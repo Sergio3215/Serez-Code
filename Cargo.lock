@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "test-language-programming"
+name = "serez-code"
 version = "0.1.0"
