@@ -1,5 +1,5 @@
-use crate::lexer::Lexer;
 use crate::token::TokenType;
+use crate::{lexer::Lexer, parser::Parser};
 use std::io::{self, Write};
 
 const PROMPT: &str = ">> ";
@@ -19,14 +19,15 @@ pub fn start() {
             return;
         }
 
-        let mut l = Lexer::new(input);
+        let lexer = Lexer::new(input);
 
-        loop {
-            let tok = l.next_token();
-            if tok.token_type == TokenType::Eof {
-                break;
-            }
-            println!("{:?}", tok);
-        }
+        // 2. Le pasamos el Lexer al Parser
+        let mut p = Parser::new(lexer);
+
+        // 3. Le pedimos al Parser que construya el AST
+        let program = p.parse_program();
+
+        // 4. Imprimimos el Árbol de Sintaxis Abstracta estructurado
+        println!("{:#?}", program);
     }
 }

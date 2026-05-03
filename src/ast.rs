@@ -27,10 +27,13 @@ pub struct LetStatement {
 // Son las piezas de código que se evalúan para producir un valor.
 #[derive(Debug, Clone)]
 pub enum Expression {
-    Identifier(String),       // Representa el uso de una variable, ej: "ii"
-    Integer(i64),             // Representa un número entero literal, ej: 1
-    String(String),           // Representa texto, ej: "sar" (del ejemplo de tu lexer)
-    Prefix(PrefixExpression), // Ej: -5 o !true
-    Infix(InfixExpression),   // Ej: 5 + 5
-                              // En el futuro, aquí agregaremos operaciones matemáticas o lógicas:
+    Identifier(String), // Representa el uso de una variable, ej: "ii"
+    Integer(i64),       // Representa un número entero literal, ej: 1
+    String(String),     // Representa texto, ej: "sar" (del ejemplo de tu lexer)
+    Boolean(bool),
+    ArrayLiteral(Vec<Expression>), // <--- Aquí está la corrección
+                                   // Representa un valor booleano, ej: true o false
+                                   //Prefix(PrefixExpression), // Ej: -5 o !true
+                                   //Infix(InfixExpression),   // Ej: 5 + 5
+                                   // En el futuro, aquí agregaremos operaciones matemáticas o lógicas:
 }
