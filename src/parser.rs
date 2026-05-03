@@ -80,6 +80,7 @@ impl Parser {
                 Some(arr) => arr,
                 _ => return None,
             },
+            TokenType::Ident => Expression::Identifier(self.current_token.literal.clone()),
             _ => return None, // Expresión no soportada temporalmente
         };
 
@@ -112,7 +113,9 @@ impl Parser {
                 TokenType::String => Some(Expression::String(self.current_token.literal.clone())),
                 TokenType::True => Some(Expression::Boolean(true)),
                 TokenType::False => Some(Expression::Boolean(false)),
-                TokenType::Ident => Some(Expression::Identifier(self.current_token.literal.clone())),
+                TokenType::Ident => {
+                    Some(Expression::Identifier(self.current_token.literal.clone()))
+                }
                 TokenType::LBracket => self.parse_array_literal(),
                 _ => return None, // Tipo no soportado
             };
