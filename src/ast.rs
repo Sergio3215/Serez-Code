@@ -32,8 +32,6 @@ pub enum Expression {
     String(String),     // Representa texto, ej: "sar" (del ejemplo de tu lexer)
     Boolean(bool),
     ArrayLiteral(Vec<Expression>), // <--- Aquí está la corrección
-                                   // Representa un valor booleano, ej: true o false
-                                   //Prefix(PrefixExpression), // Ej: -5 o !true
-                                   //Infix(InfixExpression),   // Ej: 5 + 5
-                                   // En el futuro, aquí agregaremos operaciones matemáticas o lógicas:
+    Prefix(String, Box<Expression>), // Ej: -5 o !true
+    Infix(Box<Expression>, String, Box<Expression>), // Ej: 5 + 5 o x * 2
 }
