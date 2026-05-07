@@ -1,4 +1,4 @@
-use crate::ast::{Expression, Program, Statement};
+use crate::ast::{self, Expression, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::HashMap;
@@ -84,7 +84,7 @@ impl Evaluator {
             match self.eval_statement(statement) {
                 EvalResult::Value(v) => result = v,
                 EvalResult::Return(_) => {
-                    println!("❌ ERROR FLASH SCOPE: 'return' sólo puede usarse dentro de funciones. Para el nivel global, utiliza 'export'.");
+                    println!("❌ FLASH SCOPE ERROR: 'return' can only be used inside functions. Use 'export' for the global level.");
                     return None;
                 }
                 EvalResult::Error => return None,
@@ -111,7 +111,7 @@ impl Evaluator {
 
             Statement::Assign(assign_stmt) => {
                 if self.lookup_var(&assign_stmt.name).is_none() {
-                    println!("❌ ERROR: Variable no declarada: {}", assign_stmt.name);
+                    println!("❌ ERROR: Undeclared variable: {}", assign_stmt.name);
                     return EvalResult::Error;
                 }
 
@@ -207,7 +207,7 @@ impl Evaluator {
                 match self.lookup_var(name) {
                     Some(r) => EvalResult::Value(r),
                     None => {
-                        println!("❌ ERROR: Variable no encontrada: {}", name);
+                        println!("❌ ERROR: Variable not found: {}", name);
                         EvalResult::Error
                     }
                 }
@@ -234,7 +234,7 @@ impl Evaluator {
                         (return_type, parameters, body)
                     }
                     _ => {
-                        println!("❌ ERROR: Intento de llamar a algo que no es una función");
+                        println!("❌ ERROR: Attempt to call a non-function");
                         return EvalResult::Error;
                     }
                 };
@@ -248,7 +248,7 @@ impl Evaluator {
                 }
 
                 if arg_refs.len() != parameters.len() {
-                    println!("❌ ERROR: La función esperaba {} argumentos, se enviaron {}", parameters.len(), arg_refs.len());
+                    println!("❌ ERROR: Function expected {} arguments, got {}", parameters.len(), arg_refs.len());
                     return EvalResult::Error;
                 }
 
@@ -264,7 +264,7 @@ impl Evaluator {
                         };
                         
                         if !is_valid {
-                            println!("❌ ERROR DE TIPO: El parámetro '{}' esperaba '{}' pero recibió otro tipo.", param.name, expected_type);
+                            println!("❌ TYPE ERROR: Parameter '{}' expected '{}' but received another type.", param.name, expected_type);
                             return EvalResult::Error;
                         }
                     }
@@ -313,7 +313,7 @@ impl Evaluator {
                         _ => false,
                     };
                     if !is_valid {
-                        println!("❌ ERROR DE TIPO: La función esperaba retornar '{}' pero retornó otro tipo.", expected_ret);
+                        println!("❌ TYPE ERROR: Function expected to return '{}' but returned another type.", expected_ret);
                         return EvalResult::Error;
                     }
                 }
@@ -363,7 +363,7 @@ impl Evaluator {
                 if let ObjectData::Integer(i) = right {
                     EvalResult::Value(self.alloc(ObjectData::Integer(-i)))
                 } else {
-                    println!("❌ ERROR: Prefijo '-' no soportado para este tipo");
+                    println!("❌ ERROR: Prefix '-' not supported for this type");
                     EvalResult::Error
                 }
             }
@@ -371,7 +371,7 @@ impl Evaluator {
                 if let ObjectData::Boolean(b) = right {
                     EvalResult::Value(self.alloc(ObjectData::Boolean(!b)))
                 } else {
-                    println!("❌ ERROR: Prefijo '!' solo aplica a booleanos");
+                    println!("❌ ERROR: Prefix '!' only applies to booleans");
                     EvalResult::Error
                 }
             }
@@ -388,7 +388,7 @@ impl Evaluator {
                     "*"  => ObjectData::Integer(l * r),
                     "/"  => {
                         if r == 0 {
-                            println!("❌ ERROR: División por cero");
+                            println!("❌ ERROR: Division by zero");
                             return EvalResult::Error;
                         }
                         ObjectData::Integer(l / r)
@@ -399,7 +399,7 @@ impl Evaluator {
                     "==" => ObjectData::Boolean(l == r),
                     "!=" => ObjectData::Boolean(l != r),
                     _ => {
-                        println!("❌ ERROR: Operador desconocido: {}", op);
+                        println!("❌ ERROR: Unknown operator: {}", op);
                         return EvalResult::Error;
                     }
                 };
@@ -411,7 +411,7 @@ impl Evaluator {
                     "==" => ObjectData::Boolean(l == r),
                     "!=" => ObjectData::Boolean(l != r),
                     _ => {
-                        println!("❌ ERROR: Operador '{}' no soportado entre strings", op);
+                        println!("❌ ERROR: Operator '{}' not supported between strings", op);
                         return EvalResult::Error;
                     }
                 };
@@ -421,21 +421,125 @@ impl Evaluator {
                 let result = match op {
                     "*" => {
                         if n < 0 {
-                            println!("❌ ERROR: No se puede repetir un string con n negativo");
+                            println!("❌ ERROR: Cannot repeat a string with a negative n");
                             return EvalResult::Error;
                         }
                         ObjectData::Str(s.repeat(n as usize))
                     }
                     _ => {
-                        println!("❌ ERROR: Operador '{}' no soportado entre String e Integer", op);
+                        println!("❌ ERROR: Operator '{}' not supported between String and Integer", op);
                         return EvalResult::Error;
                     }
                 };
                 EvalResult::Value(self.alloc(result))
             }
             _ => {
-                println!("❌ ERROR: Los tipos no coinciden para esta operación");
+                println!("❌ ERROR: Type mismatch for this operation");
                 EvalResult::Error
+            }
+        }
+    }
+
+    pub fn check_program(&self, program: &ast::Program) {
+        println!("🚀 Starting static analysis (Flash Scope Criticality)...");
+        println!("⚠️  NOTE: Cost in bytes is an estimated value based on AST heuristics, not an exact runtime measurement.\n");
+        
+        let mut total_memory = 0;
+        
+        for stmt in &program.statements {
+            match stmt {
+                ast::Statement::FunctionDeclaration(f) => {
+                    self.analyze_function(&f.name, &f.function, &mut total_memory);
+                }
+                ast::Statement::Let(l) => {
+                    if let ast::Expression::FunctionLiteral(func) = &l.value {
+                        self.analyze_function(&l.name, func, &mut total_memory);
+                    } else {
+                        total_memory += self.estimate_expression(&l.value);
+                    }
+                }
+                ast::Statement::Assign(a) => {
+                    total_memory += self.estimate_expression(&a.value);
+                }
+                ast::Statement::Expression(e) => {
+                    total_memory += self.estimate_expression(e);
+                }
+                _ => {}
+            }
+        }
+        
+        println!("📊 Estimated Global Memory: {} bytes", total_memory);
+    }
+
+    fn analyze_function(&self, name: &str, func: &ast::FunctionLiteral, total: &mut usize) {
+        let mut local_mem = 0;
+        
+        // Estimar memoria de parámetros
+        local_mem += func.parameters.len() * 8; // base
+        
+        // Estimar memoria del body
+        for stmt in &func.body.statements {
+            match stmt {
+                ast::Statement::Let(l) => {
+                    local_mem += 8; // variable pointer
+                    local_mem += self.estimate_expression(&l.value);
+                }
+                ast::Statement::Assign(a) => {
+                    local_mem += self.estimate_expression(&a.value);
+                }
+                ast::Statement::Expression(e) => {
+                    local_mem += self.estimate_expression(e);
+                }
+                ast::Statement::Return(r) => {
+                    local_mem += self.estimate_expression(&r.return_value);
+                }
+                _ => {}
+            }
+        }
+        
+        *total += local_mem;
+        
+        // Reporte de criticidad
+        let (color, bar, level) = if local_mem < 1024 {
+            ("\x1b[32m", "██", "🟢 < 1KB (Safe)")
+        } else if local_mem < 10240 {
+            ("\x1b[33m", "██████", "🟡 < 10KB (Warning)")
+        } else {
+            ("\x1b[31m", "██████████", "🔴 > 10KB (Critical)")
+        };
+        
+        let reset = "\x1b[0m";
+        println!("Function '{}': ~{} estimated bytes", name, local_mem);
+        println!("  Criticality: {}{}{} {}\n", color, bar, reset, level);
+    }
+
+    fn estimate_expression(&self, expr: &ast::Expression) -> usize {
+        match expr {
+            ast::Expression::Integer(_) => 8,
+            ast::Expression::Boolean(_) => 1,
+            ast::Expression::String(s) => 24 + s.len(), // Rust String overhead + capacity
+            ast::Expression::Identifier(_) => 8, // reference resolution
+            ast::Expression::Prefix(_, right) => 8 + self.estimate_expression(right),
+            ast::Expression::Infix(left, _, right) => {
+                8 + self.estimate_expression(left) + self.estimate_expression(right)
+            }
+            ast::Expression::FunctionLiteral(f) => {
+                // A closure allocation is roughly size of its context + struct size
+                32 + f.parameters.len() * 8
+            }
+            ast::Expression::Call(c) => {
+                let mut cost = 8; // function call overhead
+                for arg in &c.arguments {
+                    cost += self.estimate_expression(arg);
+                }
+                cost
+            }
+            ast::Expression::ArrayLiteral(arr) => {
+                let mut cost = 24; // Vec overhead
+                for item in arr {
+                    cost += self.estimate_expression(item);
+                }
+                cost
             }
         }
     }

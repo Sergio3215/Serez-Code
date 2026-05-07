@@ -497,7 +497,7 @@ impl Parser {
             }
 
             if self.peek_token.token_type != TokenType::Comma {
-                println!("❌ ERROR PARSER: Faltó cerrar el array con ']' o falta una coma ','");
+                println!("❌ PARSER ERROR: Missing closing bracket ']' or comma ',' in array");
                 return None;
             }
 
