@@ -10,10 +10,11 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub enum Statement {
     Let(LetStatement),
-    // En el futuro, aquí agregaremos otras acciones como:
-    // Return(ReturnStatement),
-    // If(...),
-    // While(...),
+    Expression(Expression), // Agregado: Para manejar expresiones independientes
+                            // En el futuro, aquí agregaremos otras acciones como:
+                            // Return(ReturnStatement),
+                            // If(...),
+                            // While(...),
 }
 
 // Estructura específica para "let nombre = valor;"
@@ -25,13 +26,14 @@ pub struct LetStatement {
 
 // 3. LAS EXPRESIONES (Expressions)
 // Son las piezas de código que se evalúan para producir un valor.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Expression {
     Identifier(String), // Representa el uso de una variable, ej: "ii"
     Integer(i64),       // Representa un número entero literal, ej: 1
     String(String),     // Representa texto, ej: "sar" (del ejemplo de tu lexer)
     Boolean(bool),
-    ArrayLiteral(Vec<Expression>), // <--- Aquí está la corrección
+    ArrayLiteral(Vec<Expression>),   // <--- Aquí está la corrección
     Prefix(String, Box<Expression>), // Ej: -5 o !true
     Infix(Box<Expression>, String, Box<Expression>), // Ej: 5 + 5 o x * 2
 }

@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::evaluator::Object;
 use crate::lexer::Lexer;
 use crate::token::{Token, TokenType};
 
@@ -75,8 +76,21 @@ impl Parser {
             TokenType::Let => self.parse_let_statement(),
             // Para poder escribir `1 + 1;` sin `let` se requiere parse_expression_statement.
             // Por ahora, solo soportamos `let`.
-            _ => None,
+            _ => self.parse_expression_statement(),
         }
+    }
+
+    fn parse_expression_statement(&mut self) -> Option<Statement> {
+        // Utilizamos la función que ya sabe leer variables, números y arrays
+        // (Nota: Si cambiaste su nombre, usa el que le hayas puesto, ej: parse_expression)
+        let expr = self.parse_expression(Precedence::Lowest)?;
+
+        // Si el usuario pone un punto y coma al final (ej: "ii;"), lo consumimos
+        if self.peek_token.token_type == TokenType::Semicolon {
+            self.next_token();
+        }
+
+        Some(Statement::Expression(expr))
     }
 
     fn parse_let_statement(&mut self) -> Option<Statement> {
@@ -135,10 +149,18 @@ impl Parser {
         };
 
         // 2. INFIX (Operadores que vienen después)
-        while self.peek_token.token_type != TokenType::Semicolon && precedence < self.peek_precedence() {
+        while self.peek_token.token_type != TokenType::Semicolon
+            && precedence < self.peek_precedence()
+        {
             let is_infix = match self.peek_token.token_type {
-                TokenType::Plus | TokenType::Minus | TokenType::Slash | TokenType::Asterisk |
-                TokenType::Eq | TokenType::NotEq | TokenType::Lt | TokenType::Gt => true,
+                TokenType::Plus
+                | TokenType::Minus
+                | TokenType::Slash
+                | TokenType::Asterisk
+                | TokenType::Eq
+                | TokenType::NotEq
+                | TokenType::Lt
+                | TokenType::Gt => true,
                 _ => false,
             };
 
@@ -150,7 +172,7 @@ impl Parser {
 
             let operator = self.current_token.literal.clone();
             let current_precedence = self.current_precedence();
-            
+
             self.next_token(); // Avanzamos al valor de la derecha
 
             if let Some(left) = left_exp {

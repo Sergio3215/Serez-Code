@@ -1,5 +1,4 @@
-use crate::token::TokenType;
-use crate::{lexer::Lexer, parser::Parser};
+use crate::{lexer::Lexer, parser::Parser, evaluator::Evaluator};
 use std::io::{self, Write};
 
 const PROMPT: &str = ">> ";
@@ -7,6 +6,8 @@ const PROMPT: &str = ">> ";
 pub fn start() {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
+
+    let mut evaluator = Evaluator::new();
 
     loop {
         print!("{}", PROMPT);
@@ -27,7 +28,9 @@ pub fn start() {
         // 3. Le pedimos al Parser que construya el AST
         let program = p.parse_program();
 
-        // 4. Imprimimos el Árbol de Sintaxis Abstracta estructurado
-        println!("{:#?}", program);
+        // 4. Evaluamos el programa
+        if let Some(evaluated) = evaluator.eval_program(&program) {
+            println!("{:?}", evaluated);
+        }
     }
 }
