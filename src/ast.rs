@@ -10,9 +10,11 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub enum Statement {
     Let(LetStatement),
-    Assign(AssignStatement), // Reasignación: ii = 2
-    Expression(Expression),  // Expresiones sueltas: ii, 1 + 1, etc.
-                             // En el futuro: Return, If, While...
+    Assign(AssignStatement),  // Reasignación: ii = 2
+    Block(BlockStatement),    // Bloque local: { ... }
+    Return(ReturnStatement),  // Retorno: return <expr>
+    FunctionDeclaration(FunctionDeclaration), // fn tipo nombre() {}
+    Expression(Expression),   // Expresiones sueltas: ii, 1 + 1, etc.
 }
 
 // Estructura específica para "let nombre = valor;"
@@ -25,8 +27,39 @@ pub struct LetStatement {
 // Estructura específica para reasignación "nombre = valor;"
 #[derive(Debug, Clone)]
 pub struct AssignStatement {
-    pub name: String,      // El nombre de la variable existente (ej. "ii")
-    pub value: Expression, // El nuevo valor (ej. 2)
+    pub name: String,
+    pub value: Expression,
+}
+
+// Estructura para un bloque local { sentencia1; sentencia2; ... }
+#[derive(Debug, Clone)]
+pub struct BlockStatement {
+    pub statements: Vec<Statement>,
+}
+
+// Estructura para un retorno "return valor;"
+#[derive(Debug, Clone)]
+pub struct ReturnStatement {
+    pub return_value: Expression,
+}
+
+#[derive(Debug, Clone)]
+pub struct Parameter {
+    pub name: String,
+    pub type_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionLiteral {
+    pub return_type: Option<String>,
+    pub parameters: Vec<Parameter>,
+    pub body: BlockStatement,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionDeclaration {
+    pub name: String,
+    pub function: FunctionLiteral,
 }
 
 // 3. LAS EXPRESIONES (Expressions)
@@ -38,7 +71,15 @@ pub enum Expression {
     Integer(i64),       // Representa un número entero literal, ej: 1
     String(String),     // Representa texto, ej: "sar" (del ejemplo de tu lexer)
     Boolean(bool),
-    ArrayLiteral(Vec<Expression>),   // <--- Aquí está la corrección
+    ArrayLiteral(Vec<Expression>),   
     Prefix(String, Box<Expression>), // Ej: -5 o !true
     Infix(Box<Expression>, String, Box<Expression>), // Ej: 5 + 5 o x * 2
+    FunctionLiteral(FunctionLiteral), // fn void() {} o void () => {}
+    Call(CallExpression), // sumar(1, 2)
+}
+
+#[derive(Debug, Clone)]
+pub struct CallExpression {
+    pub function: Box<Expression>, // Identificador o FunctionLiteral
+    pub arguments: Vec<Expression>,
 }

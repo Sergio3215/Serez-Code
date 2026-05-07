@@ -20,6 +20,7 @@ pub enum TokenType {
     Gt,
     Eq,
     NotEq,
+    Arrow, // =>
 
     // Delimiters
     Comma,
@@ -40,6 +41,12 @@ pub enum TokenType {
     If,
     Else,
     Return,
+
+    // Type Keywords
+    KwVoid,
+    KwInt,
+    KwString,
+    KwBool,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -66,6 +73,10 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "if" => TokenType::If,
         "else" => TokenType::Else,
         "return" => TokenType::Return,
+        "void" => TokenType::KwVoid,
+        "int" => TokenType::KwInt,
+        "string" => TokenType::KwString,
+        "bool" => TokenType::KwBool,
         _ => TokenType::Ident,
     }
 }

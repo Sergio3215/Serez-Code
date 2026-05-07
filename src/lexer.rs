@@ -37,6 +37,9 @@ impl Lexer {
                 if self.peek_char() == '=' {
                     self.read_char();
                     Token::new(TokenType::Eq, "==".to_string())
+                } else if self.peek_char() == '>' {
+                    self.read_char();
+                    Token::new(TokenType::Arrow, "=>".to_string())
                 } else {
                     Token::new(TokenType::Assign, self.ch.to_string())
                 }
@@ -100,7 +103,9 @@ impl Lexer {
 
     fn read_identifier(&mut self) -> String {
         let position = self.position;
-        while is_letter(self.ch) {
+        // El primer caracter ya sabemos que es_letter
+        self.read_char();
+        while is_letter(self.ch) || is_digit(self.ch) {
             self.read_char();
         }
         self.input[position..self.position].iter().collect()

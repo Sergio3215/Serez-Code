@@ -2,17 +2,16 @@ mod ast;
 mod evaluator;
 mod lexer;
 mod parser;
+mod region;
 mod repl;
+mod scope;
 mod token;
 
-use std::env;
+use std::fs;
 
 fn main() {
-    let user = env::var("USERNAME").unwrap_or_else(|_| "User".to_string());
-    println!(
-        "Hello {}! This is the Serez-Code programming language!",
-        user
-    );
+    println!("Hello Sergio! This is the Serez-Code programming language!");
     println!("Feel free to type in commands");
+
     repl::start();
 }

@@ -21,16 +21,12 @@ pub fn start() {
         }
 
         let lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer);
+        let program = parser.parse_program();
 
-        // 2. Le pasamos el Lexer al Parser
-        let mut p = Parser::new(lexer);
-
-        // 3. Le pedimos al Parser que construya el AST
-        let program = p.parse_program();
-
-        // 4. Evaluamos el programa
-        if let Some(evaluated) = evaluator.eval_program(&program) {
-            println!("{:?}", evaluated);
+        // eval_program retorna Option<ObjectRef> — sin clonar datos
+        if let Some(obj_ref) = evaluator.eval_program(&program) {
+            println!("{}", evaluator.display(obj_ref));
         }
     }
 }
