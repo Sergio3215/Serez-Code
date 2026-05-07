@@ -1,5 +1,4 @@
 use crate::ast::*;
-use crate::evaluator::Object;
 use crate::lexer::Lexer;
 use crate::token::{Token, TokenType};
 
@@ -74,15 +73,15 @@ impl Parser {
     fn parse_statement(&mut self) -> Option<Statement> {
         match self.current_token.token_type {
             TokenType::Let => self.parse_let_statement(),
-            // Para poder escribir `1 + 1;` sin `let` se requiere parse_expression_statement.
-            // Por ahora, solo soportamos `let`.
+            // Detectamos reasignación: cuando tenemos `Ident` seguido de `=` (Assign)
+            TokenType::Ident if self.peek_token.token_type == TokenType::Assign => {
+                self.parse_assign_statement()
+            }
             _ => self.parse_expression_statement(),
         }
     }
 
     fn parse_expression_statement(&mut self) -> Option<Statement> {
-        // Utilizamos la función que ya sabe leer variables, números y arrays
-        // (Nota: Si cambiaste su nombre, usa el que le hayas puesto, ej: parse_expression)
         let expr = self.parse_expression(Precedence::Lowest)?;
 
         // Si el usuario pone un punto y coma al final (ej: "ii;"), lo consumimos
@@ -91,6 +90,20 @@ impl Parser {
         }
 
         Some(Statement::Expression(expr))
+    }
+
+    fn parse_assign_statement(&mut self) -> Option<Statement> {
+        let name = self.current_token.literal.clone(); // el identificador
+        self.next_token(); // current: '='
+        self.next_token(); // current: primer token del valor
+
+        let value = self.parse_expression(Precedence::Lowest)?;
+
+        if self.peek_token.token_type == TokenType::Semicolon {
+            self.next_token();
+        }
+
+        Some(Statement::Assign(AssignStatement { name, value }))
     }
 
     fn parse_let_statement(&mut self) -> Option<Statement> {

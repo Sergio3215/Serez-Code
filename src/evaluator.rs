@@ -47,6 +47,16 @@ impl Evaluator {
                 self.env.insert(let_stmt.name.clone(), val);
                 Some(Object::Null)
             }
+            Statement::Assign(assign_stmt) => {
+                // Reasignación: la variable DEBE existir previamente
+                if !self.env.contains_key(&assign_stmt.name) {
+                    println!("❌ ERROR: Variable no declarada: {}", assign_stmt.name);
+                    return None;
+                }
+                let val = self.eval_expression(&assign_stmt.value)?;
+                self.env.insert(assign_stmt.name.clone(), val.clone());
+                Some(val) // Devolvemos el nuevo valor para que el REPL lo muestre
+            }
             Statement::Expression(expr) => {
                 // Si es una expresión suelta (como "ii" o "[1, 2]"), la evaluamos
                 // y devolvemos el resultado (esto es lo que hace que el REPL imprima valores)
@@ -119,19 +129,21 @@ impl Evaluator {
         left: Object,
         right: Object,
     ) -> Option<Object> {
-        // Aseguramos que solo sumamos, restamos, multiplicamos o dividimos ENTEROS
-        if let (Object::Integer(l), Object::Integer(r)) = (left, right) {
-            match operator {
+        match (left, right) {
+            // ── Integer op Integer ──────────────────────────────────────────
+            (Object::Integer(l), Object::Integer(r)) => match operator {
                 "+" => Some(Object::Integer(l + r)),
                 "-" => Some(Object::Integer(l - r)),
                 "*" => Some(Object::Integer(l * r)),
                 "/" => {
                     if r == 0 {
                         println!("❌ ERROR EVALUADOR: División por cero");
-                        return None;
+                        None
+                    } else {
+                        Some(Object::Integer(l / r))
                     }
-                    Some(Object::Integer(l / r))
                 }
+                "%" => Some(Object::Integer(l % r)),
                 "<" => Some(Object::Boolean(l < r)),
                 ">" => Some(Object::Boolean(l > r)),
                 "==" => Some(Object::Boolean(l == r)),
@@ -140,10 +152,48 @@ impl Evaluator {
                     println!("❌ ERROR EVALUADOR: Operador desconocido: {}", operator);
                     None
                 }
+            },
+
+            // ── String op String ────────────────────────────────────────────
+            (Object::String(l), Object::String(r)) => match operator {
+                "+" => Some(Object::String(l + &r)), // "hola" + "mundo" → "holamundo"
+                "==" => Some(Object::Boolean(l == r)),
+                "!=" => Some(Object::Boolean(l != r)),
+                _ => {
+                    println!(
+                        "❌ ERROR EVALUADOR: Operador '{}' no soportado entre strings",
+                        operator
+                    );
+                    None
+                }
+            },
+
+            // ── String * Integer ────────────────────────────────────────────
+            (Object::String(s), Object::Integer(n)) => match operator {
+                "*" => {
+                    if n < 0 {
+                        println!(
+                            "❌ ERROR EVALUADOR: No se puede repetir un string con número negativo"
+                        );
+                        None
+                    } else {
+                        Some(Object::String(s.repeat(n as usize)))
+                    }
+                }
+                _ => {
+                    println!(
+                        "❌ ERROR EVALUADOR: Operador '{}' no soportado entre String e Integer",
+                        operator
+                    );
+                    None
+                }
+            },
+
+            // ── Tipos incompatibles ─────────────────────────────────────────
+            _ => {
+                println!("❌ ERROR EVALUADOR: Los tipos no coinciden para esta operación");
+                None
             }
-        } else {
-            println!("❌ ERROR EVALUADOR: Los tipos no coinciden para la operación matemática");
-            None
         }
     }
 }
