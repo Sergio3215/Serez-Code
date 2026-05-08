@@ -75,7 +75,7 @@ impl Evaluator {
             Some(ObjectData::Str(s)) => format!("{}", s),
             Some(ObjectData::Array(refs)) => {
                 let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
-                format!("{}", elems.join(", "))
+                format!("[{}]", elems.join(", "))
             }
             Some(ObjectData::Function { .. }) => "Function".to_string(),
             Some(ObjectData::Null) => "null".to_string(),
