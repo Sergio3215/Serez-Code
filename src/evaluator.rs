@@ -70,15 +70,15 @@ impl Evaluator {
 
     pub fn display(&self, obj_ref: ObjectRef) -> String {
         match self.resolve(obj_ref) {
-            Some(ObjectData::Integer(i)) => format!("Integer({})", i),
-            Some(ObjectData::Boolean(b)) => format!("Boolean({})", b),
-            Some(ObjectData::Str(s)) => format!("String(\"{}\")", s),
+            Some(ObjectData::Integer(i)) => format!("{}", i),
+            Some(ObjectData::Boolean(b)) => format!("{}", b),
+            Some(ObjectData::Str(s)) => format!("{}", s),
             Some(ObjectData::Array(refs)) => {
                 let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
-                format!("Array([{}])", elems.join(", "))
+                format!("{}", elems.join(", "))
             }
             Some(ObjectData::Function { .. }) => "Function".to_string(),
-            Some(ObjectData::Null) => "Null".to_string(),
+            Some(ObjectData::Null) => "null".to_string(),
             None => "❌ Referencia inválida".to_string(),
         }
     }
