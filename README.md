@@ -1,295 +1,292 @@
-# Serez-Code 🐒
+# 🦀 Serez-Code
 
-Intérprete del lenguaje de programación **Serez-Code** escrito en **Rust**.
+> A hand-crafted, interpreted programming language written from scratch in Rust — no garbage collector, no heavy dependencies, and blazing-fast memory cleanup via **Flash Scopes**.
+
+```serez
+fn int fibonacci(int n) {
+    if (n <= 1) {
+        return n;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+out fibonacci(10);   // → Integer(55)
+```
 
 ---
 
-## Requisitos
+## ✨ What makes Serez-Code different?
 
-- [Rust](https://www.rust-lang.org/tools/install) (edition 2024)
+Most interpreters lean on Rust's `Rc<RefCell<T>>` or a garbage collector to manage object lifetimes. Serez-Code takes a different path:
 
-## Instalación y ejecución
+| Feature | Traditional approach | Serez-Code |
+|---|---|---|
+| Memory management | GC or `Rc<RefCell<T>>` | Region-based bump allocators |
+| Scope cleanup | Reference counting / GC pause | `O(1)` watermark truncation |
+| "Pointers" | Box / Rc | `ObjectRef` — a `(RegionId, usize)` tuple |
+| Type checking | Usually static or fully dynamic | Optional annotations, checked at call sites |
+
+### Flash Scopes
+
+Every `{ ... }` block is a **Flash Scope**. When the interpreter exits the block, it records the arena watermark from entry time and calls `truncate(watermark)` — destroying all block-local objects instantly, with zero iteration.
+
+```serez
+let total = 0;
+
+{
+    let temp = expensive_computation();
+    total = temp * 2;
+}   // ← temp is gone. O(1). No GC pause.
+
+out total;
+```
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (stable, edition 2024)
+
+### Install
 
 ```bash
-git clone https://github.com/Sergio3215/serez-code.git
+git clone https://github.com/your-org/serez-code
 cd serez-code
-cargo install --path .
+cargo install --path . --force
 ```
 
-### Ejecutar un script (`.sz`)
+This installs the `sz` binary globally.
 
-El intérprete se instalará globalmente en tu sistema como el ejecutable `sz`. Puedes pasarle un archivo con código Serez-Code:
+### Run a script
+
+Create `hello.sz`:
+
+```serez
+fn void greet(string name) {
+    out "Hello, ";
+    out name;
+}
+
+greet("World");
+```
 
 ```bash
-sz mi_script.sz
+sz hello.sz
 ```
 
-### Modo Interactivo (REPL)
+> **Note:** Serez-Code doesn't print values automatically. Use `out` to send output to stdout.
 
-Si ejecutas el binario sin argumentos, se iniciará el REPL:
+### Interactive REPL
 
+```bash
+sz
+>> let x = 10;
+>> x * 3
+Integer(30)
 ```
-Hello Sergio! This is the Serez-Code programming language!
-Feel free to type in commands
->>
+
+### Static profiler
+
+```bash
+sz --check script.sz
 ```
+
+Analyzes memory cost per function before executing, showing a color-coded criticality bar:
+
+- 🟢 `< 1 KB` — Safe
+- 🟡 `< 10 KB` — Warning
+- 🔴 `> 10 KB` — Critical
 
 ---
 
-## Arquitectura
+## 📖 Language Reference
 
-El intérprete sigue el pipeline clásico de un lenguaje interpretado con un sistema de memoria especializado (Flash Scopes):
-
-```
-Código fuente (texto)
-       │
-       ▼
-   [ Lexer ]        → convierte caracteres en Tokens
-       │
-       ▼
-   [ Parser ]       → convierte Tokens en un AST (Pratt Parser)
-       │
-       ▼
-   [ Evaluator ]    → recorre el AST y produce valores (Arena Memory)
-       │
-       ▼
-   [ Output ]       → imprime el resultado o maneja el REPL
-```
-
-### Archivos
-
-| Archivo              | Responsabilidad                                                         |
-| -------------------- | ----------------------------------------------------------------------- |
-| `src/token.rs`     | Define los tipos de tokens (`TokenType`) y la estructura `Token`    |
-| `src/lexer.rs`     | Convierte el texto de entrada en una secuencia de `Token`             |
-| `src/ast.rs`       | Define los nodos del AST:`Program`, `Statement`, `Expression`     |
-| `src/parser.rs`    | Construye el AST a partir de los tokens usando un **Pratt Parser** |
-| `src/evaluator.rs` | Evalúa el AST gestionando Scopes y*Flash Scopes* (`EvalResult`)    |
-| `src/region.rs`    | Sistema de **Region-Based Memory** (Arena) para evitar GC        |
-| `src/scope.rs`     | Manejo del `ScopeStack` y *watermarks* $O(1)$                     |
-| `src/repl.rs`      | Bucle interactivo: lee línea, parsea, evalúa e imprime                |
-| `src/main.rs`      | Punto de entrada (CLI y ejecución de archivos `.sz`)                 |
-
----
-
-## Tokens implementados
-
-### Literales e identificadores
-
-| Token                | Ejemplo                                |
-| -------------------- | -------------------------------------- |
-| `Ident`            | `mi_variable`, `n1`, `resultado` |
-| `Int`              | `42`, `0`, `1000`                |
-| `String`           | `"hola mundo"`                       |
-| `True` / `False` | `true`, `false`                    |
-
-### Operadores
-
-| Token        | Símbolo | Descripción                            |
-| ------------ | -------- | --------------------------------------- |
-| `Assign`   | `=`    | Asignación / reasignación sub-global  |
-| `Plus`     | `+`    | Suma / concatenación de strings        |
-| `Minus`    | `-`    | Resta / negación unaria                |
-| `Asterisk` | `*`    | Multiplicación / repetición de string |
-| `Slash`    | `/`    | División entera                        |
-| `Bang`     | `!`    | Negación booleana                      |
-| `Eq`       | `==`   | Igualdad                                |
-| `NotEq`    | `!=`   | Desigualdad                             |
-| `Lt`       | `<`    | Menor que                               |
-| `Gt`       | `>`    | Mayor que                               |
-| `Arrow`    | `=>`   | Funciones flecha                        |
-
-### Delimitadores
-
-`(` `)` `{` `}` `[` `]` `,` `;`
-
-### Palabras clave
-
-`let` `fn` `if` `else` `return` `true` `false`
-
-### Tipos de Datos
-
-`void` `int` `string` `bool`
-
----
-
-## AST — Nodos implementados
-
-### Statements (sentencias)
-
-```
-Statement
-├── Let(LetStatement)                         →  let nombre = expresión;
-├── Assign(AssignStatement)                   →  nombre = expresión;
-├── Return(ReturnStatement)                   →  return expresión;
-├── Block(BlockStatement)                     →  { ... }
-├── FunctionDeclaration(FunctionDeclaration)  →  fn int sumar() { ... }
-└── Expression(Expression)                    →  cualquier expresión suelta
-```
-
-### Expressions (expresiones)
-
-```
-Expression
-├── Identifier(String)                          →  x
-├── Integer(i64)                                →  42
-├── String(String)                              →  "hola"
-├── Boolean(bool)                               →  true / false
-├── ArrayLiteral(Vec<Expression>)               →  [1, 2, 3]
-├── FunctionLiteral(FunctionLiteral)            →  int () => { ... }
-├── Call(CallExpression)                        →  sumar(1, 2)
-├── Prefix(operador, Expression)                →  -5  !true
-└── Infix(Expression, operador, Expression)     →  a + b  x == y
-```
-
----
-
-## Evaluador y Memoria (Flash Scopes)
-
-### Gestión de Memoria (Region-Based Memory)
-
-Serez-Code **no utiliza un Garbage Collector tradicional**. En su lugar, usa un sistema de *Arenas* y *Watermarks* que garantizan velocidad y control determinista.
-
-- **Global Arena:** Persiste durante toda la ejecución.
-- **Flash Scopes:** Cada vez que se abre un bloque `{ ... }`, se toma un *watermark* de la memoria. Al cerrarse, **toda la memoria creada localmente se destruye de forma atómica e instantánea** $O(1)$.
-
-### Valores de Retorno (Return Promotion)
-
-Para evitar que el valor de un `return` sea destruido por el *Flash Scope*, Serez-Code aplica la técnica de **Return Unwinding & Promotion**, clonando dinámicamente el resultado retornado y promoviéndolo al scope superior antes de aniquilar la arena local.
-
-### Reasignación "Sub-Global"
-
-Se puede modificar una variable que esté en un scope superior haciendo `variable = nuevo_valor` sin usar `let`. El evaluador escalará los ámbitos hasta encontrarla y la modificará de forma in-place, incluso si el Flash Scope local muere.
-
----
-
-## Referencia del lenguaje
-
-### Declaración de variables y Reasignación
+### Variables
 
 ```serez
-let x = 10;
-let nombre = "Sergio";
-let activo = true;
+let name = "Sergio";
+let count = 42;
+let active = true;
 
-// Reasignación in-place (Sub-global)
-x = 99;
+count = count + 1;   // reassignment — no `let`
 ```
 
-### Funciones y Parámetros Híbridos
+### Functions
 
-Serez-Code admite parámetros fuertemente tipados combinados con parámetros dinámicos (`Any`):
+Two supported styles:
 
 ```serez
-// 'n1' es Any, 'n2' requiere un Integer estricto.
-fn int sumar(n1, int n2) {
-    return n1 + n2;
+// Named function declarations — fn <type> <name>(<params>) { ... }
+fn void greet() { out "hi"; }
+fn string getName() { return "Sergio"; }
+fn int add(int a, int b) { return a + b; }
+fn bool isEven(int n) { return n == 0; }
+```
+
+```serez
+// Anonymous arrow functions — <type> (<params>) => { ... }
+// Type goes before the parens, braces are always required
+let greet   = void ()   => { out "hi"; }
+let getName = string () => { return "Sergio"; }
+let double  = int (x)   => { return x * 2; }
+let check   = bool (x)  => { return x == 0; }
+```
+
+Type annotations are **enforced at runtime** — parameter types and return types are checked at every call site.
+
+### Control flow
+
+```serez
+if (x > 0) {
+    out "positive";
+} else {
+    out "non-positive";
 }
 
-sumar(5, 10);
-```
-
-#### Funciones Flecha (Arrow Functions)
-
-```serez
-let restar = int (a, b) => { 
-    return a - b; 
-};
-```
-
-#### Funciones Anónimas
-
-```serez
-let multiplicar = fn int(a, b) { return a * b; };
-```
-
----
-
-## Precedencia de operadores
-
-De menor a mayor precedencia:
-
-| Nivel            | Operadores    |
-| ---------------- | ------------- |
-| 1 — Lowest      | (base)        |
-| 2 — Equals      | `==` `!=` |
-| 3 — LessGreater | `<` `>`   |
-| 4 — Sum         | `+` `-`   |
-| 5 — Product     | `*` `/`   |
-| 6 — Prefix      | `-x` `!x` |
-| 7 — Call        | `fn(x)`     |
-| 8 — Index       | `arr[i]`    |
-
----
-
-## Roadmap — Por implementar
-
-- [X] `return` — sentencia de retorno con Flash Scopes
-- [X] `fn` — definición y llamada de funciones (Tradicionales y Arrow)
-- [X] Parámetros híbridos y validación de tipos
-- [X] Archivos CLI `.sz`
-- [ ] `if / else` — condicionales
-- [ ] Indexado de arrays: `arr[0]`
-- [ ] `while` / loops
-- [ ] Manejo de errores estructurado (en vez de `println!`)
-
----
-
-## Ejemplo de sesión
-
-```serez
-fn int fibonacci(int x) {
-    // Proximamente con condicionales if/else
-    return x + 1;
+let i = 0;
+while (i < 5) {
+    out i;
+    i = i + 1;
 }
+```
 
-let res = fibonacci(10);
-res; // -> Integer(11)
+### Arrays
+
+```serez
+let nums = [1, 2, 3, 4, 5];
+out nums[2];   // → Integer(3)
+```
+
+### Operators
+
+| Category | Operators |
+|---|---|
+| Arithmetic | `+ - * / %` |
+| Comparison | `< > == !=` |
+| Logical | `!` (prefix) |
+| String | `+` (concat), `*` (repeat) |
+
+### Output
+
+```serez
+out "hello";       // → String("hello")
+out 42;            // → Integer(42)
+out true;          // → Boolean(true)
 ```
 
 ---
 
-## Contribuir
+## 🏗️ Architecture Overview
 
-¡Las contribuciones son bienvenidas! Serez-Code es un proyecto open source y cualquier aporte es apreciado.
+```
+src/
+├── main.rs        — Entry point (file, --check, REPL)
+├── token.rs       — Token types and keyword table
+├── lexer.rs       — Hand-rolled character scanner
+├── ast.rs         — AST node types (Statement, Expression)
+├── parser.rs      — Pratt (TDOP) parser
+├── region.rs      — Arena allocator + ObjectRef
+├── scope.rs       — ScopeStack with watermark-based cleanup
+└── evaluator.rs   — Tree-walking evaluator + static profiler
+```
 
-### ¿Cómo contribuir?
+### Data flow
 
-1. **Fork** el repositorio en GitHub
-2. Crea una rama para tu feature o fix:
-   ```bash
-   git checkout -b feature/mi-nueva-feature
-   ```
-3. Haz tus cambios y **commitéalos** con un mensaje claro:
-   ```bash
-   git commit -m "feat: agrega soporte para if/else"
-   ```
-4. Sube tu rama y abre un **Pull Request**:
-   ```bash
-   git push origin feature/mi-nueva-feature
-   ```
+```
+Source text
+    │
+    ▼
+Lexer  ──→  Token stream
+    │
+    ▼
+Parser  ──→  AST (Program)
+    │
+    ▼
+Evaluator  ──→  ObjectRef  ──→  stdout / return value
+```
 
-### Guías para contribuir
+### Memory regions
 
-- Seguí el estilo del código existente (Rust idiomático)
-- Documentá las funciones y módulos nuevos con comentarios
-- Si agregás una feature al lenguaje, actualizá este README con ejemplos
-- Preferí commits pequeños y atómicos con mensajes descriptivos
+```
+┌────────────────────────────────┐
+│         Global Arena           │  ← top-level variables, fn declarations
+│  [Null, x=42, greet=Fn, ...]  │  never reset during a script run
+└────────────────────────────────┘
 
-### Ideas para contribuir
-
-Revisá el [Roadmap](#roadmap--por-implementar) — cualquier ítem pendiente es una oportunidad para aportar.
+┌────────────────────────────────┐
+│         Scoped Arena           │  ← local vars, function args, block temps
+│  frame0_mark  frame1_mark ...  │  truncated on every scope exit (O(1))
+└────────────────────────────────┘
+```
 
 ---
 
-## Licencia
+## 🛠️ Contributing
 
-Este proyecto está licenciado bajo la **MIT License**.
+All contributions are welcome — bug fixes, new language features, docs improvements, or test cases.
 
-Consultá el archivo [`LICENSE`](./LICENSE) para el texto completo.
+### 1. Fork and clone
+
+```bash
+git clone https://github.com/your-org/serez-code
+cd serez-code
+```
+
+### 2. Build and run tests
+
+```bash
+cargo build
+cargo test
+```
+
+The lexer includes a comprehensive token test suite in `lexer.rs`. Run just that with:
+
+```bash
+cargo test test_next_token
+```
+
+### 3. Project conventions
+
+- **No `unsafe`** — the memory model is intentionally built without unsafe blocks.
+- **No external runtime dependencies** — keep `[dependencies]` empty. Dev dependencies are fine.
+- **Error messages go to stdout** (current behavior) with the `❌` prefix pattern.
+- **All new syntax** must be reflected in: `token.rs` → `lexer.rs` → `ast.rs` → `parser.rs` → `evaluator.rs`. Don't add to the evaluator without adding to the AST first.
+- **Flash Scope invariant**: any new block-level construct must call `scopes.push()` before evaluating its body and `scopes.pop()` after — in all code paths including error paths.
+
+### 4. Adding a new statement
+
+1. Add a token in `token.rs` and wire it in `lookup_ident()` if keyword-based.
+2. Add the AST node(s) in `ast.rs`.
+3. Add a parse handler in `parser.rs` under `parse_statement()`.
+4. Add an eval handler in `evaluator.rs` under `eval_statement()`.
+5. Add a test script under `tests/` or inline in the relevant module.
+
+### 5. Open a PR
+
+- Keep commits focused (one logical change per commit).
+- Describe *why* a change was made, not just *what*.
+- PRs that add language features should include at least one `.sz` example file.
 
 ---
 
-<p align="center">
-  Hecho con ❤️ y Rust por <a href="https://www.serez.dev">Serez Dev</a>
-</p>
+## 🗺️ Roadmap
+
+- [ ] Lexical closures (captured scope variables)
+- [ ] `else if` chain
+- [ ] Array mutation via index assignment (`arr[i] = expr`)
+- [ ] String interpolation
+- [ ] Native higher-order functions (`map`, `filter`)
+- [ ] Span-aware error diagnostics
+- [ ] Standard library (basic math, string utilities)
+
+---
+
+## 📄 License
+
+See [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">Built with ❤️ and Rust — no GC required.</p>

@@ -74,8 +74,10 @@ impl Parser {
         match self.current_token.token_type {
             TokenType::Let => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
+            TokenType::Out => self.parse_out_statement(),
             TokenType::LBrace => self.parse_block_statement(),
             TokenType::Function => self.parse_function_statement(),
+            TokenType::While => self.parse_while_statement(),
             // Reasignación: Ident seguido de `=`
             TokenType::Ident if self.peek_token.token_type == TokenType::Assign => {
                 self.parse_assign_statement()
@@ -138,6 +140,112 @@ impl Parser {
         }
 
         Some(Statement::Return(ReturnStatement { return_value }))
+    }
+
+    fn parse_out_statement(&mut self) -> Option<Statement> {
+        self.next_token(); // avanzamos sobre la palabra clave 'out'
+
+        let value = self.parse_expression(Precedence::Lowest)?;
+
+        if self.peek_token.token_type == TokenType::Semicolon {
+            self.next_token();
+        }
+
+        Some(Statement::Out(OutStatement { value }))
+    }
+
+    fn parse_while_statement(&mut self) -> Option<Statement> {
+        // current token is 'while'
+        if self.peek_token.token_type != TokenType::LParen {
+            println!("❌ PARSER ERROR: Expected '(' after 'while'");
+            return None;
+        }
+        self.next_token(); // now '('
+        self.next_token(); // first token of condition
+        
+        let condition = self.parse_expression(Precedence::Lowest)?;
+        
+        if self.peek_token.token_type != TokenType::RParen {
+            println!("❌ PARSER ERROR: Expected ')' after condition in 'while'");
+            return None;
+        }
+        self.next_token(); // now ')'
+        
+        if self.peek_token.token_type != TokenType::LBrace {
+            println!("❌ PARSER ERROR: Expected '{{' to start 'while' body");
+            return None;
+        }
+        self.next_token(); // now '{'
+        
+        let body = match self.parse_block_statement()? {
+            Statement::Block(b) => b,
+            _ => return None,
+        };
+        
+        Some(Statement::While(WhileStatement { condition, body }))
+    }
+
+    fn parse_if_expression(&mut self) -> Option<Expression> {
+        // current token is 'if'
+        if self.peek_token.token_type != TokenType::LParen {
+            println!("❌ PARSER ERROR: Expected '(' after 'if'");
+            return None;
+        }
+        self.next_token(); // '('
+        self.next_token(); // condition start
+
+        let condition = self.parse_expression(Precedence::Lowest)?;
+
+        if self.peek_token.token_type != TokenType::RParen {
+            println!("❌ PARSER ERROR: Expected ')' after 'if' condition");
+            return None;
+        }
+        self.next_token(); // ')'
+
+        if self.peek_token.token_type != TokenType::LBrace {
+            println!("❌ PARSER ERROR: Expected '{{' to start 'if' consequence");
+            return None;
+        }
+        self.next_token(); // '{'
+
+        let consequence = match self.parse_block_statement()? {
+            Statement::Block(b) => b,
+            _ => return None,
+        };
+
+        let mut alternative = None;
+
+        if self.peek_token.token_type == TokenType::Else {
+            self.next_token(); // 'else'
+            
+            // Suport for 'else if' or 'else { ... }'
+            if self.peek_token.token_type == TokenType::If {
+                self.next_token(); // 'if'
+                
+                // Wrap 'else if' in a block statement to keep AST simple
+                if let Some(if_expr) = self.parse_if_expression() {
+                    alternative = Some(BlockStatement {
+                        statements: vec![Statement::Expression(if_expr)]
+                    });
+                }
+            } else {
+                if self.peek_token.token_type != TokenType::LBrace {
+                    println!("❌ PARSER ERROR: Expected '{{' or 'if' after 'else'");
+                    return None;
+                }
+                self.next_token(); // '{'
+                alternative = match self.parse_block_statement()? {
+                    Statement::Block(b) => Some(b),
+                    _ => None,
+                };
+            }
+        }
+
+        Some(Expression::If(IfExpression {
+            condition: Box::new(condition),
+            consequence,
+            alternative,
+        }))
     }
 
     fn parse_let_statement(&mut self) -> Option<Statement> {
@@ -378,6 +486,7 @@ impl Parser {
                 exp
             }
             TokenType::LBracket => self.parse_array_literal(),
+            TokenType::If => self.parse_if_expression(),
             TokenType::KwVoid | TokenType::KwInt | TokenType::KwString | TokenType::KwBool => {
                 // Arrow function syntax: void () => {}
                 self.parse_arrow_function()
@@ -431,7 +540,8 @@ impl Parser {
                 | TokenType::NotEq
                 | TokenType::Lt
                 | TokenType::Gt
-                | TokenType::LParen => true,
+                | TokenType::LParen
+                | TokenType::LBracket => true,
                 _ => false,
             };
 
@@ -450,6 +560,23 @@ impl Parser {
                         left_exp = Some(Expression::Call(CallExpression {
                             function: Box::new(left),
                             arguments: args,
+                        }));
+                    } else {
+                        return None;
+                    }
+                }
+            } else if self.current_token.token_type == TokenType::LBracket {
+                if let Some(left) = left_exp {
+                    self.next_token(); // Advance to the index expression
+                    if let Some(index) = self.parse_expression(Precedence::Lowest) {
+                        if self.peek_token.token_type != TokenType::RBracket {
+                            println!("❌ PARSER ERROR: Expected ']' after array index");
+                            return None;
+                        }
+                        self.next_token(); // Consume ']'
+                        left_exp = Some(Expression::Index(IndexExpression {
+                            left: Box::new(left),
+                            index: Box::new(index),
                         }));
                     } else {
                         return None;

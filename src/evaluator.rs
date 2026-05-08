@@ -7,25 +7,28 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum EvalResult {
-    Value(ObjectRef),   // Ejecución normal (retorno implícito)
-    Return(ObjectRef),  // Ejecución interrumpida por `return`
-    Error,              // Ocurrió un error
+    Value(ObjectRef),  // Ejecución normal (retorno implícito)
+    Return(ObjectRef), // Ejecución interrumpida por `return`
+    Error,             // Ocurrió un error
 }
 
 // ── Evaluator ─────────────────────────────────────────────────────────────────
 
 pub struct Evaluator {
-    global_arena:    Arena,
+    global_arena: Arena,
     global_bindings: HashMap<String, ObjectRef>,
-    scopes:          ScopeStack,
-    null_ref:        ObjectRef,
+    scopes: ScopeStack,
+    null_ref: ObjectRef,
 }
 
 impl Evaluator {
     pub fn new() -> Self {
         let mut global_arena = Arena::new();
         let null_idx = global_arena.alloc(ObjectData::Null);
-        let null_ref = ObjectRef { region: RegionId::Global, index: null_idx };
+        let null_ref = ObjectRef {
+            region: RegionId::Global,
+            index: null_idx,
+        };
 
         Evaluator {
             global_arena,
@@ -38,10 +41,16 @@ impl Evaluator {
     fn alloc(&mut self, data: ObjectData) -> ObjectRef {
         if self.scopes.is_empty() {
             let idx = self.global_arena.alloc(data);
-            ObjectRef { region: RegionId::Global, index: idx }
+            ObjectRef {
+                region: RegionId::Global,
+                index: idx,
+            }
         } else {
             let idx = self.scopes.arena.alloc(data);
-            ObjectRef { region: RegionId::Scoped, index: idx }
+            ObjectRef {
+                region: RegionId::Scoped,
+                index: idx,
+            }
         }
     }
 
@@ -61,16 +70,14 @@ impl Evaluator {
 
     pub fn display(&self, obj_ref: ObjectRef) -> String {
         match self.resolve(obj_ref) {
-            Some(ObjectData::Integer(i))  => format!("Integer({})", i),
-            Some(ObjectData::Boolean(b))  => format!("Boolean({})", b),
-            Some(ObjectData::Str(s))      => format!("String(\"{}\")", s),
+            Some(ObjectData::Integer(i)) => format!("Integer({})", i),
+            Some(ObjectData::Boolean(b)) => format!("Boolean({})", b),
+            Some(ObjectData::Str(s)) => format!("String(\"{}\")", s),
             Some(ObjectData::Array(refs)) => {
-                let elems: Vec<String> = refs.iter()
-                    .map(|&r| self.display(r))
-                    .collect();
+                let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
                 format!("Array([{}])", elems.join(", "))
             }
-            Some(ObjectData::Function{..}) => "Function".to_string(),
+            Some(ObjectData::Function { .. }) => "Function".to_string(),
             Some(ObjectData::Null) => "Null".to_string(),
             None => "❌ Referencia inválida".to_string(),
         }
@@ -84,7 +91,9 @@ impl Evaluator {
             match self.eval_statement(statement) {
                 EvalResult::Value(v) => result = v,
                 EvalResult::Return(_) => {
-                    println!("❌ FLASH SCOPE ERROR: 'return' can only be used inside functions. Use 'export' for the global level.");
+                    println!(
+                        "❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a function or conditional or loops."
+                    );
                     return None;
                 }
                 EvalResult::Error => return None,
@@ -142,7 +151,8 @@ impl Evaluator {
                 let func_ref = self.alloc(func_data);
 
                 if self.scopes.is_empty() {
-                    self.global_bindings.insert(func_decl.name.clone(), func_ref);
+                    self.global_bindings
+                        .insert(func_decl.name.clone(), func_ref);
                 } else {
                     self.scopes.declare(func_decl.name.clone(), func_ref);
                 }
@@ -156,16 +166,19 @@ impl Evaluator {
                 for s in &block_stmt.statements {
                     match self.eval_statement(s) {
                         EvalResult::Value(v) => result = EvalResult::Value(v),
-                        EvalResult::Return(v) => {
-                            result = EvalResult::Return(v);
-                            break; // Flash Scope: unwinding
+                        EvalResult::Return(_) => {
+                            println!(
+                                "❌ FLASH SCOPE ERROR: 'return' can only be used inside functions or control flows (if/while/for). Use 'export' for the global level."
+                            );
+                            result = EvalResult::Error;
+                            break;
                         }
                         EvalResult::Error => {
                             result = EvalResult::Error;
                             break;
                         }
                     }
-                } // <--- Added missing brace!
+                }
 
                 let result_data_opt = match &result {
                     EvalResult::Value(v) | EvalResult::Return(v) => self.resolve(*v).cloned(),
@@ -186,6 +199,35 @@ impl Evaluator {
                 }
             }
 
+            Statement::While(while_stmt) => {
+                let mut result = EvalResult::Value(self.null_ref);
+                loop {
+                    // 1. Evaluate condition
+                    let condition_ref = match self.eval_expression(&while_stmt.condition) {
+                        EvalResult::Value(v) => v,
+                        EvalResult::Error => return EvalResult::Error,
+                        EvalResult::Return(v) => return EvalResult::Return(v),
+                    };
+
+                    let condition_data = self.resolve(condition_ref).unwrap().clone();
+
+                    if !self.is_truthy(&condition_data) {
+                        break;
+                    }
+
+                    // 2. Evaluate body block without throwing Flash Scope Error on return
+                    match self.eval_block(&while_stmt.body) {
+                        EvalResult::Value(v) => result = EvalResult::Value(v),
+                        EvalResult::Return(v) => {
+                            // Un return dentro de un while interrumpe el while y sube el return
+                            return EvalResult::Return(v);
+                        }
+                        EvalResult::Error => return EvalResult::Error,
+                    }
+                }
+                result
+            }
+
             Statement::Return(return_stmt) => {
                 match self.eval_expression(&return_stmt.return_value) {
                     EvalResult::Value(v) => EvalResult::Return(v),
@@ -193,25 +235,69 @@ impl Evaluator {
                 }
             }
 
+            Statement::Out(out_stmt) => match self.eval_expression(&out_stmt.value) {
+                EvalResult::Value(v) => {
+                    println!("{}", self.display(v));
+                    EvalResult::Value(self.null_ref)
+                }
+                EvalResult::Return(v) => EvalResult::Return(v),
+                EvalResult::Error => EvalResult::Error,
+            },
+
             Statement::Expression(expr) => self.eval_expression(expr),
+        }
+    }
+
+    fn eval_block(&mut self, block: &ast::BlockStatement) -> EvalResult {
+        self.scopes.push();
+        let mut result = EvalResult::Value(self.null_ref);
+
+        for s in &block.statements {
+            match self.eval_statement(s) {
+                EvalResult::Value(v) => result = EvalResult::Value(v),
+                EvalResult::Return(v) => {
+                    result = EvalResult::Return(v);
+                    break;
+                }
+                EvalResult::Error => {
+                    result = EvalResult::Error;
+                    break;
+                }
+            }
+        }
+
+        let result_data_opt = match &result {
+            EvalResult::Value(v) | EvalResult::Return(v) => self.resolve(*v).cloned(),
+            EvalResult::Error => None,
+        };
+
+        self.scopes.pop();
+
+        if let Some(data) = result_data_opt {
+            let promoted_ref = self.alloc(data);
+            match result {
+                EvalResult::Value(_) => EvalResult::Value(promoted_ref),
+                EvalResult::Return(_) => EvalResult::Return(promoted_ref),
+                EvalResult::Error => EvalResult::Error,
+            }
+        } else {
+            EvalResult::Error
         }
     }
 
     fn eval_expression(&mut self, expr: &Expression) -> EvalResult {
         match expr {
-            Expression::Integer(i)  => EvalResult::Value(self.alloc(ObjectData::Integer(*i))),
-            Expression::String(s)   => EvalResult::Value(self.alloc(ObjectData::Str(s.clone()))),
-            Expression::Boolean(b)  => EvalResult::Value(self.alloc(ObjectData::Boolean(*b))),
+            Expression::Integer(i) => EvalResult::Value(self.alloc(ObjectData::Integer(*i))),
+            Expression::String(s) => EvalResult::Value(self.alloc(ObjectData::Str(s.clone()))),
+            Expression::Boolean(b) => EvalResult::Value(self.alloc(ObjectData::Boolean(*b))),
 
-            Expression::Identifier(name) => {
-                match self.lookup_var(name) {
-                    Some(r) => EvalResult::Value(r),
-                    None => {
-                        println!("❌ ERROR: Variable not found: {}", name);
-                        EvalResult::Error
-                    }
+            Expression::Identifier(name) => match self.lookup_var(name) {
+                Some(r) => EvalResult::Value(r),
+                None => {
+                    println!("❌ ERROR: Variable not found: {}", name);
+                    EvalResult::Error
                 }
-            }
+            },
 
             Expression::FunctionLiteral(func_lit) => {
                 let func_data = ObjectData::Function {
@@ -230,9 +316,11 @@ impl Evaluator {
 
                 let func_data = self.resolve(func_ref).cloned();
                 let (return_type, parameters, body) = match func_data {
-                    Some(ObjectData::Function { return_type, parameters, body }) => {
-                        (return_type, parameters, body)
-                    }
+                    Some(ObjectData::Function {
+                        return_type,
+                        parameters,
+                        body,
+                    }) => (return_type, parameters, body),
                     _ => {
                         println!("❌ ERROR: Attempt to call a non-function");
                         return EvalResult::Error;
@@ -248,7 +336,11 @@ impl Evaluator {
                 }
 
                 if arg_refs.len() != parameters.len() {
-                    println!("❌ ERROR: Function expected {} arguments, got {}", parameters.len(), arg_refs.len());
+                    println!(
+                        "❌ ERROR: Function expected {} arguments, got {}",
+                        parameters.len(),
+                        arg_refs.len()
+                    );
                     return EvalResult::Error;
                 }
 
@@ -262,9 +354,12 @@ impl Evaluator {
                             ("bool", ObjectData::Boolean(_)) => true,
                             _ => false,
                         };
-                        
+
                         if !is_valid {
-                            println!("❌ TYPE ERROR: Parameter '{}' expected '{}' but received another type.", param.name, expected_type);
+                            println!(
+                                "❌ TYPE ERROR: Parameter '{}' expected '{}' but received another type.",
+                                param.name, expected_type
+                            );
                             return EvalResult::Error;
                         }
                     }
@@ -273,7 +368,9 @@ impl Evaluator {
                 self.scopes.push();
 
                 for (i, param) in parameters.iter().enumerate() {
-                    self.scopes.declare(param.name.clone(), arg_refs[i]);
+                    let arg_data = self.resolve(arg_refs[i]).unwrap().clone();
+                    let local_ref = self.alloc(arg_data);
+                    self.scopes.declare(param.name.clone(), local_ref);
                 }
 
                 let mut result_ref = self.null_ref;
@@ -313,7 +410,10 @@ impl Evaluator {
                         _ => false,
                     };
                     if !is_valid {
-                        println!("❌ TYPE ERROR: Function expected to return '{}' but returned another type.", expected_ret);
+                        println!(
+                            "❌ TYPE ERROR: Function expected to return '{}' but returned another type.",
+                            expected_ret
+                        );
                         return EvalResult::Error;
                     }
                 }
@@ -330,6 +430,50 @@ impl Evaluator {
                     }
                 }
                 EvalResult::Value(self.alloc(ObjectData::Array(refs)))
+            }
+
+            Expression::If(if_expr) => {
+                let condition_ref = match self.eval_expression(&if_expr.condition) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Return(v) => return EvalResult::Return(v),
+                    EvalResult::Error => return EvalResult::Error,
+                };
+
+                let condition_data = self.resolve(condition_ref).unwrap().clone();
+                if self.is_truthy(&condition_data) {
+                    self.eval_block(&if_expr.consequence)
+                } else if let Some(alt) = &if_expr.alternative {
+                    self.eval_block(alt)
+                } else {
+                    EvalResult::Value(self.null_ref)
+                }
+            }
+
+            Expression::Index(index_expr) => {
+                let left_ref = match self.eval_expression(&index_expr.left) {
+                    EvalResult::Value(r) => r,
+                    _ => return EvalResult::Error,
+                };
+                let idx_ref = match self.eval_expression(&index_expr.index) {
+                    EvalResult::Value(r) => r,
+                    _ => return EvalResult::Error,
+                };
+
+                let left_data = self.resolve(left_ref).unwrap().clone();
+                let idx_data = self.resolve(idx_ref).unwrap().clone();
+
+                if let (ObjectData::Array(elements), ObjectData::Integer(i)) = (left_data, idx_data)
+                {
+                    if i < 0 || i as usize >= elements.len() {
+                        println!("❌ ERROR: Index out of bounds");
+                        EvalResult::Error
+                    } else {
+                        EvalResult::Value(elements[i as usize])
+                    }
+                } else {
+                    println!("❌ ERROR: Index operator not supported for these types");
+                    EvalResult::Error
+                }
             }
 
             Expression::Prefix(op, right_expr) => {
@@ -350,7 +494,7 @@ impl Evaluator {
                     EvalResult::Value(r) => r,
                     _ => return EvalResult::Error,
                 };
-                let left_data  = self.resolve(left_ref).unwrap().clone();
+                let left_data = self.resolve(left_ref).unwrap().clone();
                 let right_data = self.resolve(right_ref).unwrap().clone();
                 self.eval_infix(op, left_data, right_data)
             }
@@ -383,19 +527,19 @@ impl Evaluator {
         match (left, right) {
             (ObjectData::Integer(l), ObjectData::Integer(r)) => {
                 let result = match op {
-                    "+"  => ObjectData::Integer(l + r),
-                    "-"  => ObjectData::Integer(l - r),
-                    "*"  => ObjectData::Integer(l * r),
-                    "/"  => {
+                    "+" => ObjectData::Integer(l + r),
+                    "-" => ObjectData::Integer(l - r),
+                    "*" => ObjectData::Integer(l * r),
+                    "/" => {
                         if r == 0 {
                             println!("❌ ERROR: Division by zero");
                             return EvalResult::Error;
                         }
                         ObjectData::Integer(l / r)
                     }
-                    "%"  => ObjectData::Integer(l % r),
-                    "<"  => ObjectData::Boolean(l < r),
-                    ">"  => ObjectData::Boolean(l > r),
+                    "%" => ObjectData::Integer(l % r),
+                    "<" => ObjectData::Boolean(l < r),
+                    ">" => ObjectData::Boolean(l > r),
                     "==" => ObjectData::Boolean(l == r),
                     "!=" => ObjectData::Boolean(l != r),
                     _ => {
@@ -407,7 +551,7 @@ impl Evaluator {
             }
             (ObjectData::Str(l), ObjectData::Str(r)) => {
                 let result = match op {
-                    "+"  => ObjectData::Str(l + &r),
+                    "+" => ObjectData::Str(l + &r),
                     "==" => ObjectData::Boolean(l == r),
                     "!=" => ObjectData::Boolean(l != r),
                     _ => {
@@ -427,7 +571,10 @@ impl Evaluator {
                         ObjectData::Str(s.repeat(n as usize))
                     }
                     _ => {
-                        println!("❌ ERROR: Operator '{}' not supported between String and Integer", op);
+                        println!(
+                            "❌ ERROR: Operator '{}' not supported between String and Integer",
+                            op
+                        );
                         return EvalResult::Error;
                     }
                 };
@@ -440,12 +587,22 @@ impl Evaluator {
         }
     }
 
+    fn is_truthy(&self, data: &ObjectData) -> bool {
+        match data {
+            ObjectData::Boolean(b) => *b,
+            // Null or false are falsy, everything else is truthy
+            _ => true,
+        }
+    }
+
     pub fn check_program(&self, program: &ast::Program) {
         println!("🚀 Starting static analysis (Flash Scope Criticality)...");
-        println!("⚠️  NOTE: Cost in bytes is an estimated value based on AST heuristics, not an exact runtime measurement.\n");
-        
+        println!(
+            "⚠️  NOTE: Cost in bytes is an estimated value based on AST heuristics, not an exact runtime measurement.\n"
+        );
+
         let mut total_memory = 0;
-        
+
         for stmt in &program.statements {
             match stmt {
                 ast::Statement::FunctionDeclaration(f) => {
@@ -467,16 +624,16 @@ impl Evaluator {
                 _ => {}
             }
         }
-        
+
         println!("📊 Estimated Global Memory: {} bytes", total_memory);
     }
 
     fn analyze_function(&self, name: &str, func: &ast::FunctionLiteral, total: &mut usize) {
         let mut local_mem = 0;
-        
+
         // Estimar memoria de parámetros
         local_mem += func.parameters.len() * 8; // base
-        
+
         // Estimar memoria del body
         for stmt in &func.body.statements {
             match stmt {
@@ -493,12 +650,23 @@ impl Evaluator {
                 ast::Statement::Return(r) => {
                     local_mem += self.estimate_expression(&r.return_value);
                 }
+                ast::Statement::While(w) => {
+                    local_mem += self.estimate_expression(&w.condition);
+                    // For static analysis we approximate one iteration cost
+                    for body_stmt in &w.body.statements {
+                        if let ast::Statement::Expression(e) = body_stmt {
+                            local_mem += self.estimate_expression(e);
+                        } else if let ast::Statement::Let(l) = body_stmt {
+                            local_mem += 8 + self.estimate_expression(&l.value);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
-        
+
         *total += local_mem;
-        
+
         // Reporte de criticidad
         let (color, bar, level) = if local_mem < 1024 {
             ("\x1b[32m", "██", "🟢 < 1KB (Safe)")
@@ -507,7 +675,7 @@ impl Evaluator {
         } else {
             ("\x1b[31m", "██████████", "🔴 > 10KB (Critical)")
         };
-        
+
         let reset = "\x1b[0m";
         println!("Function '{}': ~{} estimated bytes", name, local_mem);
         println!("  Criticality: {}{}{} {}\n", color, bar, reset, level);
@@ -518,7 +686,7 @@ impl Evaluator {
             ast::Expression::Integer(_) => 8,
             ast::Expression::Boolean(_) => 1,
             ast::Expression::String(s) => 24 + s.len(), // Rust String overhead + capacity
-            ast::Expression::Identifier(_) => 8, // reference resolution
+            ast::Expression::Identifier(_) => 8,        // reference resolution
             ast::Expression::Prefix(_, right) => 8 + self.estimate_expression(right),
             ast::Expression::Infix(left, _, right) => {
                 8 + self.estimate_expression(left) + self.estimate_expression(right)
@@ -540,6 +708,34 @@ impl Evaluator {
                     cost += self.estimate_expression(item);
                 }
                 cost
+            }
+            ast::Expression::If(if_expr) => {
+                let mut cost = self.estimate_expression(&if_expr.condition);
+                // Pessimistically assume the largest branch is taken
+                let mut cons_cost = 0;
+                for stmt in &if_expr.consequence.statements {
+                    if let ast::Statement::Expression(e) = stmt {
+                        cons_cost += self.estimate_expression(e);
+                    } else if let ast::Statement::Let(l) = stmt {
+                        cons_cost += 8 + self.estimate_expression(&l.value);
+                    }
+                }
+                let mut alt_cost = 0;
+                if let Some(alt) = &if_expr.alternative {
+                    for stmt in &alt.statements {
+                        if let ast::Statement::Expression(e) = stmt {
+                            alt_cost += self.estimate_expression(e);
+                        } else if let ast::Statement::Let(l) = stmt {
+                            alt_cost += 8 + self.estimate_expression(&l.value);
+                        }
+                    }
+                }
+                cost += std::cmp::max(cons_cost, alt_cost);
+                cost
+            }
+            ast::Expression::Index(idx_expr) => {
+                8 + self.estimate_expression(&idx_expr.left)
+                    + self.estimate_expression(&idx_expr.index)
             }
         }
     }

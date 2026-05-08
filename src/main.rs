@@ -56,9 +56,7 @@ fn main() {
         if is_check {
             evaluator.check_program(&program);
         } else {
-            if let Some(r) = evaluator.eval_program(&program) {
-                println!("{}", evaluator.display(r));
-            }
+            evaluator.eval_program(&program);
         }
     } else {
         println!("Hello Sergio! This is the Serez-Code programming language!");

@@ -40,7 +40,9 @@ pub enum TokenType {
     False,
     If,
     Else,
+    While,
     Return,
+    Out,
 
     // Type Keywords
     KwVoid,
@@ -72,7 +74,9 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "false" => TokenType::False,
         "if" => TokenType::If,
         "else" => TokenType::Else,
+        "while" => TokenType::While,
         "return" => TokenType::Return,
+        "out" => TokenType::Out,
         "void" => TokenType::KwVoid,
         "int" => TokenType::KwInt,
         "string" => TokenType::KwString,
