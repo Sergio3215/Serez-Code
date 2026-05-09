@@ -1,4 +1,4 @@
-# 🦀 Serez-Code
+# ![](./img/serez-icon.svg) Serez-Code
 
 > A hand-crafted, interpreted programming language written from scratch in Rust — no garbage collector, no heavy dependencies, and blazing-fast memory cleanup via **Flash Scopes**.
 
