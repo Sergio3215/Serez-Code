@@ -10,7 +10,7 @@ fn int fibonacci(int n) {
     return fibonacci(n - 1) + fibonacci(n - 2);
 }
 
-out fibonacci(10);   // → Integer(55)
+out fibonacci(10);   // → 55
 ```
 
 ---
@@ -84,7 +84,7 @@ sz hello.sz
 sz
 >> let x = 10;
 >> x * 3
-Integer(30)
+30
 ```
 
 ### Static profiler
