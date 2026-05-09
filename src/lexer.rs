@@ -54,7 +54,14 @@ impl Lexer {
                     Token::new(TokenType::Bang, self.ch.to_string())
                 }
             }
-            '/' => Token::new(TokenType::Slash, self.ch.to_string()),
+            '/' => {
+                if self.peek_char() == '/' {
+                    self.skip_comment(); // Es un comentario, ignorar hasta fin de línea
+                    return self.next_token(); // Buscar el siguiente token válido
+                } else {
+                    Token::new(TokenType::Slash, self.ch.to_string())
+                }
+            }
             '*' => Token::new(TokenType::Asterisk, self.ch.to_string()),
             '<' => Token::new(TokenType::Lt, self.ch.to_string()),
             '>' => Token::new(TokenType::Gt, self.ch.to_string()),
@@ -131,6 +138,13 @@ impl Lexer {
         } else {
             self.input[self.read_position]
         }
+    }
+
+    fn skip_comment(&mut self) {
+        while self.ch != '\n' && self.ch != '\0' {
+            self.read_char();
+        }
+        self.skip_whitespace();
     }
 }
 
