@@ -162,26 +162,26 @@ impl Parser {
         }
         self.next_token(); // now '('
         self.next_token(); // first token of condition
-        
+
         let condition = self.parse_expression(Precedence::Lowest)?;
-        
+
         if self.peek_token.token_type != TokenType::RParen {
             println!("❌ PARSER ERROR: Expected ')' after condition in 'while'");
             return None;
         }
         self.next_token(); // now ')'
-        
+
         if self.peek_token.token_type != TokenType::LBrace {
             println!("❌ PARSER ERROR: Expected '{{' to start 'while' body");
             return None;
         }
         self.next_token(); // now '{'
-        
+
         let body = match self.parse_block_statement()? {
             Statement::Block(b) => b,
             _ => return None,
         };
-        
+
         Some(Statement::While(WhileStatement { condition, body }))
     }
 
@@ -217,15 +217,15 @@ impl Parser {
 
         if self.peek_token.token_type == TokenType::Else {
             self.next_token(); // 'else'
-            
+
             // Suport for 'else if' or 'else { ... }'
             if self.peek_token.token_type == TokenType::If {
                 self.next_token(); // 'if'
-                
+
                 // Wrap 'else if' in a block statement to keep AST simple
                 if let Some(if_expr) = self.parse_if_expression() {
                     alternative = Some(BlockStatement {
-                        statements: vec![Statement::Expression(if_expr)]
+                        statements: vec![Statement::Expression(if_expr)],
                     });
                 }
             } else {
@@ -316,7 +316,7 @@ impl Parser {
         } else {
             // Es una función anónima (usada como expresión pero en contexto de sentencia)
             // Retrocedemos la lógica para que sea parseada como expression statement
-            // Pero como Pratt Parser no puede retroceder tokens fácilmente, mejor parseamos 
+            // Pero como Pratt Parser no puede retroceder tokens fácilmente, mejor parseamos
             // el FunctionLiteral directamente y lo envolvemos en ExpressionStatement.
             if self.peek_token.token_type != TokenType::LParen {
                 return None;
@@ -504,7 +504,7 @@ impl Parser {
                     return None; // Si tiene nombre no es expresión
                 }
                 self.next_token(); // current = LParen
-                
+
                 let parameters = self.parse_function_parameters()?;
 
                 if self.peek_token.token_type != TokenType::LBrace {
@@ -556,10 +556,15 @@ impl Parser {
 
             if self.current_token.token_type == TokenType::LParen {
                 if let Some(left) = left_exp {
+                    let call_line = self.current_token.line;
+                    let call_column = self.current_token.column;
+
                     if let Some(args) = self.parse_call_arguments() {
                         left_exp = Some(Expression::Call(CallExpression {
                             function: Box::new(left),
                             arguments: args,
+                            line: call_line,
+                            column: call_column,
                         }));
                     } else {
                         return None;
@@ -583,11 +588,20 @@ impl Parser {
                     }
                 }
             } else {
+                let op_line = self.current_token.line;
+                let op_column = self.current_token.column;
+
                 self.next_token(); // Avanzamos al valor de la derecha
 
                 if let Some(left) = left_exp {
                     if let Some(right) = self.parse_expression(current_precedence) {
-                        left_exp = Some(Expression::Infix(Box::new(left), operator, Box::new(right)));
+                        left_exp = Some(Expression::Infix(InfixExpression {
+                            left: Box::new(left),
+                            operator,
+                            right: Box::new(right),
+                            line: op_line,
+                            column: op_column,
+                        }));
                     } else {
                         return None;
                     }

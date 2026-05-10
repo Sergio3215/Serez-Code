@@ -582,11 +582,9 @@ cargo test test_next_token
 - [ ] `for` loop
 - [ ] Array mutation via index: `arr[i] = expr`
 - [ ] String interpolation: `"Hello, {name}!"`
-- [ ] `null` coalescing and truthiness refinement
 - [ ] Native higher-order functions: `map`, `filter`, `reduce`
 
 ### Type system
-- [ ] Compile-time type checking pass (before evaluation)
 - [ ] Typed arrays: `[int]`, `[string]`
 - [ ] Optional / nullable types
 

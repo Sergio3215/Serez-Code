@@ -13,12 +13,17 @@ pub enum EvalResult {
 }
 
 // ── Evaluator ─────────────────────────────────────────────────────────────────
-
+struct CallFrame {
+    name: String,
+    line: usize,
+    column: usize,
+}
 pub struct Evaluator {
     global_arena: Arena,
     global_bindings: HashMap<String, ObjectRef>,
     scopes: ScopeStack,
     null_ref: ObjectRef,
+    call_stack: Vec<CallFrame>,
 }
 
 impl Evaluator {
@@ -35,6 +40,7 @@ impl Evaluator {
             global_bindings: HashMap::new(),
             scopes: ScopeStack::new(),
             null_ref,
+            call_stack: Vec::new(),
         }
     }
 
@@ -314,6 +320,20 @@ impl Evaluator {
                     _ => return EvalResult::Error,
                 };
 
+                let call_name = match call_expr.function.as_ref() {
+                    Expression::Identifier(name) => name.clone(),
+                    _ => "<anonymous>".to_string(),
+                };
+                let call_line = call_expr.line;
+                let call_col = call_expr.column;
+                self.call_stack.push(CallFrame {
+                    name: call_name,
+                    line: call_line,
+                    column: call_col,
+                });
+
+                self.scopes.push();
+
                 let func_data = self.resolve(func_ref).cloned();
                 let (return_type, parameters, body) = match func_data {
                     Some(ObjectData::Function {
@@ -341,6 +361,14 @@ impl Evaluator {
                         parameters.len(),
                         arg_refs.len()
                     );
+
+                    for frame in self.call_stack.iter().rev() {
+                        println!(
+                            "    called from '{}' [line {}:{}]",
+                            frame.name, frame.line, frame.column
+                        );
+                    }
+                    println!();
                     return EvalResult::Error;
                 }
 
@@ -360,12 +388,18 @@ impl Evaluator {
                                 "❌ TYPE ERROR: Parameter '{}' expected '{}' but received another type.",
                                 param.name, expected_type
                             );
+
+                            for frame in self.call_stack.iter().rev() {
+                                println!(
+                                    "    called from '{}' [line {}:{}]",
+                                    frame.name, frame.line, frame.column
+                                );
+                            }
+                            println!();
                             return EvalResult::Error;
                         }
                     }
                 }
-
-                self.scopes.push();
 
                 for (i, param) in parameters.iter().enumerate() {
                     let arg_data = self.resolve(arg_refs[i]).unwrap().clone();
@@ -392,7 +426,7 @@ impl Evaluator {
                 let result_data_opt = self.resolve(result_ref).cloned();
 
                 self.scopes.pop(); // Destrucción instantánea de temporales (Flash Scope)
-
+                self.call_stack.pop();
                 // Promovemos el resultado al scope actual (padre) o global
                 let result_ref = if let Some(data) = result_data_opt {
                     self.alloc(data)
@@ -414,6 +448,13 @@ impl Evaluator {
                             "❌ TYPE ERROR: Function expected to return '{}' but returned another type.",
                             expected_ret
                         );
+                        for frame in self.call_stack.iter().rev() {
+                            println!(
+                                "    called from '{}' [line {}:{}]",
+                                frame.name, frame.line, frame.column
+                            );
+                        }
+                        println!();
                         return EvalResult::Error;
                     }
                 }
@@ -466,12 +507,28 @@ impl Evaluator {
                 {
                     if i < 0 || i as usize >= elements.len() {
                         println!("❌ ERROR: Index out of bounds");
+
+                        for frame in self.call_stack.iter().rev() {
+                            println!(
+                                "    called from '{}' [line {}:{}]",
+                                frame.name, frame.line, frame.column
+                            );
+                        }
+                        println!();
                         EvalResult::Error
                     } else {
                         EvalResult::Value(elements[i as usize])
                     }
                 } else {
                     println!("❌ ERROR: Index operator not supported for these types");
+
+                    for frame in self.call_stack.iter().rev() {
+                        println!(
+                            "    called from '{}' [line {}:{}]",
+                            frame.name, frame.line, frame.column
+                        );
+                    }
+                    println!();
                     EvalResult::Error
                 }
             }
@@ -485,18 +542,24 @@ impl Evaluator {
                 self.eval_prefix(op, right_data)
             }
 
-            Expression::Infix(left_expr, op, right_expr) => {
-                let left_ref = match self.eval_expression(left_expr) {
+            Expression::Infix(infix_expr) => {
+                let left_ref = match self.eval_expression(&infix_expr.left) {
                     EvalResult::Value(r) => r,
                     _ => return EvalResult::Error,
                 };
-                let right_ref = match self.eval_expression(right_expr) {
+                let right_ref = match self.eval_expression(&infix_expr.right) {
                     EvalResult::Value(r) => r,
                     _ => return EvalResult::Error,
                 };
                 let left_data = self.resolve(left_ref).unwrap().clone();
                 let right_data = self.resolve(right_ref).unwrap().clone();
-                self.eval_infix(op, left_data, right_data)
+                self.eval_infix(
+                    &infix_expr.operator,
+                    left_data,
+                    right_data,
+                    infix_expr.line,
+                    infix_expr.column,
+                )
             }
         }
     }
@@ -523,7 +586,16 @@ impl Evaluator {
         }
     }
 
-    fn eval_infix(&mut self, op: &str, left: ObjectData, right: ObjectData) -> EvalResult {
+    fn eval_infix(
+        &mut self,
+        op: &str,
+        left: ObjectData,
+        right: ObjectData,
+        line: usize,
+        column: usize,
+    ) -> EvalResult {
+        let left_type = left.type_name().to_string();
+        let right_type = right.type_name().to_string();
         match (left, right) {
             (ObjectData::Integer(l), ObjectData::Integer(r)) => {
                 let result = match op {
@@ -581,7 +653,17 @@ impl Evaluator {
                 EvalResult::Value(self.alloc(result))
             }
             _ => {
-                println!("❌ ERROR: Type mismatch for this operation");
+                print!(
+                    "❌ ERROR: Type mismatch — operator '{}' cannot be applied between '{}' and '{}' - [{}:{}]",
+                    op, left_type, right_type, line, column
+                );
+                for frame in self.call_stack.iter().rev() {
+                    println!(
+                        "    called from '{}' [line {}:{}]",
+                        frame.name, frame.line, frame.column
+                    );
+                }
+                println!();
                 EvalResult::Error
             }
         }
@@ -688,8 +770,8 @@ impl Evaluator {
             ast::Expression::String(s) => 24 + s.len(), // Rust String overhead + capacity
             ast::Expression::Identifier(_) => 8,        // reference resolution
             ast::Expression::Prefix(_, right) => 8 + self.estimate_expression(right),
-            ast::Expression::Infix(left, _, right) => {
-                8 + self.estimate_expression(left) + self.estimate_expression(right)
+            ast::Expression::Infix(infix) => {
+                8 + self.estimate_expression(&infix.left) + self.estimate_expression(&infix.right)
             }
             ast::Expression::FunctionLiteral(f) => {
                 // A closure allocation is roughly size of its context + struct size

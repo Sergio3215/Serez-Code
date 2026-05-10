@@ -1,4 +1,3 @@
-
 // Un programa entero es simplemente una lista secuencial de sentencias.
 #[derive(Debug, Clone)]
 pub struct Program {
@@ -85,10 +84,10 @@ pub enum Expression {
     String(String),
     Boolean(bool),
     ArrayLiteral(Vec<Expression>),
-    Prefix(String, Box<Expression>),                 // Ej: -5 o !true
-    Infix(Box<Expression>, String, Box<Expression>), // Ej: 5 + 5 o x * 2
-    FunctionLiteral(FunctionLiteral),                // fn void() {} o void () => {}
-    Call(CallExpression),                            // sumar(1, 2)
+    Prefix(String, Box<Expression>),  // Ej: -5 o !true
+    Infix(InfixExpression),           // Ej: 5 + 5 o x * 2
+    FunctionLiteral(FunctionLiteral), // fn void() {} o void () => {}
+    Call(CallExpression),             // sumar(1, 2)
     If(IfExpression),
     Index(IndexExpression),
 }
@@ -97,6 +96,10 @@ pub enum Expression {
 pub struct CallExpression {
     pub function: Box<Expression>, // Identificador o FunctionLiteral
     pub arguments: Vec<Expression>,
+    #[allow(dead_code)]
+    pub line: usize,
+    #[allow(dead_code)]
+    pub column: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -110,4 +113,13 @@ pub struct IfExpression {
 pub struct IndexExpression {
     pub left: Box<Expression>,
     pub index: Box<Expression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InfixExpression {
+    pub left: Box<Expression>,
+    pub operator: String,
+    pub right: Box<Expression>,
+    pub line: usize,
+    pub column: usize,
 }

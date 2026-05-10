@@ -5,6 +5,8 @@ pub struct Lexer {
     position: usize,      // current position in input (points to current char)
     read_position: usize, // current reading position in input (after current char)
     ch: char,             // current char under examination
+    line: usize,
+    column: usize,
 }
 
 impl Lexer {
@@ -14,6 +16,8 @@ impl Lexer {
             position: 0,
             read_position: 0,
             ch: '\0',
+            line: 1,
+            column: 0,
         };
         l.read_char();
         l
@@ -23,7 +27,12 @@ impl Lexer {
         if self.read_position >= self.input.len() {
             self.ch = '\0';
         } else {
+            if self.ch == '\n' {
+                self.line += 1;
+                self.column = 0;
+            }
             self.ch = self.input[self.read_position];
+            self.column += 1;
         }
         self.position = self.read_position;
         self.read_position += 1;
@@ -36,22 +45,32 @@ impl Lexer {
             '=' => {
                 if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::Eq, "==".to_string())
+                    Token::new(TokenType::Eq, "==".to_string(), self.line, self.column)
                 } else if self.peek_char() == '>' {
                     self.read_char();
-                    Token::new(TokenType::Arrow, "=>".to_string())
+                    Token::new(TokenType::Arrow, "=>".to_string(), self.line, self.column)
                 } else {
-                    Token::new(TokenType::Assign, self.ch.to_string())
+                    Token::new(
+                        TokenType::Assign,
+                        self.ch.to_string(),
+                        self.line,
+                        self.column,
+                    )
                 }
             }
-            '+' => Token::new(TokenType::Plus, self.ch.to_string()),
-            '-' => Token::new(TokenType::Minus, self.ch.to_string()),
+            '+' => Token::new(TokenType::Plus, self.ch.to_string(), self.line, self.column),
+            '-' => Token::new(
+                TokenType::Minus,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
             '!' => {
                 if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::NotEq, "!=".to_string())
+                    Token::new(TokenType::NotEq, "!=".to_string(), self.line, self.column)
                 } else {
-                    Token::new(TokenType::Bang, self.ch.to_string())
+                    Token::new(TokenType::Bang, self.ch.to_string(), self.line, self.column)
                 }
             }
             '/' => {
@@ -59,36 +78,97 @@ impl Lexer {
                     self.skip_comment(); // Es un comentario, ignorar hasta fin de línea
                     return self.next_token(); // Buscar el siguiente token válido
                 } else {
-                    Token::new(TokenType::Slash, self.ch.to_string())
+                    Token::new(
+                        TokenType::Slash,
+                        self.ch.to_string(),
+                        self.line,
+                        self.column,
+                    )
                 }
             }
-            '*' => Token::new(TokenType::Asterisk, self.ch.to_string()),
-            '<' => Token::new(TokenType::Lt, self.ch.to_string()),
-            '>' => Token::new(TokenType::Gt, self.ch.to_string()),
-            ';' => Token::new(TokenType::Semicolon, self.ch.to_string()),
-            ',' => Token::new(TokenType::Comma, self.ch.to_string()),
-            '(' => Token::new(TokenType::LParen, self.ch.to_string()),
-            ')' => Token::new(TokenType::RParen, self.ch.to_string()),
-            '{' => Token::new(TokenType::LBrace, self.ch.to_string()),
-            '}' => Token::new(TokenType::RBrace, self.ch.to_string()),
-            '[' => Token::new(TokenType::LBracket, self.ch.to_string()),
-            ']' => Token::new(TokenType::RBracket, self.ch.to_string()),
+            '*' => Token::new(
+                TokenType::Asterisk,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
+            '<' => Token::new(TokenType::Lt, self.ch.to_string(), self.line, self.column),
+            '>' => Token::new(TokenType::Gt, self.ch.to_string(), self.line, self.column),
+            ';' => Token::new(
+                TokenType::Semicolon,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
+            ',' => Token::new(
+                TokenType::Comma,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
+            '(' => Token::new(
+                TokenType::LParen,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
+            ')' => Token::new(
+                TokenType::RParen,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
+            '{' => Token::new(
+                TokenType::LBrace,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
+            '}' => Token::new(
+                TokenType::RBrace,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
+            '[' => Token::new(
+                TokenType::LBracket,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
+            ']' => Token::new(
+                TokenType::RBracket,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
             '"' => {
                 let literal = self.read_string();
-                Token::new(TokenType::String, literal)
+                let start_line = self.line;
+                let start_column = self.column;
+                Token::new(TokenType::String, literal, start_line, start_column)
             }
-            '\0' => Token::new(TokenType::Eof, "".to_string()),
+            '\0' => Token::new(TokenType::Eof, "".to_string(), self.line, self.column),
             _ => {
                 if is_letter(self.ch) {
                     let literal = self.read_identifier();
                     let token_type = token::lookup_ident(&literal);
-                    return Token::new(token_type, literal);
+                    let start_line = self.line;
+                    let start_column = self.column;
+                    return Token::new(token_type, literal, start_line, start_column);
                 } else if is_digit(self.ch) {
                     let token_type = TokenType::Int;
                     let literal = self.read_number();
-                    return Token::new(token_type, literal);
+                    let start_line = self.line;
+                    let start_column = self.column;
+                    return Token::new(token_type, literal, start_line, start_column);
                 } else {
-                    Token::new(TokenType::Illegal, self.ch.to_string())
+                    Token::new(
+                        TokenType::Illegal,
+                        self.ch.to_string(),
+                        self.line,
+                        self.column,
+                    )
                 }
             }
         };

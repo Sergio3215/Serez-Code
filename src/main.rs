@@ -6,6 +6,7 @@ mod region;
 mod repl;
 mod scope;
 mod token;
+mod type_checker;
 
 use std::env;
 use std::fs;
@@ -51,6 +52,9 @@ fn main() {
         let lexer = lexer::Lexer::new(input);
         let mut parser = parser::Parser::new(lexer);
         let program = parser.parse_program();
+
+        let mut checker = type_checker::TypeChecker::new(program.clone());
+        checker.check();
 
         let mut evaluator = evaluator::Evaluator::new();
         if is_check {

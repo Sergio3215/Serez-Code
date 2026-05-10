@@ -38,12 +38,12 @@ pub enum ObjectData {
 impl std::fmt::Display for ObjectData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ObjectData::Integer(i)  => write!(f, "Integer({})", i),
-            ObjectData::Boolean(b)  => write!(f, "Boolean({})", b),
-            ObjectData::Str(s)      => write!(f, "String(\"{}\")", s),
-            ObjectData::Array(_)    => write!(f, "Array([...])"),
-            ObjectData::Function{..} => write!(f, "Function"),
-            ObjectData::Null        => write!(f, "Null"),
+            ObjectData::Integer(i) => write!(f, "Integer({})", i),
+            ObjectData::Boolean(b) => write!(f, "Boolean({})", b),
+            ObjectData::Str(s) => write!(f, "String(\"{}\")", s),
+            ObjectData::Array(_) => write!(f, "Array([...])"),
+            ObjectData::Function { .. } => write!(f, "Function"),
+            ObjectData::Null => write!(f, "Null"),
         }
     }
 }
@@ -57,7 +57,9 @@ pub struct Arena {
 
 impl Arena {
     pub fn new() -> Self {
-        Arena { storage: Vec::new() }
+        Arena {
+            storage: Vec::new(),
+        }
     }
 
     /// Aloca un objeto al final y devuelve su índice (análogo a bump-pointer++).
@@ -89,5 +91,17 @@ impl Arena {
     /// O(k) donde k = número de objetos eliminados (por sus Drops).
     pub fn reset_to(&mut self, mark: usize) {
         self.storage.truncate(mark);
+    }
+}
+impl ObjectData {
+    pub fn type_name(&self) -> &str {
+        match self {
+            ObjectData::Integer(_) => "int",
+            ObjectData::Boolean(_) => "bool",
+            ObjectData::Str(_) => "string",
+            ObjectData::Array(_) => "array",
+            ObjectData::Function { .. } => "function",
+            ObjectData::Null => "null",
+        }
     }
 }
