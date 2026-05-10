@@ -26,6 +26,9 @@ fn main() {
         for arg in args.iter().skip(1) {
             if arg == "--check" {
                 is_check = true;
+            } else if arg.starts_with("--") {
+                println!("❌ ERROR: Unknown flag '{}'", arg);
+                return;
             } else if file_path.is_empty() {
                 file_path = arg.clone();
             }
