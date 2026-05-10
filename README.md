@@ -1,4 +1,20 @@
 # ![](./img/serez-icon.svg) Serez-Code
+---
+
+## Tabla de Contenidos
+
+1. [Introduction](#introduction)
+2. [What makes Serez-Code different?](#what-makes-serez-code-different)
+3. [Getting Started](#getting-started)
+4. [Language Reference](#language-reference)
+5. [Architecture Overview](#architecture-overview)
+6. [Contributing](#contributing)
+7. [Roadmap](#roadmap)
+8. [License](#license)
+
+---
+
+## Introduction
 
 > A hand-crafted, interpreted programming language written from scratch in Rust — no garbage collector, no heavy dependencies, and blazing-fast memory cleanup via **Flash Scopes**.
 
@@ -15,7 +31,7 @@ out fibonacci(10);   // → 55
 
 ---
 
-## ✨ What makes Serez-Code different?
+## What makes Serez-Code different?
 
 Most interpreters lean on Rust's `Rc<RefCell<T>>` or a garbage collector to manage object lifetimes. Serez-Code takes a different path:
 
@@ -43,7 +59,7 @@ out total;
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -101,7 +117,7 @@ Analyzes memory cost per function before executing, showing a color-coded critic
 
 ---
 
-## 📖 Language Reference
+## Language Reference
 
 ### Variables
 
@@ -156,7 +172,7 @@ while (i < 5) {
 
 ```serez
 let nums = [1, 2, 3, 4, 5];
-out nums[2];   // → Integer(3)
+out nums[2];   // → 3
 ```
 
 ### Operators
@@ -171,14 +187,14 @@ out nums[2];   // → Integer(3)
 ### Output
 
 ```serez
-out "hello";       // → String("hello")
-out 42;            // → Integer(42)
-out true;          // → Boolean(true)
+out "hello";       // → "hello"
+out 42;            // → 42
+out true;          // → true
 ```
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```
 src/
@@ -223,7 +239,7 @@ Evaluator  ──→  ObjectRef  ──→  stdout / return value
 
 ---
 
-## 🛠️ Contributing
+## Contributing
 
 All contributions are welcome — bug fixes, new language features, docs improvements, or test cases.
 
@@ -271,7 +287,7 @@ cargo test test_next_token
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 - [ ] Lexical closures (captured scope variables)
 - [ ] `else if` chain
@@ -283,7 +299,7 @@ cargo test test_next_token
 
 ---
 
-## 📄 License
+## License
 
 See [LICENSE](LICENSE) for details.
 
