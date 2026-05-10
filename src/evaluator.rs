@@ -590,7 +590,7 @@ impl Evaluator {
     fn is_truthy(&self, data: &ObjectData) -> bool {
         match data {
             ObjectData::Boolean(b) => *b,
-            // Null or false are falsy, everything else is truthy
+            ObjectData::Null => false,
             _ => true,
         }
     }
