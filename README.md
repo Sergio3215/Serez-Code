@@ -505,7 +505,7 @@ Source (.sz file or REPL line)
         ▼
     Evaluator  ──────────────────►  ObjectRef
         │                                │
-        ▼                               ▼
+        ▼                                ▼
   ScopeStack                       stdout / return value
   (Flash Scopes)
 ```
