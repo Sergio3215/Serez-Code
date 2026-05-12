@@ -157,7 +157,7 @@ impl Parser {
     fn parse_while_statement(&mut self) -> Option<Statement> {
         // current token is 'while'
         if self.peek_token.token_type != TokenType::LParen {
-            println!("❌ PARSER ERROR: Expected '(' after 'while'");
+            eprintln!("❌ PARSER ERROR: Expected '(' after 'while'");
             return None;
         }
         self.next_token(); // now '('
@@ -166,13 +166,13 @@ impl Parser {
         let condition = self.parse_expression(Precedence::Lowest)?;
 
         if self.peek_token.token_type != TokenType::RParen {
-            println!("❌ PARSER ERROR: Expected ')' after condition in 'while'");
+            eprintln!("❌ PARSER ERROR: Expected ')' after condition in 'while'");
             return None;
         }
         self.next_token(); // now ')'
 
         if self.peek_token.token_type != TokenType::LBrace {
-            println!("❌ PARSER ERROR: Expected '{{' to start 'while' body");
+            eprintln!("❌ PARSER ERROR: Expected '{{' to start 'while' body");
             return None;
         }
         self.next_token(); // now '{'
@@ -188,7 +188,7 @@ impl Parser {
     fn parse_if_expression(&mut self) -> Option<Expression> {
         // current token is 'if'
         if self.peek_token.token_type != TokenType::LParen {
-            println!("❌ PARSER ERROR: Expected '(' after 'if'");
+            eprintln!("❌ PARSER ERROR: Expected '(' after 'if'");
             return None;
         }
         self.next_token(); // '('
@@ -197,13 +197,13 @@ impl Parser {
         let condition = self.parse_expression(Precedence::Lowest)?;
 
         if self.peek_token.token_type != TokenType::RParen {
-            println!("❌ PARSER ERROR: Expected ')' after 'if' condition");
+            eprintln!("❌ PARSER ERROR: Expected ')' after 'if' condition");
             return None;
         }
         self.next_token(); // ')'
 
         if self.peek_token.token_type != TokenType::LBrace {
-            println!("❌ PARSER ERROR: Expected '{{' to start 'if' consequence");
+            eprintln!("❌ PARSER ERROR: Expected '{{' to start 'if' consequence");
             return None;
         }
         self.next_token(); // '{'
@@ -230,7 +230,7 @@ impl Parser {
                 }
             } else {
                 if self.peek_token.token_type != TokenType::LBrace {
-                    println!("❌ PARSER ERROR: Expected '{{' or 'if' after 'else'");
+                    eprintln!("❌ PARSER ERROR: Expected '{{' or 'if' after 'else'");
                     return None;
                 }
                 self.next_token(); // '{'
@@ -575,7 +575,7 @@ impl Parser {
                     self.next_token(); // Advance to the index expression
                     if let Some(index) = self.parse_expression(Precedence::Lowest) {
                         if self.peek_token.token_type != TokenType::RBracket {
-                            println!("❌ PARSER ERROR: Expected ']' after array index");
+                            eprintln!("❌ PARSER ERROR: Expected ']' after array index");
                             return None;
                         }
                         self.next_token(); // Consume ']'
@@ -638,7 +638,7 @@ impl Parser {
             }
 
             if self.peek_token.token_type != TokenType::Comma {
-                println!("❌ PARSER ERROR: Missing closing bracket ']' or comma ',' in array");
+                eprintln!("❌ PARSER ERROR: Missing closing bracket ']' or comma ',' in array");
                 return None;
             }
 

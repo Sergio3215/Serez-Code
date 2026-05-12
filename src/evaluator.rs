@@ -12,6 +12,24 @@ pub enum EvalResult {
     Error,             // Ocurrió un error
 }
 
+// ── OwnedValue ────────────────────────────────────────────────────────────────
+// Árbol de valores completamente dueño de sus datos, sin refs a ninguna arena.
+// Permite extraer un resultado ANTES de truncar un scope y re-alocarlo DESPUÉS,
+// resolviendo el problema de refs colgantes en arrays devueltos por funciones.
+#[derive(Clone)]
+enum OwnedValue {
+    Integer(i64),
+    Boolean(bool),
+    Str(String),
+    Array(Vec<OwnedValue>),
+    Function {
+        return_type: Option<String>,
+        parameters: Vec<ast::Parameter>,
+        body: ast::BlockStatement,
+    },
+    Null,
+}
+
 // ── Evaluator ─────────────────────────────────────────────────────────────────
 struct CallFrame {
     name: String,
@@ -89,6 +107,43 @@ impl Evaluator {
         }
     }
 
+    // Extrae un valor completo de la arena a un OwnedValue independiente.
+    // Debe llamarse ANTES de scopes.pop() para que los índices aún sean válidos.
+    fn extract(&self, obj_ref: ObjectRef) -> OwnedValue {
+        match self.resolve(obj_ref) {
+            Some(ObjectData::Integer(i)) => OwnedValue::Integer(*i),
+            Some(ObjectData::Boolean(b)) => OwnedValue::Boolean(*b),
+            Some(ObjectData::Str(s)) => OwnedValue::Str(s.clone()),
+            Some(ObjectData::Array(refs)) => {
+                OwnedValue::Array(refs.iter().map(|&r| self.extract(r)).collect())
+            }
+            Some(ObjectData::Function { return_type, parameters, body }) => OwnedValue::Function {
+                return_type: return_type.clone(),
+                parameters: parameters.clone(),
+                body: body.clone(),
+            },
+            Some(ObjectData::Null) | None => OwnedValue::Null,
+        }
+    }
+
+    // Re-aloca un OwnedValue en la arena activa (scope padre o global).
+    // Debe llamarse DESPUÉS de scopes.pop().
+    fn plant(&mut self, value: OwnedValue) -> ObjectRef {
+        match value {
+            OwnedValue::Integer(i) => self.alloc(ObjectData::Integer(i)),
+            OwnedValue::Boolean(b) => self.alloc(ObjectData::Boolean(b)),
+            OwnedValue::Str(s) => self.alloc(ObjectData::Str(s)),
+            OwnedValue::Array(items) => {
+                let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant(v)).collect();
+                self.alloc(ObjectData::Array(refs))
+            }
+            OwnedValue::Function { return_type, parameters, body } => {
+                self.alloc(ObjectData::Function { return_type, parameters, body })
+            }
+            OwnedValue::Null => self.null_ref,
+        }
+    }
+
     // ── Evaluación de Programa ──────────────────────────────────────────────
 
     pub fn eval_program(&mut self, program: &Program) -> Option<ObjectRef> {
@@ -97,7 +152,7 @@ impl Evaluator {
             match self.eval_statement(statement) {
                 EvalResult::Value(v) => result = v,
                 EvalResult::Return(_) => {
-                    println!(
+                    eprintln!(
                         "❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a function or conditional or loops."
                     );
                     return None;
@@ -126,7 +181,7 @@ impl Evaluator {
 
             Statement::Assign(assign_stmt) => {
                 if self.lookup_var(&assign_stmt.name).is_none() {
-                    println!("❌ ERROR: Undeclared variable: {}", assign_stmt.name);
+                    eprintln!("❌ ERROR: Undeclared variable: {}", assign_stmt.name);
                     return EvalResult::Error;
                 }
 
@@ -165,49 +220,19 @@ impl Evaluator {
                 EvalResult::Value(self.null_ref)
             }
 
-            Statement::Block(block_stmt) => {
-                self.scopes.push();
-                let mut result = EvalResult::Value(self.null_ref);
-
-                for s in &block_stmt.statements {
-                    match self.eval_statement(s) {
-                        EvalResult::Value(v) => result = EvalResult::Value(v),
-                        EvalResult::Return(_) => {
-                            println!(
-                                "❌ FLASH SCOPE ERROR: 'return' can only be used inside functions or control flows (if/while/for). Use 'export' for the global level."
-                            );
-                            result = EvalResult::Error;
-                            break;
-                        }
-                        EvalResult::Error => {
-                            result = EvalResult::Error;
-                            break;
-                        }
-                    }
-                }
-
-                let result_data_opt = match &result {
-                    EvalResult::Value(v) | EvalResult::Return(v) => self.resolve(*v).cloned(),
-                    EvalResult::Error => None,
-                };
-
-                self.scopes.pop();
-
-                if let Some(data) = result_data_opt {
-                    let promoted_ref = self.alloc(data);
-                    match result {
-                        EvalResult::Value(_) => EvalResult::Value(promoted_ref),
-                        EvalResult::Return(_) => EvalResult::Return(promoted_ref),
-                        EvalResult::Error => EvalResult::Error,
-                    }
-                } else {
-                    EvalResult::Error
-                }
-            }
+            Statement::Block(block_stmt) => self.eval_block(block_stmt),
 
             Statement::While(while_stmt) => {
                 let mut result = EvalResult::Value(self.null_ref);
                 loop {
+                    // Guardar watermark antes de evaluar la condición para liberar el temporal
+                    // inmediatamente después — evita que se acumule una allocación por iteración.
+                    let cond_mark = if !self.scopes.is_empty() {
+                        Some(self.scopes.arena.watermark())
+                    } else {
+                        None
+                    };
+
                     // 1. Evaluate condition
                     let condition_ref = match self.eval_expression(&while_stmt.condition) {
                         EvalResult::Value(v) => v,
@@ -216,6 +241,11 @@ impl Evaluator {
                     };
 
                     let condition_data = self.resolve(condition_ref).unwrap().clone();
+
+                    // Liberar el temporal de la condición antes de decidir si continuar
+                    if let Some(mark) = cond_mark {
+                        self.scopes.arena.reset_to(mark);
+                    }
 
                     if !self.is_truthy(&condition_data) {
                         break;
@@ -272,22 +302,24 @@ impl Evaluator {
             }
         }
 
-        let result_data_opt = match &result {
-            EvalResult::Value(v) | EvalResult::Return(v) => self.resolve(*v).cloned(),
+        // Deep-extract ANTES del pop: preserva elementos de arrays y valores anidados.
+        let owned = match &result {
+            EvalResult::Value(v) | EvalResult::Return(v) => Some(self.extract(*v)),
             EvalResult::Error => None,
         };
 
         self.scopes.pop();
 
-        if let Some(data) = result_data_opt {
-            let promoted_ref = self.alloc(data);
-            match result {
-                EvalResult::Value(_) => EvalResult::Value(promoted_ref),
-                EvalResult::Return(_) => EvalResult::Return(promoted_ref),
-                EvalResult::Error => EvalResult::Error,
+        match owned {
+            Some(val) => {
+                let promoted = self.plant(val);
+                match result {
+                    EvalResult::Value(_) => EvalResult::Value(promoted),
+                    EvalResult::Return(_) => EvalResult::Return(promoted),
+                    EvalResult::Error => unreachable!(),
+                }
             }
-        } else {
-            EvalResult::Error
+            None => EvalResult::Error,
         }
     }
 
@@ -300,7 +332,7 @@ impl Evaluator {
             Expression::Identifier(name) => match self.lookup_var(name) {
                 Some(r) => EvalResult::Value(r),
                 None => {
-                    println!("❌ ERROR: Variable not found: {}", name);
+                    eprintln!("❌ ERROR: Variable not found: {}", name);
                     EvalResult::Error
                 }
             },
@@ -342,7 +374,9 @@ impl Evaluator {
                         body,
                     }) => (return_type, parameters, body),
                     _ => {
-                        println!("❌ ERROR: Attempt to call a non-function");
+                        eprintln!("❌ ERROR: Attempt to call a non-function");
+                        self.scopes.pop();
+                        self.call_stack.pop();
                         return EvalResult::Error;
                     }
                 };
@@ -351,24 +385,30 @@ impl Evaluator {
                 for arg in &call_expr.arguments {
                     match self.eval_expression(arg) {
                         EvalResult::Value(r) => arg_refs.push(r),
-                        _ => return EvalResult::Error,
+                        _ => {
+                            self.scopes.pop();
+                            self.call_stack.pop();
+                            return EvalResult::Error;
+                        }
                     }
                 }
 
                 if arg_refs.len() != parameters.len() {
-                    println!(
+                    eprintln!(
                         "❌ ERROR: Function expected {} arguments, got {}",
                         parameters.len(),
                         arg_refs.len()
                     );
 
                     for frame in self.call_stack.iter().rev() {
-                        println!(
+                        eprintln!(
                             "    called from '{}' [line {}:{}]",
                             frame.name, frame.line, frame.column
                         );
                     }
-                    println!();
+                    eprintln!();
+                    self.scopes.pop();
+                    self.call_stack.pop();
                     return EvalResult::Error;
                 }
 
@@ -384,18 +424,20 @@ impl Evaluator {
                         };
 
                         if !is_valid {
-                            println!(
+                            eprintln!(
                                 "❌ TYPE ERROR: Parameter '{}' expected '{}' but received another type.",
                                 param.name, expected_type
                             );
 
                             for frame in self.call_stack.iter().rev() {
-                                println!(
+                                eprintln!(
                                     "    called from '{}' [line {}:{}]",
                                     frame.name, frame.line, frame.column
                                 );
                             }
-                            println!();
+                            eprintln!();
+                            self.scopes.pop();
+                            self.call_stack.pop();
                             return EvalResult::Error;
                         }
                     }
@@ -417,22 +459,18 @@ impl Evaluator {
                         }
                         EvalResult::Error => {
                             self.scopes.pop();
+                            self.call_stack.pop();
                             return EvalResult::Error;
                         }
                     }
                 } // <--- Added missing brace
 
-                // Extraer el valor antes de destruir el Flash Scope
-                let result_data_opt = self.resolve(result_ref).cloned();
+                // Deep-extract ANTES del pop — preserva elementos de arrays anidados
+                let owned = self.extract(result_ref);
 
-                self.scopes.pop(); // Destrucción instantánea de temporales (Flash Scope)
+                self.scopes.pop(); // Flash Scope: destrucción instantánea de temporales
                 self.call_stack.pop();
-                // Promovemos el resultado al scope actual (padre) o global
-                let result_ref = if let Some(data) = result_data_opt {
-                    self.alloc(data)
-                } else {
-                    self.null_ref
-                };
+                let result_ref = self.plant(owned);
 
                 if let Some(expected_ret) = &return_type {
                     let actual_data = self.resolve(result_ref).unwrap();
@@ -444,17 +482,17 @@ impl Evaluator {
                         _ => false,
                     };
                     if !is_valid {
-                        println!(
+                        eprintln!(
                             "❌ TYPE ERROR: Function expected to return '{}' but returned another type.",
                             expected_ret
                         );
                         for frame in self.call_stack.iter().rev() {
-                            println!(
+                            eprintln!(
                                 "    called from '{}' [line {}:{}]",
                                 frame.name, frame.line, frame.column
                             );
                         }
-                        println!();
+                        eprintln!();
                         return EvalResult::Error;
                     }
                 }
@@ -506,29 +544,29 @@ impl Evaluator {
                 if let (ObjectData::Array(elements), ObjectData::Integer(i)) = (left_data, idx_data)
                 {
                     if i < 0 || i as usize >= elements.len() {
-                        println!("❌ ERROR: Index out of bounds");
+                        eprintln!("❌ ERROR: Index out of bounds");
 
                         for frame in self.call_stack.iter().rev() {
-                            println!(
+                            eprintln!(
                                 "    called from '{}' [line {}:{}]",
                                 frame.name, frame.line, frame.column
                             );
                         }
-                        println!();
+                        eprintln!();
                         EvalResult::Error
                     } else {
                         EvalResult::Value(elements[i as usize])
                     }
                 } else {
-                    println!("❌ ERROR: Index operator not supported for these types");
+                    eprintln!("❌ ERROR: Index operator not supported for these types");
 
                     for frame in self.call_stack.iter().rev() {
-                        println!(
+                        eprintln!(
                             "    called from '{}' [line {}:{}]",
                             frame.name, frame.line, frame.column
                         );
                     }
-                    println!();
+                    eprintln!();
                     EvalResult::Error
                 }
             }
@@ -570,7 +608,7 @@ impl Evaluator {
                 if let ObjectData::Integer(i) = right {
                     EvalResult::Value(self.alloc(ObjectData::Integer(-i)))
                 } else {
-                    println!("❌ ERROR: Prefix '-' not supported for this type");
+                    eprintln!("❌ ERROR: Prefix '-' not supported for this type");
                     EvalResult::Error
                 }
             }
@@ -578,7 +616,7 @@ impl Evaluator {
                 if let ObjectData::Boolean(b) = right {
                     EvalResult::Value(self.alloc(ObjectData::Boolean(!b)))
                 } else {
-                    println!("❌ ERROR: Prefix '!' only applies to booleans");
+                    eprintln!("❌ ERROR: Prefix '!' only applies to booleans");
                     EvalResult::Error
                 }
             }
@@ -602,46 +640,46 @@ impl Evaluator {
                     "+" => match l.checked_add(r) {
                         Some(v) => ObjectData::Integer(v),
                         None => {
-                            println!("❌ ERROR: Integer overflow");
+                            eprintln!("❌ ERROR: Integer overflow");
                             return EvalResult::Error;
                         }
                     },
                     "-" => match l.checked_sub(r) {
                         Some(v) => ObjectData::Integer(v),
                         None => {
-                            println!("❌ ERROR: Integer overflow");
+                            eprintln!("❌ ERROR: Integer overflow");
                             return EvalResult::Error;
                         }
                     },
                     "*" => match l.checked_mul(r) {
                         Some(v) => ObjectData::Integer(v),
                         None => {
-                            println!("❌ ERROR: Integer overflow");
+                            eprintln!("❌ ERROR: Integer overflow");
                             return EvalResult::Error;
                         }
                     },
                     "/" => {
                         if r == 0 {
-                            println!("❌ ERROR: Division by zero");
+                            eprintln!("❌ ERROR: Division by zero");
                             return EvalResult::Error;
                         }
                         match l.checked_div(r) {
                             Some(v) => ObjectData::Integer(v),
                             None => {
-                                println!("❌ ERROR: Integer overflow");
+                                eprintln!("❌ ERROR: Integer overflow");
                                 return EvalResult::Error;
                             }
                         }
                     }
                     "%" => {
                         if r == 0 {
-                            println!("❌ ERROR: Modulus operator by zero");
+                            eprintln!("❌ ERROR: Modulus operator by zero");
                             return EvalResult::Error;
                         }
                         match l.checked_rem(r) {
                             Some(v) => ObjectData::Integer(v),
                             None => {
-                                println!("❌ ERROR: Integer overflow");
+                                eprintln!("❌ ERROR: Integer overflow");
                                 return EvalResult::Error;
                             }
                         }
@@ -651,7 +689,7 @@ impl Evaluator {
                     "==" => ObjectData::Boolean(l == r),
                     "!=" => ObjectData::Boolean(l != r),
                     _ => {
-                        println!("❌ ERROR: Unknown operator: {}", op);
+                        eprintln!("❌ ERROR: Unknown operator: {}", op);
                         return EvalResult::Error;
                     }
                 };
@@ -663,7 +701,7 @@ impl Evaluator {
                     "==" => ObjectData::Boolean(l == r),
                     "!=" => ObjectData::Boolean(l != r),
                     _ => {
-                        println!("❌ ERROR: Operator '{}' not supported between strings", op);
+                        eprintln!("❌ ERROR: Operator '{}' not supported between strings", op);
                         return EvalResult::Error;
                     }
                 };
@@ -673,13 +711,13 @@ impl Evaluator {
                 let result = match op {
                     "*" => {
                         if n < 0 {
-                            println!("❌ ERROR: Cannot repeat a string with a negative n");
+                            eprintln!("❌ ERROR: Cannot repeat a string with a negative n");
                             return EvalResult::Error;
                         }
                         ObjectData::Str(s.repeat(n as usize))
                     }
                     _ => {
-                        println!(
+                        eprintln!(
                             "❌ ERROR: Operator '{}' not supported between String and Integer",
                             op
                         );
@@ -689,17 +727,17 @@ impl Evaluator {
                 EvalResult::Value(self.alloc(result))
             }
             _ => {
-                print!(
+                eprint!(
                     "❌ ERROR: Type mismatch — operator '{}' cannot be applied between '{}' and '{}' - [{}:{}]",
                     op, left_type, right_type, line, column
                 );
                 for frame in self.call_stack.iter().rev() {
-                    println!(
+                    eprintln!(
                         "    called from '{}' [line {}:{}]",
                         frame.name, frame.line, frame.column
                     );
                 }
-                println!();
+                eprintln!();
                 EvalResult::Error
             }
         }

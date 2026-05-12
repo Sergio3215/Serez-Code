@@ -27,7 +27,7 @@ fn main() {
             if arg == "--check" {
                 is_check = true;
             } else if arg.starts_with("--") {
-                println!("❌ ERROR: Unknown flag '{}'", arg);
+                eprintln!("❌ ERROR: Unknown flag '{}'", arg);
                 return;
             } else if file_path.is_empty() {
                 file_path = arg.clone();
@@ -35,19 +35,19 @@ fn main() {
         }
 
         if file_path.is_empty() {
-            println!("❌ ERROR: You must provide a .sz file to execute or check.");
+            eprintln!("❌ ERROR: You must provide a .sz file to execute or check.");
             return;
         }
 
         if !file_path.ends_with(".sz") {
-            println!("❌ ERROR: File must have a .sz extension");
+            eprintln!("❌ ERROR: File must have a .sz extension");
             return;
         }
 
         let input = match fs::read_to_string(&file_path) {
             Ok(content) => content,
             Err(e) => {
-                println!("❌ ERROR reading file '{}': {}", file_path, e);
+                eprintln!("❌ ERROR reading file '{}': {}", file_path, e);
                 return;
             }
         };

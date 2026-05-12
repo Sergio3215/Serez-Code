@@ -55,12 +55,12 @@ Most interpreted languages manage object lifetimes with a garbage collector or R
 | Trait | Traditional interpreters | Serez-Code |
 |---|---|---|
 | Memory management | GC pauses / reference counting | Bump allocator + watermark truncation |
-| Scope cleanup | Non-deterministic (GC) or O(n) | Deterministic, `O(1)` per scope exit |
+| Scope cleanup | Non-deterministic (GC) or O(n) | Deterministic, `O(k)` drops per scope exit |
 | Object references | `Box` / `Rc` / raw pointers | `ObjectRef` — a safe `(RegionId, usize)` index |
 | Type safety | Fully dynamic or fully static | Optional annotations, enforced at every call site |
 | `unsafe` code | Often required for performance | **Zero `unsafe` blocks** |
 
-Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, all block-local memory disappears in a single `truncate()` call — no iteration, no reference counting, no GC pause.
+Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, all block-local memory is freed via a single `Vec::truncate()` call — no reference counting, no GC pause. Each object runs its Rust destructor on drop, so cleanup cost is `O(k)` where `k` is the number of objects in that scope (compared to `O(n)` GC traversal over the entire heap).
 
 ---
 

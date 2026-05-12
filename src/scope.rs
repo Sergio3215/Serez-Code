@@ -5,7 +5,7 @@
 //   - un watermark para resetear la arena al salir del bloque
 
 use std::collections::HashMap;
-use crate::region::{Arena, ObjectData, ObjectRef};
+use crate::region::{Arena, ObjectData, ObjectRef, RegionId};
 
 /// Un frame de ámbito local: tabla de variables + marca de reset.
 pub struct ScopeFrame {
@@ -81,6 +81,11 @@ impl ScopeStack {
 
         // Si encontramos el ref, actualizamos in-place en la arena
         if let Some(r) = existing_ref {
+            debug_assert_eq!(
+                r.region,
+                RegionId::Scoped,
+                "assign: ref en frame debería ser Scoped; un Global ref en frames indica corrupción de scope"
+            );
             self.arena.update(r.index, new_data);
             return true;
         }
