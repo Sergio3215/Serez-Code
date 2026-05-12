@@ -15,6 +15,7 @@ pub enum Statement {
     FunctionDeclaration(FunctionDeclaration), // fn tipo nombre() {}
     Expression(Expression),                   // Expresiones sueltas: ii, 1 + 1, etc.
     While(WhileStatement),                    // Bucle while: while (cond) { ... }
+    For(ForStatement),                        // Bucle for: for (let i = 0; i < n; i = i + 1) { ... }
     Out(OutStatement),                        // Salida a consola: out expr;
 }
 
@@ -66,6 +67,14 @@ pub struct FunctionDeclaration {
 #[derive(Debug, Clone)]
 pub struct WhileStatement {
     pub condition: Expression,
+    pub body: BlockStatement,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForStatement {
+    pub init: LetStatement,
+    pub condition: Expression,
+    pub update: AssignStatement,
     pub body: BlockStatement,
 }
 

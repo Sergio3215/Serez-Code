@@ -22,6 +22,8 @@ pub enum TokenType {
     GtEq,
     Eq,
     NotEq,
+    And,   // &&
+    Or,    // ||
     Arrow, // =>
 
     // Delimiters
@@ -43,6 +45,7 @@ pub enum TokenType {
     If,
     Else,
     While,
+    For,
     Return,
     Out,
 
@@ -81,6 +84,7 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "if" => TokenType::If,
         "else" => TokenType::Else,
         "while" => TokenType::While,
+        "for" => TokenType::For,
         "return" => TokenType::Return,
         "out" => TokenType::Out,
         "void" => TokenType::KwVoid,

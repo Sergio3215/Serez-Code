@@ -5,6 +5,8 @@ use crate::token::{Token, TokenType};
 #[derive(PartialEq, PartialOrd)]
 pub enum Precedence {
     Lowest,
+    LogicalOr,   // ||
+    LogicalAnd,  // &&
     Equals,      // ==
     LessGreater, // > or <
     Sum,         // +
@@ -16,6 +18,8 @@ pub enum Precedence {
 
 pub fn token_precedence(token_type: &TokenType) -> Precedence {
     match token_type {
+        TokenType::Or => Precedence::LogicalOr,
+        TokenType::And => Precedence::LogicalAnd,
         TokenType::Eq | TokenType::NotEq => Precedence::Equals,
         TokenType::Lt | TokenType::Gt | TokenType::LtEq | TokenType::GtEq => Precedence::LessGreater,
         TokenType::Plus | TokenType::Minus => Precedence::Sum,
@@ -81,7 +85,8 @@ impl Parser {
                 | TokenType::Return
                 | TokenType::Out
                 | TokenType::Function
-                | TokenType::While => return,
+                | TokenType::While
+                | TokenType::For => return,
                 _ => self.next_token(),
             }
         }
@@ -95,6 +100,7 @@ impl Parser {
             TokenType::LBrace => self.parse_block_statement(),
             TokenType::Function => self.parse_function_statement(),
             TokenType::While => self.parse_while_statement(),
+            TokenType::For => self.parse_for_statement(),
             // Reasignación: Ident seguido de `=`
             TokenType::Ident if self.peek_token.token_type == TokenType::Assign => {
                 self.parse_assign_statement()
@@ -200,6 +206,83 @@ impl Parser {
         };
 
         Some(Statement::While(WhileStatement { condition, body }))
+    }
+
+    fn parse_for_statement(&mut self) -> Option<Statement> {
+        // current_token = 'for'
+        if self.peek_token.token_type != TokenType::LParen {
+            eprintln!("❌ PARSER ERROR: Expected '(' after 'for'");
+            return None;
+        }
+        self.next_token(); // now '('
+        self.next_token(); // first token of init
+
+        // --- INIT: let name = expr ---
+        if self.current_token.token_type != TokenType::Let {
+            eprintln!("❌ PARSER ERROR: Expected 'let' as for-loop initializer");
+            return None;
+        }
+        let init = match self.parse_let_statement()? {
+            Statement::Let(l) => l,
+            _ => return None,
+        };
+        // parse_let_statement consumed the ';' — current = ';'
+        if self.current_token.token_type != TokenType::Semicolon {
+            if self.peek_token.token_type == TokenType::Semicolon {
+                self.next_token();
+            } else {
+                eprintln!("❌ PARSER ERROR: Expected ';' after for-loop initializer");
+                return None;
+            }
+        }
+        self.next_token(); // first token of condition
+
+        // --- CONDITION ---
+        let condition = self.parse_expression(Precedence::Lowest)?;
+
+        if self.peek_token.token_type != TokenType::Semicolon {
+            eprintln!("❌ PARSER ERROR: Expected ';' after for-loop condition");
+            return None;
+        }
+        self.next_token(); // now ';'
+        self.next_token(); // first token of update
+
+        // --- UPDATE: name = expr ---
+        if self.current_token.token_type != TokenType::Ident
+            || self.peek_token.token_type != TokenType::Assign
+        {
+            eprintln!("❌ PARSER ERROR: Expected assignment as for-loop update");
+            return None;
+        }
+        let update = match self.parse_assign_statement()? {
+            Statement::Assign(a) => a,
+            _ => return None,
+        };
+        // parse_assign_statement left current at last token of RHS (peek = ')')
+
+        if self.peek_token.token_type != TokenType::RParen {
+            eprintln!("❌ PARSER ERROR: Expected ')' after for-loop update");
+            return None;
+        }
+        self.next_token(); // now ')'
+
+        if self.peek_token.token_type != TokenType::LBrace {
+            eprintln!("❌ PARSER ERROR: Expected '{{' to start for-loop body");
+            return None;
+        }
+        self.next_token(); // now '{'
+
+        let body = match self.parse_block_statement()? {
+            Statement::Block(b) => b,
+            _ => return None,
+        };
+
+        Some(Statement::For(ForStatement {
+            init,
+            condition,
+            update,
+            body,
+        }))
     }
 
     fn parse_if_expression(&mut self) -> Option<Expression> {
@@ -559,6 +642,8 @@ impl Parser {
                 | TokenType::Gt
                 | TokenType::LtEq
                 | TokenType::GtEq
+                | TokenType::And
+                | TokenType::Or
                 | TokenType::LParen
                 | TokenType::LBracket => true,
                 _ => false,

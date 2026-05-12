@@ -299,6 +299,106 @@ impl Evaluator {
                 result
             }
 
+            Statement::For(for_stmt) => {
+                // Push a dedicated scope so the init variable is local to the loop
+                self.scopes.push();
+
+                // Init: declare the loop variable
+                let init_val = match self.eval_expression(&for_stmt.init.value) {
+                    EvalResult::Value(v) => v,
+                    EvalResult::Error => {
+                        self.scopes.pop();
+                        return EvalResult::Error;
+                    }
+                    EvalResult::Return(v) => {
+                        self.scopes.pop();
+                        return EvalResult::Return(v);
+                    }
+                };
+                self.scopes.declare(for_stmt.init.name.clone(), init_val);
+
+                // loop_return holds an extracted (arena-independent) return value if a
+                // `return` was encountered inside the body — extracted BEFORE the for-scope
+                // is popped so the ObjectRef is still valid at extraction time.
+                let mut loop_return: Option<OwnedValue> = None;
+                let mut loop_error = false;
+
+                loop {
+                    // Evaluate condition, free its temporary immediately
+                    let cond_mark = self.scopes.arena.watermark();
+                    let condition_ref = match self.eval_expression(&for_stmt.condition) {
+                        EvalResult::Value(v) => v,
+                        EvalResult::Error => {
+                            loop_error = true;
+                            break;
+                        }
+                        EvalResult::Return(v) => {
+                            loop_return = Some(self.extract(v));
+                            break;
+                        }
+                    };
+                    let condition_data = self.resolve(condition_ref).unwrap().clone();
+                    self.scopes.arena.reset_to(cond_mark);
+
+                    if !self.is_truthy(&condition_data) {
+                        break;
+                    }
+
+                    // Execute body — eval_block handles its own push/pop
+                    match self.eval_block(&for_stmt.body) {
+                        EvalResult::Value(_) => {}
+                        EvalResult::Return(v) => {
+                            // Extract while for-scope (and its sub-allocs) is still live
+                            loop_return = Some(self.extract(v));
+                            break;
+                        }
+                        EvalResult::Error => {
+                            loop_error = true;
+                            break;
+                        }
+                    }
+
+                    // Evaluate update, free its temporaries, then assign in-place
+                    let update_mark = self.scopes.arena.watermark();
+                    let new_val_ref = match self.eval_expression(&for_stmt.update.value) {
+                        EvalResult::Value(v) => v,
+                        _ => {
+                            self.scopes.arena.reset_to(update_mark);
+                            loop_error = true;
+                            break;
+                        }
+                    };
+                    let new_data = self.resolve(new_val_ref).unwrap().clone();
+                    self.scopes.arena.reset_to(update_mark);
+
+                    if self.scopes.assign(&for_stmt.update.name, new_data.clone()) {
+                        // updated in-place in scoped arena
+                    } else if let Some(&existing_ref) =
+                        self.global_bindings.get(&for_stmt.update.name)
+                    {
+                        self.global_arena.update(existing_ref.index, new_data);
+                    } else {
+                        eprintln!(
+                            "❌ ERROR: Undeclared variable in for-loop update: {}",
+                            for_stmt.update.name
+                        );
+                        loop_error = true;
+                        break;
+                    }
+                }
+
+                // Pop the for-scope AFTER extracting any return value above
+                self.scopes.pop();
+
+                if loop_error {
+                    return EvalResult::Error;
+                }
+                if let Some(owned) = loop_return {
+                    return EvalResult::Return(self.plant(owned));
+                }
+                EvalResult::Value(self.null_ref)
+            }
+
             Statement::Return(return_stmt) => {
                 match self.eval_expression(&return_stmt.return_value) {
                     EvalResult::Value(v) => EvalResult::Return(v),
@@ -615,6 +715,48 @@ impl Evaluator {
                 self.eval_prefix(op, right_data)
             }
 
+            Expression::Infix(infix_expr)
+                if infix_expr.operator == "&&" || infix_expr.operator == "||" =>
+            {
+                let left_ref = match self.eval_expression(&infix_expr.left) {
+                    EvalResult::Value(r) => r,
+                    other => return other,
+                };
+                let left_data = self.resolve(left_ref).unwrap().clone();
+                let left_bool = match left_data {
+                    ObjectData::Boolean(b) => b,
+                    _ => {
+                        eprintln!(
+                            "❌ ERROR: '{}' operator requires boolean operands",
+                            infix_expr.operator
+                        );
+                        return EvalResult::Error;
+                    }
+                };
+
+                if infix_expr.operator == "&&" && !left_bool {
+                    return EvalResult::Value(self.alloc(ObjectData::Boolean(false)));
+                }
+                if infix_expr.operator == "||" && left_bool {
+                    return EvalResult::Value(self.alloc(ObjectData::Boolean(true)));
+                }
+
+                let right_ref = match self.eval_expression(&infix_expr.right) {
+                    EvalResult::Value(r) => r,
+                    other => return other,
+                };
+                match self.resolve(right_ref).unwrap().clone() {
+                    ObjectData::Boolean(_) => EvalResult::Value(right_ref),
+                    _ => {
+                        eprintln!(
+                            "❌ ERROR: '{}' operator requires boolean operands",
+                            infix_expr.operator
+                        );
+                        EvalResult::Error
+                    }
+                }
+            }
+
             Expression::Infix(infix_expr) => {
                 let left_ref = match self.eval_expression(&infix_expr.left) {
                     EvalResult::Value(r) => r,
@@ -847,6 +989,19 @@ impl Evaluator {
                     local_mem += self.estimate_expression(&w.condition);
                     // For static analysis we approximate one iteration cost
                     for body_stmt in &w.body.statements {
+                        if let ast::Statement::Expression(e) = body_stmt {
+                            local_mem += self.estimate_expression(e);
+                        } else if let ast::Statement::Let(l) = body_stmt {
+                            local_mem += 8 + self.estimate_expression(&l.value);
+                        }
+                    }
+                }
+                ast::Statement::For(f) => {
+                    local_mem += 8; // init variable
+                    local_mem += self.estimate_expression(&f.condition);
+                    local_mem += self.estimate_expression(&f.update.value);
+                    // Approximate one iteration cost
+                    for body_stmt in &f.body.statements {
                         if let ast::Statement::Expression(e) = body_stmt {
                             local_mem += self.estimate_expression(e);
                         } else if let ast::Statement::Let(l) = body_stmt {

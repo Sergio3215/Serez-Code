@@ -111,6 +111,22 @@ impl Lexer {
                     Token::new(TokenType::Gt, self.ch.to_string(), self.line, self.column)
                 }
             }
+            '&' => {
+                if self.peek_char() == '&' {
+                    self.read_char();
+                    Token::new(TokenType::And, "&&".to_string(), self.line, self.column)
+                } else {
+                    Token::new(TokenType::Illegal, self.ch.to_string(), self.line, self.column)
+                }
+            }
+            '|' => {
+                if self.peek_char() == '|' {
+                    self.read_char();
+                    Token::new(TokenType::Or, "||".to_string(), self.line, self.column)
+                } else {
+                    Token::new(TokenType::Illegal, self.ch.to_string(), self.line, self.column)
+                }
+            }
             ';' => Token::new(
                 TokenType::Semicolon,
                 self.ch.to_string(),

@@ -216,6 +216,23 @@ out !false;    // → true
 
 The `!` prefix applies only to booleans. Applying it to any other type is a runtime error.
 
+`&&` and `||` are infix logical operators. Both require boolean operands and use **short-circuit evaluation**: `&&` stops at the first `false`, `||` stops at the first `true`.
+
+```serez
+out true && true;     // → true
+out true && false;    // → false
+out false && true;    // → false  (right side not evaluated)
+out false || true;    // → true
+out false || false;   // → false
+out true || false;    // → true   (right side not evaluated)
+
+// Combine with comparison operators:
+out (1 < 2) && (3 > 0);    // → true
+out (1 > 2) || (3 == 3);   // → true
+```
+
+Applying `&&` or `||` to non-boolean operands is a runtime error.
+
 #### String operations
 
 Strings support concatenation with `+` and repetition with `*`:
@@ -243,6 +260,8 @@ From lowest to highest:
 | Level | Operators |
 |---|---|
 | `Lowest` | — |
+| `LogicalOr` | `\|\|` |
+| `LogicalAnd` | `&&` |
 | `Equals` | `==` `!=` |
 | `LessGreater` | `<` `>` `<=` `>=` |
 | `Sum` | `+` `-` |
@@ -450,6 +469,66 @@ out findFirst(99);  // → -1
 ```
 
 The while condition is evaluated freshly each iteration and its temporary memory is released before entering the body, so loops do not accumulate condition allocations.
+
+#### `for`
+
+C-style for loop. The initializer must be a `let` declaration; the update must be an assignment.
+
+```
+for (<let init>; <condition>; <update>) { <body> }
+```
+
+```serez
+for (let i = 0; i < 5; i = i + 1) {
+    out i;
+}
+// → 0, 1, 2, 3, 4
+```
+
+The loop variable is scoped to the loop — it is not accessible after the closing `}`. Iterating over an array by index:
+
+```serez
+let nums = [10, 20, 30, 40, 50];
+let sum = 0;
+
+for (let i = 0; i < 5; i = i + 1) {
+    sum = sum + nums[i];
+}
+out sum;   // → 150
+```
+
+Nested `for` loops work naturally and each loop variable is scoped independently:
+
+```serez
+let matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+
+for (let i = 0; i < 3; i = i + 1) {
+    for (let j = 0; j < 3; j = j + 1) {
+        out matrix[i][j];
+    }
+}
+// → 1, 2, 3, 4, 5, 6, 7, 8, 9
+```
+
+`return` inside a `for` propagates through the loop and exits the enclosing function immediately:
+
+```serez
+fn int firstOver(int limit) {
+    for (let k = 0; k < 100; k = k + 1) {
+        if (k > limit) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+out firstOver(7);    // → 8
+out firstOver(200);  // → -1
+```
+
+Like `while`, the condition and update temporaries are freed each iteration — loops do not accumulate allocations.
+
+---
 
 #### Standalone blocks
 
@@ -933,7 +1012,7 @@ Source file (.sz) or REPL line
     Parser (Pratt TDOP)
     — parse_program() → Program { Vec<Statement> }
     — Prefix handlers: literals, identifiers, if, fn, arrays, ( )
-    — Infix handlers: +, -, *, /, %, ==, !=, <, >, <=, >=, f(args), a[i]
+    — Infix handlers: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||, f(args), a[i]
     — Error recovery: synchronize() skips to ; or } or keyword on failure
         │
         ▼
@@ -946,7 +1025,7 @@ Source file (.sz) or REPL line
         ▼
     Evaluator (tree-walking)
     — eval_program() iterates top-level statements
-    — eval_statement() dispatches Let, Assign, While, Out, Block, …
+    — eval_statement() dispatches Let, Assign, While, For, Out, Block, …
     — eval_expression() dispatches Infix, Prefix, Call, If, Index, …
     — Flash Scope protocol on every { } block: push → eval → extract → pop → plant
     — Scratch watermark reclaims top-level Out / Expression temporaries
@@ -1039,8 +1118,8 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 ## Roadmap
 
 ### Language features
-- [ ] `&&` and `||` — logical AND and OR operators
-- [ ] `for` loop — `for (let i = 0; i < n; i = i + 1) { ... }`
+- [x] `&&` and `||` — logical AND and OR operators with short-circuit evaluation
+- [x] `for` loop — `for (let i = 0; i < n; i = i + 1) { ... }`, nested loops, 1D/2D array traversal
 - [ ] Array mutation via index — `arr[i] = expr`
 - [ ] String interpolation — `"Hello, {name}!"`
 - [ ] Lexical closures — functions that capture variables from their defining scope
