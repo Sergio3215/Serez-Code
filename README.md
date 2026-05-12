@@ -1,6 +1,7 @@
 <div align="center">
 
 # ![](./img/serez-icon.svg) Serez-Code
+
 **A hand-crafted interpreted programming language — written from scratch in Rust.**
 
 No garbage collector. No heavy dependencies. Instant memory cleanup via **Flash Scopes**.
@@ -33,18 +34,21 @@ out fibonacci(10);   // → 55
 3. [Language Reference](#language-reference)
    - [Variables](#variables)
    - [Types](#types)
+   - [Operators](#operators)
    - [Functions](#functions)
    - [Control Flow](#control-flow)
    - [Arrays](#arrays)
-   - [Operators](#operators)
    - [Output](#output)
    - [Comments](#comments)
-4. [Flash Scopes — Memory Model](#flash-scopes--memory-model)
-5. [Static Profiler](#static-profiler-check-mode)
-6. [Architecture Overview](#architecture-overview)
-7. [Contributing](#contributing)
-8. [Roadmap](#roadmap)
-9. [License](#license)
+4. [Type System](#type-system)
+5. [Runtime Safety](#runtime-safety)
+6. [Flash Scopes — Memory Model](#flash-scopes--memory-model)
+7. [Static Profiler](#static-profiler-check-mode)
+8. [Error Reference](#error-reference)
+9. [Architecture Overview](#architecture-overview)
+10. [Contributing](#contributing)
+11. [Roadmap](#roadmap)
+12. [License](#license)
 
 ---
 
@@ -56,11 +60,12 @@ Most interpreted languages manage object lifetimes with a garbage collector or R
 |---|---|---|
 | Memory management | GC pauses / reference counting | Bump allocator + watermark truncation |
 | Scope cleanup | Non-deterministic (GC) or O(n) | Deterministic, `O(k)` drops per scope exit |
-| Object references | `Box` / `Rc` / raw pointers | `ObjectRef` — a safe `(RegionId, usize)` index |
+| Object references | `Box` / `Rc` / raw pointers | `ObjectRef` — a safe `(RegionId, usize)` index pair |
 | Type safety | Fully dynamic or fully static | Optional annotations, enforced at every call site |
+| Integer safety | Silent overflow or panic | `checked_*` arithmetic — overflow is a runtime error |
 | `unsafe` code | Often required for performance | **Zero `unsafe` blocks** |
 
-Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, all block-local memory is freed via a single `Vec::truncate()` call — no reference counting, no GC pause. Each object runs its Rust destructor on drop, so cleanup cost is `O(k)` where `k` is the number of objects in that scope (compared to `O(n)` GC traversal over the entire heap).
+Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, all block-local memory is freed via a single `Vec::truncate()` call — no reference counting, no GC pause.
 
 ---
 
@@ -83,7 +88,14 @@ This installs the `sz` binary globally.
 ### Run a script
 
 ```bash
-sz hello.sz
+sz script.sz
+```
+
+Errors go to `stderr`. You can separate program output from errors:
+
+```bash
+sz script.sz > output.txt    # captures only out statements
+sz script.sz 2> errors.txt   # captures only runtime errors
 ```
 
 ### Start the REPL
@@ -91,7 +103,7 @@ sz hello.sz
 ```bash
 sz
 >> let x = 10;
->> x * 3
+>> out x * 3;
 30
 ```
 
@@ -115,20 +127,35 @@ sz --version
 
 ### Variables
 
-Variables are declared with `let`. Reassignment uses plain `=` — no `let` again.
+Variables are declared with `let`. Reassignment uses bare `=` — no `let` again.
 
 ```serez
-let name   = "Jhon";
+let name   = "Sergio";
 let count  = 20;
 let active = true;
 
 count = count + 1;   // reassignment — variable must already exist
 ```
 
-Attempting to reassign an undeclared variable is a runtime error.
+Variables declared inside a block `{ ... }` are invisible outside it. Variables from outer scopes can be mutated from inside:
 
 ```serez
-x = 5;   // ❌ ERROR: Undeclared variable: x
+let total = 0;
+
+{
+    let local = 42;   // only lives in this block
+    total = local;    // outer variable mutated — allowed
+}
+
+out total;    // → 42
+// out local; // ❌ ERROR: Variable not found: local
+```
+
+Attempting to use or reassign an undeclared variable is a runtime error:
+
+```serez
+x = 5;    // ❌ ERROR: Undeclared variable: x
+out y;    // ❌ ERROR: Variable not found: y
 ```
 
 ---
@@ -137,30 +164,105 @@ x = 5;   // ❌ ERROR: Undeclared variable: x
 
 Serez-Code has four primitive types and two compound types:
 
-| Type | Literal examples | Notes |
+| Type | Literal examples | Runtime representation |
 |---|---|---|
 | `int` | `0`, `42`, `-7` | 64-bit signed integer (`i64`) |
-| `bool` | `true`, `false` | |
-| `string` | `"hello"`, `"foo bar"` | UTF-8, no escape sequences yet |
+| `bool` | `true`, `false` | Boolean |
+| `string` | `"hello"`, `"foo bar"` | UTF-8 string |
 | `void` | — | Signals absence of a return value |
 | Array | `[1, 2, "x"]` | Heterogeneous, 0-indexed |
 | Function | `fn int add(...)` | First-class value |
 
-Type annotations are **optional** on parameters and return types. When present, they are **enforced at every call site** at runtime — not at compile time.
+Types are **dynamic by default**. Annotations are optional on parameters and return values. When provided, they are enforced at every call site — see [Type System](#type-system) for details.
+
+---
+
+### Operators
+
+#### Arithmetic
+
+All arithmetic operates on `int` values. Integer division truncates toward zero.
 
 ```serez
-fn int strictAdd(int a, int b) {
-    return a + b;
-}
+out 10 + 3;    // → 13
+out 10 - 3;    // → 7
+out 10 * 3;    // → 30
+out 10 / 3;    // → 3   (integer division, truncates)
+out 10 % 3;    // → 1   (modulo)
+out -5;        // → -5  (negation — prefix)
+```
 
-strictAdd(1, "oops");   // ❌ TYPE ERROR: Parameter 'b' expected 'int'
+All arithmetic operations are overflow-safe. If the result would overflow `i64`, a runtime error is raised instead of wrapping silently. Division and modulo by zero are runtime errors.
+
+#### Comparison
+
+Comparison operators produce `bool` values:
+
+```serez
+out 5 > 3;     // → true
+out 5 < 3;     // → false
+out 5 >= 5;    // → true
+out 5 <= 4;    // → false
+out 5 == 5;    // → true
+out 5 != 3;    // → true
+```
+
+#### Logical
+
+```serez
+out !true;     // → false
+out !false;    // → true
+```
+
+The `!` prefix applies only to booleans. Applying it to any other type is a runtime error.
+
+#### String operations
+
+Strings support concatenation with `+` and repetition with `*`:
+
+```serez
+out "hello" + " world";    // → hello world
+out "ha" * 3;              // → hahaha
+out "a" == "a";            // → true
+out "a" != "b";            // → true
+```
+
+`*` requires a non-negative integer on the right. Negative repeat is a runtime error.
+
+String and integer concatenation requires explicit conversion via concatenation with another string:
+
+```serez
+let age = 23;
+out "Sergio con " + age + " años";   // → Sergio con 23 años
+```
+
+#### Operator precedence
+
+From lowest to highest:
+
+| Level | Operators |
+|---|---|
+| `Lowest` | — |
+| `Equals` | `==` `!=` |
+| `LessGreater` | `<` `>` `<=` `>=` |
+| `Sum` | `+` `-` |
+| `Product` | `*` `/` `%` |
+| `Prefix` | `-x` `!x` |
+| `Call` | `f(x)` |
+| `Index` | `a[i]` |
+
+Parentheses can override precedence:
+
+```serez
+out 2 + 3 * 4;     // → 14  (Product before Sum)
+out (2 + 3) * 4;   // → 20
 ```
 
 ---
 
 ### Functions
 
-Serez-Code supports two syntaxes for defining functions: **named declarations** and **arrow functions**.
+Serez-Code supports three function syntaxes. All functions are first-class values.
 
 #### Named declarations
 
@@ -168,14 +270,16 @@ Serez-Code supports two syntaxes for defining functions: **named declarations** 
 fn <return_type> <name>(<params>) { <body> }
 ```
 
+The return type and parameter types are optional. Names are required for declarations.
+
 ```serez
+fn int add(int a, int b) {
+    return a + b;
+}
+
 fn void greet(string name) {
     out "Hello, ";
     out name;
-}
-
-fn int add(int a, int b) {
-    return a + b;
 }
 
 fn bool isAdult(int age) {
@@ -196,27 +300,22 @@ let <name> = <return_type> (<params>) => { <body> }
 The return type goes **before** the parentheses. Braces are always required.
 
 ```serez
-let double  = int (int n)     => { return n * 2; }
-let greet   = void (string s) => { out s; }
-let isEven  = bool (int n)    => { return n == 0; }
-```
-
-#### Mixed / untyped parameters
-
-Type annotations are per-parameter. You can mix typed and untyped in the same signature:
-
-```serez
-fn int mixta(x, int y, string z) {
-    out z;
-    return y + 100;
+let double = int (int n) => {
+    return n * 2;
 }
 
-mixta(1, 50, "processing...");   // → 150
+let greet = void (string s) => {
+    out s;
+}
+
+let isEven = bool (int n) => {
+    return n == 0;
+}
 ```
 
-#### Anonymous functions as values
+#### Anonymous functions
 
-Functions are first-class. Assign them, pass them, store them in variables:
+Functions without a name can be assigned to variables and passed around:
 
 ```serez
 let run = fn void () {
@@ -225,6 +324,31 @@ let run = fn void () {
 
 run();
 ```
+
+#### Mixed / untyped parameters
+
+Type annotations are per-parameter. Typed and untyped can be mixed freely in the same signature:
+
+```serez
+fn int mixta(x, int y, string z) {
+    out z;
+    return y + 100;
+}
+
+out mixta(1, 50, "processing...");   // → 150
+```
+
+When a parameter has no type annotation, the function accepts any value for it.
+
+#### Calling functions
+
+```serez
+out add(3, 7);          // → 10
+out isAdult(18);        // → true
+out repeat("ab", 3);   // → ababab
+```
+
+Arguments are evaluated left-to-right before the call.
 
 #### Recursive functions
 
@@ -239,11 +363,26 @@ fn int factorial(int n) {
 out factorial(6);   // → 720
 ```
 
+The call stack is tracked and printed on error, so deeply nested recursion will display a readable trace.
+
+#### Functions as values
+
+```serez
+fn int double(int n) {
+    return n * 2;
+}
+
+let op = double;    // functions are values
+out op(21);         // → 42
+```
+
 ---
 
 ### Control Flow
 
 #### `if` / `else`
+
+Parentheses around the condition are required. Braces around each branch are required.
 
 ```serez
 if (x > 0) {
@@ -253,7 +392,19 @@ if (x > 0) {
 }
 ```
 
-`if` is an expression — it can appear anywhere a value is expected.
+`if` is an expression — it produces a value that can be returned or assigned:
+
+```serez
+fn string classify(int n) {
+    if (n > 0) {
+        return "positive";
+    } else if (n < 0) {
+        return "negative";
+    } else {
+        return "zero";
+    }
+}
+```
 
 #### `else if` chaining
 
@@ -262,8 +413,10 @@ if (score >= 90) {
     out "A";
 } else if (score >= 75) {
     out "B";
-} else {
+} else if (score >= 60) {
     out "C";
+} else {
+    out "F";
 }
 ```
 
@@ -275,33 +428,41 @@ while (i < 5) {
     out i;
     i = i + 1;
 }
+// → 0, 1, 2, 3, 4
 ```
 
-`return` inside a `while` propagates up through the loop and exits the enclosing function:
+`return` inside a `while` propagates through the loop and exits the enclosing function immediately:
 
 ```serez
 fn int findFirst(int target) {
     let i = 0;
     while (i < 10) {
         if (i == target) {
-            return i;   // exits the function immediately
+            return i;
         }
         i = i + 1;
     }
     return -1;
 }
+
+out findFirst(7);   // → 7
+out findFirst(99);  // → -1
 ```
+
+The while condition is evaluated freshly each iteration and its temporary memory is released before entering the body, so loops do not accumulate condition allocations.
 
 #### Standalone blocks
 
-Any `{ ... }` creates a new Flash Scope. Variables declared inside are invisible outside:
+Any `{ ... }` creates a new Flash Scope. This is useful to limit the lifetime of temporary variables:
 
 ```serez
 let y = 1;
 
+out y;   // → 1
+
 {
-    let x = 10;   // x lives only in this block
-    y = 100;      // y is in an outer scope — mutation is allowed
+    let x = 10;   // x is local to this block
+    y = 100;      // y lives outside — mutation propagates
 }
 
 out y;   // → 100
@@ -312,59 +473,54 @@ out y;   // → 100
 
 ### Arrays
 
-Arrays are heterogeneous and 0-indexed. Indexing with an out-of-bounds value is a runtime error.
+Arrays are heterogeneous (can mix types) and 0-indexed. They are created with bracket literals.
 
 ```serez
-let nums   = [1, 2, 3, 4, 5];
-let mixed  = [1, "two", true];
-
-out nums[0];     // → 1
-out nums[2];     // → 3
-out mixed[1];    // → two
+let nums  = [1, 2, 3, 4, 5];
+let mixed = [42, "hello", true];
+let empty = [];
 ```
 
----
-
-### Operators
-
-#### Arithmetic
+#### Index access
 
 ```serez
-out 10 + 3;    // → 13
-out 10 - 3;    // → 7
-out 10 * 3;    // → 30
-out 10 / 3;    // → 3   (integer division)
-out 10 % 3;    // → 1
+out nums[0];    // → 1
+out nums[4];    // → 5
+out mixed[1];   // → hello
 ```
 
-Division by zero is a runtime error.
-
-#### Comparison
+Indexing with a negative number or an index beyond the last element is a runtime error:
 
 ```serez
-out 5 > 3;     // → true
-out 5 < 3;     // → false
-out 5 == 5;    // → true
-out 5 != 3;    // → true
+out nums[10];   // ❌ ERROR: Index out of bounds
 ```
 
-#### Logical
+#### Arrays from functions
+
+Functions can build and return arrays. The returned array is safely promoted out of the function's scope before cleanup:
 
 ```serez
-out !true;     // → false
-out !false;    // → true
+fn make_arr() {
+    return [7, 8, 9];
+}
+
+let result = make_arr();
+out result[0];   // → 7
+out result[1];   // → 8
+out result[2];   // → 9
 ```
 
-#### String operations
+Passing values into arrays works the same way:
 
 ```serez
-out "hello" + " world";    // → hello world  (concatenation)
-out "ha" * 3;              // → hahaha        (repetition)
-out "a" == "a";            // → true
-out "a" != "b";            // → true
-```
+fn wrap(a, b) {
+    return [a, b];
+}
 
-String repetition requires a non-negative integer. Negative repeat is a runtime error.
+let pair = wrap(42, 99);
+out pair[0];   // → 42
+out pair[1];   // → 99
+```
 
 ---
 
@@ -373,107 +529,376 @@ String repetition requires a non-negative integer. Negative repeat is a runtime 
 `out` prints any value to stdout followed by a newline. It accepts any expression:
 
 ```serez
-out "hello";              // → hello
-out 42;                   // → 42
-out true;                 // → true
-out [1, 2, 3];            // → [1, 2, 3]
-out "score: " + "100";    // → score: 100
-out fibonacci(8);         // → 21
+out "hello";             // → hello
+out 42;                  // → 42
+out true;                // → true
+out [1, 2, 3];           // → [1, 2, 3]
+out "x = " + 10;        // → x = 10
+out fibonacci(8);        // → 21
 ```
+
+`out` is a statement, not a function — it cannot be nested inside an expression.
 
 ---
 
 ### Comments
 
-Single-line comments with `//`. No block comments yet.
+Single-line comments with `//`. Everything from `//` to end of line is ignored.
 
 ```serez
-// This is a comment
-let x = 5;   // inline comment
+// Full-line comment
+let x = 5;   // Inline comment
+
+// Commented-out code:
+// out x * 2;
+```
+
+---
+
+## Type System
+
+### Overview
+
+Serez-Code uses a **hybrid type system**: the language is dynamically typed by default, but you can add optional annotations that are enforced at runtime and partially checked statically before the program runs.
+
+```
+                 ┌──────────────────────────────────┐
+                 │          Type Annotations         │
+                 │                                   │
+  fn int add(int a, int b) { ... }                  │
+       ^^^        ^^^   ^^^                          │
+       │          │     └─ parameter type            │
+       │          └─ parameter type                  │
+       └─ return type                                │
+                 └──────────────────────────────────┘
+                        ↓ checked at two points ↓
+                  Static Checker          Runtime
+                  (before run)          (on call)
+```
+
+### Type annotations
+
+Annotations use the keywords `int`, `string`, `bool`, and `void`:
+
+```serez
+fn int strictAdd(int a, int b) {
+    return a + b;
+}
+
+fn void log(string msg) {
+    out msg;
+}
+
+fn bool check(int n) {
+    return n > 0;
+}
+```
+
+They are fully optional. Parameters and return types without annotations accept any value:
+
+```serez
+fn multiply(a, b) {     // untyped: accepts any value for a and b
+    return a * b;
+}
+```
+
+### Static type checker
+
+Before the program runs, the interpreter performs a static analysis pass over the AST. It catches type mismatches in function call arguments when the types can be determined statically:
+
+**Catches literal mismatches:**
+```serez
+fn int double(int n) {
+    return n * 2;
+}
+
+double("hello");
+// ❌ TYPE ERROR [line 5:7]: Parameter 'n' of 'double' expected 'int' but received 'string'.
+```
+
+**Catches variable mismatches** when the variable was declared with a literal:
+```serez
+let name = "Sergio";   // inferred as string
+double(name);
+// ❌ TYPE ERROR [line 2:8]: Parameter 'n' of 'double' expected 'int' but received 'string'.
+```
+
+**Catches arity errors:**
+```serez
+fn int add(int a, int b) { return a + b; }
+add(1);
+// ❌ TYPE ERROR: 'add' expects 2 arguments but got 1.
+```
+
+Expressions that are too complex to analyze statically (function calls as arguments, array elements, etc.) are skipped — they fall through to the runtime checker.
+
+### Runtime type enforcement
+
+At every call site, typed parameters and return values are checked against the actual runtime values:
+
+```serez
+fn int double(int n) {
+    return n * 2;
+}
+
+let x = 5;
+double(x);           // ✅ x is int → passes
+double(true);        // ❌ TYPE ERROR: Parameter 'n' expected 'int' but received another type.
+```
+
+Return type violations:
+
+```serez
+fn int alwaysNull() {
+    // returns null implicitly — violates 'int' return annotation
+}
+
+alwaysNull();
+// ❌ TYPE ERROR: Function expected to return 'int' but returned another type.
+```
+
+### Call stack in errors
+
+When a type or runtime error occurs inside a nested call chain, the full call stack is printed:
+
+```serez
+fn int inner(int n) { return n * 2; }
+fn void outer() { inner("bad"); }
+
+outer();
+// ❌ TYPE ERROR: Parameter 'n' expected 'int' but received another type.
+//     called from 'outer' [line 2:22]
+//     called from '<top>' [line 4:1]
+```
+
+---
+
+## Runtime Safety
+
+Serez-Code enforces several runtime invariants that would otherwise cause panics or silent corruption in a naive interpreter.
+
+### Integer overflow
+
+All arithmetic operations use Rust's `checked_*` variants. Overflow raises an error instead of wrapping:
+
+```serez
+let max = 9223372036854775807;   // i64::MAX
+out max + 1;
+// ❌ ERROR: Integer overflow
+```
+
+### Division and modulo by zero
+
+```serez
+out 10 / 0;   // ❌ ERROR: Division by zero
+out 10 % 0;   // ❌ ERROR: Modulus operator by zero
+```
+
+### Array bounds
+
+```serez
+let a = [1, 2, 3];
+out a[-1];    // ❌ ERROR: Index out of bounds
+out a[3];     // ❌ ERROR: Index out of bounds
+```
+
+### Undeclared variables
+
+```serez
+out x;        // ❌ ERROR: Variable not found: x
+y = 10;       // ❌ ERROR: Undeclared variable: y
+```
+
+### Non-function calls
+
+```serez
+let n = 42;
+n();          // ❌ ERROR: Attempt to call a non-function
+```
+
+### Type mismatch in operators
+
+```serez
+out true + 1;        // ❌ ERROR: Type mismatch — operator '+' cannot be applied between 'bool' and 'int'
+out "hello" - 1;     // ❌ ERROR: Type mismatch — ...
+```
+
+### `return` outside a function
+
+```serez
+return 5;   // ❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a function
 ```
 
 ---
 
 ## Flash Scopes — Memory Model
 
-Flash Scopes are the core innovation of Serez-Code's runtime. They replace garbage collection with a deterministic, arena-based memory model.
+Flash Scopes are the core of Serez-Code's runtime. They replace garbage collection with a deterministic, arena-based memory model that is predictable, fast, and requires zero `unsafe` Rust.
 
-### How it works
+### Two memory regions
 
-The runtime maintains two separate memory regions:
+The runtime maintains two separate arenas:
 
 ```
-┌──────────────────────────────────────┐
-│            Global Arena              │
-│  [Null, x=42, greet=Fn, result=...]  │  ← top-level vars and fn declarations
-│  Never reset during a script run     │     persist for the lifetime of the program
-└──────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│                  Global Arena                    │
+│  [null | x=42 | greet=Fn | result=Array | ...]  │
+│                                                  │
+│  Top-level variables and function declarations   │
+│  persist for the entire program lifetime.        │
+│  Temporary allocations from 'out' and bare       │
+│  expression statements are reclaimed immediately │
+│  via a scratch watermark after each statement.   │
+└──────────────────────────────────────────────────┘
 
-┌──────────────────────────────────────┐
-│            Scoped Arena              │
-│  [frame0_data ... | frame1_data ...] │  ← local vars, function args, block temps
-│        ^mark0            ^mark1      │     truncated on every scope exit
-└──────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│                  Scoped Arena                    │
+│  [...frame0... | ...frame1... | ...frame2... ]   │
+│                ^mark0          ^mark1            │
+│                                                  │
+│  Local variables, function arguments, and        │
+│  block-level temporaries. One shared arena       │
+│  with a stack of watermarks — each scope exit    │
+│  truncates back to its entry mark instantly.     │
+└──────────────────────────────────────────────────┘
 ```
 
-Every time the interpreter enters a `{ ... }` block (whether a function body, `if` branch, `while` body, or a standalone block), it:
+### ObjectRef — the safe pointer
 
-1. Records the current **watermark** of the scoped arena.
-2. Evaluates the block's statements, allocating into the arena normally.
-3. On exit, calls `arena.truncate(watermark)` — instantly freeing every object allocated in that block.
+No raw pointers are used anywhere. Every value reference is an `ObjectRef`:
 
-### The "promote before pop" invariant
+```
+ObjectRef { region: RegionId, index: usize }
+                │                  │
+                │                  └── slot index within the arena Vec
+                └──── Global or Scoped — determines which arena to read
+```
 
-If a block produces a return value, the runtime clones the value's data **before** calling `pop()`, then re-allocates it in the parent scope. This guarantees the returned value is never a dangling reference.
+An `ObjectRef` cannot dangle: if the arena is reset, the index becomes unreachable, not invalid memory. The interpreter never hands out refs that cross the reset boundary.
+
+### How scope entry and exit work
+
+Every `{ ... }` block — function body, `if` branch, `while` body, or standalone block — follows this protocol:
+
+```
+1. Record watermark = arena.len()
+2. Execute statements (new allocs append to arena)
+3. Extract the return value as an arena-independent OwnedValue (deep clone)
+4. arena.truncate(watermark) — all block-local data is freed
+5. Re-allocate the extracted value in the parent scope (plant)
+```
+
+Step 3–5 is the **"promote before pop" invariant**. It ensures the returned value is never a dangling reference even when it is an array whose elements live inside the now-freed scope.
 
 ```serez
-let total = 0;
+fn make_pair(int a, int b) {
+    return [a, b];          // array lives in the function's scoped frame
+}
 
-{
-    let temp = 42 * 2;   // allocated in scoped arena at index N
-    total = temp;        // temp's data is promoted to outer scope
-}                        // ← truncate(watermark): temp is gone, O(1)
-
-out total;   // → 84  (lives in the outer or global arena)
+let p = make_pair(10, 20); // extracted before pop, planted in global arena
+out p[0];                  // → 10 — safe, lives in global arena now
+out p[1];                  // → 20
 ```
 
-### Why it matters
+### Why scope cleanup is O(k), not O(n)
 
-| Property | Result |
-|---|---|
-| Deterministic | Memory is freed at an exact, predictable point in the code |
-| No GC pauses | Cleanup is a single `Vec::truncate()` call |
-| No `unsafe` | All references are `(RegionId, usize)` index pairs — they can't dangle |
-| No `Rc` / `RefCell` | No shared ownership, no runtime borrow checking overhead |
+`Vec::truncate(k)` runs the Rust `Drop` implementation for each removed element — that is `O(k)` where `k` is the number of objects in the scope that was exited. A garbage collector would traverse the entire live heap to identify unreachable objects — `O(n)` over the full heap.
+
+For a function with 5 local variables, scope cleanup costs exactly 5 destructor calls, regardless of how large the rest of the program's memory is.
+
+### Scratch watermark for top-level temporaries
+
+At the top level, `out` statements and bare expression statements create temporary values (e.g., the result of `5 + 3` used only for printing). These are freed immediately after each statement via a scratch watermark on the global arena — they do not accumulate for the lifetime of the script.
+
+```serez
+out fibonacci(10);   // temporary result allocated, printed, freed
+out fibonacci(20);   // same — no accumulation between statements
+```
+
+Global variable bindings from `let` are always kept; only truly temporary values are released.
 
 ---
 
 ## Static Profiler (`--check` mode)
 
-Run `sz --check script.sz` to analyze your program's memory footprint **before executing it**. The profiler walks the AST and estimates the byte cost of each function using heuristic rules:
+Run `sz --check script.sz` to analyze your program's memory footprint before executing it. The profiler walks the AST and estimates the byte cost of each function using heuristic rules:
 
-| Node | Estimated cost |
+| AST node | Estimated cost |
 |---|---|
 | `int` literal | 8 bytes |
 | `bool` literal | 1 byte |
-| `string` literal | 24 + string length bytes |
+| `string` literal | 24 + length bytes |
 | Identifier lookup | 8 bytes |
+| Prefix expression | 8 + operand bytes |
 | Infix expression | 8 + left + right bytes |
 | Function call | 8 + sum of arguments bytes |
 | Array literal | 24 + sum of elements bytes |
-| `if` expression | condition + max(consequence, alternative) |
+| `if` expression | condition + max(consequence, alternative) bytes |
 
 Each function is classified by criticality:
 
 ```
+🚀 Starting static analysis (Flash Scope Criticality)...
+⚠️  NOTE: Cost in bytes is an estimated value based on AST heuristics.
+
 Function 'fibonacci': ~312 estimated bytes
   Criticality: ██  🟢 < 1KB (Safe)
 
 Function 'processData': ~11840 estimated bytes
   Criticality: ██████████  🔴 > 10KB (Critical)
+
+📊 Estimated Global Memory: 12152 bytes
 ```
 
-> **Note:** These are AST-level heuristic estimates, not exact runtime measurements. Use them as a relative guide, not an absolute profiler.
+Criticality levels:
+
+| Color | Range | Meaning |
+|---|---|---|
+| 🟢 Green | < 1 KB | Safe — well within typical stack budget |
+| 🟡 Yellow | 1–10 KB | Warning — review loops and allocations |
+| 🔴 Red | > 10 KB | Critical — likely a hot path; optimize |
+
+> These are AST-level heuristic estimates, not exact runtime measurements. Use them to identify relative hotspots, not as absolute byte counts.
+
+---
+
+## Error Reference
+
+All error messages go to `stderr`. Program output (`out` statements) goes to `stdout`. This lets you pipe them independently:
+
+```bash
+sz script.sz > output.txt 2> errors.txt
+```
+
+### Common errors
+
+| Error message | Cause |
+|---|---|
+| `❌ ERROR: Variable not found: x` | Reading an undeclared variable |
+| `❌ ERROR: Undeclared variable: x` | Assigning to a variable that was never `let`-declared |
+| `❌ ERROR: Attempt to call a non-function` | Calling a value that is not a function |
+| `❌ ERROR: Function expected N arguments, got M` | Arity mismatch at call site |
+| `❌ ERROR: Index out of bounds` | Array access outside `[0, len-1]` |
+| `❌ ERROR: Division by zero` | `/` with zero on the right |
+| `❌ ERROR: Modulus operator by zero` | `%` with zero on the right |
+| `❌ ERROR: Integer overflow` | Arithmetic result exceeds `i64` range |
+| `❌ TYPE ERROR: Parameter 'p' expected 'T'` | Runtime type mismatch on a typed parameter |
+| `❌ TYPE ERROR: Function expected to return 'T'` | Return value type does not match declared return type |
+| `❌ TYPE ERROR [line L:C]: ...` | Static checker caught a type error before execution |
+| `❌ FLASH SCOPE ERROR: 'return' outside function` | `return` used at the top level |
+| `❌ PARSER ERROR: Expected ...` | Syntax error — the parser describes the missing token |
+
+### Understanding parser errors
+
+The parser recovers from errors and continues parsing remaining statements. This means multiple errors can be reported in one run, each pointing to a different line:
+
+```serez
+let x = ;       // ← parse error here
+let y = 10;     // this line still parses correctly
+out y;          // and this executes
+```
+
+Parser errors always include the expected token or construct, making them actionable without needing a language specification.
 
 ---
 
@@ -481,93 +906,129 @@ Function 'processData': ~11840 estimated bytes
 
 ```
 src/
-├── main.rs        — CLI entry point: file execution, --check, REPL
-├── token.rs       — Token types and keyword lookup table
-├── lexer.rs       — Hand-rolled character scanner with 1-char lookahead
-├── ast.rs         — AST node definitions (Statement, Expression, etc.)
-├── parser.rs      — Pratt (TDOP) parser, 8-level precedence table
-├── region.rs      — Arena allocator (bump alloc) + ObjectRef + ObjectData
-├── scope.rs       — ScopeStack with watermark-based Flash Scope cleanup
-└── evaluator.rs   — Tree-walking interpreter + static memory profiler
+├── main.rs          — CLI entry point: file execution, --check mode, REPL
+├── token.rs         — Token enum and keyword-to-token lookup table
+├── lexer.rs         — Hand-rolled character scanner; byte-indexed over the source String
+├── ast.rs           — AST node definitions (Statement, Expression, BlockStatement, …)
+├── parser.rs        — Pratt (TDOP) parser with 8-level precedence + error recovery
+├── type_checker.rs  — Static pre-run type checker with literal and variable inference
+├── region.rs        — Arena allocator, ObjectRef, ObjectData definitions
+├── scope.rs         — ScopeStack — manages push/pop/lookup over the scoped arena
+├── evaluator.rs     — Tree-walking interpreter, Flash Scope protocol, static profiler
+└── repl.rs          — Read-eval-print loop
 ```
 
 ### Data flow
 
 ```
-Source (.sz file or REPL line)
+Source file (.sz) or REPL line
         │
         ▼
-    Lexer  ──────────────────────►  Token stream
+    Lexer
+    — Byte-indexed scan over the source String (no intermediate Vec<char> copy)
+    — 1-character lookahead for two-char tokens (==, !=, <=, >=, =>)
+    — Emits a stream of Token { type, literal, line, column }
         │
         ▼
-    Parser (Pratt TDOP)  ────────►  AST (Program)
+    Parser (Pratt TDOP)
+    — parse_program() → Program { Vec<Statement> }
+    — Prefix handlers: literals, identifiers, if, fn, arrays, ( )
+    — Infix handlers: +, -, *, /, %, ==, !=, <, >, <=, >=, f(args), a[i]
+    — Error recovery: synchronize() skips to ; or } or keyword on failure
         │
         ▼
-    Evaluator  ──────────────────►  ObjectRef
-        │                                │
-        ▼                                ▼
-  ScopeStack                       stdout / return value
-  (Flash Scopes)
+    TypeChecker (static pass)
+    — Collects all FunctionDeclarations into a name → signature map
+    — Infers types for let-bound variables with literal RHS
+    — Checks call sites against declared parameter and return types
+    — Reports errors to stderr; does not halt execution
+        │
+        ▼
+    Evaluator (tree-walking)
+    — eval_program() iterates top-level statements
+    — eval_statement() dispatches Let, Assign, While, Out, Block, …
+    — eval_expression() dispatches Infix, Prefix, Call, If, Index, …
+    — Flash Scope protocol on every { } block: push → eval → extract → pop → plant
+    — Scratch watermark reclaims top-level Out / Expression temporaries
+        │
+        ├──► stdout  (out statements, REPL results)
+        └──► stderr  (type errors, runtime errors, parser errors)
 ```
 
-### Parser — Pratt precedence table
+### Lexer — byte-indexed scanning
 
-The parser uses Top-Down Operator Precedence (Pratt parsing). Operator precedence from lowest to highest:
+The lexer operates directly on the source `String` using byte offsets (`position`, `read_position`). It does not copy the input into a `Vec<char>`. Multi-byte UTF-8 characters in identifiers are handled correctly because `read_char` advances by `c.len_utf8()` bytes, and string slicing uses `&str[start..end]` which is byte-range indexed.
 
-| Level | Operators |
-|---|---|
-| `Lowest` | — |
-| `Equals` | `==` `!=` |
-| `LessGreater` | `<` `>` |
-| `Sum` | `+` `-` |
-| `Product` | `*` `/` `%` |
-| `Prefix` | `-x` `!x` |
-| `Call` | `f(x)` |
-| `Index` | `a[i]` |
+### Parser — Pratt TDOP
+
+The parser implements Top-Down Operator Precedence (Pratt parsing). Every infix operator must be registered in **two places**:
+
+1. `token_precedence()` — returns the operator's binding power (precedence level)
+2. `is_infix` match in `parse_expression()` — gates entry into the infix loop
+
+Registering in only one place produces subtly wrong behavior: the parser either ignores the operator or silently discards the expression around it.
+
+### Evaluator — Flash Scope protocol
+
+The core memory invariant enforced by the evaluator:
+
+```rust
+// Every block follows this sequence in ALL code paths, including errors:
+scopes.push();
+// ... evaluate block statements ...
+let owned = extract(result_ref);   // deep clone before pop
+scopes.pop();                      // free all block-local memory
+let promoted = plant(owned);       // re-allocate in parent scope
+```
+
+`extract` materializes the full object tree (including nested arrays) into an arena-independent `OwnedValue`. `plant` re-allocates it wherever `alloc()` currently points — the parent scope or global arena.
 
 ---
 
 ## Contributing
 
-All contributions are welcome — bug fixes, new language features, documentation improvements, or test cases.
+All contributions are welcome — bug fixes, new language features, documentation, or test cases.
 
-### 1. Fork and clone
-
-```bash
-git clone https://github.com/your-org/serez-code
-cd serez-code
-```
-
-### 2. Build and test
+### Build and test
 
 ```bash
 cargo build
-cargo test
+cargo test              # runs the lexer unit test
+sz test.sz              # run the integration test script
+sz test_arrays.sz       # run the array test script
 ```
 
-Run just the lexer suite:
-
-```bash
-cargo test test_next_token
-```
-
-### 3. Project conventions
+### Project conventions
 
 - **No `unsafe`** — the memory model is intentionally built without unsafe blocks. Keep it that way.
 - **No external runtime dependencies** — `[dependencies]` stays empty. Dev dependencies are fine.
-- **Error messages use `❌` prefix** and go to stdout (current behavior).
-- **All new syntax** must flow through the full pipeline: `token.rs` → `lexer.rs` → `ast.rs` → `parser.rs` → `evaluator.rs`. Never add to the evaluator without adding to the AST first.
-- **Flash Scope invariant** — any new block-level construct must call `scopes.push()` before evaluating its body and `scopes.pop()` after, in **all** code paths including error paths.
+- **Errors go to `stderr`** — use `eprintln!` for all error output; `println!` only for program output (`out` statements) and the REPL.
+- **Flash Scope invariant** — any new block-level construct must call `scopes.push()` before evaluating its body and `scopes.pop()` after, in **all** code paths including error paths. Forgetting a pop on an error path leaks the call stack in the REPL.
+- **All new syntax flows through the full pipeline** — `token.rs` → `lexer.rs` → `ast.rs` → `parser.rs` → `evaluator.rs`. Never add to the evaluator without a corresponding AST node.
 
-### 4. Adding a new statement
+### Adding a new infix operator
+
+Infix operators require registration in **two** places in `parser.rs`, or the parser will silently misbehave:
+
+```rust
+// 1. token_precedence() — gives the operator its binding power
+TokenType::MyOp => Precedence::Sum,
+
+// 2. is_infix match — allows parse_expression to enter the infix loop
+TokenType::MyOp => true,
+```
+
+Then add evaluation in `eval_infix()` in `evaluator.rs`.
+
+### Adding a new statement
 
 1. Add a `TokenType` variant in `token.rs`. If keyword-based, wire it in `lookup_ident()`.
 2. Add the AST node(s) in `ast.rs`.
 3. Add a parse handler in `parser.rs` inside `parse_statement()`.
 4. Add an eval handler in `evaluator.rs` inside `eval_statement()`.
-5. Add a test script (`.sz` file) or inline test in the relevant module.
+5. Add a test `.sz` file demonstrating the feature.
 
-### 5. Open a PR
+### Open a PR
 
 - One logical change per commit.
 - Describe **why** a change was made, not just what.
@@ -578,19 +1039,21 @@ cargo test test_next_token
 ## Roadmap
 
 ### Language features
-- [ ] Lexical closures (captured scope variables)
-- [ ] `for` loop
-- [ ] Array mutation via index: `arr[i] = expr`
-- [ ] String interpolation: `"Hello, {name}!"`
-- [ ] Native higher-order functions: `map`, `filter`, `reduce`
+- [ ] `&&` and `||` — logical AND and OR operators
+- [ ] `for` loop — `for (let i = 0; i < n; i = i + 1) { ... }`
+- [ ] Array mutation via index — `arr[i] = expr`
+- [ ] String interpolation — `"Hello, {name}!"`
+- [ ] Lexical closures — functions that capture variables from their defining scope
+- [ ] Native higher-order functions — `map`, `filter`, `reduce`
 
 ### Type system
-- [ ] Typed arrays: `[int]`, `[string]`
+- [ ] Typed arrays — `[int]`, `[string]`
+- [ ] Type inference for function call results (e.g., `let x = add(1, 2)` infers `x: int`)
 - [ ] Optional / nullable types
 
 ### Tooling
-- [ ] Span-aware error diagnostics (line + column numbers)
-- [ ] Standard library (math, string utilities)
+- [ ] Span-aware error diagnostics with source line preview
+- [ ] Standard library (math utilities, string formatting)
 - [ ] `.sz` file formatter
 - [ ] LSP server for editor support
 

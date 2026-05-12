@@ -4,6 +4,7 @@ use std::collections::HashMap;
 pub struct TypeChecker {
     program: Program,
     functions: HashMap<String, ast::FunctionLiteral>,
+    var_types: HashMap<String, String>,
 }
 
 impl TypeChecker {
@@ -11,6 +12,7 @@ impl TypeChecker {
         TypeChecker {
             program,
             functions: HashMap::new(),
+            var_types: HashMap::new(),
         }
     }
 
@@ -19,6 +21,21 @@ impl TypeChecker {
             if let Statement::FunctionDeclaration(func_decl) = statement {
                 self.functions
                     .insert(func_decl.name.clone(), func_decl.function.clone());
+            }
+        }
+
+        // Infer types for let-bound variables with literal RHS
+        for statement in &self.program.statements.clone() {
+            if let Statement::Let(let_stmt) = statement {
+                let inferred = match &let_stmt.value {
+                    Expression::Integer(_) => Some("int"),
+                    Expression::String(_) => Some("string"),
+                    Expression::Boolean(_) => Some("bool"),
+                    _ => None,
+                };
+                if let Some(t) = inferred {
+                    self.var_types.insert(let_stmt.name.clone(), t.to_string());
+                }
             }
         }
 
@@ -61,7 +78,7 @@ impl TypeChecker {
 
         // Chequear cantidad de argumentos
         if call_expr.arguments.len() != func.parameters.len() {
-            println!(
+            eprintln!(
                 "❌ TYPE ERROR: '{}' expects {} arguments but got {}.",
                 func_name,
                 func.parameters.len(),
@@ -81,11 +98,15 @@ impl TypeChecker {
                 Expression::Integer(_) => "int",
                 Expression::String(_) => "string",
                 Expression::Boolean(_) => "bool",
-                _ => continue, // variable o expresión compleja → saltar
+                Expression::Identifier(name) => match self.var_types.get(name) {
+                    Some(t) => t.as_str(),
+                    None => continue, // type unknown at static analysis time
+                },
+                _ => continue, // complex expression → skip
             };
 
             if actual_type != expected_type.as_str() {
-                println!(
+                eprintln!(
                     "❌ TYPE ERROR [line {}:{}]: Parameter '{}' of '{}' expected '{}' but received '{}'.",
                     call_expr.line,
                     call_expr.column,

@@ -1,9 +1,9 @@
 use crate::token::{self, Token, TokenType};
 
 pub struct Lexer {
-    input: Vec<char>,
-    position: usize,      // current position in input (points to current char)
-    read_position: usize, // current reading position in input (after current char)
+    input: String,
+    position: usize,      // byte offset of current char (self.ch)
+    read_position: usize, // byte offset of next char to read
     ch: char,             // current char under examination
     line: usize,
     column: usize,
@@ -12,7 +12,7 @@ pub struct Lexer {
 impl Lexer {
     pub fn new(input: String) -> Self {
         let mut l = Lexer {
-            input: input.chars().collect(),
+            input,
             position: 0,
             read_position: 0,
             ch: '\0',
@@ -26,16 +26,19 @@ impl Lexer {
     pub fn read_char(&mut self) {
         if self.read_position >= self.input.len() {
             self.ch = '\0';
+            self.position = self.read_position;
+            self.read_position += 1;
         } else {
             if self.ch == '\n' {
                 self.line += 1;
                 self.column = 0;
             }
-            self.ch = self.input[self.read_position];
+            let c = self.input[self.read_position..].chars().next().unwrap();
+            self.ch = c;
             self.column += 1;
+            self.position = self.read_position;
+            self.read_position += c.len_utf8();
         }
-        self.position = self.read_position;
-        self.read_position += 1;
     }
 
     pub fn next_token(&mut self) -> Token {
@@ -75,8 +78,8 @@ impl Lexer {
             }
             '/' => {
                 if self.peek_char() == '/' {
-                    self.skip_comment(); // Es un comentario, ignorar hasta fin de línea
-                    return self.next_token(); // Buscar el siguiente token válido
+                    self.skip_comment();
+                    return self.next_token();
                 } else {
                     Token::new(
                         TokenType::Slash,
@@ -192,32 +195,35 @@ impl Lexer {
     }
 
     fn read_string(&mut self) -> String {
-        let position = self.position + 1;
+        // self.ch == '"' (opening quote); read_position points to first content byte
+        let start = self.read_position;
         loop {
             self.read_char();
             if self.ch == '"' || self.ch == '\0' {
                 break;
             }
         }
-        self.input[position..self.position].iter().collect()
+        // self.position == byte offset of closing '"' (or EOF)
+        self.input[start..self.position].to_string()
     }
 
     fn read_identifier(&mut self) -> String {
-        let position = self.position;
-        // El primer caracter ya sabemos que es_letter
+        let start = self.position;
         self.read_char();
         while is_letter(self.ch) || is_digit(self.ch) {
             self.read_char();
         }
-        self.input[position..self.position].iter().collect()
+        // self.position == byte offset of first non-identifier char
+        self.input[start..self.position].to_string()
     }
 
     fn read_number(&mut self) -> String {
-        let position = self.position;
+        let start = self.position;
         while is_digit(self.ch) {
             self.read_char();
         }
-        self.input[position..self.position].iter().collect()
+        // self.position == byte offset of first non-digit char
+        self.input[start..self.position].to_string()
     }
 
     fn skip_whitespace(&mut self) {
@@ -230,7 +236,7 @@ impl Lexer {
         if self.read_position >= self.input.len() {
             '\0'
         } else {
-            self.input[self.read_position]
+            self.input[self.read_position..].chars().next().unwrap()
         }
     }
 

@@ -159,15 +159,40 @@ impl Evaluator {
     pub fn eval_program(&mut self, program: &Program) -> Option<ObjectRef> {
         let mut result = self.null_ref;
         for statement in &program.statements {
+            // Out and pure Expression statements at top level produce values that are
+            // immediately consumed and never retained. Use a scratch watermark so
+            // those temporaries don't accumulate in the global arena for the program lifetime.
+            let scratch_mark = match statement {
+                Statement::Out(_) | Statement::Expression(_) => {
+                    Some(self.global_arena.watermark())
+                }
+                _ => None,
+            };
+
             match self.eval_statement(statement) {
-                EvalResult::Value(v) => result = v,
+                EvalResult::Value(v) => {
+                    if scratch_mark.is_none() {
+                        result = v;
+                    }
+                    if let Some(mark) = scratch_mark {
+                        self.global_arena.reset_to(mark);
+                    }
+                }
                 EvalResult::Return(_) => {
+                    if let Some(mark) = scratch_mark {
+                        self.global_arena.reset_to(mark);
+                    }
                     eprintln!(
                         "❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a function or conditional or loops."
                     );
                     return None;
                 }
-                EvalResult::Error => return None,
+                EvalResult::Error => {
+                    if let Some(mark) = scratch_mark {
+                        self.global_arena.reset_to(mark);
+                    }
+                    return None;
+                }
             }
         }
         Some(result)

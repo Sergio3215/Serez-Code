@@ -62,12 +62,29 @@ impl Parser {
         };
 
         while self.current_token.token_type != TokenType::Eof {
-            if let Some(stmt) = self.parse_statement() {
-                program.statements.push(stmt);
+            match self.parse_statement() {
+                Some(stmt) => program.statements.push(stmt),
+                None => self.synchronize(),
             }
             self.next_token();
         }
         program
+    }
+
+    // Advance past the current malformed statement to the next recovery point
+    // so subsequent valid statements can still be parsed.
+    fn synchronize(&mut self) {
+        while self.current_token.token_type != TokenType::Eof {
+            match self.current_token.token_type {
+                TokenType::Semicolon | TokenType::RBrace => return,
+                TokenType::Let
+                | TokenType::Return
+                | TokenType::Out
+                | TokenType::Function
+                | TokenType::While => return,
+                _ => self.next_token(),
+            }
+        }
     }
 
     fn parse_statement(&mut self) -> Option<Statement> {
