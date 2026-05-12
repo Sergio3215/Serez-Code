@@ -18,6 +18,8 @@ pub enum TokenType {
 
     Lt,
     Gt,
+    LtEq,
+    GtEq,
     Eq,
     NotEq,
     Arrow, // =>

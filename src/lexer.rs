@@ -92,8 +92,22 @@ impl Lexer {
                 self.line,
                 self.column,
             ),
-            '<' => Token::new(TokenType::Lt, self.ch.to_string(), self.line, self.column),
-            '>' => Token::new(TokenType::Gt, self.ch.to_string(), self.line, self.column),
+            '<' => {
+                if self.peek_char() == '=' {
+                    self.read_char();
+                    Token::new(TokenType::LtEq, "<=".to_string(), self.line, self.column)
+                } else {
+                    Token::new(TokenType::Lt, self.ch.to_string(), self.line, self.column)
+                }
+            }
+            '>' => {
+                if self.peek_char() == '=' {
+                    self.read_char();
+                    Token::new(TokenType::GtEq, ">=".to_string(), self.line, self.column)
+                } else {
+                    Token::new(TokenType::Gt, self.ch.to_string(), self.line, self.column)
+                }
+            }
             ';' => Token::new(
                 TokenType::Semicolon,
                 self.ch.to_string(),

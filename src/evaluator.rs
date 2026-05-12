@@ -117,7 +117,11 @@ impl Evaluator {
             Some(ObjectData::Array(refs)) => {
                 OwnedValue::Array(refs.iter().map(|&r| self.extract(r)).collect())
             }
-            Some(ObjectData::Function { return_type, parameters, body }) => OwnedValue::Function {
+            Some(ObjectData::Function {
+                return_type,
+                parameters,
+                body,
+            }) => OwnedValue::Function {
                 return_type: return_type.clone(),
                 parameters: parameters.clone(),
                 body: body.clone(),
@@ -137,9 +141,15 @@ impl Evaluator {
                 let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant(v)).collect();
                 self.alloc(ObjectData::Array(refs))
             }
-            OwnedValue::Function { return_type, parameters, body } => {
-                self.alloc(ObjectData::Function { return_type, parameters, body })
-            }
+            OwnedValue::Function {
+                return_type,
+                parameters,
+                body,
+            } => self.alloc(ObjectData::Function {
+                return_type,
+                parameters,
+                body,
+            }),
             OwnedValue::Null => self.null_ref,
         }
     }
@@ -686,6 +696,8 @@ impl Evaluator {
                     }
                     "<" => ObjectData::Boolean(l < r),
                     ">" => ObjectData::Boolean(l > r),
+                    "<=" => ObjectData::Boolean(l <= r),
+                    ">=" => ObjectData::Boolean(l >= r),
                     "==" => ObjectData::Boolean(l == r),
                     "!=" => ObjectData::Boolean(l != r),
                     _ => {

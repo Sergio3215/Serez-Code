@@ -17,7 +17,7 @@ pub enum Precedence {
 pub fn token_precedence(token_type: &TokenType) -> Precedence {
     match token_type {
         TokenType::Eq | TokenType::NotEq => Precedence::Equals,
-        TokenType::Lt | TokenType::Gt => Precedence::LessGreater,
+        TokenType::Lt | TokenType::Gt | TokenType::LtEq | TokenType::GtEq => Precedence::LessGreater,
         TokenType::Plus | TokenType::Minus => Precedence::Sum,
         TokenType::Slash | TokenType::Asterisk => Precedence::Product,
         TokenType::LParen => Precedence::Call,
@@ -540,6 +540,8 @@ impl Parser {
                 | TokenType::NotEq
                 | TokenType::Lt
                 | TokenType::Gt
+                | TokenType::LtEq
+                | TokenType::GtEq
                 | TokenType::LParen
                 | TokenType::LBracket => true,
                 _ => false,
