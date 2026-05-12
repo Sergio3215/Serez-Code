@@ -599,17 +599,53 @@ impl Evaluator {
         match (left, right) {
             (ObjectData::Integer(l), ObjectData::Integer(r)) => {
                 let result = match op {
-                    "+" => ObjectData::Integer(l + r),
-                    "-" => ObjectData::Integer(l - r),
-                    "*" => ObjectData::Integer(l * r),
+                    "+" => match l.checked_add(r) {
+                        Some(v) => ObjectData::Integer(v),
+                        None => {
+                            println!("❌ ERROR: Integer overflow");
+                            return EvalResult::Error;
+                        }
+                    },
+                    "-" => match l.checked_sub(r) {
+                        Some(v) => ObjectData::Integer(v),
+                        None => {
+                            println!("❌ ERROR: Integer overflow");
+                            return EvalResult::Error;
+                        }
+                    },
+                    "*" => match l.checked_mul(r) {
+                        Some(v) => ObjectData::Integer(v),
+                        None => {
+                            println!("❌ ERROR: Integer overflow");
+                            return EvalResult::Error;
+                        }
+                    },
                     "/" => {
                         if r == 0 {
                             println!("❌ ERROR: Division by zero");
                             return EvalResult::Error;
                         }
-                        ObjectData::Integer(l / r)
+                        match l.checked_div(r) {
+                            Some(v) => ObjectData::Integer(v),
+                            None => {
+                                println!("❌ ERROR: Integer overflow");
+                                return EvalResult::Error;
+                            }
+                        }
                     }
-                    "%" => ObjectData::Integer(l % r),
+                    "%" => {
+                        if r == 0 {
+                            println!("❌ ERROR: Modulus operator by zero");
+                            return EvalResult::Error;
+                        }
+                        match l.checked_rem(r) {
+                            Some(v) => ObjectData::Integer(v),
+                            None => {
+                                println!("❌ ERROR: Integer overflow");
+                                return EvalResult::Error;
+                            }
+                        }
+                    }
                     "<" => ObjectData::Boolean(l < r),
                     ">" => ObjectData::Boolean(l > r),
                     "==" => ObjectData::Boolean(l == r),
