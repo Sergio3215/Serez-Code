@@ -6,6 +6,7 @@ pub enum TokenType {
     // Identifiers + literals
     Ident,
     Int,
+    Decimal,
     String,
 
     // Operators
@@ -56,6 +57,7 @@ pub enum TokenType {
     // Type Keywords
     KwVoid,
     KwInt,
+    KwDecimal,
     KwString,
     KwBool,
     KwAny,
@@ -94,6 +96,7 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "out" => TokenType::Out,
         "void" => TokenType::KwVoid,
         "int" => TokenType::KwInt,
+        "decimal" => TokenType::KwDecimal,
         "string" => TokenType::KwString,
         "bool" => TokenType::KwBool,
         "any" => TokenType::KwAny,

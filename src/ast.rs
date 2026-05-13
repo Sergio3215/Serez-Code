@@ -98,12 +98,14 @@ pub struct OutStatement {
 pub enum Expression {
     Identifier(String),
     Integer(i64),
+    Decimal(f64),
     String(String),
     Boolean(bool),
     ArrayLiteral(Vec<Expression>),
     Prefix(String, Box<Expression>),  // Ej: -5 o !true
     Infix(InfixExpression),           // Ej: 5 + 5 o x * 2
     FunctionLiteral(FunctionLiteral), // fn void() {} o void () => {}
+    Lambda(LambdaExpression),         // item => body  /  (a, b) => body
     Call(CallExpression),             // sumar(1, 2)
     If(IfExpression),
     Index(IndexExpression),
@@ -111,6 +113,18 @@ pub enum Expression {
     EntryLiteral(Box<Expression>, Box<Expression>),  // {key, value} in method args
     DotCall(DotCallExpression),                      // obj.method(args)
     InterpolatedString(Vec<StringPart>),             // "Hello, {name}!"
+}
+
+#[derive(Debug, Clone)]
+pub struct LambdaExpression {
+    pub params: Vec<String>,
+    pub body: LambdaBody,
+}
+
+#[derive(Debug, Clone)]
+pub enum LambdaBody {
+    Block(BlockStatement),
+    Expr(Box<Expression>),
 }
 
 /// One segment of an interpolated string literal.

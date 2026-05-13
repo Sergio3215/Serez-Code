@@ -25,6 +25,7 @@ use crate::ast::{BlockStatement, Parameter};
 #[derive(Debug, Clone)]
 pub enum OwnedValue {
     Integer(i64),
+    Decimal(f64),
     Boolean(bool),
     Str(String),
     Array(Vec<OwnedValue>),
@@ -47,6 +48,7 @@ pub enum OwnedValue {
 #[derive(Debug, Clone)]
 pub enum ObjectData {
     Integer(i64),
+    Decimal(f64),
     Boolean(bool),
     Str(String),
     Array(Vec<ObjectRef>), // los elementos son refs, no datos inline
@@ -68,6 +70,7 @@ impl std::fmt::Display for ObjectData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ObjectData::Integer(i) => write!(f, "Integer({})", i),
+            ObjectData::Decimal(d) => write!(f, "Decimal({})", d),
             ObjectData::Boolean(b) => write!(f, "Boolean({})", b),
             ObjectData::Str(s) => write!(f, "String(\"{}\")", s),
             ObjectData::Array(_) => write!(f, "Array([...])"),
@@ -129,6 +132,7 @@ impl ObjectData {
     pub fn type_name(&self) -> &str {
         match self {
             ObjectData::Integer(_) => "int",
+            ObjectData::Decimal(_) => "decimal",
             ObjectData::Boolean(_) => "bool",
             ObjectData::Str(_) => "string",
             ObjectData::Array(_) => "array",

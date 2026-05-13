@@ -27,6 +27,9 @@
 | [B-16](#b-16--lexer-duplicated-input-memory-with-vecchar) | Lexer duplicated input memory with `Vec<char>` | 🟢 Low | ✅ |
 | [B-17](#b-17---operator-not-lexed--fell-through-to-illegal) | `%` operator not lexed — fell through to `Illegal` | 🔴 Critical | ✅ |
 | [B-18](#b-18--let-x--arri-aliased-the-array-element-slot) | `let x = arr[i]` aliased the array element slot | 🔴 Critical | ✅ |
+| [B-19](#b-19--splitproduced-empty-strings-at-boundaries) | `split("")` produced empty strings at boundaries | 🟡 High | ✅ |
+| [B-20](#b-20--tostring-only-worked-on-string-type) | `.toString()` only worked on `string` type | 🟡 High | ✅ |
+| [B-21](#b-21--decimal-display-imprecision-due-to-f64-binary-representation) | Decimal display imprecision due to `f64` binary representation | 🟡 High | ✅ |
 
 ---
 
@@ -719,4 +722,135 @@ Statement::Let(let_stmt) => {
 
 ---
 
-*Last updated: 2026-05-12 — 18 bugs documented, all fixed.*
+---
+
+## B-19 — `split("")` produced empty strings at boundaries
+
+**Date:** 2026-05-13  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High
+
+### Symptom
+
+```serez
+out "abc".split("");
+// → [, a, b, c, ]   // 5 elements — first and last are empty strings
+```
+
+Splitting on an empty separator should produce one element per character: `[a, b, c]`.
+
+### Root cause
+
+The implementation called Rust's `str::split("")` directly. Rust's `split("")` inserts empty-string matches at the start and end of the input (before the first character and after the last), yielding `n + 1` results for a string of length `n`.
+
+```rust
+// Before — produces ["", "a", "b", "c", ""]
+s.split(&sep[..]).map(|part| self.alloc(ObjectData::Str(part.to_string()))).collect()
+```
+
+### Fix
+
+Special-case an empty separator to use `str::chars()` instead, which yields exactly one `char` per Unicode character with no boundary artifacts:
+
+```rust
+if sep.is_empty() {
+    s.chars().map(|c| self.alloc(ObjectData::Str(c.to_string()))).collect()
+} else {
+    s.split(&sep[..]).map(|part| self.alloc(ObjectData::Str(part.to_string()))).collect()
+}
+```
+
+---
+
+## B-20 — `.toString()` only worked on `string` type
+
+**Date:** 2026-05-13  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High
+
+### Symptom
+
+```serez
+out 42.toString();     // ❌ ERROR: Unknown method 'toString' on type 'int'
+out 3.14.toString();   // ❌ ERROR: Unknown method 'toString' on type 'decimal'
+out true.toString();   // ❌ ERROR: Unknown method 'toString' on type 'bool'
+```
+
+`.toString()` was documented as a universal conversion but only worked on `string` values (where it was an identity).
+
+### Root cause
+
+The `DotCall` evaluator dispatched array methods for `Array`, string methods for `Str`, and dict methods for `Dict`. All other types fell directly to the error arm:
+
+```rust
+_ => {
+    eprintln!("❌ ERROR: Unknown method '{}' on type '{}'", dot_call.method, type_name);
+    EvalResult::Error
+}
+```
+
+There was no general fallback for `.toString()` on other types.
+
+### Fix
+
+A wildcard arm for `.toString()` was added before the error fallback. It calls `self.display(obj_ref)` — the same function already used by `out` — to produce the string representation:
+
+```rust
+_ if dot_call.method == "toString" => {
+    let s = self.display(obj_ref);
+    EvalResult::Value(self.alloc(ObjectData::Str(s)))
+}
+_ => {
+    eprintln!("❌ ERROR: Unknown method '{}' on type '{}'", dot_call.method, ...);
+    EvalResult::Error
+}
+```
+
+---
+
+## B-21 — Decimal display imprecision due to `f64` binary representation
+
+**Date:** 2026-05-13  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High
+
+### Symptom
+
+```serez
+let prices = [9.99, 3.50, 14.99, 7.25];
+prices.sort();
+let total = prices.reduce(0.0, (acc, p) => acc + p);
+out total;
+// → 35.730000000000004   // expected: 35.73
+```
+
+Decimal values produced by arithmetic operations displayed with spurious low-order digits.
+
+### Root cause
+
+`f64` represents decimal fractions in binary, and most decimal fractions cannot be represented exactly. `3.5 + 7.25 + 9.99 + 14.99` accumulates representational error in the least-significant bits. Using Rust's default `{}` or `{:.2}` formatting exposes this error:
+
+```rust
+format!("{}", 35.73_f64 + f64::EPSILON)  // → "35.730000000000004"
+```
+
+### Fix
+
+Format to 10 significant decimal places and then trim trailing zeros and the decimal point:
+
+```rust
+Some(ObjectData::Decimal(d)) => {
+    if d.fract() == 0.0 {
+        format!("{:.1}", d)   // "5.0" for integer-valued decimals
+    } else {
+        let s = format!("{:.10}", d);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+```
+
+This rounds the display at 10 decimal places, which eliminates all practical f64 noise while preserving genuine precision up to 10 decimal digits. Values like `35.730000000000004` display as `35.73`; values like `3.14159` display as `3.14159`.
+
+---
+
+*Last updated: 2026-05-13 — 21 bugs documented, all fixed.*

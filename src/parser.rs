@@ -76,8 +76,6 @@ impl Parser {
         program
     }
 
-    // Advance past the current malformed statement to the next recovery point
-    // so subsequent valid statements can still be parsed.
     fn synchronize(&mut self) {
         while self.current_token.token_type != TokenType::Eof {
             match self.current_token.token_type {
@@ -102,11 +100,9 @@ impl Parser {
             TokenType::Function => self.parse_function_statement(),
             TokenType::While => self.parse_while_statement(),
             TokenType::For => self.parse_for_statement(),
-            // Reasignación: Ident seguido de `=`
             TokenType::Ident if self.peek_token.token_type == TokenType::Assign => {
                 self.parse_assign_statement()
             }
-            // Posible mutación de array: arr[i] = expr  (o expresión arr[i] suelta)
             TokenType::Ident if self.peek_token.token_type == TokenType::LBracket => {
                 self.parse_index_assign_or_expr_statement()
             }
@@ -115,9 +111,7 @@ impl Parser {
     }
 
     fn parse_block_statement(&mut self) -> Option<Statement> {
-        // current_token = `{`
-        self.next_token(); // avanzamos al primer token dentro del bloque
-
+        self.next_token();
         let mut statements = Vec::new();
 
         while self.current_token.token_type != TokenType::RBrace
@@ -128,7 +122,6 @@ impl Parser {
             }
             self.next_token();
         }
-        // current_token = `}` al salir del while
 
         Some(Statement::Block(BlockStatement { statements }))
     }
@@ -136,7 +129,6 @@ impl Parser {
     fn parse_expression_statement(&mut self) -> Option<Statement> {
         let expr = self.parse_expression(Precedence::Lowest)?;
 
-        // Si el usuario pone un punto y coma al final (ej: "ii;"), lo consumimos
         if self.peek_token.token_type == TokenType::Semicolon {
             self.next_token();
         }
@@ -145,9 +137,9 @@ impl Parser {
     }
 
     fn parse_assign_statement(&mut self) -> Option<Statement> {
-        let name = self.current_token.literal.clone(); // el identificador
-        self.next_token(); // current: '='
-        self.next_token(); // current: primer token del valor
+        let name = self.current_token.literal.clone();
+        self.next_token(); // '='
+        self.next_token(); // first token of value
 
         let value = self.parse_expression(Precedence::Lowest)?;
 
@@ -159,7 +151,7 @@ impl Parser {
     }
 
     fn parse_return_statement(&mut self) -> Option<Statement> {
-        self.next_token(); // avanzamos sobre la palabra clave 'return'
+        self.next_token();
 
         let return_value = self.parse_expression(Precedence::Lowest)?;
 
@@ -171,7 +163,7 @@ impl Parser {
     }
 
     fn parse_out_statement(&mut self) -> Option<Statement> {
-        self.next_token(); // avanzamos sobre la palabra clave 'out'
+        self.next_token();
 
         let value = self.parse_expression(Precedence::Lowest)?;
 
@@ -183,13 +175,12 @@ impl Parser {
     }
 
     fn parse_while_statement(&mut self) -> Option<Statement> {
-        // current token is 'while'
         if self.peek_token.token_type != TokenType::LParen {
             eprintln!("❌ PARSER ERROR: Expected '(' after 'while'");
             return None;
         }
-        self.next_token(); // now '('
-        self.next_token(); // first token of condition
+        self.next_token();
+        self.next_token();
 
         let condition = self.parse_expression(Precedence::Lowest)?;
 
@@ -197,13 +188,13 @@ impl Parser {
             eprintln!("❌ PARSER ERROR: Expected ')' after condition in 'while'");
             return None;
         }
-        self.next_token(); // now ')'
+        self.next_token();
 
         if self.peek_token.token_type != TokenType::LBrace {
             eprintln!("❌ PARSER ERROR: Expected '{{' to start 'while' body");
             return None;
         }
-        self.next_token(); // now '{'
+        self.next_token();
 
         let body = match self.parse_block_statement()? {
             Statement::Block(b) => b,
@@ -214,12 +205,9 @@ impl Parser {
     }
 
     fn parse_index_assign_or_expr_statement(&mut self) -> Option<Statement> {
-        // current = Ident, peek = '['
-        // Parse the full expression first (may be arr[i], arr[i][j], call, etc.)
         let expr = self.parse_expression(Precedence::Lowest)?;
 
         if self.peek_token.token_type == TokenType::Assign {
-            // arr[i] = value
             let (target, index) = match &expr {
                 Expression::Index(idx_expr) => {
                     let target = match idx_expr.left.as_ref() {
@@ -238,7 +226,7 @@ impl Parser {
                 }
             };
 
-            self.next_token(); // consume '='
+            self.next_token(); // '='
             self.next_token(); // first token of value
 
             let value = self.parse_expression(Precedence::Lowest)?;
@@ -253,7 +241,6 @@ impl Parser {
                 value,
             }))
         } else {
-            // Plain expression statement
             if self.peek_token.token_type == TokenType::Semicolon {
                 self.next_token();
             }
@@ -262,15 +249,13 @@ impl Parser {
     }
 
     fn parse_for_statement(&mut self) -> Option<Statement> {
-        // current_token = 'for'
         if self.peek_token.token_type != TokenType::LParen {
             eprintln!("❌ PARSER ERROR: Expected '(' after 'for'");
             return None;
         }
-        self.next_token(); // now '('
-        self.next_token(); // first token of init
+        self.next_token();
+        self.next_token();
 
-        // --- INIT: let name = expr ---
         if self.current_token.token_type != TokenType::Let {
             eprintln!("❌ PARSER ERROR: Expected 'let' as for-loop initializer");
             return None;
@@ -279,7 +264,6 @@ impl Parser {
             Statement::Let(l) => l,
             _ => return None,
         };
-        // parse_let_statement consumed the ';' — current = ';'
         if self.current_token.token_type != TokenType::Semicolon {
             if self.peek_token.token_type == TokenType::Semicolon {
                 self.next_token();
@@ -288,19 +272,17 @@ impl Parser {
                 return None;
             }
         }
-        self.next_token(); // first token of condition
+        self.next_token();
 
-        // --- CONDITION ---
         let condition = self.parse_expression(Precedence::Lowest)?;
 
         if self.peek_token.token_type != TokenType::Semicolon {
             eprintln!("❌ PARSER ERROR: Expected ';' after for-loop condition");
             return None;
         }
-        self.next_token(); // now ';'
-        self.next_token(); // first token of update
+        self.next_token();
+        self.next_token();
 
-        // --- UPDATE: name = expr ---
         if self.current_token.token_type != TokenType::Ident
             || self.peek_token.token_type != TokenType::Assign
         {
@@ -311,19 +293,18 @@ impl Parser {
             Statement::Assign(a) => a,
             _ => return None,
         };
-        // parse_assign_statement left current at last token of RHS (peek = ')')
 
         if self.peek_token.token_type != TokenType::RParen {
             eprintln!("❌ PARSER ERROR: Expected ')' after for-loop update");
             return None;
         }
-        self.next_token(); // now ')'
+        self.next_token();
 
         if self.peek_token.token_type != TokenType::LBrace {
             eprintln!("❌ PARSER ERROR: Expected '{{' to start for-loop body");
             return None;
         }
-        self.next_token(); // now '{'
+        self.next_token();
 
         let body = match self.parse_block_statement()? {
             Statement::Block(b) => b,
@@ -339,13 +320,12 @@ impl Parser {
     }
 
     fn parse_if_expression(&mut self) -> Option<Expression> {
-        // current token is 'if'
         if self.peek_token.token_type != TokenType::LParen {
             eprintln!("❌ PARSER ERROR: Expected '(' after 'if'");
             return None;
         }
-        self.next_token(); // '('
-        self.next_token(); // condition start
+        self.next_token();
+        self.next_token();
 
         let condition = self.parse_expression(Precedence::Lowest)?;
 
@@ -353,13 +333,13 @@ impl Parser {
             eprintln!("❌ PARSER ERROR: Expected ')' after 'if' condition");
             return None;
         }
-        self.next_token(); // ')'
+        self.next_token();
 
         if self.peek_token.token_type != TokenType::LBrace {
             eprintln!("❌ PARSER ERROR: Expected '{{' to start 'if' consequence");
             return None;
         }
-        self.next_token(); // '{'
+        self.next_token();
 
         let consequence = match self.parse_block_statement()? {
             Statement::Block(b) => b,
@@ -369,13 +349,11 @@ impl Parser {
         let mut alternative = None;
 
         if self.peek_token.token_type == TokenType::Else {
-            self.next_token(); // 'else'
+            self.next_token();
 
-            // Suport for 'else if' or 'else { ... }'
             if self.peek_token.token_type == TokenType::If {
-                self.next_token(); // 'if'
+                self.next_token();
 
-                // Wrap 'else if' in a block statement to keep AST simple
                 if let Some(if_expr) = self.parse_if_expression() {
                     alternative = Some(BlockStatement {
                         statements: vec![Statement::Expression(if_expr)],
@@ -386,7 +364,7 @@ impl Parser {
                     eprintln!("❌ PARSER ERROR: Expected '{{' or 'if' after 'else'");
                     return None;
                 }
-                self.next_token(); // '{'
+                self.next_token();
                 alternative = match self.parse_block_statement()? {
                     Statement::Block(b) => Some(b),
                     _ => None,
@@ -408,7 +386,6 @@ impl Parser {
         self.next_token();
         let name = self.current_token.literal.clone();
 
-        // Dict declaration: let name <key_type, value_type> = (...)
         if self.peek_token.token_type == TokenType::Lt {
             let (key_type, value_type) = self.parse_dict_type_annotation()?;
 
@@ -416,8 +393,8 @@ impl Parser {
                 eprintln!("❌ PARSER ERROR: Expected '=' after dict type annotation");
                 return None;
             }
-            self.next_token(); // current: '='
-            self.next_token(); // current: '('
+            self.next_token();
+            self.next_token();
 
             if self.current_token.token_type != TokenType::LParen {
                 eprintln!("❌ PARSER ERROR: Expected '(' to start dict literal");
@@ -436,8 +413,8 @@ impl Parser {
         if self.peek_token.token_type != TokenType::Assign {
             return None;
         }
-        self.next_token(); // current: '=', peek: primer elemento
-        self.next_token(); // current: primer elemento de la expresión
+        self.next_token(); // '='
+        self.next_token(); // first token of value
 
         let value = self.parse_expression(Precedence::Lowest)?;
 
@@ -449,31 +426,27 @@ impl Parser {
     }
 
     fn parse_function_statement(&mut self) -> Option<Statement> {
-        // Asumimos que current_token == TokenType::Function
-        // peek puede ser el tipo de retorno (KwVoid, KwInt, etc) o LParen (si no hay tipo).
         let mut return_type = None;
         if is_type_keyword(&self.peek_token.token_type) {
             self.next_token();
             return_type = Some(self.current_token.literal.clone());
         }
 
-        // Ahora peek puede ser un Identificador (nombre de la función) o un LParen (anónima).
         if self.peek_token.token_type == TokenType::Ident {
-            // Es una declaración de función: fn tipo nombre()
             self.next_token();
             let name = self.current_token.literal.clone();
 
             if self.peek_token.token_type != TokenType::LParen {
                 return None;
             }
-            self.next_token(); // current_token == LParen
+            self.next_token();
 
             let parameters = self.parse_function_parameters()?;
 
             if self.peek_token.token_type != TokenType::LBrace {
                 return None;
             }
-            self.next_token(); // current_token == LBrace
+            self.next_token();
 
             let body_stmt = self.parse_block_statement()?;
             let body = match body_stmt {
@@ -481,32 +454,21 @@ impl Parser {
                 _ => return None,
             };
 
-            let function = FunctionLiteral {
-                return_type,
-                parameters,
-                body,
-            };
+            let function = FunctionLiteral { return_type, parameters, body };
 
-            Some(Statement::FunctionDeclaration(FunctionDeclaration {
-                name,
-                function,
-            }))
+            Some(Statement::FunctionDeclaration(FunctionDeclaration { name, function }))
         } else {
-            // Es una función anónima (usada como expresión pero en contexto de sentencia)
-            // Retrocedemos la lógica para que sea parseada como expression statement
-            // Pero como Pratt Parser no puede retroceder tokens fácilmente, mejor parseamos
-            // el FunctionLiteral directamente y lo envolvemos en ExpressionStatement.
             if self.peek_token.token_type != TokenType::LParen {
                 return None;
             }
-            self.next_token(); // current_token == LParen
+            self.next_token();
 
             let parameters = self.parse_function_parameters()?;
 
             if self.peek_token.token_type != TokenType::LBrace {
                 return None;
             }
-            self.next_token(); // current_token == LBrace
+            self.next_token();
 
             let body_stmt = self.parse_block_statement()?;
             let body = match body_stmt {
@@ -514,18 +476,13 @@ impl Parser {
                 _ => return None,
             };
 
-            let function = FunctionLiteral {
-                return_type,
-                parameters,
-                body,
-            };
+            let function = FunctionLiteral { return_type, parameters, body };
 
             Some(Statement::Expression(Expression::FunctionLiteral(function)))
         }
     }
 
     fn parse_function_parameters(&mut self) -> Option<Vec<Parameter>> {
-        // current_token == LParen
         let mut parameters = Vec::new();
 
         if self.peek_token.token_type == TokenType::RParen {
@@ -538,13 +495,11 @@ impl Parser {
         loop {
             let mut type_name = None;
 
-            // Verificamos si hay un tipo
             if is_type_keyword(&self.current_token.token_type) {
                 type_name = Some(self.current_token.literal.clone());
                 self.next_token();
             }
 
-            // El token actual debe ser el Identificador
             let name = if self.current_token.token_type == TokenType::Ident {
                 self.current_token.literal.clone()
             } else {
@@ -554,8 +509,8 @@ impl Parser {
             parameters.push(Parameter { name, type_name });
 
             if self.peek_token.token_type == TokenType::Comma {
-                self.next_token(); // saltar coma
-                self.next_token(); // ir al siguiente parámetro
+                self.next_token();
+                self.next_token();
             } else {
                 break;
             }
@@ -570,25 +525,24 @@ impl Parser {
     }
 
     fn parse_arrow_function(&mut self) -> Option<Expression> {
-        // current_token == KwVoid | KwInt | KwString | KwBool
         let return_type = Some(self.current_token.literal.clone());
 
         if self.peek_token.token_type != TokenType::LParen {
             return None;
         }
-        self.next_token(); // current_token == LParen
+        self.next_token();
 
         let parameters = self.parse_function_parameters()?;
 
         if self.peek_token.token_type != TokenType::Arrow {
             return None;
         }
-        self.next_token(); // current_token == Arrow
+        self.next_token();
 
         if self.peek_token.token_type != TokenType::LBrace {
             return None;
         }
-        self.next_token(); // current_token == LBrace
+        self.next_token();
 
         let body_stmt = self.parse_block_statement()?;
         let body = match body_stmt {
@@ -596,15 +550,10 @@ impl Parser {
             _ => return None,
         };
 
-        Some(Expression::FunctionLiteral(FunctionLiteral {
-            return_type,
-            parameters,
-            body,
-        }))
+        Some(Expression::FunctionLiteral(FunctionLiteral { return_type, parameters, body }))
     }
 
     fn parse_call_arguments(&mut self) -> Option<Vec<Expression>> {
-        // current_token == LParen
         let mut args = Vec::new();
 
         if self.peek_token.token_type == TokenType::RParen {
@@ -634,86 +583,33 @@ impl Parser {
         Some(args)
     }
 
-    fn parse_expression(&mut self, precedence: Precedence) -> Option<Expression> {
-        // 1. PREFIX (Funciones de prefijo o valores literales)
-        let mut left_exp = match self.current_token.token_type {
-            TokenType::Ident => Some(Expression::Identifier(self.current_token.literal.clone())),
-            TokenType::Int => {
-                if let Ok(num) = self.current_token.literal.parse::<i64>() {
-                    Some(Expression::Integer(num))
-                } else {
-                    None
-                }
-            }
-            TokenType::String => {
-                let s = self.current_token.literal.clone();
-                if s.contains('{') {
-                    parse_interpolated_string(&s)
-                } else {
-                    Some(Expression::String(s))
-                }
-            }
-            TokenType::True => Some(Expression::Boolean(true)),
-            TokenType::False => Some(Expression::Boolean(false)),
-            TokenType::Bang | TokenType::Minus => {
-                let operator = self.current_token.literal.clone();
-                self.next_token();
-                let right = self.parse_expression(Precedence::Prefix)?;
-                Some(Expression::Prefix(operator, Box::new(right)))
-            }
-            TokenType::LParen => {
-                self.next_token();
-                let exp = self.parse_expression(Precedence::Lowest);
-                if self.peek_token.token_type != TokenType::RParen {
-                    return None;
-                }
-                self.next_token(); // Consumimos RParen
-                exp
-            }
-            TokenType::LBracket => self.parse_array_literal(),
-            TokenType::LBrace => self.parse_entry_literal(),
-            TokenType::If => self.parse_if_expression(),
-            TokenType::KwVoid | TokenType::KwInt | TokenType::KwString | TokenType::KwBool | TokenType::KwAny => {
-                // Arrow function syntax: void () => {}
-                self.parse_arrow_function()
-            }
-            TokenType::Function => {
-                // Expression form of traditional function: fn void() {}
-                // Since parse_function_statement handles both, but here we only want expression
-                let mut return_type = None;
-                if is_type_keyword(&self.peek_token.token_type) {
-                    self.next_token();
-                    return_type = Some(self.current_token.literal.clone());
-                }
+    // ── Lambda parsing ────────────────────────────────────────────────────────
 
-                if self.peek_token.token_type != TokenType::LParen {
-                    return None; // Si tiene nombre no es expresión
-                }
-                self.next_token(); // current = LParen
+    fn parse_lambda_body(&mut self) -> Option<LambdaBody> {
+        // current = '=>'
+        if self.peek_token.token_type == TokenType::LBrace {
+            self.next_token(); // '{'
+            let block = match self.parse_block_statement()? {
+                Statement::Block(b) => b,
+                _ => return None,
+            };
+            Some(LambdaBody::Block(block))
+        } else {
+            self.next_token(); // first token of expression
+            let expr = self.parse_expression(Precedence::Lowest)?;
+            Some(LambdaBody::Expr(Box::new(expr)))
+        }
+    }
 
-                let parameters = self.parse_function_parameters()?;
+    // ── Expression parsing ────────────────────────────────────────────────────
 
-                if self.peek_token.token_type != TokenType::LBrace {
-                    return None;
-                }
-                self.next_token();
-
-                let body_stmt = self.parse_block_statement()?;
-                let body = match body_stmt {
-                    Statement::Block(b) => b,
-                    _ => return None,
-                };
-
-                Some(Expression::FunctionLiteral(FunctionLiteral {
-                    return_type,
-                    parameters,
-                    body,
-                }))
-            }
-            _ => None,
-        };
-
-        // 2. INFIX (Operadores que vienen después)
+    /// Continues the infix chain starting from an already-parsed left expression.
+    /// Used by both parse_expression and the lambda fallback grouped-expr case.
+    fn parse_infix_chain(
+        &mut self,
+        mut left_exp: Option<Expression>,
+        precedence: Precedence,
+    ) -> Option<Expression> {
         while self.peek_token.token_type != TokenType::Semicolon
             && precedence < self.peek_precedence()
         {
@@ -764,13 +660,13 @@ impl Parser {
                 }
             } else if self.current_token.token_type == TokenType::LBracket {
                 if let Some(left) = left_exp {
-                    self.next_token(); // Advance to the index expression
+                    self.next_token();
                     if let Some(index) = self.parse_expression(Precedence::Lowest) {
                         if self.peek_token.token_type != TokenType::RBracket {
                             eprintln!("❌ PARSER ERROR: Expected ']' after array index");
                             return None;
                         }
-                        self.next_token(); // Consume ']'
+                        self.next_token();
                         left_exp = Some(Expression::Index(IndexExpression {
                             left: Box::new(left),
                             index: Box::new(index),
@@ -787,11 +683,11 @@ impl Parser {
                     eprintln!("❌ PARSER ERROR: Expected method name after '.'");
                     return left_exp;
                 }
-                self.next_token(); // current = method name
+                self.next_token();
                 let method = self.current_token.literal.clone();
 
                 let arguments = if self.peek_token.token_type == TokenType::LParen {
-                    self.next_token(); // current = '('
+                    self.next_token();
                     self.parse_call_arguments().unwrap_or_default()
                 } else {
                     Vec::new()
@@ -810,7 +706,7 @@ impl Parser {
                 let op_line = self.current_token.line;
                 let op_column = self.current_token.column;
 
-                self.next_token(); // Avanzamos al valor de la derecha
+                self.next_token();
 
                 if let Some(left) = left_exp {
                     if let Some(right) = self.parse_expression(current_precedence) {
@@ -833,10 +729,177 @@ impl Parser {
         left_exp
     }
 
+    fn parse_expression(&mut self, precedence: Precedence) -> Option<Expression> {
+        // ── PREFIX ────────────────────────────────────────────────────────────
+        let left_exp = match self.current_token.token_type {
+            // Single-param lambda: item => body
+            TokenType::Ident if self.peek_token.token_type == TokenType::Arrow => {
+                let param = self.current_token.literal.clone();
+                self.next_token(); // consume '=>'
+                let body = self.parse_lambda_body()?;
+                Some(Expression::Lambda(LambdaExpression { params: vec![param], body }))
+            }
+
+            TokenType::Ident => {
+                Some(Expression::Identifier(self.current_token.literal.clone()))
+            }
+
+            TokenType::Int => {
+                if let Ok(num) = self.current_token.literal.parse::<i64>() {
+                    Some(Expression::Integer(num))
+                } else {
+                    None
+                }
+            }
+
+            TokenType::Decimal => {
+                if let Ok(num) = self.current_token.literal.parse::<f64>() {
+                    Some(Expression::Decimal(num))
+                } else {
+                    None
+                }
+            }
+
+            TokenType::String => {
+                let s = self.current_token.literal.clone();
+                if s.contains('{') {
+                    parse_interpolated_string(&s)
+                } else {
+                    Some(Expression::String(s))
+                }
+            }
+
+            TokenType::True => Some(Expression::Boolean(true)),
+            TokenType::False => Some(Expression::Boolean(false)),
+
+            TokenType::Bang | TokenType::Minus => {
+                let operator = self.current_token.literal.clone();
+                self.next_token();
+                let right = self.parse_expression(Precedence::Prefix)?;
+                Some(Expression::Prefix(operator, Box::new(right)))
+            }
+
+            // Multi-param lambda: (a, b) => body  /  (a) => body  /  (expr)
+            TokenType::LParen if self.peek_token.token_type == TokenType::Ident => {
+                self.next_token(); // consume '(' → current = first ident
+                let first_name = self.current_token.literal.clone();
+
+                match self.peek_token.token_type {
+                    // (a, b, ...) => body
+                    TokenType::Comma => {
+                        let mut params = vec![first_name];
+                        while self.peek_token.token_type == TokenType::Comma {
+                            self.next_token(); // ','
+                            self.next_token(); // next ident
+                            if self.current_token.token_type != TokenType::Ident {
+                                eprintln!("❌ PARSER ERROR: Expected identifier in lambda parameters");
+                                return None;
+                            }
+                            params.push(self.current_token.literal.clone());
+                        }
+                        if self.peek_token.token_type != TokenType::RParen {
+                            eprintln!("❌ PARSER ERROR: Expected ')' after lambda parameters");
+                            return None;
+                        }
+                        self.next_token(); // ')'
+                        if self.peek_token.token_type != TokenType::Arrow {
+                            eprintln!("❌ PARSER ERROR: Expected '=>' after lambda parameters");
+                            return None;
+                        }
+                        self.next_token(); // '=>'
+                        let body = self.parse_lambda_body()?;
+                        Some(Expression::Lambda(LambdaExpression { params, body }))
+                    }
+
+                    // (a) => body  or  just (a)
+                    TokenType::RParen => {
+                        self.next_token(); // ')'
+                        if self.peek_token.token_type == TokenType::Arrow {
+                            self.next_token(); // '=>'
+                            let body = self.parse_lambda_body()?;
+                            Some(Expression::Lambda(LambdaExpression {
+                                params: vec![first_name],
+                                body,
+                            }))
+                        } else {
+                            Some(Expression::Identifier(first_name))
+                        }
+                    }
+
+                    // (ident op ...) — grouped expression starting with an identifier
+                    _ => {
+                        let first = Some(Expression::Identifier(first_name));
+                        let inner = self.parse_infix_chain(first, Precedence::Lowest)?;
+                        if self.peek_token.token_type != TokenType::RParen {
+                            eprintln!("❌ PARSER ERROR: Expected ')' in grouped expression");
+                            return None;
+                        }
+                        self.next_token(); // ')'
+                        Some(inner)
+                    }
+                }
+            }
+
+            // Regular grouped expression: (expr)
+            TokenType::LParen => {
+                self.next_token();
+                let exp = self.parse_expression(Precedence::Lowest);
+                if self.peek_token.token_type != TokenType::RParen {
+                    return None;
+                }
+                self.next_token();
+                exp
+            }
+
+            TokenType::LBracket => self.parse_array_literal(),
+            TokenType::LBrace => self.parse_entry_literal(),
+            TokenType::If => self.parse_if_expression(),
+
+            TokenType::KwVoid
+            | TokenType::KwInt
+            | TokenType::KwDecimal
+            | TokenType::KwString
+            | TokenType::KwBool
+            | TokenType::KwAny => self.parse_arrow_function(),
+
+            TokenType::Function => {
+                let mut return_type = None;
+                if is_type_keyword(&self.peek_token.token_type) {
+                    self.next_token();
+                    return_type = Some(self.current_token.literal.clone());
+                }
+
+                if self.peek_token.token_type != TokenType::LParen {
+                    return None;
+                }
+                self.next_token();
+
+                let parameters = self.parse_function_parameters()?;
+
+                if self.peek_token.token_type != TokenType::LBrace {
+                    return None;
+                }
+                self.next_token();
+
+                let body_stmt = self.parse_block_statement()?;
+                let body = match body_stmt {
+                    Statement::Block(b) => b,
+                    _ => return None,
+                };
+
+                Some(Expression::FunctionLiteral(FunctionLiteral { return_type, parameters, body }))
+            }
+
+            _ => None,
+        };
+
+        // ── INFIX ─────────────────────────────────────────────────────────────
+        self.parse_infix_chain(left_exp, precedence)
+    }
+
     fn parse_dict_type_annotation(&mut self) -> Option<(String, String)> {
-        // Entry: current = name, peek = Lt
-        self.next_token(); // current = '<'
-        self.next_token(); // current = key_type keyword
+        self.next_token(); // '<'
+        self.next_token(); // key_type
 
         if !is_type_keyword(&self.current_token.token_type) {
             eprintln!("❌ PARSER ERROR: Expected type keyword for dict key type, got '{}'", self.current_token.literal);
@@ -848,8 +911,8 @@ impl Parser {
             eprintln!("❌ PARSER ERROR: Expected ',' between key and value types in dict annotation");
             return None;
         }
-        self.next_token(); // current = ','
-        self.next_token(); // current = value_type keyword
+        self.next_token(); // ','
+        self.next_token(); // value_type
 
         if !is_type_keyword(&self.current_token.token_type) {
             eprintln!("❌ PARSER ERROR: Expected type keyword for dict value type, got '{}'", self.current_token.literal);
@@ -861,29 +924,27 @@ impl Parser {
             eprintln!("❌ PARSER ERROR: Expected '>' to close dict type annotation");
             return None;
         }
-        self.next_token(); // current = '>'
-        // Exit: current = '>', peek = Assign
+        self.next_token(); // '>'
 
         Some((key_type, value_type))
     }
 
     fn parse_dict_literal(&mut self, key_type: String, value_type: String) -> Option<Expression> {
-        // Entry: current = '('
         let mut entries = Vec::new();
 
         if self.peek_token.token_type == TokenType::RParen {
-            self.next_token(); // consume ')'
+            self.next_token();
             return Some(Expression::DictLiteral(DictLiteral { key_type, value_type, entries }));
         }
 
-        self.next_token(); // current = '{' (first entry)
+        self.next_token(); // first '{'
 
         loop {
             if self.current_token.token_type != TokenType::LBrace {
                 eprintln!("❌ PARSER ERROR: Expected '{{' to start dict entry");
                 return None;
             }
-            self.next_token(); // advance to key expression
+            self.next_token();
 
             let key = self.parse_expression(Precedence::Lowest)?;
 
@@ -891,8 +952,8 @@ impl Parser {
                 eprintln!("❌ PARSER ERROR: Expected ',' between key and value in dict entry");
                 return None;
             }
-            self.next_token(); // current = ','
-            self.next_token(); // current = value start
+            self.next_token();
+            self.next_token();
 
             let value = self.parse_expression(Precedence::Lowest)?;
 
@@ -900,12 +961,12 @@ impl Parser {
                 eprintln!("❌ PARSER ERROR: Expected '}}' to close dict entry");
                 return None;
             }
-            self.next_token(); // current = '}'
+            self.next_token(); // '}'
 
             entries.push((key, value));
 
             if self.peek_token.token_type == TokenType::RParen {
-                self.next_token(); // current = ')'
+                self.next_token();
                 break;
             }
 
@@ -913,16 +974,15 @@ impl Parser {
                 eprintln!("❌ PARSER ERROR: Expected ',' or ')' after dict entry");
                 return None;
             }
-            self.next_token(); // current = ','
-            self.next_token(); // current = '{' (next entry)
+            self.next_token(); // ','
+            self.next_token(); // next '{'
         }
 
         Some(Expression::DictLiteral(DictLiteral { key_type, value_type, entries }))
     }
 
     fn parse_entry_literal(&mut self) -> Option<Expression> {
-        // Entry: current = '{' — used for {key, value} in method arguments
-        self.next_token(); // advance to key expression
+        self.next_token();
 
         let key = self.parse_expression(Precedence::Lowest)?;
 
@@ -930,8 +990,8 @@ impl Parser {
             eprintln!("❌ PARSER ERROR: Expected ',' between key and value in entry literal");
             return None;
         }
-        self.next_token(); // current = ','
-        self.next_token(); // current = value start
+        self.next_token();
+        self.next_token();
 
         let value = self.parse_expression(Precedence::Lowest)?;
 
@@ -939,7 +999,7 @@ impl Parser {
             eprintln!("❌ PARSER ERROR: Expected '}}' to close entry literal");
             return None;
         }
-        self.next_token(); // current = '}'
+        self.next_token();
 
         Some(Expression::EntryLiteral(Box::new(key), Box::new(value)))
     }
@@ -955,7 +1015,6 @@ impl Parser {
         self.next_token();
 
         loop {
-            // Evaluamos la expresión de forma recursiva
             let expr = self.parse_expression(Precedence::Lowest);
 
             if let Some(e) = expr {
@@ -972,8 +1031,8 @@ impl Parser {
                 return None;
             }
 
-            self.next_token(); // Avanzamos a ','
-            self.next_token(); // Avanzamos a la siguiente expresión
+            self.next_token();
+            self.next_token();
         }
 
         Some(Expression::ArrayLiteral(elements))
@@ -983,13 +1042,15 @@ impl Parser {
 fn is_type_keyword(token_type: &TokenType) -> bool {
     matches!(
         token_type,
-        TokenType::KwVoid | TokenType::KwInt | TokenType::KwString | TokenType::KwBool | TokenType::KwAny
+        TokenType::KwVoid
+            | TokenType::KwInt
+            | TokenType::KwDecimal
+            | TokenType::KwString
+            | TokenType::KwBool
+            | TokenType::KwAny
     )
 }
 
-/// Splits a raw string literal on `{...}` boundaries and builds an
-/// `InterpolatedString` expression.  Each `{expr}` segment is parsed
-/// independently using a fresh sub-parser.
 fn parse_interpolated_string(raw: &str) -> Option<Expression> {
     use crate::lexer::Lexer;
     let mut parts: Vec<StringPart> = Vec::new();
@@ -1021,7 +1082,6 @@ fn parse_interpolated_string(raw: &str) -> Option<Expression> {
         parts.push(StringPart::Literal(rest.to_string()));
     }
 
-    // Degenerate case: no interpolations, just a plain string
     if parts.len() == 1 {
         if let StringPart::Literal(ref s) = parts[0] {
             return Some(Expression::String(s.clone()));

@@ -29,6 +29,7 @@ impl TypeChecker {
             if let Statement::Let(let_stmt) = statement {
                 let inferred = match &let_stmt.value {
                     Expression::Integer(_) => Some("int"),
+                    Expression::Decimal(_) => Some("decimal"),
                     Expression::String(_) => Some("string"),
                     Expression::Boolean(_) => Some("bool"),
                     _ => None,
@@ -96,6 +97,7 @@ impl TypeChecker {
 
             let actual_type = match &call_expr.arguments[i] {
                 Expression::Integer(_) => "int",
+                Expression::Decimal(_) => "decimal",
                 Expression::String(_) => "string",
                 Expression::Boolean(_) => "bool",
                 Expression::Identifier(name) => match self.var_types.get(name) {

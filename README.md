@@ -38,7 +38,10 @@ out fibonacci(10);   // → 55
    - [Functions](#functions)
    - [Control Flow](#control-flow)
    - [Arrays](#arrays)
+   - [String Methods](#string-methods)
    - [Dictionaries](#dictionaries)
+   - [Higher-Order Functions](#higher-order-functions)
+   - [Type Conversions](#type-conversions)
    - [Output](#output)
    - [Comments](#comments)
 4. [Type System](#type-system)
@@ -164,11 +167,12 @@ out y;    // ❌ ERROR: Variable not found: y
 
 ### Types
 
-Serez-Code has four primitive types and three compound types:
+Serez-Code has five primitive types and three compound types:
 
 | Type | Literal / annotation examples | Runtime representation |
 |---|---|---|
 | `int` | `0`, `42`, `-7` | 64-bit signed integer (`i64`) |
+| `decimal` | `3.14`, `0.5`, `2.0` | 64-bit floating-point (`f64`) |
 | `bool` | `true`, `false` | Boolean |
 | `string` | `"hello"`, `"foo bar"` | UTF-8 string |
 | `void` | — | Signals absence of a return value |
@@ -187,7 +191,7 @@ The `any` keyword suppresses type checking for that slot. It is useful for dict 
 
 #### Arithmetic
 
-All arithmetic operates on `int` values. Integer division truncates toward zero.
+Integer arithmetic operates on `int` values. Integer division truncates toward zero.
 
 ```serez
 out 10 + 3;    // → 13
@@ -198,7 +202,33 @@ out 10 % 3;    // → 1   (modulo)
 out -5;        // → -5  (negation — prefix)
 ```
 
-All arithmetic operations are overflow-safe. If the result would overflow `i64`, a runtime error is raised instead of wrapping silently. Division and modulo by zero are runtime errors.
+All integer arithmetic operations are overflow-safe. If the result would overflow `i64`, a runtime error is raised instead of wrapping silently. Division and modulo by zero are runtime errors.
+
+#### Decimal arithmetic
+
+The `decimal` type (`f64`) supports the same arithmetic operators as `int`. Mixing `int` and `decimal` in the same expression is allowed — the `int` is automatically promoted:
+
+```serez
+let pi = 3.14159;
+let r  = 2.0;
+
+out pi * r * r;       // → 12.56636
+out 1 + 0.5;          // → 1.5   (int + decimal → decimal)
+out 10.0 / 4;         // → 2.5
+out -3.14;            // → -3.14 (prefix negation)
+```
+
+Decimal literals always require a digit on both sides of the dot: `3.14`, `0.5`, `2.0`. The display trims trailing zeros but always shows at least one decimal place for integer-valued results (`5.0`, not `5`).
+
+Functions can be annotated with `decimal` for parameter and return types:
+
+```serez
+fn decimal area(decimal r) {
+    return r * r * 3.14159;
+}
+
+out area(5.0);   // → 78.53975
+```
 
 #### Comparison
 
@@ -647,6 +677,89 @@ out pair[0];   // → 42
 out pair[1];   // → 99
 ```
 
+#### Array mutation methods
+
+| Method | Effect |
+|---|---|
+| `.push(val)` | Appends `val` to the end of the array (mutates in-place). |
+| `.pop()` | Removes and returns the last element. |
+| `.shift()` | Removes and returns the first element. |
+| `.unshift(val)` | Prepends `val` to the beginning (mutates in-place). |
+| `.sort()` | Sorts in ascending order (mutates in-place). Equivalent to `.sort("asc")`. |
+| `.sort("desc")` | Sorts in descending order (mutates in-place). |
+
+```serez
+let stack = [1, 2, 3, 4, 5];
+let top   = stack.pop();       // removes 5
+out top;                       // → 5
+out stack;                     // → [1, 2, 3, 4]
+
+stack.push(99);
+out stack;                     // → [1, 2, 3, 4, 99]
+
+let first = stack.shift();     // removes 1
+out first;                     // → 1
+
+stack.unshift(0);
+out stack;                     // → [0, 2, 3, 4, 99]
+
+let nums = [5, 2, 8, 1, 4];
+nums.sort();
+out nums;                      // → [1, 2, 4, 5, 8]
+
+nums.sort("desc");
+out nums;                      // → [8, 5, 4, 2, 1]
+```
+
+`.sort` works on arrays of all-`int`, all-`decimal`, or all-`string`. Mixed-type arrays cannot be sorted — this is a runtime error.
+
+#### Array properties
+
+`.length` is a property (no parentheses) that returns the number of elements:
+
+```serez
+let a = [10, 20, 30, 40];
+out a.length;   // → 4
+out [].length;  // → 0
+```
+
+---
+
+### String Methods
+
+All string methods are called with dot syntax. `.length` is a property; all others are method calls.
+
+| Method / property | Description |
+|---|---|
+| `.length` | Number of Unicode characters (UTF-8 aware). |
+| `.toString()` | Returns the string itself (identity for strings; works on `int`, `decimal`, `bool` too). |
+| `.substring(start, end)` | Returns characters from index `start` (inclusive) to `end` (exclusive). |
+| `.split(sep)` | Splits the string by `sep` and returns an array of substrings. Empty `sep` splits into individual characters. |
+| `.replace(from, to)` | Returns a new string with the **first** occurrence of `from` replaced by `to`. |
+| `.replaceAll(from, to)` | Returns a new string with **all** occurrences of `from` replaced by `to`. |
+| `.includes(sub)` / `.contains(sub)` | Returns `true` if the string contains `sub`, `false` otherwise. |
+
+```serez
+let s = "hello world";
+
+out s.length;                     // → 11
+out s.substring(0, 5);            // → hello
+out s.split(" ");                 // → [hello, world]
+out s.replace("world", "Serez");  // → hello Serez
+out s.replaceAll("l", "L");       // → heLLo worLd
+out s.includes("world");          // → true
+out s.includes("xyz");            // → false
+out "abc".split("");              // → [a, b, c]
+```
+
+`.toString()` also works on `int`, `decimal`, and `bool` values, returning their string representation:
+
+```serez
+out 42.toString();     // → 42
+out 3.14.toString();   // → 3.14
+out true.toString();   // → true
+```
+
 ---
 
 ### Dictionaries
@@ -684,6 +797,22 @@ out dicc;   // → {hola: 1, chau: 1, gracias: 1}
 | `Remove` | `d.Remove("key")` | Delete the entry with the given key. No-op if the key is absent. |
 | `RemoveAll` | `d.RemoveAll()` | Delete all entries. |
 | `clear` | `d.clear()` | Alias for `RemoveAll`. |
+| `toList()` | `d.toList()` | Returns an array of all keys in insertion order. |
+| `toArray()` | `d.toArray()` | Returns a 2D array of `[[key, val], [key, val], ...]` pairs. |
+
+```serez
+let scores <string,int> = ({"Alice",90},{"Bob",75},{"Carol",88});
+
+let names = scores.toList();
+out names;   // → [Alice, Bob, Carol]
+
+let pairs = scores.toArray();
+out pairs;   // → [[Alice, 90], [Bob, 75], [Carol, 88]]
+
+// toArray() is useful with filter / map:
+let top = pairs.filter(pair => pair[1] >= 85);
+out top;     // → [[Alice, 90], [Carol, 88]]
+```
 
 ```serez
 dicc.Add({"cantar","true"});
@@ -734,6 +863,134 @@ fn void inc() {
 inc();
 inc();
 out counters["hits"];   // → 2
+```
+
+---
+
+### Higher-Order Functions
+
+Arrays support three built-in higher-order functions: `.map`, `.filter`, and `.reduce`. Each takes a **lambda** (anonymous inline function) as its callback.
+
+#### Lambda syntax
+
+Lambdas use JS-style arrow syntax:
+
+```
+// Single parameter — no parentheses needed
+x => expression
+x => { statements; return value; }
+
+// Two parameters (value + index)
+(item, index) => expression
+(item, index) => { statements; return value; }
+
+// Accumulator pattern (for reduce)
+(acc, item) => expression
+```
+
+#### `.map(callback)`
+
+Transforms each element. Returns a new array.
+
+```serez
+let nums = [1, 2, 3, 4, 5];
+
+let doubled = nums.map(x => x * 2);
+out doubled;   // → [2, 4, 6, 8, 10]
+
+// With index:
+let indexed = nums.map((x, i) => i);
+out indexed;   // → [0, 1, 2, 3, 4]
+
+// Multi-line lambda body:
+let results = nums.map(x => {
+    let doubled = x * 2;
+    return doubled + 1;
+});
+out results;   // → [3, 5, 7, 9, 11]
+
+// toString on each element:
+let strs = [1, 2, 3].map(x => x.toString());
+out strs;      // → [1, 2, 3]
+```
+
+#### `.filter(callback)`
+
+Keeps only elements for which the callback returns `true`. Returns a new array.
+
+```serez
+let data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+let evens = data.filter(x => x % 2 == 0);
+out evens;   // → [2, 4, 6, 8, 10]
+
+// Capturing an outer variable (closure):
+let threshold = 5;
+let big = [1, 3, 5, 7, 9, 11].filter(x => x > threshold);
+out big;     // → [7, 9, 11]
+```
+
+#### `.reduce(initial, callback)`
+
+Folds the array into a single value. The callback receives `(accumulator, currentValue)`. The first argument is the initial accumulator value.
+
+```serez
+let nums = [1, 2, 3, 4, 5];
+
+let sum = nums.reduce(0, (acc, x) => acc + x);
+out sum;   // → 15
+
+// String accumulator:
+let words = ["hello", " ", "world", "!"];
+let sentence = words.reduce("", (acc, w) => acc + w);
+out sentence;   // → hello world!
+
+// Chaining filter + reduce:
+let sum_evens = [1,2,3,4,5,6,7,8,9,10].filter(x => x % 2 == 0).reduce(0, (a,x) => a+x);
+out sum_evens;   // → 30
+```
+
+#### Lambdas capture their enclosing scope
+
+Lambdas close over variables from the scope where they are defined:
+
+```serez
+let multiplier = 3;
+let tripled = [1, 2, 3, 4].map(x => x * multiplier);
+out tripled;   // → [3, 6, 9, 12]
+```
+
+---
+
+### Type Conversions
+
+Two global functions convert between `string`, `int`, and `decimal`:
+
+#### `parseInt(val)`
+
+Converts a value to `int`:
+- `string` → parses the string as a decimal integer. Runtime error if the string is not a valid integer.
+- `decimal` → truncates toward zero (same as casting).
+- `int` → returns the value unchanged.
+
+```serez
+out parseInt("42");     // → 42
+out parseInt("  7 ");   // → 7    (whitespace trimmed)
+out parseInt(3.99);     // → 3    (truncated)
+out parseInt(10);       // → 10
+```
+
+#### `parseDecimal(val)`
+
+Converts a value to `decimal`:
+- `string` → parses the string as a floating-point number.
+- `int` → promotes to `decimal`.
+- `decimal` → returns the value unchanged.
+
+```serez
+out parseDecimal("3.14");   // → 3.14
+out parseDecimal(5);        // → 5.0
+out parseDecimal(2.71);     // → 2.71
 ```
 
 ---
@@ -792,7 +1049,7 @@ Serez-Code uses a **hybrid type system**: the language is dynamically typed by d
 
 ### Type annotations
 
-Annotations use the keywords `int`, `string`, `bool`, `void`, and `any`:
+Annotations use the keywords `int`, `decimal`, `string`, `bool`, `void`, and `any`:
 
 ```serez
 fn int strictAdd(int a, int b) {
@@ -1042,8 +1299,10 @@ Run `sz --check script.sz` to analyze your program's memory footprint before exe
 | AST node | Estimated cost |
 |---|---|
 | `int` literal | 8 bytes |
+| `decimal` literal | 8 bytes |
 | `bool` literal | 1 byte |
 | `string` literal | 24 + length bytes |
+| Lambda expression | 32 bytes |
 | Identifier lookup | 8 bytes |
 | Prefix expression | 8 + operand bytes |
 | Infix expression | 8 + left + right bytes |
@@ -1217,6 +1476,7 @@ cargo build
 cargo test              # runs the lexer unit test
 sz test.sz              # run the integration test script
 sz test_arrays.sz       # run the array test script
+sz test_complex.sz      # run the advanced/edge-case test suite
 ```
 
 ### Project conventions
@@ -1265,7 +1525,12 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] Array mutation via index — `arr[i] = expr`, works in loops and from inside functions
 - [x] String interpolation — `"Hello, {name}!"`
 - [x] Lexical closures — functions that capture variables from their defining scope
-- [ ] Native higher-order functions — `map`, `filter`, `reduce`
+- [x] Native higher-order functions — `map`, `filter`, `reduce` with lambda syntax `x => expr` / `(x, i) => expr`
+- [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.sort("asc"/"desc")`, `.length`
+- [x] String methods — `.length`, `.substring(s,e)`, `.split(sep)`, `.replace(a,b)`, `.replaceAll(a,b)`, `.includes(sub)`, `.toString()`
+- [x] Dict methods — `.toList()` (keys array), `.toArray()` (2D entries array)
+- [x] `decimal` type — f64 literals (`3.14`), mixed arithmetic with `int`
+- [x] Global conversions — `parseInt(val)`, `parseDecimal(val)`
 
 ### Type system
 - [ ] Typed arrays — `[int]`, `[string]`

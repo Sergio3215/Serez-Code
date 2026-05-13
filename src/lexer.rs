@@ -197,10 +197,14 @@ impl Lexer {
                     let start_column = self.column;
                     return Token::new(token_type, literal, start_line, start_column);
                 } else if is_digit(self.ch) {
-                    let token_type = TokenType::Int;
-                    let literal = self.read_number();
                     let start_line = self.line;
                     let start_column = self.column;
+                    let literal = self.read_number();
+                    let token_type = if literal.contains('.') {
+                        TokenType::Decimal
+                    } else {
+                        TokenType::Int
+                    };
                     return Token::new(token_type, literal, start_line, start_column);
                 } else {
                     Token::new(
@@ -245,7 +249,19 @@ impl Lexer {
         while is_digit(self.ch) {
             self.read_char();
         }
-        // self.position == byte offset of first non-digit char
+        // Consume decimal part when '.' is followed by a digit
+        if self.ch == '.' {
+            let next_is_digit = self.input[self.read_position..]
+                .chars()
+                .next()
+                .map_or(false, is_digit);
+            if next_is_digit {
+                self.read_char(); // consume '.'
+                while is_digit(self.ch) {
+                    self.read_char();
+                }
+            }
+        }
         self.input[start..self.position].to_string()
     }
 

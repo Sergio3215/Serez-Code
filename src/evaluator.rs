@@ -88,6 +88,15 @@ impl Evaluator {
     pub fn display(&self, obj_ref: ObjectRef) -> String {
         match self.resolve(obj_ref) {
             Some(ObjectData::Integer(i)) => format!("{}", i),
+            Some(ObjectData::Decimal(d)) => {
+                if d.fract() == 0.0 {
+                    format!("{:.1}", d)
+                } else {
+                    // 10 significant decimal places, trailing zeros trimmed
+                    let s = format!("{:.10}", d);
+                    s.trim_end_matches('0').trim_end_matches('.').to_string()
+                }
+            }
             Some(ObjectData::Boolean(b)) => format!("{}", b),
             Some(ObjectData::Str(s)) => format!("{}", s),
             Some(ObjectData::Array(refs)) => {
@@ -113,6 +122,7 @@ impl Evaluator {
     fn extract(&self, obj_ref: ObjectRef) -> OwnedValue {
         match self.resolve(obj_ref) {
             Some(ObjectData::Integer(i)) => OwnedValue::Integer(*i),
+            Some(ObjectData::Decimal(d)) => OwnedValue::Decimal(*d),
             Some(ObjectData::Boolean(b)) => OwnedValue::Boolean(*b),
             Some(ObjectData::Str(s)) => OwnedValue::Str(s.clone()),
             Some(ObjectData::Array(refs)) => {
@@ -143,6 +153,7 @@ impl Evaluator {
     fn plant(&mut self, value: OwnedValue) -> ObjectRef {
         match value {
             OwnedValue::Integer(i) => self.alloc(ObjectData::Integer(i)),
+            OwnedValue::Decimal(d) => self.alloc(ObjectData::Decimal(d)),
             OwnedValue::Boolean(b) => self.alloc(ObjectData::Boolean(b)),
             OwnedValue::Str(s) => self.alloc(ObjectData::Str(s)),
             OwnedValue::Array(items) => {
@@ -178,6 +189,10 @@ impl Evaluator {
         match value {
             OwnedValue::Integer(i) => {
                 let idx = self.global_arena.alloc(ObjectData::Integer(i));
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Decimal(d) => {
+                let idx = self.global_arena.alloc(ObjectData::Decimal(d));
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Boolean(b) => {
@@ -636,6 +651,7 @@ impl Evaluator {
     fn eval_expression(&mut self, expr: &Expression) -> EvalResult {
         match expr {
             Expression::Integer(i) => EvalResult::Value(self.alloc(ObjectData::Integer(*i))),
+            Expression::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(*d))),
             Expression::String(s) => EvalResult::Value(self.alloc(ObjectData::Str(s.clone()))),
             Expression::Boolean(b) => EvalResult::Value(self.alloc(ObjectData::Boolean(*b))),
 
@@ -658,6 +674,28 @@ impl Evaluator {
                 EvalResult::Value(self.alloc(func_data))
             }
 
+            Expression::Lambda(lambda) => {
+                use crate::ast::{LambdaBody, Parameter, BlockStatement, Statement, ReturnStatement};
+                let params: Vec<Parameter> = lambda.params.iter()
+                    .map(|n| Parameter { name: n.clone(), type_name: None })
+                    .collect();
+                let body = match &lambda.body {
+                    LambdaBody::Block(b) => b.clone(),
+                    LambdaBody::Expr(e) => BlockStatement {
+                        statements: vec![Statement::Return(ReturnStatement {
+                            return_value: *e.clone(),
+                        })],
+                    },
+                };
+                let captured = self.capture_env();
+                EvalResult::Value(self.alloc(ObjectData::Function {
+                    return_type: None,
+                    parameters: params,
+                    body,
+                    captured,
+                }))
+            }
+
             Expression::InterpolatedString(parts) => {
                 let mut result = String::new();
                 for part in parts {
@@ -675,6 +713,15 @@ impl Evaluator {
             }
 
             Expression::Call(call_expr) => {
+                // Built-in global functions (intercept before variable lookup)
+                if let Expression::Identifier(name) = call_expr.function.as_ref() {
+                    match name.as_str() {
+                        "parseInt" => return self.eval_parse_int(&call_expr.arguments),
+                        "parseDecimal" => return self.eval_parse_decimal(&call_expr.arguments),
+                        _ => {}
+                    }
+                }
+
                 let func_ref = match self.eval_expression(&call_expr.function) {
                     EvalResult::Value(r) => r,
                     _ => return EvalResult::Error,
@@ -747,6 +794,7 @@ impl Evaluator {
                         let actual_data = self.resolve(arg_ref).unwrap();
                         let is_valid = match (expected_type.as_str(), actual_data) {
                             ("int", ObjectData::Integer(_)) => true,
+                            ("decimal", ObjectData::Decimal(_)) => true,
                             ("string", ObjectData::Str(_)) => true,
                             ("bool", ObjectData::Boolean(_)) => true,
                             ("any", _) => true,
@@ -812,6 +860,7 @@ impl Evaluator {
                     let actual_data = self.resolve(result_ref).unwrap();
                     let is_valid = match (expected_ret.as_str(), actual_data) {
                         ("int", ObjectData::Integer(_)) => true,
+                        ("decimal", ObjectData::Decimal(_)) => true,
                         ("string", ObjectData::Str(_)) => true,
                         ("bool", ObjectData::Boolean(_)) => true,
                         ("void", ObjectData::Null) => true,
@@ -975,6 +1024,17 @@ impl Evaluator {
                 };
 
                 match obj_data {
+                    // ── Array methods ─────────────────────────────────────────
+                    ObjectData::Array(ref elems) => {
+                        self.eval_array_method(obj_ref, elems.clone(), dot_call)
+                    }
+
+                    // ── String methods ────────────────────────────────────────
+                    ObjectData::Str(ref s) => {
+                        self.eval_string_method(s.clone(), dot_call)
+                    }
+
+                    // ── Dict methods ──────────────────────────────────────────
                     ObjectData::Dict { key_type, value_type, mut entries } => {
                         match dot_call.method.as_str() {
                             "Add" => {
@@ -1079,12 +1139,40 @@ impl Evaluator {
                                 EvalResult::Value(self.null_ref)
                             }
 
+                            // Returns array of keys: [k1, k2, ...]
+                            "toList" => {
+                                let keys: Vec<OwnedValue> = entries.iter()
+                                    .map(|&(k, _)| self.extract(k))
+                                    .collect();
+                                let refs: Vec<ObjectRef> = keys.into_iter()
+                                    .map(|v| self.plant(v))
+                                    .collect();
+                                EvalResult::Value(self.alloc(ObjectData::Array(refs)))
+                            }
+
+                            // Returns 2-D array of entries: [[k1,v1],[k2,v2],...]
+                            "toArray" => {
+                                let pairs: Vec<OwnedValue> = entries.iter()
+                                    .map(|&(k, v)| OwnedValue::Array(vec![self.extract(k), self.extract(v)]))
+                                    .collect();
+                                let rows: Vec<ObjectRef> = pairs.into_iter()
+                                    .map(|row| self.plant(row))
+                                    .collect();
+                                EvalResult::Value(self.alloc(ObjectData::Array(rows)))
+                            }
+
                             _ => {
                                 eprintln!("❌ ERROR: Unknown dict method '{}'", dot_call.method);
                                 EvalResult::Error
                             }
                         }
                     }
+                    // .toString() available on all types
+                    _ if dot_call.method == "toString" => {
+                        let s = self.display(obj_ref);
+                        EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                    }
+
                     _ => {
                         eprintln!("❌ ERROR: '.' method call not supported for type '{}'", obj_data.type_name());
                         EvalResult::Error
@@ -1167,14 +1255,14 @@ impl Evaluator {
 
     fn eval_prefix(&mut self, op: &str, right: ObjectData) -> EvalResult {
         match op {
-            "-" => {
-                if let ObjectData::Integer(i) = right {
-                    EvalResult::Value(self.alloc(ObjectData::Integer(-i)))
-                } else {
+            "-" => match right {
+                ObjectData::Integer(i) => EvalResult::Value(self.alloc(ObjectData::Integer(-i))),
+                ObjectData::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(-d))),
+                _ => {
                     eprintln!("❌ ERROR: Prefix '-' not supported for this type");
                     EvalResult::Error
                 }
-            }
+            },
             "!" => {
                 if let ObjectData::Boolean(b) = right {
                     EvalResult::Value(self.alloc(ObjectData::Boolean(!b)))
@@ -1260,6 +1348,71 @@ impl Evaluator {
                 };
                 EvalResult::Value(self.alloc(result))
             }
+            // Decimal arithmetic (decimal op decimal, int op decimal, decimal op int)
+            (ObjectData::Decimal(l), ObjectData::Decimal(r)) => {
+                let result = match op {
+                    "+" => ObjectData::Decimal(l + r),
+                    "-" => ObjectData::Decimal(l - r),
+                    "*" => ObjectData::Decimal(l * r),
+                    "/" => {
+                        if r == 0.0 { eprintln!("❌ ERROR: Division by zero"); return EvalResult::Error; }
+                        ObjectData::Decimal(l / r)
+                    }
+                    "%" => {
+                        if r == 0.0 { eprintln!("❌ ERROR: Modulus by zero"); return EvalResult::Error; }
+                        ObjectData::Decimal(l % r)
+                    }
+                    "<"  => ObjectData::Boolean(l < r),
+                    ">"  => ObjectData::Boolean(l > r),
+                    "<=" => ObjectData::Boolean(l <= r),
+                    ">=" => ObjectData::Boolean(l >= r),
+                    "==" => ObjectData::Boolean(l == r),
+                    "!=" => ObjectData::Boolean(l != r),
+                    _ => { eprintln!("❌ ERROR: Unknown operator: {}", op); return EvalResult::Error; }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Integer(l), ObjectData::Decimal(r)) => {
+                let l = l as f64;
+                let result = match op {
+                    "+" => ObjectData::Decimal(l + r),
+                    "-" => ObjectData::Decimal(l - r),
+                    "*" => ObjectData::Decimal(l * r),
+                    "/" => {
+                        if r == 0.0 { eprintln!("❌ ERROR: Division by zero"); return EvalResult::Error; }
+                        ObjectData::Decimal(l / r)
+                    }
+                    "<"  => ObjectData::Boolean(l < r),
+                    ">"  => ObjectData::Boolean(l > r),
+                    "<=" => ObjectData::Boolean(l <= r),
+                    ">=" => ObjectData::Boolean(l >= r),
+                    "==" => ObjectData::Boolean(l == r),
+                    "!=" => ObjectData::Boolean(l != r),
+                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported here", op); return EvalResult::Error; }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Decimal(l), ObjectData::Integer(r)) => {
+                let r = r as f64;
+                let result = match op {
+                    "+" => ObjectData::Decimal(l + r),
+                    "-" => ObjectData::Decimal(l - r),
+                    "*" => ObjectData::Decimal(l * r),
+                    "/" => {
+                        if r == 0.0 { eprintln!("❌ ERROR: Division by zero"); return EvalResult::Error; }
+                        ObjectData::Decimal(l / r)
+                    }
+                    "<"  => ObjectData::Boolean(l < r),
+                    ">"  => ObjectData::Boolean(l > r),
+                    "<=" => ObjectData::Boolean(l <= r),
+                    ">=" => ObjectData::Boolean(l >= r),
+                    "==" => ObjectData::Boolean(l == r),
+                    "!=" => ObjectData::Boolean(l != r),
+                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported here", op); return EvalResult::Error; }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+
             (ObjectData::Str(l), ObjectData::Str(r)) => {
                 let result = match op {
                     "+" => ObjectData::Str(l + &r),
@@ -1418,9 +1571,11 @@ impl Evaluator {
     fn estimate_expression(&self, expr: &ast::Expression) -> usize {
         match expr {
             ast::Expression::Integer(_) => 8,
+            ast::Expression::Decimal(_) => 8,
             ast::Expression::Boolean(_) => 1,
             ast::Expression::String(s) => 24 + s.len(),
             ast::Expression::Identifier(_) => 8,
+            ast::Expression::Lambda(_) => 32,
             ast::Expression::Prefix(_, right) => 8 + self.estimate_expression(right),
             ast::Expression::Infix(infix) => {
                 8 + self.estimate_expression(&infix.left) + self.estimate_expression(&infix.right)
@@ -1510,6 +1665,430 @@ impl Evaluator {
             RegionId::Scoped => self.scopes.arena.update(obj_ref.index, data),
         }
     }
+
+    fn update_array(&mut self, arr_ref: ObjectRef, elems: Vec<ObjectRef>) {
+        match arr_ref.region {
+            RegionId::Global => self.global_arena.update(arr_ref.index, ObjectData::Array(elems)),
+            RegionId::Scoped => self.scopes.arena.update(arr_ref.index, ObjectData::Array(elems)),
+        }
+    }
+
+    // ── Callback calling helper ───────────────────────────────────────────────
+
+    fn call_function(&mut self, func_ref: ObjectRef, arg_vals: Vec<OwnedValue>) -> EvalResult {
+        let func_data = self.resolve(func_ref).cloned();
+        match func_data {
+            Some(ObjectData::Function { parameters, body, captured, .. }) => {
+                if arg_vals.len() != parameters.len() {
+                    eprintln!(
+                        "❌ ERROR: Callback expected {} argument(s), got {}",
+                        parameters.len(), arg_vals.len()
+                    );
+                    return EvalResult::Error;
+                }
+                self.scopes.push();
+                for (name, owned) in captured {
+                    let r = self.plant(owned);
+                    self.scopes.declare(name, r);
+                }
+                for (param, val) in parameters.iter().zip(arg_vals.into_iter()) {
+                    let r = self.plant(val);
+                    self.scopes.declare(param.name.clone(), r);
+                }
+                let mut result_ref = self.null_ref;
+                for s in &body.statements {
+                    match self.eval_statement(s) {
+                        EvalResult::Value(v) => result_ref = v,
+                        EvalResult::Return(v) => { result_ref = v; break; }
+                        EvalResult::Error => { self.scopes.pop(); return EvalResult::Error; }
+                    }
+                }
+                let owned = self.extract(result_ref);
+                self.scopes.pop();
+                EvalResult::Value(self.plant(owned))
+            }
+            _ => {
+                eprintln!("❌ ERROR: Callback is not a function");
+                EvalResult::Error
+            }
+        }
+    }
+
+    fn callback_param_count(&self, func_ref: ObjectRef) -> Option<usize> {
+        match self.resolve(func_ref) {
+            Some(ObjectData::Function { parameters, .. }) => Some(parameters.len()),
+            _ => None,
+        }
+    }
+
+    // ── Built-in global functions ─────────────────────────────────────────────
+
+    fn eval_parse_int(&mut self, args: &[ast::Expression]) -> EvalResult {
+        if args.len() != 1 {
+            eprintln!("❌ ERROR: parseInt expects 1 argument");
+            return EvalResult::Error;
+        }
+        let r = match self.eval_expression(&args[0]) {
+            EvalResult::Value(r) => r,
+            _ => return EvalResult::Error,
+        };
+        match self.resolve(r).cloned() {
+            Some(ObjectData::Integer(i)) => EvalResult::Value(self.alloc(ObjectData::Integer(i))),
+            Some(ObjectData::Decimal(d)) => EvalResult::Value(self.alloc(ObjectData::Integer(d as i64))),
+            Some(ObjectData::Str(s)) => match s.trim().parse::<i64>() {
+                Ok(n) => EvalResult::Value(self.alloc(ObjectData::Integer(n))),
+                Err(_) => {
+                    eprintln!("❌ ERROR: parseInt: cannot parse '{}' as int", s);
+                    EvalResult::Error
+                }
+            },
+            _ => { eprintln!("❌ ERROR: parseInt: unsupported type"); EvalResult::Error }
+        }
+    }
+
+    fn eval_parse_decimal(&mut self, args: &[ast::Expression]) -> EvalResult {
+        if args.len() != 1 {
+            eprintln!("❌ ERROR: parseDecimal expects 1 argument");
+            return EvalResult::Error;
+        }
+        let r = match self.eval_expression(&args[0]) {
+            EvalResult::Value(r) => r,
+            _ => return EvalResult::Error,
+        };
+        match self.resolve(r).cloned() {
+            Some(ObjectData::Integer(i)) => EvalResult::Value(self.alloc(ObjectData::Decimal(i as f64))),
+            Some(ObjectData::Decimal(d)) => EvalResult::Value(self.alloc(ObjectData::Decimal(d))),
+            Some(ObjectData::Str(s)) => match s.trim().parse::<f64>() {
+                Ok(n) => EvalResult::Value(self.alloc(ObjectData::Decimal(n))),
+                Err(_) => {
+                    eprintln!("❌ ERROR: parseDecimal: cannot parse '{}' as decimal", s);
+                    EvalResult::Error
+                }
+            },
+            _ => { eprintln!("❌ ERROR: parseDecimal: unsupported type"); EvalResult::Error }
+        }
+    }
+
+    // ── Array methods ─────────────────────────────────────────────────────────
+
+    fn eval_array_method(
+        &mut self,
+        arr_ref: ObjectRef,
+        elems: Vec<ObjectRef>,
+        dot_call: &ast::DotCallExpression,
+    ) -> EvalResult {
+        match dot_call.method.as_str() {
+
+            "length" => EvalResult::Value(self.alloc(ObjectData::Integer(elems.len() as i64))),
+
+            "push" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: push expects 1 argument");
+                    return EvalResult::Error;
+                }
+                let val = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => self.extract(r),
+                    _ => return EvalResult::Error,
+                };
+                let new_ref = match arr_ref.region {
+                    RegionId::Global => self.plant_global(val),
+                    RegionId::Scoped => self.plant(val),
+                };
+                let mut e = elems;
+                e.push(new_ref);
+                self.update_array(arr_ref, e);
+                EvalResult::Value(self.null_ref)
+            }
+
+            "pop" => {
+                if elems.is_empty() {
+                    eprintln!("❌ ERROR: pop on empty array");
+                    return EvalResult::Error;
+                }
+                let mut e = elems;
+                let last = e.pop().unwrap();
+                let owned = self.extract(last);
+                self.update_array(arr_ref, e);
+                EvalResult::Value(self.plant(owned))
+            }
+
+            "shift" => {
+                if elems.is_empty() {
+                    eprintln!("❌ ERROR: shift on empty array");
+                    return EvalResult::Error;
+                }
+                let mut e = elems;
+                let first = e.remove(0);
+                let owned = self.extract(first);
+                self.update_array(arr_ref, e);
+                EvalResult::Value(self.plant(owned))
+            }
+
+            "unshift" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: unshift expects 1 argument");
+                    return EvalResult::Error;
+                }
+                let val = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => self.extract(r),
+                    _ => return EvalResult::Error,
+                };
+                let new_ref = match arr_ref.region {
+                    RegionId::Global => self.plant_global(val),
+                    RegionId::Scoped => self.plant(val),
+                };
+                let mut e = elems;
+                e.insert(0, new_ref);
+                self.update_array(arr_ref, e);
+                EvalResult::Value(self.null_ref)
+            }
+
+            "sort" => {
+                let order = if dot_call.arguments.is_empty() {
+                    "asc".to_string()
+                } else {
+                    match self.eval_expression(&dot_call.arguments[0]) {
+                        EvalResult::Value(r) => match self.resolve(r).cloned() {
+                            Some(ObjectData::Str(s)) => s,
+                            _ => "asc".to_string(),
+                        },
+                        _ => return EvalResult::Error,
+                    }
+                };
+                let descending = order == "desc";
+
+                let mut owned_vals: Vec<OwnedValue> =
+                    elems.iter().map(|&r| self.extract(r)).collect();
+
+                let all_ints = owned_vals.iter().all(|v| matches!(v, OwnedValue::Integer(_)));
+                let all_decs = owned_vals.iter().all(|v| matches!(v, OwnedValue::Decimal(_)));
+                let all_strs = owned_vals.iter().all(|v| matches!(v, OwnedValue::Str(_)));
+
+                if !all_ints && !all_decs && !all_strs {
+                    eprintln!("❌ ERROR: sort requires a homogeneous array (all int, decimal, or string)");
+                    return EvalResult::Error;
+                }
+
+                owned_vals.sort_by(|a, b| {
+                    let cmp = match (a, b) {
+                        (OwnedValue::Integer(x), OwnedValue::Integer(y)) => x.cmp(y),
+                        (OwnedValue::Decimal(x), OwnedValue::Decimal(y)) =>
+                            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+                        (OwnedValue::Str(x), OwnedValue::Str(y)) => x.cmp(y),
+                        _ => std::cmp::Ordering::Equal,
+                    };
+                    if descending { cmp.reverse() } else { cmp }
+                });
+
+                let new_refs: Vec<ObjectRef> = owned_vals.into_iter().map(|v| {
+                    match arr_ref.region {
+                        RegionId::Global => self.plant_global(v),
+                        RegionId::Scoped => self.plant(v),
+                    }
+                }).collect();
+                self.update_array(arr_ref, new_refs);
+                EvalResult::Value(self.null_ref)
+            }
+
+            "map" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: map expects 1 callback argument");
+                    return EvalResult::Error;
+                }
+                let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
+                    _ => return EvalResult::Error,
+                };
+                let n_params = match self.callback_param_count(cb_ref) {
+                    Some(n) => n,
+                    None => { eprintln!("❌ ERROR: map argument must be a function"); return EvalResult::Error; }
+                };
+                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
+                let mut results = Vec::new();
+                for (i, val) in owned_elems.into_iter().enumerate() {
+                    let args = if n_params >= 2 {
+                        vec![val, OwnedValue::Integer(i as i64)]
+                    } else {
+                        vec![val]
+                    };
+                    match self.call_function(cb_ref, args) {
+                        EvalResult::Value(r) => results.push(r),
+                        _ => return EvalResult::Error,
+                    }
+                }
+                EvalResult::Value(self.alloc(ObjectData::Array(results)))
+            }
+
+            "filter" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: filter expects 1 callback argument");
+                    return EvalResult::Error;
+                }
+                let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
+                    _ => return EvalResult::Error,
+                };
+                let n_params = match self.callback_param_count(cb_ref) {
+                    Some(n) => n,
+                    None => { eprintln!("❌ ERROR: filter argument must be a function"); return EvalResult::Error; }
+                };
+                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
+                let mut kept = Vec::new();
+                for (i, val) in owned_elems.into_iter().enumerate() {
+                    let args = if n_params >= 2 {
+                        vec![val.clone(), OwnedValue::Integer(i as i64)]
+                    } else {
+                        vec![val.clone()]
+                    };
+                    let keep = match self.call_function(cb_ref, args) {
+                        EvalResult::Value(r) => {
+                            let d = self.resolve(r).cloned();
+                            self.is_truthy(&d.unwrap_or(ObjectData::Null))
+                        }
+                        _ => return EvalResult::Error,
+                    };
+                    if keep {
+                        kept.push(self.plant(val));
+                    }
+                }
+                EvalResult::Value(self.alloc(ObjectData::Array(kept)))
+            }
+
+            "reduce" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: reduce expects 2 arguments (initial, callback)");
+                    return EvalResult::Error;
+                }
+                let init_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
+                    _ => return EvalResult::Error,
+                };
+                let cb_ref = match self.eval_expression(&dot_call.arguments[1]) {
+                    EvalResult::Value(r) => r,
+                    _ => return EvalResult::Error,
+                };
+                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
+                let mut acc_ref = init_ref;
+                for val in owned_elems {
+                    let acc_val = self.extract(acc_ref);
+                    acc_ref = match self.call_function(cb_ref, vec![acc_val, val]) {
+                        EvalResult::Value(r) => r,
+                        _ => return EvalResult::Error,
+                    };
+                }
+                EvalResult::Value(acc_ref)
+            }
+
+            _ => {
+                eprintln!("❌ ERROR: Unknown array method '{}'", dot_call.method);
+                EvalResult::Error
+            }
+        }
+    }
+
+    // ── String methods ────────────────────────────────────────────────────────
+
+    fn eval_string_method(&mut self, s: String, dot_call: &ast::DotCallExpression) -> EvalResult {
+        match dot_call.method.as_str() {
+
+            "length" => EvalResult::Value(self.alloc(ObjectData::Integer(s.chars().count() as i64))),
+
+            "toString" => EvalResult::Value(self.alloc(ObjectData::Str(s))),
+
+            "includes" | "contains" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: includes expects 1 argument");
+                    return EvalResult::Error;
+                }
+                let sub = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => match self.resolve(r).cloned() {
+                        Some(ObjectData::Str(t)) => t,
+                        _ => { eprintln!("❌ ERROR: includes argument must be a string"); return EvalResult::Error; }
+                    },
+                    _ => return EvalResult::Error,
+                };
+                EvalResult::Value(self.alloc(ObjectData::Boolean(s.contains(&sub[..]))))
+            }
+
+            "replace" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: replace expects 2 arguments (from, to)");
+                    return EvalResult::Error;
+                }
+                let from = match self.eval_str_arg(&dot_call.arguments[0]) { Some(v) => v, None => return EvalResult::Error };
+                let to   = match self.eval_str_arg(&dot_call.arguments[1]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Str(s.replacen(&from[..], &to, 1))))
+            }
+
+            "replaceAll" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: replaceAll expects 2 arguments (from, to)");
+                    return EvalResult::Error;
+                }
+                let from = match self.eval_str_arg(&dot_call.arguments[0]) { Some(v) => v, None => return EvalResult::Error };
+                let to   = match self.eval_str_arg(&dot_call.arguments[1]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Str(s.replace(&from[..], &to))))
+            }
+
+            "split" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: split expects 1 argument (separator)");
+                    return EvalResult::Error;
+                }
+                let sep = match self.eval_str_arg(&dot_call.arguments[0]) { Some(v) => v, None => return EvalResult::Error };
+                let parts: Vec<ObjectRef> = if sep.is_empty() {
+                    // Empty separator → split into individual characters
+                    s.chars().map(|c| self.alloc(ObjectData::Str(c.to_string()))).collect()
+                } else {
+                    s.split(&sep[..]).map(|p| self.alloc(ObjectData::Str(p.to_string()))).collect()
+                };
+                EvalResult::Value(self.alloc(ObjectData::Array(parts)))
+            }
+
+            "substring" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: substring expects 2 arguments (start, end)");
+                    return EvalResult::Error;
+                }
+                let start = match self.eval_int_arg(&dot_call.arguments[0]) { Some(v) => v, None => return EvalResult::Error };
+                let end   = match self.eval_int_arg(&dot_call.arguments[1]) { Some(v) => v, None => return EvalResult::Error };
+                let chars: Vec<char> = s.chars().collect();
+                let len = chars.len() as i64;
+                let start = start.max(0).min(len) as usize;
+                let end   = end.max(0).min(len) as usize;
+                let start = start.min(end);
+                let result: String = chars[start..end].iter().collect();
+                EvalResult::Value(self.alloc(ObjectData::Str(result)))
+            }
+
+            _ => {
+                eprintln!("❌ ERROR: Unknown string method '{}'", dot_call.method);
+                EvalResult::Error
+            }
+        }
+    }
+
+    // ── Argument extraction helpers ───────────────────────────────────────────
+
+    fn eval_str_arg(&mut self, expr: &ast::Expression) -> Option<String> {
+        match self.eval_expression(expr) {
+            EvalResult::Value(r) => match self.resolve(r).cloned() {
+                Some(ObjectData::Str(s)) => Some(s),
+                _ => { eprintln!("❌ ERROR: Expected string argument"); None }
+            },
+            _ => None,
+        }
+    }
+
+    fn eval_int_arg(&mut self, expr: &ast::Expression) -> Option<i64> {
+        match self.eval_expression(expr) {
+            EvalResult::Value(r) => match self.resolve(r).cloned() {
+                Some(ObjectData::Integer(i)) => Some(i),
+                _ => { eprintln!("❌ ERROR: Expected int argument"); None }
+            },
+            _ => None,
+        }
+    }
 }
 
 // ── Free helpers ──────────────────────────────────────────────────────────────
@@ -1526,6 +2105,7 @@ fn obj_data_to_key_str(data: &ObjectData) -> String {
 fn type_matches(expected: &str, data: &ObjectData) -> bool {
     match (expected, data) {
         ("int", ObjectData::Integer(_)) => true,
+        ("decimal", ObjectData::Decimal(_)) => true,
         ("string", ObjectData::Str(_)) => true,
         ("bool", ObjectData::Boolean(_)) => true,
         ("any", _) => true,
