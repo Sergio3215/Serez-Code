@@ -50,6 +50,7 @@ out fibonacci(10);   // → 55
 10. [Contributing](#contributing)
 11. [Roadmap](#roadmap)
 12. [License](#license)
+13. [Bugs Fixed List](bugs)
 
 ---
 
