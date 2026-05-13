@@ -645,7 +645,14 @@ impl Parser {
                     None
                 }
             }
-            TokenType::String => Some(Expression::String(self.current_token.literal.clone())),
+            TokenType::String => {
+                let s = self.current_token.literal.clone();
+                if s.contains('{') {
+                    parse_interpolated_string(&s)
+                } else {
+                    Some(Expression::String(s))
+                }
+            }
             TokenType::True => Some(Expression::Boolean(true)),
             TokenType::False => Some(Expression::Boolean(false)),
             TokenType::Bang | TokenType::Minus => {
@@ -978,4 +985,48 @@ fn is_type_keyword(token_type: &TokenType) -> bool {
         token_type,
         TokenType::KwVoid | TokenType::KwInt | TokenType::KwString | TokenType::KwBool | TokenType::KwAny
     )
+}
+
+/// Splits a raw string literal on `{...}` boundaries and builds an
+/// `InterpolatedString` expression.  Each `{expr}` segment is parsed
+/// independently using a fresh sub-parser.
+fn parse_interpolated_string(raw: &str) -> Option<Expression> {
+    use crate::lexer::Lexer;
+    let mut parts: Vec<StringPart> = Vec::new();
+    let mut rest = raw;
+
+    while let Some(open) = rest.find('{') {
+        if open > 0 {
+            parts.push(StringPart::Literal(rest[..open].to_string()));
+        }
+        let after_open = &rest[open + 1..];
+        let close = match after_open.find('}') {
+            Some(c) => c,
+            None => {
+                eprintln!("❌ PARSER ERROR: Unclosed '{{' in string interpolation");
+                return None;
+            }
+        };
+        let expr_src = after_open[..close].trim();
+        if !expr_src.is_empty() {
+            let lexer = Lexer::new(expr_src.to_string());
+            let mut sub = Parser::new(lexer);
+            let expr = sub.parse_expression(Precedence::Lowest)?;
+            parts.push(StringPart::Expr(Box::new(expr)));
+        }
+        rest = &after_open[close + 1..];
+    }
+
+    if !rest.is_empty() {
+        parts.push(StringPart::Literal(rest.to_string()));
+    }
+
+    // Degenerate case: no interpolations, just a plain string
+    if parts.len() == 1 {
+        if let StringPart::Literal(ref s) = parts[0] {
+            return Some(Expression::String(s.clone()));
+        }
+    }
+
+    Some(Expression::InterpolatedString(parts))
 }

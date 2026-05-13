@@ -110,6 +110,14 @@ pub enum Expression {
     DictLiteral(DictLiteral),                        // ({"k","v"}, ...)
     EntryLiteral(Box<Expression>, Box<Expression>),  // {key, value} in method args
     DotCall(DotCallExpression),                      // obj.method(args)
+    InterpolatedString(Vec<StringPart>),             // "Hello, {name}!"
+}
+
+/// One segment of an interpolated string literal.
+#[derive(Debug, Clone)]
+pub enum StringPart {
+    Literal(String),
+    Expr(Box<Expression>),
 }
 
 #[derive(Debug, Clone)]

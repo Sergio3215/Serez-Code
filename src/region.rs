@@ -19,6 +19,29 @@ pub struct ObjectRef {
 
 use crate::ast::{BlockStatement, Parameter};
 
+/// Arena-independent deep clone of a value tree.
+/// Used to safely extract values before a scope pop and re-plant after,
+/// and to store lexical closure captures arena-free.
+#[derive(Debug, Clone)]
+pub enum OwnedValue {
+    Integer(i64),
+    Boolean(bool),
+    Str(String),
+    Array(Vec<OwnedValue>),
+    Dict {
+        key_type: String,
+        value_type: String,
+        entries: Vec<(OwnedValue, OwnedValue)>,
+    },
+    Function {
+        return_type: Option<String>,
+        parameters: Vec<Parameter>,
+        body: BlockStatement,
+        captured: Vec<(String, OwnedValue)>,
+    },
+    Null,
+}
+
 /// Datos crudos de un valor de Serez-Code.
 /// No posee lógica de scope — solo los bytes del valor.
 #[derive(Debug, Clone)]
@@ -36,6 +59,7 @@ pub enum ObjectData {
         return_type: Option<String>,
         parameters: Vec<Parameter>,
         body: BlockStatement,
+        captured: Vec<(String, OwnedValue)>, // lexical closure environment
     },
     Null,
 }

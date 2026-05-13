@@ -1,5 +1,5 @@
 use crate::ast::{self, Expression, Program, Statement};
-use crate::region::{Arena, ObjectData, ObjectRef, RegionId};
+use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::HashMap;
 
@@ -10,29 +10,6 @@ pub enum EvalResult {
     Value(ObjectRef),  // Ejecución normal (retorno implícito)
     Return(ObjectRef), // Ejecución interrumpida por `return`
     Error,             // Ocurrió un error
-}
-
-// ── OwnedValue ────────────────────────────────────────────────────────────────
-// Árbol de valores completamente dueño de sus datos, sin refs a ninguna arena.
-// Permite extraer un resultado ANTES de truncar un scope y re-alocarlo DESPUÉS,
-// resolviendo el problema de refs colgantes en arrays devueltos por funciones.
-#[derive(Clone)]
-enum OwnedValue {
-    Integer(i64),
-    Boolean(bool),
-    Str(String),
-    Array(Vec<OwnedValue>),
-    Dict {
-        key_type: String,
-        value_type: String,
-        entries: Vec<(OwnedValue, OwnedValue)>,
-    },
-    Function {
-        return_type: Option<String>,
-        parameters: Vec<ast::Parameter>,
-        body: ast::BlockStatement,
-    },
-    Null,
 }
 
 // ── Evaluator ─────────────────────────────────────────────────────────────────
@@ -97,6 +74,17 @@ impl Evaluator {
         self.global_bindings.get(name).copied()
     }
 
+    /// Snapshot all currently-visible scoped variables as arena-independent
+    /// OwnedValues for use as a lexical closure capture.
+    /// Returns an empty vec at global scope (nothing to capture).
+    fn capture_env(&self) -> Vec<(String, OwnedValue)> {
+        self.scopes
+            .all_bindings()
+            .into_iter()
+            .map(|(name, r)| (name, self.extract(r)))
+            .collect()
+    }
+
     pub fn display(&self, obj_ref: ObjectRef) -> String {
         match self.resolve(obj_ref) {
             Some(ObjectData::Integer(i)) => format!("{}", i),
@@ -139,10 +127,12 @@ impl Evaluator {
                 return_type,
                 parameters,
                 body,
+                captured,
             }) => OwnedValue::Function {
                 return_type: return_type.clone(),
                 parameters: parameters.clone(),
                 body: body.clone(),
+                captured: captured.clone(),
             },
             Some(ObjectData::Null) | None => OwnedValue::Null,
         }
@@ -170,10 +160,12 @@ impl Evaluator {
                 return_type,
                 parameters,
                 body,
+                captured,
             } => self.alloc(ObjectData::Function {
                 return_type,
                 parameters,
                 body,
+                captured,
             }),
             OwnedValue::Null => self.null_ref,
         }
@@ -214,11 +206,12 @@ impl Evaluator {
                 });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
-            OwnedValue::Function { return_type, parameters, body } => {
+            OwnedValue::Function { return_type, parameters, body, captured } => {
                 let idx = self.global_arena.alloc(ObjectData::Function {
                     return_type,
                     parameters,
                     body,
+                    captured,
                 });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
@@ -321,10 +314,12 @@ impl Evaluator {
             }
 
             Statement::FunctionDeclaration(func_decl) => {
+                let captured = self.capture_env();
                 let func_data = ObjectData::Function {
                     return_type: func_decl.function.return_type.clone(),
                     parameters: func_decl.function.parameters.clone(),
                     body: func_decl.function.body.clone(),
+                    captured,
                 };
                 let func_ref = self.alloc(func_data);
 
@@ -653,12 +648,30 @@ impl Evaluator {
             },
 
             Expression::FunctionLiteral(func_lit) => {
+                let captured = self.capture_env();
                 let func_data = ObjectData::Function {
                     return_type: func_lit.return_type.clone(),
                     parameters: func_lit.parameters.clone(),
                     body: func_lit.body.clone(),
+                    captured,
                 };
                 EvalResult::Value(self.alloc(func_data))
+            }
+
+            Expression::InterpolatedString(parts) => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        ast::StringPart::Literal(s) => result.push_str(s),
+                        ast::StringPart::Expr(expr) => {
+                            match self.eval_expression(expr) {
+                                EvalResult::Value(r) => result.push_str(&self.display(r)),
+                                other => return other,
+                            }
+                        }
+                    }
+                }
+                EvalResult::Value(self.alloc(ObjectData::Str(result)))
             }
 
             Expression::Call(call_expr) => {
@@ -682,12 +695,13 @@ impl Evaluator {
                 self.scopes.push();
 
                 let func_data = self.resolve(func_ref).cloned();
-                let (return_type, parameters, body) = match func_data {
+                let (return_type, parameters, body, captured) = match func_data {
                     Some(ObjectData::Function {
                         return_type,
                         parameters,
                         body,
-                    }) => (return_type, parameters, body),
+                        captured,
+                    }) => (return_type, parameters, body, captured),
                     _ => {
                         eprintln!("❌ ERROR: Attempt to call a non-function");
                         self.scopes.pop();
@@ -757,6 +771,12 @@ impl Evaluator {
                             return EvalResult::Error;
                         }
                     }
+                }
+
+                // Bind captured environment first — params shadow same-named captures
+                for (name, owned) in captured {
+                    let local_ref = self.plant(owned);
+                    self.scopes.declare(name, local_ref);
                 }
 
                 for (i, param) in parameters.iter().enumerate() {
@@ -1463,6 +1483,16 @@ impl Evaluator {
             ast::Expression::Index(idx_expr) => {
                 8 + self.estimate_expression(&idx_expr.left)
                     + self.estimate_expression(&idx_expr.index)
+            }
+            ast::Expression::InterpolatedString(parts) => {
+                let mut cost = 24usize;
+                for part in parts {
+                    match part {
+                        ast::StringPart::Literal(s) => cost += 24 + s.len(),
+                        ast::StringPart::Expr(e) => cost += self.estimate_expression(e),
+                    }
+                }
+                cost
             }
         }
     }

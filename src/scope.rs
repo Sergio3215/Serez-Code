@@ -101,4 +101,17 @@ impl ScopeStack {
         }
         None
     }
+
+    /// Returns all (name, ref) pairs visible in the current scope chain,
+    /// ordered outer-to-inner so that inner-frame values override outer ones
+    /// when iterated in order (used to build closure captures).
+    pub fn all_bindings(&self) -> Vec<(String, ObjectRef)> {
+        let mut result = Vec::new();
+        for frame in &self.frames {
+            for (name, &r) in &frame.bindings {
+                result.push((name.clone(), r));
+            }
+        }
+        result
+    }
 }
