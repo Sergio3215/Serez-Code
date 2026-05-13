@@ -1263,8 +1263,8 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] `&&` and `||` — logical AND and OR operators with short-circuit evaluation
 - [x] `for` loop — `for (let i = 0; i < n; i = i + 1) { ... }`, nested loops, 1D/2D array traversal
 - [x] Array mutation via index — `arr[i] = expr`, works in loops and from inside functions
-- [ ] String interpolation — `"Hello, {name}!"`
-- [ ] Lexical closures — functions that capture variables from their defining scope
+- [x] String interpolation — `"Hello, {name}!"`
+- [x] Lexical closures — functions that capture variables from their defining scope
 - [ ] Native higher-order functions — `map`, `filter`, `reduce`
 
 ### Type system
