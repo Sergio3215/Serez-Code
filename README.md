@@ -38,6 +38,7 @@ out fibonacci(10);   // → 55
    - [Functions](#functions)
    - [Control Flow](#control-flow)
    - [Arrays](#arrays)
+   - [Dictionaries](#dictionaries)
    - [Output](#output)
    - [Comments](#comments)
 4. [Type System](#type-system)
@@ -162,18 +163,22 @@ out y;    // ❌ ERROR: Variable not found: y
 
 ### Types
 
-Serez-Code has four primitive types and two compound types:
+Serez-Code has four primitive types and three compound types:
 
-| Type | Literal examples | Runtime representation |
+| Type | Literal / annotation examples | Runtime representation |
 |---|---|---|
 | `int` | `0`, `42`, `-7` | 64-bit signed integer (`i64`) |
 | `bool` | `true`, `false` | Boolean |
 | `string` | `"hello"`, `"foo bar"` | UTF-8 string |
 | `void` | — | Signals absence of a return value |
+| `any` | — | Wildcard: skips type validation |
 | Array | `[1, 2, "x"]` | Heterogeneous, 0-indexed |
+| Dict | `let d <string,int> = (...)` | Typed key-value store, ordered insertion |
 | Function | `fn int add(...)` | First-class value |
 
 Types are **dynamic by default**. Annotations are optional on parameters and return values. When provided, they are enforced at every call site — see [Type System](#type-system) for details.
+
+The `any` keyword suppresses type checking for that slot. It is useful for dict values of mixed type and for function parameters that accept any value.
 
 ---
 
@@ -267,7 +272,7 @@ From lowest to highest:
 | `Sum` | `+` `-` |
 | `Product` | `*` `/` `%` |
 | `Prefix` | `-x` `!x` |
-| `Call` | `f(x)` |
+| `Call` | `f(x)` `.method(args)` |
 | `Index` | `a[i]` |
 
 Parentheses can override precedence:
@@ -574,6 +579,46 @@ Indexing with a negative number or an index beyond the last element is a runtime
 out nums[10];   // ❌ ERROR: Index out of bounds
 ```
 
+#### Index mutation
+
+Array elements can be reassigned by index. The array must already be declared with `let`.
+
+```serez
+let nums = [10, 20, 30];
+nums[1] = 99;
+out nums[1];   // → 99
+```
+
+Mutation works inside loops:
+
+```serez
+let squares = [0, 0, 0, 0, 0];
+for (let i = 0; i < 5; i = i + 1) {
+    squares[i] = i * i;
+}
+out squares[3];   // → 9
+```
+
+Mutation of a global array from inside a function also works:
+
+```serez
+let data = [10, 20, 30];
+
+fn void doubleAt(int idx) {
+    data[idx] = data[idx] * 2;
+}
+
+doubleAt(1);
+out data[1];   // → 40
+```
+
+Index must be a non-negative integer within bounds — out-of-range mutations are runtime errors:
+
+```serez
+let a = [1, 2, 3];
+a[5] = 0;   // ❌ ERROR: Index out of bounds
+```
+
 #### Arrays from functions
 
 Functions can build and return arrays. The returned array is safely promoted out of the function's scope before cleanup:
@@ -599,6 +644,95 @@ fn wrap(a, b) {
 let pair = wrap(42, 99);
 out pair[0];   // → 42
 out pair[1];   // → 99
+```
+
+---
+
+### Dictionaries
+
+Dictionaries are typed key-value stores. The type annotation `<key_type, value_type>` is mandatory. Use `any` for values of mixed or unknown type.
+
+```serez
+let dicc    <string,string> = ({"hola","1"},{"chau","1"},{"gracias","1"});
+let precios <string,int>    = ({"jamon",12},{"Shen",2});
+let mixto   <string,any>    = ({"jamon",2},{"Shen",true});
+let empty   <string,int>    = ();
+```
+
+#### Reading
+
+```serez
+out dicc["hola"];      // → 1
+out precios["jamon"];  // → 12
+out mixto["Shen"];     // → true
+```
+
+If the key does not exist, a runtime error is raised: `❌ ERROR: Key 'x' not found in dict`.
+
+#### Printing the whole dict
+
+```serez
+out dicc;   // → {hola: 1, chau: 1, gracias: 1}
+```
+
+#### Methods
+
+| Method | Syntax | Effect |
+|---|---|---|
+| `Add` | `d.Add({"key","val"})` | Insert a new entry. If the key already exists, replace its value (upsert). |
+| `Remove` | `d.Remove("key")` | Delete the entry with the given key. No-op if the key is absent. |
+| `RemoveAll` | `d.RemoveAll()` | Delete all entries. |
+| `clear` | `d.clear()` | Alias for `RemoveAll`. |
+
+```serez
+dicc.Add({"cantar","true"});
+out dicc["cantar"];    // → true
+
+dicc.Add({"hola","2"});   // overwrite existing key
+out dicc["hola"];          // → 2
+
+dicc.Remove("cantar");
+out dicc;              // → {hola: 2, chau: 1, gracias: 1}
+
+dicc.RemoveAll();
+out dicc;              // → {}
+```
+
+#### Writing via index
+
+As an alternative to `Add`, a key can be written directly with index-assignment syntax:
+
+```serez
+precios["queso"] = 8;    // inserts "queso" → 8
+precios["jamon"] = 15;   // replaces existing value
+out precios["jamon"];    // → 15
+```
+
+#### Type enforcement
+
+The type annotation is enforced on both `Add` and the dict literal. Using `any` for either type skips enforcement for that slot:
+
+```serez
+let typed <string,int> = ({"a",1});
+typed.Add({"b","wrong"});   // ❌ TYPE ERROR: Dict value type mismatch on Add (expected 'int')
+
+let flexible <string,any> = ({"a",1},{"b",true},{"c","mixed"});   // all valid
+```
+
+#### Mutating a global dict from a function
+
+Mutations of global dicts from inside functions use the same `plant_global` mechanism as arrays — the new values are allocated in the global arena so they outlive the function scope:
+
+```serez
+let counters <string,int> = ({"hits",0});
+
+fn void inc() {
+    counters.Add({"hits", counters["hits"] + 1});
+}
+
+inc();
+inc();
+out counters["hits"];   // → 2
 ```
 
 ---
@@ -657,7 +791,7 @@ Serez-Code uses a **hybrid type system**: the language is dynamically typed by d
 
 ### Type annotations
 
-Annotations use the keywords `int`, `string`, `bool`, and `void`:
+Annotations use the keywords `int`, `string`, `bool`, `void`, and `any`:
 
 ```serez
 fn int strictAdd(int a, int b) {
@@ -887,14 +1021,16 @@ For a function with 5 local variables, scope cleanup costs exactly 5 destructor 
 
 ### Scratch watermark for top-level temporaries
 
-At the top level, `out` statements and bare expression statements create temporary values (e.g., the result of `5 + 3` used only for printing). These are freed immediately after each statement via a scratch watermark on the global arena — they do not accumulate for the lifetime of the script.
+At the top level, `out` statements create temporary values (e.g., the result of `fibonacci(10)` used only for printing). These are freed immediately after the statement via a scratch watermark on the global arena — they do not accumulate for the lifetime of the script.
 
 ```serez
 out fibonacci(10);   // temporary result allocated, printed, freed
 out fibonacci(20);   // same — no accumulation between statements
 ```
 
-Global variable bindings from `let` are always kept; only truly temporary values are released.
+Bare expression statements (e.g., function calls used as statements) are **not** subject to the scratch reset, because they may have persistent side-effects — for example, a function that mutates a global array via index assignment allocates the new element value in the global arena as a side-effect. Resetting the watermark would destroy that allocation.
+
+Global variable bindings from `let` are always kept; only display-only temporaries from `out` are released.
 
 ---
 
@@ -912,6 +1048,8 @@ Run `sz --check script.sz` to analyze your program's memory footprint before exe
 | Infix expression | 8 + left + right bytes |
 | Function call | 8 + sum of arguments bytes |
 | Array literal | 24 + sum of elements bytes |
+| Dict literal | 24 + sum of (key + value) bytes per entry |
+| Dot call (method) | 8 + sum of arguments bytes |
 | `if` expression | condition + max(consequence, alternative) bytes |
 
 Each function is classified by criticality:
@@ -958,6 +1096,9 @@ sz script.sz > output.txt 2> errors.txt
 | `❌ ERROR: Attempt to call a non-function` | Calling a value that is not a function |
 | `❌ ERROR: Function expected N arguments, got M` | Arity mismatch at call site |
 | `❌ ERROR: Index out of bounds` | Array access outside `[0, len-1]` |
+| `❌ ERROR: Key 'x' not found in dict` | Dict key lookup on a key that does not exist |
+| `❌ ERROR: Unknown dict method 'x'` | Calling an undefined method on a dict |
+| `❌ TYPE ERROR: Dict key/value type mismatch` | Adding an entry whose types violate the dict's annotation |
 | `❌ ERROR: Division by zero` | `/` with zero on the right |
 | `❌ ERROR: Modulus operator by zero` | `%` with zero on the right |
 | `❌ ERROR: Integer overflow` | Arithmetic result exceeds `i64` range |
@@ -1011,8 +1152,8 @@ Source file (.sz) or REPL line
         ▼
     Parser (Pratt TDOP)
     — parse_program() → Program { Vec<Statement> }
-    — Prefix handlers: literals, identifiers, if, fn, arrays, ( )
-    — Infix handlers: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||, f(args), a[i]
+    — Prefix handlers: literals, identifiers, if, fn, arrays, entry literals {k,v}, ( )
+    — Infix handlers: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||, f(args), a[i], obj.method(args)
     — Error recovery: synchronize() skips to ; or } or keyword on failure
         │
         ▼
@@ -1028,7 +1169,7 @@ Source file (.sz) or REPL line
     — eval_statement() dispatches Let, Assign, While, For, Out, Block, …
     — eval_expression() dispatches Infix, Prefix, Call, If, Index, …
     — Flash Scope protocol on every { } block: push → eval → extract → pop → plant
-    — Scratch watermark reclaims top-level Out / Expression temporaries
+    — Scratch watermark reclaims top-level Out temporaries (Expression excluded — may have persistent side-effects)
         │
         ├──► stdout  (out statements, REPL results)
         └──► stderr  (type errors, runtime errors, parser errors)
@@ -1120,7 +1261,7 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 ### Language features
 - [x] `&&` and `||` — logical AND and OR operators with short-circuit evaluation
 - [x] `for` loop — `for (let i = 0; i < n; i = i + 1) { ... }`, nested loops, 1D/2D array traversal
-- [ ] Array mutation via index — `arr[i] = expr`
+- [x] Array mutation via index — `arr[i] = expr`, works in loops and from inside functions
 - [ ] String interpolation — `"Hello, {name}!"`
 - [ ] Lexical closures — functions that capture variables from their defining scope
 - [ ] Native higher-order functions — `map`, `filter`, `reduce`

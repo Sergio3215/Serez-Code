@@ -23,8 +23,9 @@ pub fn token_precedence(token_type: &TokenType) -> Precedence {
         TokenType::Eq | TokenType::NotEq => Precedence::Equals,
         TokenType::Lt | TokenType::Gt | TokenType::LtEq | TokenType::GtEq => Precedence::LessGreater,
         TokenType::Plus | TokenType::Minus => Precedence::Sum,
-        TokenType::Slash | TokenType::Asterisk => Precedence::Product,
+        TokenType::Slash | TokenType::Asterisk | TokenType::Percent => Precedence::Product,
         TokenType::LParen => Precedence::Call,
+        TokenType::Dot => Precedence::Call,
         TokenType::LBracket => Precedence::Index,
         _ => Precedence::Lowest,
     }
@@ -104,6 +105,10 @@ impl Parser {
             // Reasignación: Ident seguido de `=`
             TokenType::Ident if self.peek_token.token_type == TokenType::Assign => {
                 self.parse_assign_statement()
+            }
+            // Posible mutación de array: arr[i] = expr  (o expresión arr[i] suelta)
+            TokenType::Ident if self.peek_token.token_type == TokenType::LBracket => {
+                self.parse_index_assign_or_expr_statement()
             }
             _ => self.parse_expression_statement(),
         }
@@ -206,6 +211,54 @@ impl Parser {
         };
 
         Some(Statement::While(WhileStatement { condition, body }))
+    }
+
+    fn parse_index_assign_or_expr_statement(&mut self) -> Option<Statement> {
+        // current = Ident, peek = '['
+        // Parse the full expression first (may be arr[i], arr[i][j], call, etc.)
+        let expr = self.parse_expression(Precedence::Lowest)?;
+
+        if self.peek_token.token_type == TokenType::Assign {
+            // arr[i] = value
+            let (target, index) = match &expr {
+                Expression::Index(idx_expr) => {
+                    let target = match idx_expr.left.as_ref() {
+                        Expression::Identifier(name) => name.clone(),
+                        _ => {
+                            eprintln!("❌ PARSER ERROR: Index assignment target must be a simple array variable");
+                            return None;
+                        }
+                    };
+                    let index = *idx_expr.index.clone();
+                    (target, index)
+                }
+                _ => {
+                    eprintln!("❌ PARSER ERROR: Left side of '=' is not an index expression");
+                    return None;
+                }
+            };
+
+            self.next_token(); // consume '='
+            self.next_token(); // first token of value
+
+            let value = self.parse_expression(Precedence::Lowest)?;
+
+            if self.peek_token.token_type == TokenType::Semicolon {
+                self.next_token();
+            }
+
+            Some(Statement::IndexAssign(IndexAssignStatement {
+                target,
+                index,
+                value,
+            }))
+        } else {
+            // Plain expression statement
+            if self.peek_token.token_type == TokenType::Semicolon {
+                self.next_token();
+            }
+            Some(Statement::Expression(expr))
+        }
     }
 
     fn parse_for_statement(&mut self) -> Option<Statement> {
@@ -354,6 +407,31 @@ impl Parser {
         }
         self.next_token();
         let name = self.current_token.literal.clone();
+
+        // Dict declaration: let name <key_type, value_type> = (...)
+        if self.peek_token.token_type == TokenType::Lt {
+            let (key_type, value_type) = self.parse_dict_type_annotation()?;
+
+            if self.peek_token.token_type != TokenType::Assign {
+                eprintln!("❌ PARSER ERROR: Expected '=' after dict type annotation");
+                return None;
+            }
+            self.next_token(); // current: '='
+            self.next_token(); // current: '('
+
+            if self.current_token.token_type != TokenType::LParen {
+                eprintln!("❌ PARSER ERROR: Expected '(' to start dict literal");
+                return None;
+            }
+
+            let value = self.parse_dict_literal(key_type, value_type)?;
+
+            if self.peek_token.token_type == TokenType::Semicolon {
+                self.next_token();
+            }
+
+            return Some(Statement::Let(LetStatement { name, value }));
+        }
 
         if self.peek_token.token_type != TokenType::Assign {
             return None;
@@ -586,8 +664,9 @@ impl Parser {
                 exp
             }
             TokenType::LBracket => self.parse_array_literal(),
+            TokenType::LBrace => self.parse_entry_literal(),
             TokenType::If => self.parse_if_expression(),
-            TokenType::KwVoid | TokenType::KwInt | TokenType::KwString | TokenType::KwBool => {
+            TokenType::KwVoid | TokenType::KwInt | TokenType::KwString | TokenType::KwBool | TokenType::KwAny => {
                 // Arrow function syntax: void () => {}
                 self.parse_arrow_function()
             }
@@ -636,6 +715,7 @@ impl Parser {
                 | TokenType::Minus
                 | TokenType::Slash
                 | TokenType::Asterisk
+                | TokenType::Percent
                 | TokenType::Eq
                 | TokenType::NotEq
                 | TokenType::Lt
@@ -645,6 +725,7 @@ impl Parser {
                 | TokenType::And
                 | TokenType::Or
                 | TokenType::LParen
+                | TokenType::Dot
                 | TokenType::LBracket => true,
                 _ => false,
             };
@@ -691,6 +772,33 @@ impl Parser {
                         return None;
                     }
                 }
+            } else if self.current_token.token_type == TokenType::Dot {
+                let dot_line = self.current_token.line;
+                let dot_column = self.current_token.column;
+
+                if self.peek_token.token_type != TokenType::Ident {
+                    eprintln!("❌ PARSER ERROR: Expected method name after '.'");
+                    return left_exp;
+                }
+                self.next_token(); // current = method name
+                let method = self.current_token.literal.clone();
+
+                let arguments = if self.peek_token.token_type == TokenType::LParen {
+                    self.next_token(); // current = '('
+                    self.parse_call_arguments().unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
+                if let Some(left) = left_exp {
+                    left_exp = Some(Expression::DotCall(DotCallExpression {
+                        object: Box::new(left),
+                        method,
+                        arguments,
+                        line: dot_line,
+                        column: dot_column,
+                    }));
+                }
             } else {
                 let op_line = self.current_token.line;
                 let op_column = self.current_token.column;
@@ -716,6 +824,117 @@ impl Parser {
         }
 
         left_exp
+    }
+
+    fn parse_dict_type_annotation(&mut self) -> Option<(String, String)> {
+        // Entry: current = name, peek = Lt
+        self.next_token(); // current = '<'
+        self.next_token(); // current = key_type keyword
+
+        if !is_type_keyword(&self.current_token.token_type) {
+            eprintln!("❌ PARSER ERROR: Expected type keyword for dict key type, got '{}'", self.current_token.literal);
+            return None;
+        }
+        let key_type = self.current_token.literal.clone();
+
+        if self.peek_token.token_type != TokenType::Comma {
+            eprintln!("❌ PARSER ERROR: Expected ',' between key and value types in dict annotation");
+            return None;
+        }
+        self.next_token(); // current = ','
+        self.next_token(); // current = value_type keyword
+
+        if !is_type_keyword(&self.current_token.token_type) {
+            eprintln!("❌ PARSER ERROR: Expected type keyword for dict value type, got '{}'", self.current_token.literal);
+            return None;
+        }
+        let value_type = self.current_token.literal.clone();
+
+        if self.peek_token.token_type != TokenType::Gt {
+            eprintln!("❌ PARSER ERROR: Expected '>' to close dict type annotation");
+            return None;
+        }
+        self.next_token(); // current = '>'
+        // Exit: current = '>', peek = Assign
+
+        Some((key_type, value_type))
+    }
+
+    fn parse_dict_literal(&mut self, key_type: String, value_type: String) -> Option<Expression> {
+        // Entry: current = '('
+        let mut entries = Vec::new();
+
+        if self.peek_token.token_type == TokenType::RParen {
+            self.next_token(); // consume ')'
+            return Some(Expression::DictLiteral(DictLiteral { key_type, value_type, entries }));
+        }
+
+        self.next_token(); // current = '{' (first entry)
+
+        loop {
+            if self.current_token.token_type != TokenType::LBrace {
+                eprintln!("❌ PARSER ERROR: Expected '{{' to start dict entry");
+                return None;
+            }
+            self.next_token(); // advance to key expression
+
+            let key = self.parse_expression(Precedence::Lowest)?;
+
+            if self.peek_token.token_type != TokenType::Comma {
+                eprintln!("❌ PARSER ERROR: Expected ',' between key and value in dict entry");
+                return None;
+            }
+            self.next_token(); // current = ','
+            self.next_token(); // current = value start
+
+            let value = self.parse_expression(Precedence::Lowest)?;
+
+            if self.peek_token.token_type != TokenType::RBrace {
+                eprintln!("❌ PARSER ERROR: Expected '}}' to close dict entry");
+                return None;
+            }
+            self.next_token(); // current = '}'
+
+            entries.push((key, value));
+
+            if self.peek_token.token_type == TokenType::RParen {
+                self.next_token(); // current = ')'
+                break;
+            }
+
+            if self.peek_token.token_type != TokenType::Comma {
+                eprintln!("❌ PARSER ERROR: Expected ',' or ')' after dict entry");
+                return None;
+            }
+            self.next_token(); // current = ','
+            self.next_token(); // current = '{' (next entry)
+        }
+
+        Some(Expression::DictLiteral(DictLiteral { key_type, value_type, entries }))
+    }
+
+    fn parse_entry_literal(&mut self) -> Option<Expression> {
+        // Entry: current = '{' — used for {key, value} in method arguments
+        self.next_token(); // advance to key expression
+
+        let key = self.parse_expression(Precedence::Lowest)?;
+
+        if self.peek_token.token_type != TokenType::Comma {
+            eprintln!("❌ PARSER ERROR: Expected ',' between key and value in entry literal");
+            return None;
+        }
+        self.next_token(); // current = ','
+        self.next_token(); // current = value start
+
+        let value = self.parse_expression(Precedence::Lowest)?;
+
+        if self.peek_token.token_type != TokenType::RBrace {
+            eprintln!("❌ PARSER ERROR: Expected '}}' to close entry literal");
+            return None;
+        }
+        self.next_token(); // current = '}'
+
+        Some(Expression::EntryLiteral(Box::new(key), Box::new(value)))
     }
 
     fn parse_array_literal(&mut self) -> Option<Expression> {
@@ -757,6 +976,6 @@ impl Parser {
 fn is_type_keyword(token_type: &TokenType) -> bool {
     matches!(
         token_type,
-        TokenType::KwVoid | TokenType::KwInt | TokenType::KwString | TokenType::KwBool
+        TokenType::KwVoid | TokenType::KwInt | TokenType::KwString | TokenType::KwBool | TokenType::KwAny
     )
 }

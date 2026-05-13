@@ -22,6 +22,11 @@ enum OwnedValue {
     Boolean(bool),
     Str(String),
     Array(Vec<OwnedValue>),
+    Dict {
+        key_type: String,
+        value_type: String,
+        entries: Vec<(OwnedValue, OwnedValue)>,
+    },
     Function {
         return_type: Option<String>,
         parameters: Vec<ast::Parameter>,
@@ -101,6 +106,14 @@ impl Evaluator {
                 let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
                 format!("[{}]", elems.join(", "))
             }
+            Some(ObjectData::Dict { entries, .. }) => {
+                let entries = entries.clone();
+                let pairs: Vec<String> = entries
+                    .iter()
+                    .map(|&(k, v)| format!("{}: {}", self.display(k), self.display(v)))
+                    .collect();
+                format!("{{{}}}", pairs.join(", "))
+            }
             Some(ObjectData::Function { .. }) => "Function".to_string(),
             Some(ObjectData::Null) => "null".to_string(),
             None => "❌ Referencia inválida".to_string(),
@@ -117,6 +130,11 @@ impl Evaluator {
             Some(ObjectData::Array(refs)) => {
                 OwnedValue::Array(refs.iter().map(|&r| self.extract(r)).collect())
             }
+            Some(ObjectData::Dict { key_type, value_type, entries }) => OwnedValue::Dict {
+                key_type: key_type.clone(),
+                value_type: value_type.clone(),
+                entries: entries.iter().map(|&(k, v)| (self.extract(k), self.extract(v))).collect(),
+            },
             Some(ObjectData::Function {
                 return_type,
                 parameters,
@@ -141,6 +159,13 @@ impl Evaluator {
                 let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant(v)).collect();
                 self.alloc(ObjectData::Array(refs))
             }
+            OwnedValue::Dict { key_type, value_type, entries } => {
+                let planted: Vec<(ObjectRef, ObjectRef)> = entries
+                    .into_iter()
+                    .map(|(k, v)| (self.plant(k), self.plant(v)))
+                    .collect();
+                self.alloc(ObjectData::Dict { key_type, value_type, entries: planted })
+            }
             OwnedValue::Function {
                 return_type,
                 parameters,
@@ -154,18 +179,69 @@ impl Evaluator {
         }
     }
 
+    // Igual que plant() pero siempre aloca en la arena global.
+    // Necesario cuando se muta un array global desde dentro de un scope:
+    // los nuevos elementos deben vivir en la misma arena que el array.
+    fn plant_global(&mut self, value: OwnedValue) -> ObjectRef {
+        match value {
+            OwnedValue::Integer(i) => {
+                let idx = self.global_arena.alloc(ObjectData::Integer(i));
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Boolean(b) => {
+                let idx = self.global_arena.alloc(ObjectData::Boolean(b));
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Str(s) => {
+                let idx = self.global_arena.alloc(ObjectData::Str(s));
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Array(items) => {
+                let refs: Vec<ObjectRef> =
+                    items.into_iter().map(|v| self.plant_global(v)).collect();
+                let idx = self.global_arena.alloc(ObjectData::Array(refs));
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Dict { key_type, value_type, entries } => {
+                let planted: Vec<(ObjectRef, ObjectRef)> = entries
+                    .into_iter()
+                    .map(|(k, v)| (self.plant_global(k), self.plant_global(v)))
+                    .collect();
+                let idx = self.global_arena.alloc(ObjectData::Dict {
+                    key_type,
+                    value_type,
+                    entries: planted,
+                });
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Function { return_type, parameters, body } => {
+                let idx = self.global_arena.alloc(ObjectData::Function {
+                    return_type,
+                    parameters,
+                    body,
+                });
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Null => self.null_ref,
+        }
+    }
+
     // ── Evaluación de Programa ──────────────────────────────────────────────
 
     pub fn eval_program(&mut self, program: &Program) -> Option<ObjectRef> {
         let mut result = self.null_ref;
         for statement in &program.statements {
-            // Out and pure Expression statements at top level produce values that are
-            // immediately consumed and never retained. Use a scratch watermark so
-            // those temporaries don't accumulate in the global arena for the program lifetime.
+            // Out statements at top level produce values that are immediately consumed
+            // (printed) and never retained. Use a scratch watermark so display
+            // temporaries don't accumulate in the global arena for the program lifetime.
+            //
+            // NOTE: Expression statements (e.g. function calls used as statements) are
+            // intentionally excluded here. A function call may have persistent side effects
+            // such as IndexAssign on a global array: those allocations land in the global
+            // arena and must survive the statement boundary. Resetting to a pre-call
+            // watermark would free them, producing dangling refs.
             let scratch_mark = match statement {
-                Statement::Out(_) | Statement::Expression(_) => {
-                    Some(self.global_arena.watermark())
-                }
+                Statement::Out(_) => Some(self.global_arena.watermark()),
                 _ => None,
             };
 
@@ -205,6 +281,12 @@ impl Evaluator {
                     EvalResult::Value(v) => v,
                     _ => return EvalResult::Error,
                 };
+
+                // Always allocate a fresh slot so the variable never aliases its
+                // source (e.g. `let x = arr[0]` must not share the slot with arr[0],
+                // or a later `x = new_val` would silently mutate the array element).
+                let fresh_data = self.resolve(val_ref).unwrap().clone();
+                let val_ref = self.alloc(fresh_data);
 
                 if self.scopes.is_empty() {
                     self.global_bindings.insert(let_stmt.name.clone(), val_ref);
@@ -258,7 +340,6 @@ impl Evaluator {
             Statement::Block(block_stmt) => self.eval_block(block_stmt),
 
             Statement::While(while_stmt) => {
-                let mut result = EvalResult::Value(self.null_ref);
                 loop {
                     // Guardar watermark antes de evaluar la condición para liberar el temporal
                     // inmediatamente después — evita que se acumule una allocación por iteración.
@@ -286,9 +367,9 @@ impl Evaluator {
                         break;
                     }
 
-                    // 2. Evaluate body block without throwing Flash Scope Error on return
+                    // 2. Evaluate body — body value is discarded (while is a statement, not expression)
                     match self.eval_block(&while_stmt.body) {
-                        EvalResult::Value(v) => result = EvalResult::Value(v),
+                        EvalResult::Value(_) => {}
                         EvalResult::Return(v) => {
                             // Un return dentro de un while interrumpe el while y sube el return
                             return EvalResult::Return(v);
@@ -296,7 +377,7 @@ impl Evaluator {
                         EvalResult::Error => return EvalResult::Error,
                     }
                 }
-                result
+                EvalResult::Value(self.null_ref)
             }
 
             Statement::For(for_stmt) => {
@@ -396,6 +477,105 @@ impl Evaluator {
                 if let Some(owned) = loop_return {
                     return EvalResult::Return(self.plant(owned));
                 }
+                EvalResult::Value(self.null_ref)
+            }
+
+            Statement::IndexAssign(stmt) => {
+                // Resolve the target array
+                let arr_ref = match self.lookup_var(&stmt.target) {
+                    Some(r) => r,
+                    None => {
+                        eprintln!("❌ ERROR: Variable not found: {}", stmt.target);
+                        return EvalResult::Error;
+                    }
+                };
+
+                // Evaluate index and new value
+                let idx_ref = match self.eval_expression(&stmt.index) {
+                    EvalResult::Value(v) => v,
+                    _ => return EvalResult::Error,
+                };
+                let val_ref = match self.eval_expression(&stmt.value) {
+                    EvalResult::Value(v) => v,
+                    _ => return EvalResult::Error,
+                };
+
+                let arr_data = self.resolve(arr_ref).unwrap().clone();
+                let idx_data = self.resolve(idx_ref).unwrap().clone();
+
+                match arr_data {
+                    ObjectData::Array(mut elements) => {
+                        let i = match idx_data {
+                            ObjectData::Integer(i) => i,
+                            _ => {
+                                eprintln!("❌ ERROR: Array index must be an integer");
+                                return EvalResult::Error;
+                            }
+                        };
+
+                        if i < 0 || i as usize >= elements.len() {
+                            eprintln!("❌ ERROR: Index out of bounds");
+                            return EvalResult::Error;
+                        }
+
+                        let owned = self.extract(val_ref);
+                        let new_elem_ref = match arr_ref.region {
+                            RegionId::Global => self.plant_global(owned),
+                            RegionId::Scoped => self.plant(owned),
+                        };
+                        elements[i as usize] = new_elem_ref;
+
+                        match arr_ref.region {
+                            RegionId::Global => {
+                                self.global_arena.update(arr_ref.index, ObjectData::Array(elements));
+                            }
+                            RegionId::Scoped => {
+                                self.scopes.arena.update(arr_ref.index, ObjectData::Array(elements));
+                            }
+                        }
+                    }
+
+                    ObjectData::Dict { key_type, value_type, mut entries } => {
+                        let search_key = obj_data_to_key_str(&idx_data);
+                        let owned_val = self.extract(val_ref);
+
+                        // Index-based loop so we can call &mut self methods (plant/plant_global)
+                        let mut replaced = false;
+                        let mut i = 0;
+                        while i < entries.len() {
+                            let k_data = self.resolve(entries[i].0).unwrap().clone();
+                            if obj_data_to_key_str(&k_data) == search_key {
+                                let new_ref = match arr_ref.region {
+                                    RegionId::Global => self.plant_global(owned_val.clone()),
+                                    RegionId::Scoped => self.plant(owned_val.clone()),
+                                };
+                                entries[i].1 = new_ref;
+                                replaced = true;
+                                break;
+                            }
+                            i += 1;
+                        }
+                        if !replaced {
+                            let owned_k = OwnedValue::Str(search_key);
+                            let new_k = match arr_ref.region {
+                                RegionId::Global => self.plant_global(owned_k),
+                                RegionId::Scoped => self.plant(owned_k),
+                            };
+                            let new_v = match arr_ref.region {
+                                RegionId::Global => self.plant_global(owned_val),
+                                RegionId::Scoped => self.plant(owned_val),
+                            };
+                            entries.push((new_k, new_v));
+                        }
+                        self.update_dict(arr_ref, key_type, value_type, entries);
+                    }
+
+                    _ => {
+                        eprintln!("❌ ERROR: '{}' is not an array or dict", stmt.target);
+                        return EvalResult::Error;
+                    }
+                }
+
                 EvalResult::Value(self.null_ref)
             }
 
@@ -555,6 +735,7 @@ impl Evaluator {
                             ("int", ObjectData::Integer(_)) => true,
                             ("string", ObjectData::Str(_)) => true,
                             ("bool", ObjectData::Boolean(_)) => true,
+                            ("any", _) => true,
                             _ => false,
                         };
 
@@ -614,6 +795,8 @@ impl Evaluator {
                         ("string", ObjectData::Str(_)) => true,
                         ("bool", ObjectData::Boolean(_)) => true,
                         ("void", ObjectData::Null) => true,
+                        ("dict", ObjectData::Dict { .. }) => true,
+                        ("any", _) => true,
                         _ => false,
                     };
                     if !is_valid {
@@ -676,33 +859,216 @@ impl Evaluator {
                 let left_data = self.resolve(left_ref).unwrap().clone();
                 let idx_data = self.resolve(idx_ref).unwrap().clone();
 
-                if let (ObjectData::Array(elements), ObjectData::Integer(i)) = (left_data, idx_data)
-                {
-                    if i < 0 || i as usize >= elements.len() {
-                        eprintln!("❌ ERROR: Index out of bounds");
-
+                match (&left_data, &idx_data) {
+                    (ObjectData::Array(elements), ObjectData::Integer(i)) => {
+                        if *i < 0 || *i as usize >= elements.len() {
+                            eprintln!("❌ ERROR: Index out of bounds");
+                            for frame in self.call_stack.iter().rev() {
+                                eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
+                            }
+                            eprintln!();
+                            EvalResult::Error
+                        } else {
+                            EvalResult::Value(elements[*i as usize])
+                        }
+                    }
+                    (ObjectData::Dict { entries, .. }, _) => {
+                        let search_key = obj_data_to_key_str(&idx_data);
+                        let found = entries.iter().find(|&&(k_ref, _)| {
+                            let k_data = self.resolve(k_ref).unwrap();
+                            obj_data_to_key_str(k_data) == search_key
+                        });
+                        match found {
+                            Some(&(_, v_ref)) => EvalResult::Value(v_ref),
+                            None => {
+                                eprintln!("❌ ERROR: Key '{}' not found in dict", search_key);
+                                EvalResult::Error
+                            }
+                        }
+                    }
+                    _ => {
+                        eprintln!("❌ ERROR: Index operator not supported for these types");
                         for frame in self.call_stack.iter().rev() {
-                            eprintln!(
-                                "    called from '{}' [line {}:{}]",
-                                frame.name, frame.line, frame.column
-                            );
+                            eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
                         }
                         eprintln!();
                         EvalResult::Error
-                    } else {
-                        EvalResult::Value(elements[i as usize])
                     }
-                } else {
-                    eprintln!("❌ ERROR: Index operator not supported for these types");
+                }
+            }
 
-                    for frame in self.call_stack.iter().rev() {
-                        eprintln!(
-                            "    called from '{}' [line {}:{}]",
-                            frame.name, frame.line, frame.column
-                        );
+            Expression::DictLiteral(dict_lit) => {
+                let mut entries: Vec<(ObjectRef, ObjectRef)> = Vec::new();
+                for (key_expr, val_expr) in &dict_lit.entries {
+                    let key_ref = match self.eval_expression(key_expr) {
+                        EvalResult::Value(r) => r,
+                        _ => return EvalResult::Error,
+                    };
+                    let val_ref = match self.eval_expression(val_expr) {
+                        EvalResult::Value(r) => r,
+                        _ => return EvalResult::Error,
+                    };
+
+                    if dict_lit.key_type != "any" {
+                        let kd = self.resolve(key_ref).unwrap();
+                        let valid = type_matches(&dict_lit.key_type, kd);
+                        if !valid {
+                            eprintln!("❌ TYPE ERROR: Dict key does not match declared key type '{}'", dict_lit.key_type);
+                            return EvalResult::Error;
+                        }
                     }
-                    eprintln!();
-                    EvalResult::Error
+                    if dict_lit.value_type != "any" {
+                        let vd = self.resolve(val_ref).unwrap();
+                        let valid = type_matches(&dict_lit.value_type, vd);
+                        if !valid {
+                            eprintln!("❌ TYPE ERROR: Dict value does not match declared value type '{}'", dict_lit.value_type);
+                            return EvalResult::Error;
+                        }
+                    }
+
+                    entries.push((key_ref, val_ref));
+                }
+                EvalResult::Value(self.alloc(ObjectData::Dict {
+                    key_type: dict_lit.key_type.clone(),
+                    value_type: dict_lit.value_type.clone(),
+                    entries,
+                }))
+            }
+
+            Expression::EntryLiteral(_, _) => {
+                eprintln!("❌ ERROR: Entry literal {{k,v}} is only valid as an argument to a dict method");
+                EvalResult::Error
+            }
+
+            Expression::DotCall(dot_call) => {
+                let obj_ref = match self.eval_expression(&dot_call.object) {
+                    EvalResult::Value(r) => r,
+                    _ => return EvalResult::Error,
+                };
+
+                let obj_data = match self.resolve(obj_ref) {
+                    Some(d) => d.clone(),
+                    None => {
+                        eprintln!("❌ ERROR: Invalid reference in dot call");
+                        return EvalResult::Error;
+                    }
+                };
+
+                match obj_data {
+                    ObjectData::Dict { key_type, value_type, mut entries } => {
+                        match dot_call.method.as_str() {
+                            "Add" => {
+                                if dot_call.arguments.len() != 1 {
+                                    eprintln!("❌ ERROR: Add expects 1 argument {{key, value}}");
+                                    return EvalResult::Error;
+                                }
+                                let (key_ref, val_ref) = match &dot_call.arguments[0] {
+                                    Expression::EntryLiteral(k_expr, v_expr) => {
+                                        let k = match self.eval_expression(k_expr) {
+                                            EvalResult::Value(r) => r,
+                                            _ => return EvalResult::Error,
+                                        };
+                                        let v = match self.eval_expression(v_expr) {
+                                            EvalResult::Value(r) => r,
+                                            _ => return EvalResult::Error,
+                                        };
+                                        (k, v)
+                                    }
+                                    _ => {
+                                        eprintln!("❌ ERROR: Add argument must be an entry literal {{key, value}}");
+                                        return EvalResult::Error;
+                                    }
+                                };
+
+                                if key_type != "any" {
+                                    let kd = self.resolve(key_ref).unwrap();
+                                    if !type_matches(&key_type, kd) {
+                                        eprintln!("❌ TYPE ERROR: Dict key type mismatch on Add (expected '{}')", key_type);
+                                        return EvalResult::Error;
+                                    }
+                                }
+                                if value_type != "any" {
+                                    let vd = self.resolve(val_ref).unwrap();
+                                    if !type_matches(&value_type, vd) {
+                                        eprintln!("❌ TYPE ERROR: Dict value type mismatch on Add (expected '{}')", value_type);
+                                        return EvalResult::Error;
+                                    }
+                                }
+
+                                let key_data = self.resolve(key_ref).unwrap().clone();
+                                let search_key = obj_data_to_key_str(&key_data);
+
+                                let mut replaced = false;
+                                for (k_ref, v_ref) in entries.iter_mut() {
+                                    let existing = self.resolve(*k_ref).unwrap().clone();
+                                    if obj_data_to_key_str(&existing) == search_key {
+                                        let owned_val = self.extract(val_ref);
+                                        *v_ref = match obj_ref.region {
+                                            RegionId::Global => self.plant_global(owned_val),
+                                            RegionId::Scoped => self.plant(owned_val),
+                                        };
+                                        replaced = true;
+                                        break;
+                                    }
+                                }
+                                if !replaced {
+                                    let owned_k = self.extract(key_ref);
+                                    let owned_v = self.extract(val_ref);
+                                    let new_k = match obj_ref.region {
+                                        RegionId::Global => self.plant_global(owned_k),
+                                        RegionId::Scoped => self.plant(owned_k),
+                                    };
+                                    let new_v = match obj_ref.region {
+                                        RegionId::Global => self.plant_global(owned_v),
+                                        RegionId::Scoped => self.plant(owned_v),
+                                    };
+                                    entries.push((new_k, new_v));
+                                }
+
+                                self.update_dict(obj_ref, key_type, value_type, entries);
+                                EvalResult::Value(self.null_ref)
+                            }
+
+                            "Remove" => {
+                                if dot_call.arguments.len() != 1 {
+                                    eprintln!("❌ ERROR: Remove expects 1 argument (key)");
+                                    return EvalResult::Error;
+                                }
+                                let key_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                                    EvalResult::Value(r) => r,
+                                    _ => return EvalResult::Error,
+                                };
+                                let key_data = self.resolve(key_ref).unwrap().clone();
+                                let search_key = obj_data_to_key_str(&key_data);
+
+                                entries.retain(|(k_ref, _)| {
+                                    let kd = self.resolve(*k_ref).unwrap();
+                                    obj_data_to_key_str(kd) != search_key
+                                });
+
+                                self.update_dict(obj_ref, key_type, value_type, entries);
+                                EvalResult::Value(self.null_ref)
+                            }
+
+                            "RemoveAll" | "clear" => {
+                                if !dot_call.arguments.is_empty() {
+                                    eprintln!("❌ ERROR: {} expects no arguments", dot_call.method);
+                                    return EvalResult::Error;
+                                }
+                                self.update_dict(obj_ref, key_type, value_type, Vec::new());
+                                EvalResult::Value(self.null_ref)
+                            }
+
+                            _ => {
+                                eprintln!("❌ ERROR: Unknown dict method '{}'", dot_call.method);
+                                EvalResult::Error
+                            }
+                        }
+                    }
+                    _ => {
+                        eprintln!("❌ ERROR: '.' method call not supported for type '{}'", obj_data.type_name());
+                        EvalResult::Error
+                    }
                 }
             }
 
@@ -1033,33 +1399,46 @@ impl Evaluator {
         match expr {
             ast::Expression::Integer(_) => 8,
             ast::Expression::Boolean(_) => 1,
-            ast::Expression::String(s) => 24 + s.len(), // Rust String overhead + capacity
-            ast::Expression::Identifier(_) => 8,        // reference resolution
+            ast::Expression::String(s) => 24 + s.len(),
+            ast::Expression::Identifier(_) => 8,
             ast::Expression::Prefix(_, right) => 8 + self.estimate_expression(right),
             ast::Expression::Infix(infix) => {
                 8 + self.estimate_expression(&infix.left) + self.estimate_expression(&infix.right)
             }
-            ast::Expression::FunctionLiteral(f) => {
-                // A closure allocation is roughly size of its context + struct size
-                32 + f.parameters.len() * 8
-            }
+            ast::Expression::FunctionLiteral(f) => 32 + f.parameters.len() * 8,
             ast::Expression::Call(c) => {
-                let mut cost = 8; // function call overhead
+                let mut cost = 8;
                 for arg in &c.arguments {
                     cost += self.estimate_expression(arg);
                 }
                 cost
             }
             ast::Expression::ArrayLiteral(arr) => {
-                let mut cost = 24; // Vec overhead
+                let mut cost = 24;
                 for item in arr {
                     cost += self.estimate_expression(item);
                 }
                 cost
             }
+            ast::Expression::DictLiteral(d) => {
+                let mut cost = 24; // Vec overhead
+                for (k, v) in &d.entries {
+                    cost += self.estimate_expression(k) + self.estimate_expression(v);
+                }
+                cost
+            }
+            ast::Expression::EntryLiteral(k, v) => {
+                self.estimate_expression(k) + self.estimate_expression(v)
+            }
+            ast::Expression::DotCall(dc) => {
+                let mut cost = 8;
+                for arg in &dc.arguments {
+                    cost += self.estimate_expression(arg);
+                }
+                cost
+            }
             ast::Expression::If(if_expr) => {
                 let mut cost = self.estimate_expression(&if_expr.condition);
-                // Pessimistically assume the largest branch is taken
                 let mut cons_cost = 0;
                 for stmt in &if_expr.consequence.statements {
                     if let ast::Statement::Expression(e) = stmt {
@@ -1086,5 +1465,40 @@ impl Evaluator {
                     + self.estimate_expression(&idx_expr.index)
             }
         }
+    }
+
+    fn update_dict(
+        &mut self,
+        obj_ref: ObjectRef,
+        key_type: String,
+        value_type: String,
+        entries: Vec<(ObjectRef, ObjectRef)>,
+    ) {
+        let data = ObjectData::Dict { key_type, value_type, entries };
+        match obj_ref.region {
+            RegionId::Global => self.global_arena.update(obj_ref.index, data),
+            RegionId::Scoped => self.scopes.arena.update(obj_ref.index, data),
+        }
+    }
+}
+
+// ── Free helpers ──────────────────────────────────────────────────────────────
+
+fn obj_data_to_key_str(data: &ObjectData) -> String {
+    match data {
+        ObjectData::Str(s) => s.clone(),
+        ObjectData::Integer(i) => i.to_string(),
+        ObjectData::Boolean(b) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn type_matches(expected: &str, data: &ObjectData) -> bool {
+    match (expected, data) {
+        ("int", ObjectData::Integer(_)) => true,
+        ("string", ObjectData::Str(_)) => true,
+        ("bool", ObjectData::Boolean(_)) => true,
+        ("any", _) => true,
+        _ => false,
     }
 }

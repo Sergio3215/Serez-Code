@@ -15,6 +15,7 @@ pub enum TokenType {
     Bang,
     Asterisk,
     Slash,
+    Percent, // %
 
     Lt,
     Gt,
@@ -49,11 +50,15 @@ pub enum TokenType {
     Return,
     Out,
 
+    // Delimiters (continued)
+    Dot, // .
+
     // Type Keywords
     KwVoid,
     KwInt,
     KwString,
     KwBool,
+    KwAny,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -91,6 +96,7 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "int" => TokenType::KwInt,
         "string" => TokenType::KwString,
         "bool" => TokenType::KwBool,
+        "any" => TokenType::KwAny,
         _ => TokenType::Ident,
     }
 }

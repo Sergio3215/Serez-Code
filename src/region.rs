@@ -27,6 +27,11 @@ pub enum ObjectData {
     Boolean(bool),
     Str(String),
     Array(Vec<ObjectRef>), // los elementos son refs, no datos inline
+    Dict {
+        key_type: String,
+        value_type: String,
+        entries: Vec<(ObjectRef, ObjectRef)>, // ordered pairs, O(n) lookup
+    },
     Function {
         return_type: Option<String>,
         parameters: Vec<Parameter>,
@@ -42,6 +47,9 @@ impl std::fmt::Display for ObjectData {
             ObjectData::Boolean(b) => write!(f, "Boolean({})", b),
             ObjectData::Str(s) => write!(f, "String(\"{}\")", s),
             ObjectData::Array(_) => write!(f, "Array([...])"),
+            ObjectData::Dict { key_type, value_type, .. } => {
+                write!(f, "Dict<{},{}>{{...}}", key_type, value_type)
+            }
             ObjectData::Function { .. } => write!(f, "Function"),
             ObjectData::Null => write!(f, "Null"),
         }
@@ -100,6 +108,7 @@ impl ObjectData {
             ObjectData::Boolean(_) => "bool",
             ObjectData::Str(_) => "string",
             ObjectData::Array(_) => "array",
+            ObjectData::Dict { .. } => "dict",
             ObjectData::Function { .. } => "function",
             ObjectData::Null => "null",
         }

@@ -95,6 +95,12 @@ impl Lexer {
                 self.line,
                 self.column,
             ),
+            '%' => Token::new(
+                TokenType::Percent,
+                self.ch.to_string(),
+                self.line,
+                self.column,
+            ),
             '<' => {
                 if self.peek_char() == '=' {
                     self.read_char();
@@ -175,6 +181,7 @@ impl Lexer {
                 self.line,
                 self.column,
             ),
+            '.' => Token::new(TokenType::Dot, ".".to_string(), self.line, self.column),
             '"' => {
                 let literal = self.read_string();
                 let start_line = self.line;

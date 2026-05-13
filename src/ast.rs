@@ -16,6 +16,7 @@ pub enum Statement {
     Expression(Expression),                   // Expresiones sueltas: ii, 1 + 1, etc.
     While(WhileStatement),                    // Bucle while: while (cond) { ... }
     For(ForStatement),                        // Bucle for: for (let i = 0; i < n; i = i + 1) { ... }
+    IndexAssign(IndexAssignStatement),        // Mutación de array: arr[i] = expr
     Out(OutStatement),                        // Salida a consola: out expr;
 }
 
@@ -71,6 +72,13 @@ pub struct WhileStatement {
 }
 
 #[derive(Debug, Clone)]
+pub struct IndexAssignStatement {
+    pub target: String,
+    pub index: Expression,
+    pub value: Expression,
+}
+
+#[derive(Debug, Clone)]
 pub struct ForStatement {
     pub init: LetStatement,
     pub condition: Expression,
@@ -99,6 +107,27 @@ pub enum Expression {
     Call(CallExpression),             // sumar(1, 2)
     If(IfExpression),
     Index(IndexExpression),
+    DictLiteral(DictLiteral),                        // ({"k","v"}, ...)
+    EntryLiteral(Box<Expression>, Box<Expression>),  // {key, value} in method args
+    DotCall(DotCallExpression),                      // obj.method(args)
+}
+
+#[derive(Debug, Clone)]
+pub struct DictLiteral {
+    pub key_type: String,
+    pub value_type: String,
+    pub entries: Vec<(Expression, Expression)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DotCallExpression {
+    pub object: Box<Expression>,
+    pub method: String,
+    pub arguments: Vec<Expression>,
+    #[allow(dead_code)]
+    pub line: usize,
+    #[allow(dead_code)]
+    pub column: usize,
 }
 
 #[derive(Debug, Clone)]
