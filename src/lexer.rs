@@ -182,6 +182,7 @@ impl Lexer {
                 self.column,
             ),
             '.' => Token::new(TokenType::Dot, ".".to_string(), self.line, self.column),
+            '?' => Token::new(TokenType::Question, "?".to_string(), self.line, self.column),
             '"' => {
                 let literal = self.read_string();
                 let start_line = self.line;

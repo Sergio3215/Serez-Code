@@ -177,13 +177,39 @@ Serez-Code has five primitive types and three compound types:
 | `string` | `"hello"`, `"foo bar"` | UTF-8 string |
 | `void` | — | Signals absence of a return value |
 | `any` | — | Wildcard: skips type validation |
-| Array | `[1, 2, "x"]` | Heterogeneous, 0-indexed |
+| `null` | `null` | Absence of a value; used with nullable types |
+| Array | `[1, 2, "x"]` or `[int]`, `[string]` | Typed or untyped, 0-indexed |
 | Dict | `let d <string,int> = (...)` | Typed key-value store, ordered insertion |
 | Function | `fn int add(...)` | First-class value |
 
 Types are **dynamic by default**. Annotations are optional on parameters and return values. When provided, they are enforced at every call site — see [Type System](#type-system) for details.
 
 The `any` keyword suppresses type checking for that slot. It is useful for dict values of mixed type and for function parameters that accept any value.
+
+#### Nullable types
+
+Append `?` to any type to make it nullable. A nullable type accepts either the base type or `null`:
+
+```serez
+fn int? findIndex(string target) {
+    // returns int if found, null if not
+    let i = 0;
+    while (i < names.length()) {
+        if (names[i] == target) { return i; }
+        i = i + 1;
+    }
+    return null;
+}
+
+let idx = findIndex("Ana");
+if (idx != null) {
+    out "Found at index {idx}";
+} else {
+    out "Not found";
+}
+```
+
+Nullable annotations work on parameters, return types, and array element types: `int?`, `string?`, `[int?]`. The `null` literal produces a null value that is compatible with any nullable type.
 
 ---
 
@@ -596,6 +622,41 @@ let mixed = [42, "hello", true];
 let empty = [];
 ```
 
+#### Typed arrays
+
+Place a type keyword between the name and `=` to constrain every element to that type. The interpreter enforces the type on construction, `push`, `unshift`, and index-assignment:
+
+```serez
+let nums    [int]     = [1, 2, 3];
+let prices  [decimal] = [9.99, 14.50, 3.0];
+let labels  [string]  = ["a", "b", "c"];
+let maybes  [int?]    = [1, null, 3];   // nullable element type
+
+nums.push(4);        // ✅
+nums.push("hello");  // ❌ TYPE ERROR: Cannot push 'string' into [int] array
+```
+
+Functions can also declare typed array parameters and return types:
+
+```serez
+fn decimal sumAll([decimal] values) {
+    return values.reduce(0.0, (acc, v) => acc + v);
+}
+
+fn [string] namesAbove([decimal] scores, decimal threshold) {
+    // returns a typed [string] array
+    let result [string] = [];
+    let i = 0;
+    while (i < scores.length()) {
+        if (scores[i] > threshold) { result.push(names[i]); }
+        i = i + 1;
+    }
+    return result;
+}
+```
+
+Untyped arrays (e.g. `let arr = [1, "x", true]`) remain valid and accept mixed element types.
+
 #### Index access
 
 ```serez
@@ -685,8 +746,9 @@ out pair[1];   // → 99
 | `.pop()` | Removes and returns the last element. |
 | `.shift()` | Removes and returns the first element. |
 | `.unshift(val)` | Prepends `val` to the beginning (mutates in-place). |
-| `.sort()` | Sorts in ascending order (mutates in-place). Equivalent to `.sort("asc")`. |
-| `.sort("desc")` | Sorts in descending order (mutates in-place). |
+| `.sort()` | Sorts in ascending order (mutates in-place, returns the same array). |
+| `.sort("desc")` | Sorts in descending order (mutates in-place, returns the same array). |
+| `.sort((a, b) => expr)` | Sorts with a custom comparator lambda. Positive result = swap (like JS). |
 
 ```serez
 let stack = [1, 2, 3, 4, 5];
@@ -709,9 +771,16 @@ out nums;                      // → [1, 2, 4, 5, 8]
 
 nums.sort("desc");
 out nums;                      // → [8, 5, 4, 2, 1]
+
+// Custom comparator — descending by absolute value:
+let vals = [3, -7, 1, -2, 8];
+let sorted = vals.sort((a, b) => b - a);
+out sorted;                    // → [8, 3, 1, -2, -7]
 ```
 
-`.sort` works on arrays of all-`int`, all-`decimal`, or all-`string`. Mixed-type arrays cannot be sorted — this is a runtime error.
+`.sort` without a comparator requires a homogeneous array (all `int`, all `decimal`, or all `string`). Mixed-type arrays cannot be sorted — this is a runtime error. `.sort` with a comparator lambda uses bubble sort internally and works for any numeric array.
+
+`.sort` mutates the array in-place **and** returns the same array reference, allowing assignment: `let sorted = arr.sort((a, b) => b - a)`.
 
 #### Array properties
 
@@ -1049,7 +1118,7 @@ Serez-Code uses a **hybrid type system**: the language is dynamically typed by d
 
 ### Type annotations
 
-Annotations use the keywords `int`, `decimal`, `string`, `bool`, `void`, and `any`:
+Annotations use the keywords `int`, `decimal`, `string`, `bool`, `void`, `any`, and typed array forms `[int]`, `[string]`, `[decimal]`. Append `?` to make a type nullable:
 
 ```serez
 fn int strictAdd(int a, int b) {
@@ -1063,6 +1132,17 @@ fn void log(string msg) {
 fn bool check(int n) {
     return n > 0;
 }
+
+fn int? search(string name) {    // nullable return — may return null
+    // ...
+    return null;
+}
+
+fn [int] getIndices([int] arr, int threshold) {   // typed array param and return
+    let result [int] = [];
+    // ...
+    return result;
+}
 ```
 
 They are fully optional. Parameters and return types without annotations accept any value:
@@ -1075,7 +1155,7 @@ fn multiply(a, b) {     // untyped: accepts any value for a and b
 
 ### Static type checker
 
-Before the program runs, the interpreter performs a static analysis pass over the AST. It catches type mismatches in function call arguments when the types can be determined statically:
+Before the program runs, the interpreter performs a static analysis pass over the AST. It infers types for top-level variables and checks call sites against declared signatures:
 
 **Catches literal mismatches:**
 ```serez
@@ -1087,11 +1167,22 @@ double("hello");
 // ❌ TYPE ERROR [line 5:7]: Parameter 'n' of 'double' expected 'int' but received 'string'.
 ```
 
-**Catches variable mismatches** when the variable was declared with a literal:
+**Catches variable mismatches** when the variable was declared with a literal or inferred from a call result:
 ```serez
 let name = "Sergio";   // inferred as string
 double(name);
 // ❌ TYPE ERROR [line 2:8]: Parameter 'n' of 'double' expected 'int' but received 'string'.
+
+fn int add(int a, int b) { return a + b; }
+let x = add(1, 2);   // x inferred as int
+double(x);            // ✅ int → int, no error
+```
+
+**Catches return type violations** when the returned expression type is known statically:
+```serez
+fn bool isPositive(int n) {
+    return 42;   // ❌ TYPE ERROR: Function declares return 'bool' but 'return' expression has type 'int'.
+}
 ```
 
 **Catches arity errors:**
@@ -1101,7 +1192,9 @@ add(1);
 // ❌ TYPE ERROR: 'add' expects 2 arguments but got 1.
 ```
 
-Expressions that are too complex to analyze statically (function calls as arguments, array elements, etc.) are skipped — they fall through to the runtime checker.
+Expressions too complex to analyze statically (nested calls, array elements, etc.) are skipped — they fall through to the runtime checker. The static checker never halts execution; it only prints to `stderr`.
+
+**Nullable awareness:** The static checker understands nullable types. A variable assigned `null` is inferred as type `"null"`. A nullable parameter (`int?`) accepts both `int` and `null` arguments without a static error.
 
 ### Runtime type enforcement
 
@@ -1526,16 +1619,16 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] String interpolation — `"Hello, {name}!"`
 - [x] Lexical closures — functions that capture variables from their defining scope
 - [x] Native higher-order functions — `map`, `filter`, `reduce` with lambda syntax `x => expr` / `(x, i) => expr`
-- [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.sort("asc"/"desc")`, `.length`
+- [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.sort("asc"/"desc")`, `.sort((a,b) => ...)`, `.length`
 - [x] String methods — `.length`, `.substring(s,e)`, `.split(sep)`, `.replace(a,b)`, `.replaceAll(a,b)`, `.includes(sub)`, `.toString()`
 - [x] Dict methods — `.toList()` (keys array), `.toArray()` (2D entries array)
 - [x] `decimal` type — f64 literals (`3.14`), mixed arithmetic with `int`
 - [x] Global conversions — `parseInt(val)`, `parseDecimal(val)`
 
 ### Type system
-- [ ] Typed arrays — `[int]`, `[string]`
-- [ ] Type inference for function call results (e.g., `let x = add(1, 2)` infers `x: int`)
-- [ ] Optional / nullable types
+- [x] Typed arrays — `[int]`, `[string]`, `[decimal]`, `[T?]` with element-level enforcement on `push`, `unshift`, index-assign, and construction
+- [x] Type inference for function call results — `let x = add(1, 2)` infers `x: int` in the static checker
+- [x] Optional / nullable types — `int?`, `string?`, `fn int? search()`, `null` literal, null equality (`== null`, `!= null`)
 
 ### Tooling
 - [ ] Span-aware error diagnostics with source line preview

@@ -101,7 +101,8 @@ pub enum Expression {
     Decimal(f64),
     String(String),
     Boolean(bool),
-    ArrayLiteral(Vec<Expression>),
+    ArrayLiteral(ArrayLiteral),
+    Null,
     Prefix(String, Box<Expression>),  // Ej: -5 o !true
     Infix(InfixExpression),           // Ej: 5 + 5 o x * 2
     FunctionLiteral(FunctionLiteral), // fn void() {} o void () => {}
@@ -132,6 +133,12 @@ pub enum LambdaBody {
 pub enum StringPart {
     Literal(String),
     Expr(Box<Expression>),
+}
+
+#[derive(Debug, Clone)]
+pub struct ArrayLiteral {
+    pub element_type: Option<String>,
+    pub elements: Vec<Expression>,
 }
 
 #[derive(Debug, Clone)]

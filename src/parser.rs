@@ -386,6 +386,40 @@ impl Parser {
         self.next_token();
         let name = self.current_token.literal.clone();
 
+        // Typed array annotation: let name [type] = [...]
+        if self.peek_token.token_type == TokenType::LBracket {
+            self.next_token(); // consume '['
+            self.next_token(); // move to type keyword
+            if !is_type_keyword(&self.current_token.token_type) {
+                eprintln!("❌ PARSER ERROR: Expected type keyword inside '[...]' array annotation");
+                return None;
+            }
+            let element_type = self.parse_type_string()?;
+            if self.peek_token.token_type != TokenType::RBracket {
+                eprintln!("❌ PARSER ERROR: Expected ']' after array type annotation");
+                return None;
+            }
+            self.next_token(); // consume ']'
+            if self.peek_token.token_type != TokenType::Assign {
+                eprintln!("❌ PARSER ERROR: Expected '=' after array type annotation");
+                return None;
+            }
+            self.next_token(); // '='
+            self.next_token(); // first token of RHS
+            let mut value = self.parse_expression(Precedence::Lowest)?;
+            match &mut value {
+                Expression::ArrayLiteral(arr) => arr.element_type = Some(element_type),
+                _ => {
+                    eprintln!("❌ PARSER ERROR: Expected '[...]' array literal after typed array annotation");
+                    return None;
+                }
+            }
+            if self.peek_token.token_type == TokenType::Semicolon {
+                self.next_token();
+            }
+            return Some(Statement::Let(LetStatement { name, value }));
+        }
+
         if self.peek_token.token_type == TokenType::Lt {
             let (key_type, value_type) = self.parse_dict_type_annotation()?;
 
@@ -429,7 +463,21 @@ impl Parser {
         let mut return_type = None;
         if is_type_keyword(&self.peek_token.token_type) {
             self.next_token();
-            return_type = Some(self.current_token.literal.clone());
+            return_type = self.parse_type_string();
+        } else if self.peek_token.token_type == TokenType::LBracket {
+            self.next_token(); // '['
+            self.next_token(); // type keyword
+            if !is_type_keyword(&self.current_token.token_type) {
+                eprintln!("❌ PARSER ERROR: Expected type keyword inside '[...]' return type");
+                return None;
+            }
+            let elem_type = self.parse_type_string()?;
+            if self.peek_token.token_type != TokenType::RBracket {
+                eprintln!("❌ PARSER ERROR: Expected ']' after return type annotation");
+                return None;
+            }
+            self.next_token(); // ']'
+            return_type = Some(format!("[{}]", elem_type));
         }
 
         if self.peek_token.token_type == TokenType::Ident {
@@ -495,8 +543,23 @@ impl Parser {
         loop {
             let mut type_name = None;
 
-            if is_type_keyword(&self.current_token.token_type) {
-                type_name = Some(self.current_token.literal.clone());
+            if self.current_token.token_type == TokenType::LBracket {
+                // [type] array parameter annotation
+                self.next_token(); // move to type keyword
+                if !is_type_keyword(&self.current_token.token_type) {
+                    eprintln!("❌ PARSER ERROR: Expected type keyword inside '[...]' parameter annotation");
+                    return None;
+                }
+                let elem_type = self.parse_type_string()?;
+                if self.peek_token.token_type != TokenType::RBracket {
+                    eprintln!("❌ PARSER ERROR: Expected ']' after array parameter type");
+                    return None;
+                }
+                self.next_token(); // consume ']'
+                type_name = Some(format!("[{}]", elem_type));
+                self.next_token(); // advance to param name
+            } else if is_type_keyword(&self.current_token.token_type) {
+                type_name = self.parse_type_string();
                 self.next_token();
             }
 
@@ -525,7 +588,7 @@ impl Parser {
     }
 
     fn parse_arrow_function(&mut self) -> Option<Expression> {
-        let return_type = Some(self.current_token.literal.clone());
+        let return_type = self.parse_type_string();
 
         if self.peek_token.token_type != TokenType::LParen {
             return None;
@@ -771,6 +834,7 @@ impl Parser {
 
             TokenType::True => Some(Expression::Boolean(true)),
             TokenType::False => Some(Expression::Boolean(false)),
+            TokenType::KwNull => Some(Expression::Null),
 
             TokenType::Bang | TokenType::Minus => {
                 let operator = self.current_token.literal.clone();
@@ -1009,7 +1073,7 @@ impl Parser {
 
         if self.peek_token.token_type == TokenType::RBracket {
             self.next_token();
-            return Some(Expression::ArrayLiteral(elements));
+            return Some(Expression::ArrayLiteral(ArrayLiteral { element_type: None, elements }));
         }
 
         self.next_token();
@@ -1035,7 +1099,7 @@ impl Parser {
             self.next_token();
         }
 
-        Some(Expression::ArrayLiteral(elements))
+        Some(Expression::ArrayLiteral(ArrayLiteral { element_type: None, elements }))
     }
 }
 
@@ -1049,6 +1113,20 @@ fn is_type_keyword(token_type: &TokenType) -> bool {
             | TokenType::KwBool
             | TokenType::KwAny
     )
+}
+
+impl Parser {
+    // Reads current token as a base type and optionally appends '?' if peek is Question.
+    // Assumes caller already verified current is a type keyword.
+    fn parse_type_string(&mut self) -> Option<String> {
+        let base = self.current_token.literal.clone();
+        if self.peek_token.token_type == TokenType::Question {
+            self.next_token();
+            Some(format!("{}?", base))
+        } else {
+            Some(base)
+        }
+    }
 }
 
 fn parse_interpolated_string(raw: &str) -> Option<Expression> {

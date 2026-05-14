@@ -99,7 +99,7 @@ impl Evaluator {
             }
             Some(ObjectData::Boolean(b)) => format!("{}", b),
             Some(ObjectData::Str(s)) => format!("{}", s),
-            Some(ObjectData::Array(refs)) => {
+            Some(ObjectData::Array { elements: refs, .. }) => {
                 let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
                 format!("[{}]", elems.join(", "))
             }
@@ -125,8 +125,11 @@ impl Evaluator {
             Some(ObjectData::Decimal(d)) => OwnedValue::Decimal(*d),
             Some(ObjectData::Boolean(b)) => OwnedValue::Boolean(*b),
             Some(ObjectData::Str(s)) => OwnedValue::Str(s.clone()),
-            Some(ObjectData::Array(refs)) => {
-                OwnedValue::Array(refs.iter().map(|&r| self.extract(r)).collect())
+            Some(ObjectData::Array { element_type, elements: refs }) => {
+                OwnedValue::Array {
+                    element_type: element_type.clone(),
+                    elements: refs.iter().map(|&r| self.extract(r)).collect(),
+                }
             }
             Some(ObjectData::Dict { key_type, value_type, entries }) => OwnedValue::Dict {
                 key_type: key_type.clone(),
@@ -156,9 +159,9 @@ impl Evaluator {
             OwnedValue::Decimal(d) => self.alloc(ObjectData::Decimal(d)),
             OwnedValue::Boolean(b) => self.alloc(ObjectData::Boolean(b)),
             OwnedValue::Str(s) => self.alloc(ObjectData::Str(s)),
-            OwnedValue::Array(items) => {
+            OwnedValue::Array { element_type, elements: items } => {
                 let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant(v)).collect();
-                self.alloc(ObjectData::Array(refs))
+                self.alloc(ObjectData::Array { element_type, elements: refs })
             }
             OwnedValue::Dict { key_type, value_type, entries } => {
                 let planted: Vec<(ObjectRef, ObjectRef)> = entries
@@ -203,10 +206,10 @@ impl Evaluator {
                 let idx = self.global_arena.alloc(ObjectData::Str(s));
                 ObjectRef { region: RegionId::Global, index: idx }
             }
-            OwnedValue::Array(items) => {
+            OwnedValue::Array { element_type, elements: items } => {
                 let refs: Vec<ObjectRef> =
                     items.into_iter().map(|v| self.plant_global(v)).collect();
-                let idx = self.global_arena.alloc(ObjectData::Array(refs));
+                let idx = self.global_arena.alloc(ObjectData::Array { element_type, elements: refs });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Dict { key_type, value_type, entries } => {
@@ -514,7 +517,7 @@ impl Evaluator {
                 let idx_data = self.resolve(idx_ref).unwrap().clone();
 
                 match arr_data {
-                    ObjectData::Array(mut elements) => {
+                    ObjectData::Array { element_type, mut elements } => {
                         let i = match idx_data {
                             ObjectData::Integer(i) => i,
                             _ => {
@@ -528,19 +531,31 @@ impl Evaluator {
                             return EvalResult::Error;
                         }
 
+                        if let Some(ref et) = element_type {
+                            let val_data = self.resolve(val_ref).unwrap();
+                            if !type_matches(et, val_data) {
+                                eprintln!(
+                                    "❌ TYPE ERROR: Cannot assign '{}' to [{}] array element",
+                                    val_data.type_name(), et
+                                );
+                                return EvalResult::Error;
+                            }
+                        }
+
                         let owned = self.extract(val_ref);
                         let new_elem_ref = match arr_ref.region {
                             RegionId::Global => self.plant_global(owned),
+                            RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(owned),
                             RegionId::Scoped => self.plant(owned),
                         };
                         elements[i as usize] = new_elem_ref;
 
                         match arr_ref.region {
                             RegionId::Global => {
-                                self.global_arena.update(arr_ref.index, ObjectData::Array(elements));
+                                self.global_arena.update(arr_ref.index, ObjectData::Array { element_type, elements });
                             }
                             RegionId::Scoped => {
-                                self.scopes.arena.update(arr_ref.index, ObjectData::Array(elements));
+                                self.scopes.arena.update(arr_ref.index, ObjectData::Array { element_type, elements });
                             }
                         }
                     }
@@ -654,6 +669,7 @@ impl Evaluator {
             Expression::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(*d))),
             Expression::String(s) => EvalResult::Value(self.alloc(ObjectData::Str(s.clone()))),
             Expression::Boolean(b) => EvalResult::Value(self.alloc(ObjectData::Boolean(*b))),
+            Expression::Null => EvalResult::Value(self.null_ref),
 
             Expression::Identifier(name) => match self.lookup_var(name) {
                 Some(r) => EvalResult::Value(r),
@@ -792,14 +808,7 @@ impl Evaluator {
                     let arg_ref = arg_refs[i];
                     if let Some(expected_type) = &param.type_name {
                         let actual_data = self.resolve(arg_ref).unwrap();
-                        let is_valid = match (expected_type.as_str(), actual_data) {
-                            ("int", ObjectData::Integer(_)) => true,
-                            ("decimal", ObjectData::Decimal(_)) => true,
-                            ("string", ObjectData::Str(_)) => true,
-                            ("bool", ObjectData::Boolean(_)) => true,
-                            ("any", _) => true,
-                            _ => false,
-                        };
+                        let is_valid = type_matches(expected_type.as_str(), actual_data);
 
                         if !is_valid {
                             eprintln!(
@@ -858,16 +867,7 @@ impl Evaluator {
 
                 if let Some(expected_ret) = &return_type {
                     let actual_data = self.resolve(result_ref).unwrap();
-                    let is_valid = match (expected_ret.as_str(), actual_data) {
-                        ("int", ObjectData::Integer(_)) => true,
-                        ("decimal", ObjectData::Decimal(_)) => true,
-                        ("string", ObjectData::Str(_)) => true,
-                        ("bool", ObjectData::Boolean(_)) => true,
-                        ("void", ObjectData::Null) => true,
-                        ("dict", ObjectData::Dict { .. }) => true,
-                        ("any", _) => true,
-                        _ => false,
-                    };
+                    let is_valid = type_matches(expected_ret.as_str(), actual_data);
                     if !is_valid {
                         eprintln!(
                             "❌ TYPE ERROR: Function expected to return '{}' but returned another type.",
@@ -887,15 +887,30 @@ impl Evaluator {
                 EvalResult::Value(result_ref)
             }
 
-            Expression::ArrayLiteral(elements) => {
+            Expression::ArrayLiteral(arr) => {
                 let mut refs = Vec::new();
-                for el in elements {
+                for el in &arr.elements {
                     match self.eval_expression(el) {
-                        EvalResult::Value(r) => refs.push(r),
+                        EvalResult::Value(r) => {
+                            if let Some(ref et) = arr.element_type {
+                                let data = self.resolve(r).unwrap();
+                                if !type_matches(et, data) {
+                                    eprintln!(
+                                        "❌ TYPE ERROR: Array declared as [{}] but element has type '{}'",
+                                        et, data.type_name()
+                                    );
+                                    return EvalResult::Error;
+                                }
+                            }
+                            refs.push(r);
+                        }
                         _ => return EvalResult::Error,
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array(refs)))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: arr.element_type.clone(),
+                    elements: refs,
+                }))
             }
 
             Expression::If(if_expr) => {
@@ -929,7 +944,7 @@ impl Evaluator {
                 let idx_data = self.resolve(idx_ref).unwrap().clone();
 
                 match (&left_data, &idx_data) {
-                    (ObjectData::Array(elements), ObjectData::Integer(i)) => {
+                    (ObjectData::Array { elements, .. }, ObjectData::Integer(i)) => {
                         if *i < 0 || *i as usize >= elements.len() {
                             eprintln!("❌ ERROR: Index out of bounds");
                             for frame in self.call_stack.iter().rev() {
@@ -1025,8 +1040,8 @@ impl Evaluator {
 
                 match obj_data {
                     // ── Array methods ─────────────────────────────────────────
-                    ObjectData::Array(ref elems) => {
-                        self.eval_array_method(obj_ref, elems.clone(), dot_call)
+                    ObjectData::Array { element_type, elements: ref elems } => {
+                        self.eval_array_method(obj_ref, element_type.clone(), elems.clone(), dot_call)
                     }
 
                     // ── String methods ────────────────────────────────────────
@@ -1147,18 +1162,21 @@ impl Evaluator {
                                 let refs: Vec<ObjectRef> = keys.into_iter()
                                     .map(|v| self.plant(v))
                                     .collect();
-                                EvalResult::Value(self.alloc(ObjectData::Array(refs)))
+                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: refs }))
                             }
 
                             // Returns 2-D array of entries: [[k1,v1],[k2,v2],...]
                             "toArray" => {
                                 let pairs: Vec<OwnedValue> = entries.iter()
-                                    .map(|&(k, v)| OwnedValue::Array(vec![self.extract(k), self.extract(v)]))
+                                    .map(|&(k, v)| OwnedValue::Array {
+                                        element_type: None,
+                                        elements: vec![self.extract(k), self.extract(v)],
+                                    })
                                     .collect();
                                 let rows: Vec<ObjectRef> = pairs.into_iter()
                                     .map(|row| self.plant(row))
                                     .collect();
-                                EvalResult::Value(self.alloc(ObjectData::Array(rows)))
+                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: rows }))
                             }
 
                             _ => {
@@ -1283,6 +1301,26 @@ impl Evaluator {
         line: usize,
         column: usize,
     ) -> EvalResult {
+        // Null equality: any value can be compared to null with == / !=
+        if matches!(left, ObjectData::Null) || matches!(right, ObjectData::Null) {
+            return match op {
+                "==" => {
+                    let eq = matches!(left, ObjectData::Null) && matches!(right, ObjectData::Null);
+                    EvalResult::Value(self.alloc(ObjectData::Boolean(eq)))
+                }
+                "!=" => {
+                    let eq = matches!(left, ObjectData::Null) && matches!(right, ObjectData::Null);
+                    EvalResult::Value(self.alloc(ObjectData::Boolean(!eq)))
+                }
+                _ => {
+                    eprintln!(
+                        "❌ ERROR: Operator '{}' cannot be applied to null - [{}:{}]",
+                        op, line, column
+                    );
+                    EvalResult::Error
+                }
+            };
+        }
         let left_type = left.type_name().to_string();
         let right_type = right.type_name().to_string();
         match (left, right) {
@@ -1590,11 +1628,12 @@ impl Evaluator {
             }
             ast::Expression::ArrayLiteral(arr) => {
                 let mut cost = 24;
-                for item in arr {
+                for item in &arr.elements {
                     cost += self.estimate_expression(item);
                 }
                 cost
             }
+            ast::Expression::Null => 0,
             ast::Expression::DictLiteral(d) => {
                 let mut cost = 24; // Vec overhead
                 for (k, v) in &d.entries {
@@ -1666,10 +1705,11 @@ impl Evaluator {
         }
     }
 
-    fn update_array(&mut self, arr_ref: ObjectRef, elems: Vec<ObjectRef>) {
+    fn update_array(&mut self, arr_ref: ObjectRef, element_type: Option<String>, elems: Vec<ObjectRef>) {
+        let data = ObjectData::Array { element_type, elements: elems };
         match arr_ref.region {
-            RegionId::Global => self.global_arena.update(arr_ref.index, ObjectData::Array(elems)),
-            RegionId::Scoped => self.scopes.arena.update(arr_ref.index, ObjectData::Array(elems)),
+            RegionId::Global => self.global_arena.update(arr_ref.index, data),
+            RegionId::Scoped => self.scopes.arena.update(arr_ref.index, data),
         }
     }
 
@@ -1774,6 +1814,7 @@ impl Evaluator {
     fn eval_array_method(
         &mut self,
         arr_ref: ObjectRef,
+        element_type: Option<String>,
         elems: Vec<ObjectRef>,
         dot_call: &ast::DotCallExpression,
     ) -> EvalResult {
@@ -1786,17 +1827,29 @@ impl Evaluator {
                     eprintln!("❌ ERROR: push expects 1 argument");
                     return EvalResult::Error;
                 }
-                let val = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => self.extract(r),
+                let val_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
                     _ => return EvalResult::Error,
                 };
+                if let Some(ref et) = element_type {
+                    let data = self.resolve(val_ref).unwrap();
+                    if !type_matches(et, data) {
+                        eprintln!(
+                            "❌ TYPE ERROR: Cannot push '{}' into [{}] array",
+                            data.type_name(), et
+                        );
+                        return EvalResult::Error;
+                    }
+                }
+                let val = self.extract(val_ref);
                 let new_ref = match arr_ref.region {
                     RegionId::Global => self.plant_global(val),
+                    RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(val),
                     RegionId::Scoped => self.plant(val),
                 };
                 let mut e = elems;
                 e.push(new_ref);
-                self.update_array(arr_ref, e);
+                self.update_array(arr_ref, element_type, e);
                 EvalResult::Value(self.null_ref)
             }
 
@@ -1808,7 +1861,7 @@ impl Evaluator {
                 let mut e = elems;
                 let last = e.pop().unwrap();
                 let owned = self.extract(last);
-                self.update_array(arr_ref, e);
+                self.update_array(arr_ref, element_type, e);
                 EvalResult::Value(self.plant(owned))
             }
 
@@ -1820,7 +1873,7 @@ impl Evaluator {
                 let mut e = elems;
                 let first = e.remove(0);
                 let owned = self.extract(first);
-                self.update_array(arr_ref, e);
+                self.update_array(arr_ref, element_type, e);
                 EvalResult::Value(self.plant(owned))
             }
 
@@ -1829,21 +1882,83 @@ impl Evaluator {
                     eprintln!("❌ ERROR: unshift expects 1 argument");
                     return EvalResult::Error;
                 }
-                let val = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => self.extract(r),
+                let val_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
                     _ => return EvalResult::Error,
                 };
+                if let Some(ref et) = element_type {
+                    let data = self.resolve(val_ref).unwrap();
+                    if !type_matches(et, data) {
+                        eprintln!(
+                            "❌ TYPE ERROR: Cannot unshift '{}' into [{}] array",
+                            data.type_name(), et
+                        );
+                        return EvalResult::Error;
+                    }
+                }
+                let val = self.extract(val_ref);
                 let new_ref = match arr_ref.region {
                     RegionId::Global => self.plant_global(val),
+                    RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(val),
                     RegionId::Scoped => self.plant(val),
                 };
                 let mut e = elems;
                 e.insert(0, new_ref);
-                self.update_array(arr_ref, e);
+                self.update_array(arr_ref, element_type, e);
                 EvalResult::Value(self.null_ref)
             }
 
             "sort" => {
+                // If a function comparator is provided, use it
+                let use_comparator = dot_call.arguments.len() == 1 && {
+                    match self.eval_expression(&dot_call.arguments[0]) {
+                        EvalResult::Value(r) => matches!(self.resolve(r), Some(ObjectData::Function { .. })),
+                        _ => false,
+                    }
+                };
+
+                if use_comparator {
+                    let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                        EvalResult::Value(r) => r,
+                        _ => return EvalResult::Error,
+                    };
+                    let mut owned_vals: Vec<OwnedValue> =
+                        elems.iter().map(|&r| self.extract(r)).collect();
+                    let n = owned_vals.len();
+                    // Bubble sort (simple, avoids borrow issues with call_function)
+                    let mut i = 0;
+                    while i < n {
+                        let mut j = 0;
+                        while j < n - i - 1 {
+                            let a = owned_vals[j].clone();
+                            let b = owned_vals[j + 1].clone();
+                            let result = self.call_function(cb_ref, vec![a, b]);
+                            let should_swap = match result {
+                                EvalResult::Value(r) => match self.resolve(r).cloned() {
+                                    Some(ObjectData::Integer(v)) => v > 0,
+                                    Some(ObjectData::Decimal(v)) => v > 0.0,
+                                    _ => false,
+                                },
+                                _ => false,
+                            };
+                            if should_swap {
+                                owned_vals.swap(j, j + 1);
+                            }
+                            j += 1;
+                        }
+                        i += 1;
+                    }
+                    let new_refs: Vec<ObjectRef> = owned_vals.into_iter().map(|v| {
+                        match arr_ref.region {
+                            RegionId::Global => self.plant_global(v),
+                            RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(v),
+                            RegionId::Scoped => self.plant(v),
+                        }
+                    }).collect();
+                    self.update_array(arr_ref, element_type, new_refs);
+                    return EvalResult::Value(arr_ref);
+                }
+
                 let order = if dot_call.arguments.is_empty() {
                     "asc".to_string()
                 } else {
@@ -1883,11 +1998,12 @@ impl Evaluator {
                 let new_refs: Vec<ObjectRef> = owned_vals.into_iter().map(|v| {
                     match arr_ref.region {
                         RegionId::Global => self.plant_global(v),
+                        RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(v),
                         RegionId::Scoped => self.plant(v),
                     }
                 }).collect();
-                self.update_array(arr_ref, new_refs);
-                EvalResult::Value(self.null_ref)
+                self.update_array(arr_ref, element_type, new_refs);
+                EvalResult::Value(arr_ref)
             }
 
             "map" => {
@@ -1916,7 +2032,7 @@ impl Evaluator {
                         _ => return EvalResult::Error,
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array(results)))
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: results }))
             }
 
             "filter" => {
@@ -1951,7 +2067,7 @@ impl Evaluator {
                         kept.push(self.plant(val));
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array(kept)))
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type, elements: kept }))
             }
 
             "reduce" => {
@@ -2042,7 +2158,7 @@ impl Evaluator {
                 } else {
                     s.split(&sep[..]).map(|p| self.alloc(ObjectData::Str(p.to_string()))).collect()
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array(parts)))
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: parts }))
             }
 
             "substring" => {
@@ -2108,7 +2224,18 @@ fn type_matches(expected: &str, data: &ObjectData) -> bool {
         ("decimal", ObjectData::Decimal(_)) => true,
         ("string", ObjectData::Str(_)) => true,
         ("bool", ObjectData::Boolean(_)) => true,
+        ("void", ObjectData::Null) => true,
+        ("dict", ObjectData::Dict { .. }) => true,
+        ("array", ObjectData::Array { .. }) => true,
         ("any", _) => true,
+        // "[type]" param accepts any array (element type enforced at construction)
+        (t, ObjectData::Array { .. }) if t.starts_with('[') && t.ends_with(']') => true,
+        // Nullable: "int?" accepts int or null
+        (t, ObjectData::Null) if t.ends_with('?') => true,
+        (t, d) if t.ends_with('?') => {
+            let base = &t[..t.len() - 1];
+            type_matches(base, d)
+        }
         _ => false,
     }
 }

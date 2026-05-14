@@ -61,6 +61,8 @@ pub enum TokenType {
     KwString,
     KwBool,
     KwAny,
+    KwNull,
+    Question, // ?
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -100,6 +102,7 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "string" => TokenType::KwString,
         "bool" => TokenType::KwBool,
         "any" => TokenType::KwAny,
+        "null" => TokenType::KwNull,
         _ => TokenType::Ident,
     }
 }

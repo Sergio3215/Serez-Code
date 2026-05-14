@@ -102,6 +102,11 @@ impl ScopeStack {
         None
     }
 
+    /// Current nesting depth (number of active frames).
+    pub fn depth(&self) -> usize {
+        self.frames.len()
+    }
+
     /// Returns all (name, ref) pairs visible in the current scope chain,
     /// ordered outer-to-inner so that inner-frame values override outer ones
     /// when iterated in order (used to build closure captures).

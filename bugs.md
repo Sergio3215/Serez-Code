@@ -30,6 +30,8 @@
 | [B-19](#b-19--splitproduced-empty-strings-at-boundaries) | `split("")` produced empty strings at boundaries | 🟡 High | ✅ |
 | [B-20](#b-20--tostring-only-worked-on-string-type) | `.toString()` only worked on `string` type | 🟡 High | ✅ |
 | [B-21](#b-21--decimal-display-imprecision-due-to-f64-binary-representation) | Decimal display imprecision due to `f64` binary representation | 🟡 High | ✅ |
+| [B-22](#b-22--push-inside-while-body-loses-elements-on-scoped-array) | `push` inside `while` body loses elements on scoped array | 🔴 Critical | ✅ |
+| [B-23](#b-23--sort-returned-null-instead-of-the-array) | `.sort` returned `null` instead of the array | 🟡 High | ✅ |
 
 ---
 
@@ -853,4 +855,104 @@ This rounds the display at 10 decimal places, which eliminates all practical f64
 
 ---
 
-*Last updated: 2026-05-13 — 21 bugs documented, all fixed.*
+---
+
+## B-22 — `push` inside `while` body loses elements on scoped array
+
+**Date:** 2026-05-14  
+**Files:** `src/evaluator.rs`, `src/scope.rs`  
+**Severity:** 🔴 Critical
+
+### Symptom
+
+A function-local typed array built up with `push` inside a `while` loop would lose elements or crash with "Index out of bounds":
+
+```serez
+fn [int] lowStock(int threshold) {
+    let indices [int] = [];
+    let i = 0;
+    while (i < stock.length()) {
+        if (stock[i] <= threshold) {
+            indices.push(i);   // only first push survives
+        }
+        i = i + 1;
+    }
+    return indices;
+}
+
+let alerts = lowStock(3);
+out alerts.length();  // → 1 (expected 2)
+// accessing alerts[1] → ❌ ERROR: Index out of bounds
+```
+
+### Root cause
+
+`eval_block` calls `scopes.push()` at the start of every `{ ... }` block and `scopes.pop()` at the end. `scopes.pop()` calls `arena.reset_to(frame.watermark)`, which truncates the scoped arena back to the mark taken at the start of that block.
+
+When `push` is called on a scoped array (one declared inside a function) from within the `while` body, the new element is allocated via `self.plant(val)`, which lands in the scoped arena **at the current watermark** — inside the while body's ephemeral range. When the while body's `eval_block` pops, that watermark is reset, freeing the newly allocated element ref. The array object still holds the now-freed index, causing dangling refs.
+
+```
+Scoped arena state after first push:
+  [indices_array @ 0][element_0 @ 1]   ← watermark at start of while body was 1
+While body pops → reset_to(1) → element_0 freed
+Array still contains ObjectRef{Scoped, index: 1} → dangling
+```
+
+### Fix
+
+Added `pub fn depth(&self) -> usize` to `ScopeStack` (returns `self.frames.len()`).
+
+In `eval_array_method`, for `push` and `unshift`: when the array lives in the scoped arena but we're currently inside a nested scope (`scopes.depth() > 1`), allocate the new element via `plant_global` instead of `plant`. This ensures the element outlives the inner block's scope pop:
+
+```rust
+let new_ref = match arr_ref.region {
+    RegionId::Global => self.plant_global(val),
+    RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(val),  // ← fix
+    RegionId::Scoped => self.plant(val),
+};
+```
+
+The same fix was applied to `IndexAssign` for scoped arrays inside nested scopes.
+
+**Trade-off:** Elements of scoped arrays that are mutated from nested scopes now live in the global arena. They are logically owned by the function scope but physically in global arena — a bounded "leak" for the duration of program execution. For an interpreter this is acceptable; these elements are not reachable after the function returns.
+
+---
+
+## B-23 — `.sort` returned `null` instead of the array
+
+**Date:** 2026-05-14  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High
+
+### Symptom
+
+Assigning the result of `.sort()` produced `null`, making chaining impossible:
+
+```serez
+let sorted = nums.sort((a, b) => b - a);
+out sorted.length();  // ❌ ERROR: '.' method call not supported for type 'null'
+```
+
+### Root cause
+
+The `sort` branch in `eval_array_method` ended with `EvalResult::Value(self.null_ref)`. While it correctly sorted the array in-place via `update_array`, it discarded the array ref.
+
+### Fix
+
+Changed the return to `EvalResult::Value(arr_ref)` — returns the same (now sorted) array reference, consistent with JavaScript's `Array.prototype.sort` semantics.
+
+Also added comparator lambda support: when the argument to `.sort` is a function (detected via `resolve` before consuming the argument), a bubble-sort loop calls `call_function(cb, [a, b])` for each comparison. Positive result → swap.
+
+```rust
+// Before
+self.update_array(arr_ref, element_type, new_refs);
+EvalResult::Value(self.null_ref)
+
+// After
+self.update_array(arr_ref, element_type, new_refs);
+EvalResult::Value(arr_ref)
+```
+
+---
+
+*Last updated: 2026-05-14 — 23 bugs documented, all fixed.*
