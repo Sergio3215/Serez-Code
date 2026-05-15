@@ -1328,13 +1328,13 @@ Serez-Code uses a **hybrid type system**: the language is dynamically typed by d
 
 ```
                  ┌──────────────────────────────────┐
-                 │          Type Annotations         │
-                 │                                   │
+                 │          Type Annotations        │
+                 │                                  │
   fn int add(int a, int b) { ... }                  │
-       ^^^        ^^^   ^^^                          │
-       │          │     └─ parameter type            │
-       │          └─ parameter type                  │
-       └─ return type                                │
+       ^^^        ^^^   ^^^                         │
+       │          │     └─ parameter type           │
+       │          └─ parameter type                 │
+       └─ return type                               │
                  └──────────────────────────────────┘
                         ↓ checked at two points ↓
                   Static Checker          Runtime
