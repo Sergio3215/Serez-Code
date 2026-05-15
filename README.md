@@ -41,6 +41,7 @@ out fibonacci(10);   // → 55
    - [String Methods](#string-methods)
    - [Dictionaries](#dictionaries)
    - [Higher-Order Functions](#higher-order-functions)
+   - [Classes & Interfaces](#classes--interfaces)
    - [Type Conversions](#type-conversions)
    - [Output](#output)
    - [Comments](#comments)
@@ -181,6 +182,8 @@ Serez-Code has five primitive types and three compound types:
 | Array | `[1, 2, "x"]` or `[int]`, `[string]` | Typed or untyped, 0-indexed |
 | Dict | `let d <string,int> = (...)` | Typed key-value store, ordered insertion |
 | Function | `fn int add(...)` | First-class value |
+| Interface | `new Punto({ x: 0.0, y: 0.0 })` | Record of typed fields; no methods |
+| Class instance | `new Rectangulo("Box", 5.0, 3.0)` | Object with constructor, fields, and methods |
 
 Types are **dynamic by default**. Annotations are optional on parameters and return values. When provided, they are enforced at every call site — see [Type System](#type-system) for details.
 
@@ -1031,6 +1034,212 @@ out tripled;   // → [3, 6, 9, 12]
 
 ---
 
+### Classes & Interfaces
+
+Serez-Code supports C#-style object-oriented programming with interfaces, classes, single inheritance, and `super()` constructor delegation.
+
+---
+
+#### Interfaces
+
+An `interface` defines a named record with typed fields. It is purely a data container — no methods. Create instances with `new`:
+
+```serez
+interface Punto {
+    x: decimal,
+    y: decimal,
+}
+
+let origen = new Punto({ x: 0.0, y: 0.0 });
+let p      = new Punto({ x: 3.0, y: 4.0 });
+
+out "{origen.x}, {origen.y}";   // → 0.0, 0.0
+out "{p.x}, {p.y}";             // → 3.0, 4.0
+```
+
+All field names and types from the interface declaration must be supplied. Extra fields are a runtime error.
+
+**Reading fields:**
+
+```serez
+out p.x;   // → 3.0
+```
+
+**Mutating fields:**
+
+```serez
+p.x = 10.0;
+out p.x;   // → 10.0
+```
+
+**Partial object patch** — reassign selected fields at once without `let`:
+
+```serez
+p = { x: 5.0, y: 12.0 };   // overwrites only named fields; others unchanged
+out "{p.x}, {p.y}";         // → 5.0, 12.0
+```
+
+The patch only overwrites the listed fields. Fields not listed keep their previous values.
+
+---
+
+#### Classes
+
+A `class` bundles data and behaviour. Each class has a constructor (same name as the class, prefixed with `public`) and any number of `public` or `private` methods.
+
+```serez
+public class Animal {
+    public Animal(string nombre, string sonido) {
+        this.nombre  = nombre;
+        this.sonido  = sonido;
+        this.energia = 100;
+    }
+
+    public string getNombre() {
+        return this.nombre;
+    }
+
+    public void hacer_sonido() {
+        out "{this.nombre} dice: {this.sonido}";
+    }
+
+    public void comer(int cantidad) {
+        this.energia = this.energia + cantidad;
+    }
+
+    public string describir() {
+        return "{this.nombre} (energía: {this.energia})";
+    }
+}
+
+let perro = new Animal("Rex", "Guau");
+perro.hacer_sonido();          // → Rex dice: Guau
+perro.comer(20);
+out perro.describir();         // → Rex (energía: 120)
+```
+
+**Field assignment:**
+
+Fields set inside the constructor via `this.field = value` are created automatically. Any method can read or write them with the same syntax:
+
+```serez
+perro.energia = 50;   // direct field mutation from outside
+```
+
+**Methods** are called with dot syntax and parentheses, just like built-in methods:
+
+```serez
+out perro.getNombre();   // → Rex
+```
+
+---
+
+#### Inheritance
+
+Use `: ParentClass` to inherit from another class. The child's constructor **must** call `super(args...)` before doing anything else — this executes the parent constructor body against the same `this` object.
+
+```serez
+public class Perro : Animal {
+    public Perro(string nombre, string raza) {
+        super(nombre, "Guau");   // runs Animal's constructor with this
+        this.raza = raza;
+    }
+
+    public string getRaza() {
+        return this.raza;
+    }
+
+    // Override the parent method:
+    public string describir() {
+        return "{this.nombre} [{this.raza}] (energía: {this.energia})";
+    }
+}
+
+let fido = new Perro("Fido", "Labrador");
+fido.hacer_sonido();        // → Fido dice: Guau  (inherited from Animal)
+out fido.describir();       // → Fido [Labrador] (energía: 100)
+out fido.getNombre();       // → Fido  (inherited)
+out fido.getRaza();         // → Labrador
+```
+
+Inheritance is single — a class can have at most one parent.
+
+**Method resolution** walks the chain from the most-derived class upward until the method is found:
+
+```
+Perro.describir()    → found in Perro — use it
+Perro.hacer_sonido() → not in Perro → found in Animal — use it
+```
+
+**`super()` semantics:**
+
+`super(args...)` runs the parent constructor's body against the same `this` that the child constructor received. Only the variables that the parent explicitly assigns to `this` inside its body are visible in the child. Grand-parent constructors are not automatically called by `super()` — each level must call `super()` explicitly if the chain needs to be continued.
+
+Multi-level inheritance example:
+
+```serez
+public class Figura {
+    public Figura(string nombre) {
+        this.nombre = nombre;
+        this.color  = "blanco";
+    }
+    public void setColor(string c) { this.color = c; }
+}
+
+public class Rectangulo : Figura {
+    public Rectangulo(string nombre, decimal ancho, decimal alto) {
+        super(nombre);          // → runs Figura's constructor
+        this.ancho = ancho;
+        this.alto  = alto;
+    }
+    public decimal area() { return this.ancho * this.alto; }
+}
+
+public class Cuadrado : Rectangulo {
+    public Cuadrado(string nombre, decimal lado) {
+        super(nombre, lado, lado);   // → runs Rectangulo's constructor
+        this.lado = lado;
+    }
+}
+
+let c = new Cuadrado("Tile", 4.0);
+c.setColor("azul");
+out c.area();     // → 16.0
+out c.color;      // → azul
+out c.nombre;     // → Tile
+```
+
+---
+
+#### `public` and `private` methods
+
+```serez
+public class Contador {
+    public Contador(int inicio) {
+        this.valor = inicio;
+    }
+
+    private void incrementar() {
+        this.valor = this.valor + 1;
+    }
+
+    public int siguiente() {
+        this.incrementar();
+        return this.valor;
+    }
+}
+
+let c = new Contador(0);
+out c.siguiente();   // → 1
+out c.siguiente();   // → 2
+```
+
+`private` methods can only be called by other methods of the same class. Calling a private method from outside the instance is a runtime error.
+
+> **Note:** The `public` keyword is required on class and constructor declarations. Omitting it is a parse error.
+
+---
+
 ### Type Conversions
 
 Two global functions convert between `string`, `int`, and `decimal`:
@@ -1060,6 +1269,22 @@ Converts a value to `decimal`:
 out parseDecimal("3.14");   // → 3.14
 out parseDecimal(5);        // → 5.0
 out parseDecimal(2.71);     // → 2.71
+```
+
+---
+
+#### `readLine(prompt?)`
+
+Reads a line from stdin and returns it as a `string`. Strips the trailing newline.
+- Called with no arguments: blocks and waits for input silently.
+- Called with a `string` argument: prints the prompt first (no newline), then reads.
+
+```serez
+let name: string = readLine("What is your name? ");
+out "Hello, {name}!";
+
+let raw: string = readLine();
+let n: int = parseInt(raw);
 ```
 
 ---
@@ -1485,7 +1710,7 @@ src/
 ├── ast.rs           — AST node definitions (Statement, Expression, BlockStatement, …)
 ├── parser.rs        — Pratt (TDOP) parser with 8-level precedence + error recovery
 ├── type_checker.rs  — Static pre-run type checker with literal and variable inference
-├── region.rs        — Arena allocator, ObjectRef, ObjectData definitions
+├── region.rs        — Arena allocator, ObjectRef, ObjectData, OwnedValue definitions
 ├── scope.rs         — ScopeStack — manages push/pop/lookup over the scoped arena
 ├── evaluator.rs     — Tree-walking interpreter, Flash Scope protocol, static profiler
 └── repl.rs          — Read-eval-print loop
@@ -1616,7 +1841,7 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] `&&` and `||` — logical AND and OR operators with short-circuit evaluation
 - [x] `for` loop — `for (let i = 0; i < n; i = i + 1) { ... }`, nested loops, 1D/2D array traversal
 - [x] Array mutation via index — `arr[i] = expr`, works in loops and from inside functions
-- [x] String interpolation — `"Hello, {name}!"`
+- [x] String interpolation — `"Hello, {name}!"`, supports nested quotes inside `{…}` (e.g. `{dict["key"]}`)
 - [x] Lexical closures — functions that capture variables from their defining scope
 - [x] Native higher-order functions — `map`, `filter`, `reduce` with lambda syntax `x => expr` / `(x, i) => expr`
 - [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.sort("asc"/"desc")`, `.sort((a,b) => ...)`, `.length`
@@ -1624,6 +1849,10 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] Dict methods — `.toList()` (keys array), `.toArray()` (2D entries array)
 - [x] `decimal` type — f64 literals (`3.14`), mixed arithmetic with `int`
 - [x] Global conversions — `parseInt(val)`, `parseDecimal(val)`
+- [x] Console input — `readLine(prompt?)`
+- [x] Interfaces — typed record schemas: `interface Point { x: decimal, y: decimal }`, `new Point({ x:1.0, y:2.0 })`, field read/write, object patch `p = { x: 5.0 }`
+- [x] Classes — C#-style OOP: `public class Foo`, constructor `public Foo(args)`, `this.field`, `public`/`private` methods, field assignment `obj.field = val`
+- [x] Single inheritance — `public class Bar : Foo`, `super(args)` constructor delegation, method override, inherited method lookup
 
 ### Type system
 - [x] Typed arrays — `[int]`, `[string]`, `[decimal]`, `[T?]` with element-level enforcement on `push`, `unshift`, index-assign, and construction

@@ -183,6 +183,7 @@ impl Lexer {
             ),
             '.' => Token::new(TokenType::Dot, ".".to_string(), self.line, self.column),
             '?' => Token::new(TokenType::Question, "?".to_string(), self.line, self.column),
+            ':' => Token::new(TokenType::Colon, ":".to_string(), self.line, self.column),
             '"' => {
                 let literal = self.read_string();
                 let start_line = self.line;
@@ -225,10 +226,22 @@ impl Lexer {
     fn read_string(&mut self) -> String {
         // self.ch == '"' (opening quote); read_position points to first content byte
         let start = self.read_position;
+        let mut brace_depth: usize = 0;
         loop {
             self.read_char();
-            if self.ch == '"' || self.ch == '\0' {
-                break;
+            match self.ch {
+                '\0' => break,
+                '{' => brace_depth += 1,
+                '}' if brace_depth > 0 => brace_depth -= 1,
+                // Skip inner quoted strings inside {…} interpolation blocks
+                '"' if brace_depth > 0 => {
+                    loop {
+                        self.read_char();
+                        if self.ch == '"' || self.ch == '\0' { break; }
+                    }
+                }
+                '"' => break, // closing quote at depth 0
+                _ => {}
             }
         }
         // self.position == byte offset of closing '"' (or EOF)

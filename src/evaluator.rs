@@ -2,6 +2,14 @@ use crate::ast::{self, Expression, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::HashMap;
+use std::io::{self, Write};
+
+#[derive(Clone)]
+struct StoredClass {
+    parent: Option<String>,
+    constructor: Option<ast::ClassConstructor>,
+    methods: Vec<ast::ClassMethod>,
+}
 
 // ── EvalResult ────────────────────────────────────────────────────────────────
 
@@ -24,6 +32,9 @@ pub struct Evaluator {
     scopes: ScopeStack,
     null_ref: ObjectRef,
     call_stack: Vec<CallFrame>,
+    interface_registry: HashMap<String, Vec<ast::InterfaceField>>,
+    class_registry: HashMap<String, StoredClass>,
+    constructing_class: Option<String>,
 }
 
 impl Evaluator {
@@ -41,6 +52,9 @@ impl Evaluator {
             scopes: ScopeStack::new(),
             null_ref,
             call_stack: Vec::new(),
+            interface_registry: HashMap::new(),
+            class_registry: HashMap::new(),
+            constructing_class: None,
         }
     }
 
@@ -112,6 +126,12 @@ impl Evaluator {
                 format!("{{{}}}", pairs.join(", "))
             }
             Some(ObjectData::Function { .. }) => "Function".to_string(),
+            Some(ObjectData::Instance { class_name, fields }) => {
+                let pairs: Vec<String> = fields.iter()
+                    .map(|(n, v)| format!("{}: {}", n, v.display_str()))
+                    .collect();
+                format!("{}{{ {} }}", class_name, pairs.join(", "))
+            }
             Some(ObjectData::Null) => "null".to_string(),
             None => "❌ Referencia inválida".to_string(),
         }
@@ -147,6 +167,10 @@ impl Evaluator {
                 body: body.clone(),
                 captured: captured.clone(),
             },
+            Some(ObjectData::Instance { class_name, fields }) => OwnedValue::Instance {
+                class_name: class_name.clone(),
+                fields: fields.clone(),
+            },
             Some(ObjectData::Null) | None => OwnedValue::Null,
         }
     }
@@ -181,6 +205,9 @@ impl Evaluator {
                 body,
                 captured,
             }),
+            OwnedValue::Instance { class_name, fields } => {
+                self.alloc(ObjectData::Instance { class_name, fields })
+            }
             OwnedValue::Null => self.null_ref,
         }
     }
@@ -231,6 +258,10 @@ impl Evaluator {
                     body,
                     captured,
                 });
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Instance { class_name, fields } => {
+                let idx = self.global_arena.alloc(ObjectData::Instance { class_name, fields });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Null => self.null_ref,
@@ -311,6 +342,11 @@ impl Evaluator {
                 if self.lookup_var(&assign_stmt.name).is_none() {
                     eprintln!("❌ ERROR: Undeclared variable: {}", assign_stmt.name);
                     return EvalResult::Error;
+                }
+
+                // Interface patch: person = { field: val, ... }
+                if let Expression::ObjectPatch(patch_fields) = &assign_stmt.value {
+                    return self.eval_object_patch(&assign_stmt.name, patch_fields.clone());
                 }
 
                 let val_ref = match self.eval_expression(&assign_stmt.value) {
@@ -621,6 +657,52 @@ impl Evaluator {
             },
 
             Statement::Expression(expr) => self.eval_expression(expr),
+
+            Statement::InterfaceDeclaration(decl) => {
+                self.interface_registry.insert(decl.name.clone(), decl.fields.clone());
+                EvalResult::Value(self.null_ref)
+            }
+
+            Statement::ClassDeclaration(decl) => {
+                self.class_registry.insert(decl.name.clone(), StoredClass {
+                    parent: decl.parent.clone(),
+                    constructor: decl.constructor.clone(),
+                    methods: decl.methods.clone(),
+                });
+                EvalResult::Value(self.null_ref)
+            }
+
+            Statement::FieldAssign(stmt) => {
+                let val_ref = match self.eval_expression(&stmt.value) {
+                    EvalResult::Value(r) => r,
+                    other => return other,
+                };
+                let new_val = self.extract(val_ref);
+
+                let obj_ref = match self.lookup_var(&stmt.object) {
+                    Some(r) => r,
+                    None => {
+                        eprintln!("❌ ERROR: Undeclared variable '{}' in field assignment", stmt.object);
+                        return EvalResult::Error;
+                    }
+                };
+
+                if let Some(ObjectData::Instance { class_name, mut fields }) = self.resolve(obj_ref).cloned() {
+                    if let Some(f) = fields.iter_mut().find(|(n, _)| n == &stmt.field) {
+                        f.1 = new_val;
+                    } else {
+                        fields.push((stmt.field.clone(), new_val));
+                    }
+                    match obj_ref.region {
+                        RegionId::Global => self.global_arena.update(obj_ref.index, ObjectData::Instance { class_name, fields }),
+                        RegionId::Scoped => self.scopes.arena.update(obj_ref.index, ObjectData::Instance { class_name, fields }),
+                    }
+                    EvalResult::Value(self.null_ref)
+                } else {
+                    eprintln!("❌ ERROR: '{}' is not a class or interface instance", stmt.object);
+                    EvalResult::Error
+                }
+            }
         }
     }
 
@@ -734,6 +816,8 @@ impl Evaluator {
                     match name.as_str() {
                         "parseInt" => return self.eval_parse_int(&call_expr.arguments),
                         "parseDecimal" => return self.eval_parse_decimal(&call_expr.arguments),
+                        "readLine" => return self.eval_read_line(&call_expr.arguments),
+                        "super" => return self.eval_super_call(&call_expr.arguments),
                         _ => {}
                     }
                 }
@@ -1185,6 +1269,11 @@ impl Evaluator {
                             }
                         }
                     }
+                    // ── Instance field read / method call ─────────────────────
+                    ObjectData::Instance { class_name, fields } => {
+                        self.eval_instance_dot(obj_ref, class_name, fields, dot_call)
+                    }
+
                     // .toString() available on all types
                     _ if dot_call.method == "toString" => {
                         let s = self.display(obj_ref);
@@ -1196,6 +1285,22 @@ impl Evaluator {
                         EvalResult::Error
                     }
                 }
+            }
+
+            Expression::New(new_expr) => {
+                if let Some(iface) = self.interface_registry.get(&new_expr.class_name).cloned() {
+                    return self.eval_new_interface(new_expr, iface);
+                }
+                if let Some(class) = self.class_registry.get(&new_expr.class_name).cloned() {
+                    return self.eval_new_class(new_expr, class);
+                }
+                eprintln!("❌ ERROR: Unknown class or interface '{}'", new_expr.class_name);
+                EvalResult::Error
+            }
+
+            Expression::ObjectPatch(_) => {
+                eprintln!("❌ ERROR: Object patch '{{field: val}}' is only valid in an assignment context");
+                EvalResult::Error
             }
 
             Expression::Prefix(op, right_expr) => {
@@ -1688,6 +1793,16 @@ impl Evaluator {
                 }
                 cost
             }
+            ast::Expression::New(n) => {
+                let arg_cost: usize = match &n.args {
+                    ast::NewArgs::Positional(args) => args.iter().map(|e| self.estimate_expression(e)).sum(),
+                    ast::NewArgs::Fields(fields) => fields.iter().map(|(_, e)| self.estimate_expression(e)).sum(),
+                };
+                32 + arg_cost
+            }
+            ast::Expression::ObjectPatch(fields) => {
+                32 + fields.iter().map(|(_, e)| self.estimate_expression(e)).sum::<usize>()
+            }
         }
     }
 
@@ -1806,6 +1921,362 @@ impl Evaluator {
                 }
             },
             _ => { eprintln!("❌ ERROR: parseDecimal: unsupported type"); EvalResult::Error }
+        }
+    }
+
+    fn eval_read_line(&mut self, args: &[ast::Expression]) -> EvalResult {
+        if args.len() > 1 {
+            eprintln!("❌ ERROR: readLine expects 0 or 1 argument");
+            return EvalResult::Error;
+        }
+        if let Some(prompt_expr) = args.first() {
+            match self.eval_expression(prompt_expr) {
+                EvalResult::Value(r) => {
+                    let prompt = self.display(r);
+                    print!("{}", prompt);
+                    let _ = io::stdout().flush();
+                }
+                _ => return EvalResult::Error,
+            }
+        }
+        let mut line = String::new();
+        match io::stdin().read_line(&mut line) {
+            Ok(_) => {
+                let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
+                EvalResult::Value(self.alloc(ObjectData::Str(trimmed)))
+            }
+            Err(e) => {
+                eprintln!("❌ ERROR: readLine: failed to read from stdin — {}", e);
+                EvalResult::Error
+            }
+        }
+    }
+
+    // ── Interface / Class instantiation ──────────────────────────────────────
+
+    fn eval_new_interface(&mut self, new_expr: &ast::NewExpression, iface_fields: Vec<ast::InterfaceField>) -> EvalResult {
+        let provided = match &new_expr.args {
+            ast::NewArgs::Fields(f) => f.clone(),
+            ast::NewArgs::Positional(_) => {
+                eprintln!("❌ ERROR: Interface '{}' must be instantiated with {{ field: value }} syntax", new_expr.class_name);
+                return EvalResult::Error;
+            }
+        };
+
+        let mut fields: Vec<(String, OwnedValue)> = Vec::new();
+        for iface_field in &iface_fields {
+            let entry = provided.iter().find(|(n, _)| n == &iface_field.name);
+            match entry {
+                Some((_, expr)) => {
+                    let val_ref = match self.eval_expression(expr) {
+                        EvalResult::Value(r) => r,
+                        other => return other,
+                    };
+                    if let Some(actual) = self.resolve(val_ref) {
+                        if !type_matches(&iface_field.type_name, actual) {
+                            eprintln!("❌ TYPE ERROR: Interface field '{}' expects '{}' but got '{}'",
+                                iface_field.name, iface_field.type_name, actual.type_name());
+                            return EvalResult::Error;
+                        }
+                    }
+                    let owned = self.extract(val_ref);
+                    fields.push((iface_field.name.clone(), owned));
+                }
+                None => {
+                    eprintln!("❌ ERROR: Missing field '{}' when creating '{}'", iface_field.name, new_expr.class_name);
+                    return EvalResult::Error;
+                }
+            }
+        }
+
+        EvalResult::Value(self.alloc(ObjectData::Instance {
+            class_name: new_expr.class_name.clone(),
+            fields,
+        }))
+    }
+
+    fn eval_new_class(&mut self, new_expr: &ast::NewExpression, class: StoredClass) -> EvalResult {
+        let arg_exprs = match &new_expr.args {
+            ast::NewArgs::Positional(a) => a.clone(),
+            ast::NewArgs::Fields(_) => {
+                eprintln!("❌ ERROR: Class '{}' uses positional arguments, not field syntax", new_expr.class_name);
+                return EvalResult::Error;
+            }
+        };
+
+        // Evaluate args before pushing scope
+        let mut arg_vals: Vec<OwnedValue> = Vec::new();
+        for expr in &arg_exprs {
+            match self.eval_expression(expr) {
+                EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                other => return other,
+            }
+        }
+
+        // Allocate empty instance in current context
+        let instance_ref = self.alloc(ObjectData::Instance {
+            class_name: new_expr.class_name.clone(),
+            fields: Vec::new(),
+        });
+
+        if let Some(ctor) = class.constructor {
+            if arg_vals.len() != ctor.parameters.len() {
+                eprintln!("❌ ERROR: Constructor '{}' expects {} arguments, got {}",
+                    new_expr.class_name, ctor.parameters.len(), arg_vals.len());
+                return EvalResult::Error;
+            }
+
+            self.scopes.push();
+            self.scopes.declare("this".to_string(), instance_ref);
+
+            for (i, param) in ctor.parameters.iter().enumerate() {
+                let arg_ref = self.plant(arg_vals[i].clone());
+                self.scopes.declare(param.name.clone(), arg_ref);
+            }
+
+            let old_class = self.constructing_class.replace(new_expr.class_name.clone());
+
+            let mut body_error = false;
+            for stmt in &ctor.body.statements {
+                match self.eval_statement(stmt) {
+                    EvalResult::Error => { body_error = true; break; }
+                    EvalResult::Return(_) => break,
+                    EvalResult::Value(_) => {}
+                }
+            }
+
+            self.constructing_class = old_class;
+
+            // Extract instance state before popping constructor scope
+            let instance_owned = self.extract(instance_ref);
+            self.scopes.pop();
+
+            if body_error {
+                return EvalResult::Error;
+            }
+
+            // Re-plant instance in outer context with updated fields
+            let final_ref = self.plant(instance_owned);
+            EvalResult::Value(final_ref)
+        } else {
+            if !arg_vals.is_empty() {
+                eprintln!("❌ ERROR: Class '{}' has no constructor but received {} arguments",
+                    new_expr.class_name, arg_vals.len());
+                return EvalResult::Error;
+            }
+            EvalResult::Value(instance_ref)
+        }
+    }
+
+    fn eval_super_call(&mut self, args: &[ast::Expression]) -> EvalResult {
+        let current_class = match &self.constructing_class {
+            Some(c) => c.clone(),
+            None => {
+                eprintln!("❌ ERROR: super() called outside of a constructor");
+                return EvalResult::Error;
+            }
+        };
+        let parent_name = match self.class_registry.get(&current_class).and_then(|c| c.parent.clone()) {
+            Some(p) => p,
+            None => {
+                eprintln!("❌ ERROR: Class '{}' has no parent to call super() on", current_class);
+                return EvalResult::Error;
+            }
+        };
+        let parent_ctor = match self.class_registry.get(&parent_name).and_then(|c| c.constructor.clone()) {
+            Some(ctor) => ctor,
+            None => return EvalResult::Value(self.null_ref), // parent has no constructor
+        };
+
+        let mut arg_vals: Vec<OwnedValue> = Vec::new();
+        for expr in args {
+            match self.eval_expression(expr) {
+                EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                other => return other,
+            }
+        }
+
+        if arg_vals.len() != parent_ctor.parameters.len() {
+            eprintln!("❌ ERROR: super() for '{}' expects {} arguments, got {}",
+                parent_name, parent_ctor.parameters.len(), arg_vals.len());
+            return EvalResult::Error;
+        }
+
+        // Execute parent constructor body — "this" is already bound in the current scope
+        self.scopes.push();
+        for (i, param) in parent_ctor.parameters.iter().enumerate() {
+            let arg_ref = self.plant(arg_vals[i].clone());
+            self.scopes.declare(param.name.clone(), arg_ref);
+        }
+
+        let old_class = self.constructing_class.replace(parent_name);
+
+        let mut error = false;
+        for stmt in &parent_ctor.body.statements {
+            match self.eval_statement(stmt) {
+                EvalResult::Error => { error = true; break; }
+                EvalResult::Return(_) => break,
+                EvalResult::Value(_) => {}
+            }
+        }
+
+        self.constructing_class = old_class;
+        self.scopes.pop();
+
+        if error { EvalResult::Error } else { EvalResult::Value(self.null_ref) }
+    }
+
+    fn eval_object_patch(&mut self, var_name: &str, patch: Vec<(String, ast::Expression)>) -> EvalResult {
+        let obj_ref = match self.lookup_var(var_name) {
+            Some(r) => r,
+            None => {
+                eprintln!("❌ ERROR: Undeclared variable '{}' in object patch", var_name);
+                return EvalResult::Error;
+            }
+        };
+
+        if let Some(ObjectData::Instance { class_name, mut fields }) = self.resolve(obj_ref).cloned() {
+            // Validate against interface schema if it's an interface
+            let schema = self.interface_registry.get(&class_name).cloned();
+
+            for (field_name, expr) in patch {
+                let val_ref = match self.eval_expression(&expr) {
+                    EvalResult::Value(r) => r,
+                    other => return other,
+                };
+                if let Some(ref schema_fields) = schema {
+                    if let Some(iface_field) = schema_fields.iter().find(|f| f.name == field_name) {
+                        if let Some(actual) = self.resolve(val_ref) {
+                            if !type_matches(&iface_field.type_name, actual) {
+                                eprintln!("❌ TYPE ERROR: Field '{}' expects '{}' but got '{}'",
+                                    field_name, iface_field.type_name, actual.type_name());
+                                return EvalResult::Error;
+                            }
+                        }
+                    }
+                }
+                let owned = self.extract(val_ref);
+                if let Some(f) = fields.iter_mut().find(|(n, _)| n == &field_name) {
+                    f.1 = owned;
+                } else {
+                    fields.push((field_name, owned));
+                }
+            }
+
+            match obj_ref.region {
+                RegionId::Global => self.global_arena.update(obj_ref.index, ObjectData::Instance { class_name, fields }),
+                RegionId::Scoped => self.scopes.arena.update(obj_ref.index, ObjectData::Instance { class_name, fields }),
+            }
+            EvalResult::Value(self.null_ref)
+        } else {
+            eprintln!("❌ ERROR: '{}' is not an interface instance — cannot use patch syntax", var_name);
+            EvalResult::Error
+        }
+    }
+
+    fn eval_instance_dot(
+        &mut self,
+        obj_ref: ObjectRef,
+        class_name: String,
+        fields: Vec<(String, OwnedValue)>,
+        dot_call: &ast::DotCallExpression,
+    ) -> EvalResult {
+        let method_name = &dot_call.method;
+
+        // toString() available on all types
+        if method_name == "toString" {
+            let s = self.display(obj_ref);
+            return EvalResult::Value(self.alloc(ObjectData::Str(s)));
+        }
+
+        // Field read: no args and field exists
+        if dot_call.arguments.is_empty() {
+            if let Some((_, owned)) = fields.iter().find(|(n, _)| n == method_name) {
+                let owned = owned.clone();
+                return EvalResult::Value(self.plant(owned));
+            }
+        }
+
+        // Method dispatch: walk inheritance chain
+        let method = self.find_method(&class_name, method_name);
+        match method {
+            Some(m) => {
+                let args_exprs = dot_call.arguments.clone();
+                let mut arg_vals: Vec<OwnedValue> = Vec::new();
+                for expr in &args_exprs {
+                    match self.eval_expression(expr) {
+                        EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                        other => return other,
+                    }
+                }
+
+                if arg_vals.len() != m.parameters.len() {
+                    eprintln!("❌ ERROR: Method '{}' expects {} arguments, got {}",
+                        method_name, m.parameters.len(), arg_vals.len());
+                    return EvalResult::Error;
+                }
+
+                if !m.is_public {
+                    eprintln!("❌ ERROR: Method '{}' is private and cannot be called externally", method_name);
+                    return EvalResult::Error;
+                }
+
+                self.scopes.push();
+                self.scopes.declare("this".to_string(), obj_ref);
+
+                for (i, param) in m.parameters.iter().enumerate() {
+                    let arg_ref = self.plant(arg_vals[i].clone());
+                    self.scopes.declare(param.name.clone(), arg_ref);
+                }
+
+                let mut result_ref = self.null_ref;
+                let mut error = false;
+                for stmt in &m.body.statements {
+                    match self.eval_statement(stmt) {
+                        EvalResult::Value(v) => result_ref = v,
+                        EvalResult::Return(v) => { result_ref = v; break; }
+                        EvalResult::Error => { error = true; break; }
+                    }
+                }
+
+                let owned = self.extract(result_ref);
+                self.scopes.pop();
+
+                if error { return EvalResult::Error; }
+
+                let result = self.plant(owned);
+
+                // Validate return type if declared
+                if let Some(ref rt) = m.return_type {
+                    let actual = self.resolve(result).unwrap();
+                    if !type_matches(rt, actual) {
+                        eprintln!("❌ TYPE ERROR: Method '{}' declared return '{}' but returned '{}'",
+                            method_name, rt, actual.type_name());
+                        return EvalResult::Error;
+                    }
+                }
+
+                EvalResult::Value(result)
+            }
+            None => {
+                eprintln!("❌ ERROR: '{}' has no field or method named '{}'", class_name, method_name);
+                EvalResult::Error
+            }
+        }
+    }
+
+    // Walk the inheritance chain to find a method
+    fn find_method(&self, class_name: &str, method_name: &str) -> Option<ast::ClassMethod> {
+        let mut current = class_name.to_string();
+        loop {
+            let class = self.class_registry.get(&current)?;
+            if let Some(m) = class.methods.iter().find(|m| m.name == method_name) {
+                return Some(m.clone());
+            }
+            match &class.parent {
+                Some(parent) => current = parent.clone(),
+                None => return None,
+            }
         }
     }
 

@@ -118,6 +118,9 @@ impl TypeChecker {
                 self.check_expression(e, expected_return);
             }
             Statement::IndexAssign(_) => {}
+            Statement::ClassDeclaration(_) => {}
+            Statement::InterfaceDeclaration(_) => {}
+            Statement::FieldAssign(_) => {}
         }
     }
 

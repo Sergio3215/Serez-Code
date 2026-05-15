@@ -51,8 +51,16 @@ pub enum TokenType {
     Return,
     Out,
 
+    // Class / Interface keywords
+    KwClass,
+    KwInterface,
+    KwNew,
+    KwPublic,
+    KwPrivate,
+
     // Delimiters (continued)
-    Dot, // .
+    Dot,   // .
+    Colon, // :
 
     // Type Keywords
     KwVoid,
@@ -103,6 +111,11 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "bool" => TokenType::KwBool,
         "any" => TokenType::KwAny,
         "null" => TokenType::KwNull,
+        "class" => TokenType::KwClass,
+        "interface" => TokenType::KwInterface,
+        "new" => TokenType::KwNew,
+        "public" => TokenType::KwPublic,
+        "private" => TokenType::KwPrivate,
         _ => TokenType::Ident,
     }
 }

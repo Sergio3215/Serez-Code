@@ -85,7 +85,11 @@ impl Parser {
                 | TokenType::Out
                 | TokenType::Function
                 | TokenType::While
-                | TokenType::For => return,
+                | TokenType::For
+                | TokenType::KwClass
+                | TokenType::KwInterface
+                | TokenType::KwPublic
+                | TokenType::KwPrivate => return,
                 _ => self.next_token(),
             }
         }
@@ -100,6 +104,9 @@ impl Parser {
             TokenType::Function => self.parse_function_statement(),
             TokenType::While => self.parse_while_statement(),
             TokenType::For => self.parse_for_statement(),
+            TokenType::KwClass => self.parse_class_declaration(true),
+            TokenType::KwInterface => self.parse_interface_declaration(true),
+            TokenType::KwPublic | TokenType::KwPrivate => self.parse_visibility_statement(),
             TokenType::Ident if self.peek_token.token_type == TokenType::Assign => {
                 self.parse_assign_statement()
             }
@@ -128,6 +135,29 @@ impl Parser {
 
     fn parse_expression_statement(&mut self) -> Option<Statement> {
         let expr = self.parse_expression(Precedence::Lowest)?;
+
+        // Detect obj.field = value  or  this.field = value
+        if self.peek_token.token_type == TokenType::Assign {
+            if let Expression::DotCall(ref dot) = expr {
+                if dot.arguments.is_empty() {
+                    if let Expression::Identifier(ref obj_name) = *dot.object {
+                        let object = obj_name.clone();
+                        let field = dot.method.clone();
+                        self.next_token(); // '='
+                        self.next_token(); // first token of value
+                        let value = self.parse_expression(Precedence::Lowest)?;
+                        if self.peek_token.token_type == TokenType::Semicolon {
+                            self.next_token();
+                        }
+                        return Some(Statement::FieldAssign(FieldAssignStatement {
+                            object,
+                            field,
+                            value,
+                        }));
+                    }
+                }
+            }
+        }
 
         if self.peek_token.token_type == TokenType::Semicolon {
             self.next_token();
@@ -916,8 +946,9 @@ impl Parser {
             }
 
             TokenType::LBracket => self.parse_array_literal(),
-            TokenType::LBrace => self.parse_entry_literal(),
+            TokenType::LBrace => self.parse_brace_expression(),
             TokenType::If => self.parse_if_expression(),
+            TokenType::KwNew => self.parse_new_expression(),
 
             TokenType::KwVoid
             | TokenType::KwInt
@@ -1068,6 +1099,349 @@ impl Parser {
         Some(Expression::EntryLiteral(Box::new(key), Box::new(value)))
     }
 
+    // ── { ... } disambiguation ────────────────────────────────────────────────
+    // When '{' appears in expression context:
+    //   - If next token is Ident and next-next is ':' → ObjectPatch { field: val, ... }
+    //   - Otherwise → EntryLiteral {key, value} (for dict method args)
+    fn parse_brace_expression(&mut self) -> Option<Expression> {
+        if self.peek_token.token_type == TokenType::Ident {
+            // Consume '{', now current = Ident
+            self.next_token();
+            if self.peek_token.token_type == TokenType::Colon {
+                // ObjectPatch: { field: val, ... }
+                return self.parse_object_patch_from_ident();
+            } else {
+                // Entry literal: { ident, value }
+                let key = Expression::Identifier(self.current_token.literal.clone());
+                return self.parse_entry_literal_from_key(key);
+            }
+        }
+        self.parse_entry_literal()
+    }
+
+    // current = first field name (already consumed '{' and Ident)
+    fn parse_object_patch_from_ident(&mut self) -> Option<Expression> {
+        let mut fields = Vec::new();
+        loop {
+            if self.current_token.token_type != TokenType::Ident {
+                eprintln!("❌ PARSER ERROR: Expected field name in object literal");
+                return None;
+            }
+            let name = self.current_token.literal.clone();
+            if self.peek_token.token_type != TokenType::Colon {
+                eprintln!("❌ PARSER ERROR: Expected ':' after field name in object literal");
+                return None;
+            }
+            self.next_token(); // ':'
+            self.next_token(); // value
+            let value = self.parse_expression(Precedence::Lowest)?;
+            fields.push((name, value));
+
+            match self.peek_token.token_type {
+                TokenType::Comma => {
+                    self.next_token(); // ','
+                    if self.peek_token.token_type == TokenType::RBrace {
+                        self.next_token(); // '}'
+                        break;
+                    }
+                    self.next_token(); // next field name
+                }
+                TokenType::RBrace => {
+                    self.next_token(); // '}'
+                    break;
+                }
+                _ => {
+                    eprintln!("❌ PARSER ERROR: Expected ',' or '}}' in object literal");
+                    return None;
+                }
+            }
+        }
+        Some(Expression::ObjectPatch(fields))
+    }
+
+    // current = first ident of key (already consumed '{'); continue parsing full key expression
+    fn parse_entry_literal_from_key(&mut self, key_start: Expression) -> Option<Expression> {
+        // The key might be more than just the ident (e.g. nombres[i])
+        let key = self.parse_infix_chain(Some(key_start), Precedence::Lowest)?;
+
+        if self.peek_token.token_type != TokenType::Comma {
+            eprintln!("❌ PARSER ERROR: Expected ',' between key and value in entry literal");
+            return None;
+        }
+        self.next_token(); // ','
+        self.next_token(); // value
+        let value = self.parse_expression(Precedence::Lowest)?;
+        if self.peek_token.token_type != TokenType::RBrace {
+            eprintln!("❌ PARSER ERROR: Expected '}}' to close entry literal");
+            return None;
+        }
+        self.next_token(); // '}'
+        Some(Expression::EntryLiteral(Box::new(key), Box::new(value)))
+    }
+
+    // ── new expression ────────────────────────────────────────────────────────
+    fn parse_new_expression(&mut self) -> Option<Expression> {
+        // current = 'new'
+        if self.peek_token.token_type != TokenType::Ident {
+            eprintln!("❌ PARSER ERROR: Expected class name after 'new'");
+            return None;
+        }
+        self.next_token();
+        let class_name = self.current_token.literal.clone();
+
+        if self.peek_token.token_type != TokenType::LParen {
+            eprintln!("❌ PARSER ERROR: Expected '(' after class name in 'new'");
+            return None;
+        }
+        self.next_token(); // '('
+
+        // Distinguish interface { field: val } from positional args
+        if self.peek_token.token_type == TokenType::LBrace {
+            self.next_token(); // '{'
+            self.next_token(); // first field name or '}'
+
+            let mut fields: Vec<(String, Expression)> = Vec::new();
+            while self.current_token.token_type != TokenType::RBrace
+                && self.current_token.token_type != TokenType::Eof
+            {
+                if self.current_token.token_type != TokenType::Ident {
+                    eprintln!("❌ PARSER ERROR: Expected field name in 'new' interface literal");
+                    return None;
+                }
+                let field_name = self.current_token.literal.clone();
+                if self.peek_token.token_type != TokenType::Colon {
+                    eprintln!("❌ PARSER ERROR: Expected ':' after field name in 'new'");
+                    return None;
+                }
+                self.next_token(); // ':'
+                self.next_token(); // value
+                let value = self.parse_expression(Precedence::Lowest)?;
+                fields.push((field_name, value));
+
+                match self.peek_token.token_type {
+                    TokenType::Comma => {
+                        self.next_token(); // ','
+                        if self.peek_token.token_type == TokenType::RBrace {
+                            self.next_token(); // '}'
+                            break;
+                        }
+                        self.next_token(); // next field
+                    }
+                    TokenType::RBrace => {
+                        self.next_token(); // '}'
+                        break;
+                    }
+                    _ => {
+                        eprintln!("❌ PARSER ERROR: Expected ',' or '}}' in interface fields");
+                        return None;
+                    }
+                }
+            }
+            if self.peek_token.token_type != TokenType::RParen {
+                eprintln!("❌ PARSER ERROR: Expected ')' after '}}' in 'new'");
+                return None;
+            }
+            self.next_token(); // ')'
+            Some(Expression::New(NewExpression {
+                class_name,
+                args: NewArgs::Fields(fields),
+            }))
+        } else {
+            let args = self.parse_call_arguments()?;
+            Some(Expression::New(NewExpression {
+                class_name,
+                args: NewArgs::Positional(args),
+            }))
+        }
+    }
+
+    // ── Interface declaration ─────────────────────────────────────────────────
+    fn parse_interface_declaration(&mut self, is_public: bool) -> Option<Statement> {
+        // current = 'interface'
+        if self.peek_token.token_type != TokenType::Ident {
+            eprintln!("❌ PARSER ERROR: Expected interface name after 'interface'");
+            return None;
+        }
+        self.next_token();
+        let name = self.current_token.literal.clone();
+
+        if self.peek_token.token_type != TokenType::LBrace {
+            eprintln!("❌ PARSER ERROR: Expected '{{' after interface name");
+            return None;
+        }
+        self.next_token(); // '{'
+        self.next_token(); // first field or '}'
+
+        let mut fields = Vec::new();
+        while self.current_token.token_type != TokenType::RBrace
+            && self.current_token.token_type != TokenType::Eof
+        {
+            if self.current_token.token_type != TokenType::Ident {
+                eprintln!("❌ PARSER ERROR: Expected field name in interface body");
+                return None;
+            }
+            let field_name = self.current_token.literal.clone();
+
+            if self.peek_token.token_type != TokenType::Colon {
+                eprintln!("❌ PARSER ERROR: Expected ':' after field name '{}' in interface", field_name);
+                return None;
+            }
+            self.next_token(); // ':'
+            self.next_token(); // type keyword
+
+            if !is_type_keyword(&self.current_token.token_type) {
+                eprintln!("❌ PARSER ERROR: Expected type after ':' for field '{}' in interface", field_name);
+                return None;
+            }
+            let type_name = self.parse_type_string()?;
+            fields.push(InterfaceField { name: field_name, type_name });
+
+            // consume ';' or ','
+            if self.peek_token.token_type == TokenType::Semicolon
+                || self.peek_token.token_type == TokenType::Comma
+            {
+                self.next_token();
+            }
+            self.next_token(); // next field or '}'
+        }
+
+        Some(Statement::InterfaceDeclaration(InterfaceDeclaration { name, is_public, fields }))
+    }
+
+    // ── Class declaration ─────────────────────────────────────────────────────
+    fn parse_class_declaration(&mut self, is_public: bool) -> Option<Statement> {
+        // current = 'class'
+        if self.peek_token.token_type != TokenType::Ident {
+            eprintln!("❌ PARSER ERROR: Expected class name after 'class'");
+            return None;
+        }
+        self.next_token();
+        let name = self.current_token.literal.clone();
+
+        // Optional inheritance: class Child : Parent
+        let parent = if self.peek_token.token_type == TokenType::Colon {
+            self.next_token(); // ':'
+            if self.peek_token.token_type != TokenType::Ident {
+                eprintln!("❌ PARSER ERROR: Expected parent class name after ':'");
+                return None;
+            }
+            self.next_token();
+            Some(self.current_token.literal.clone())
+        } else {
+            None
+        };
+
+        if self.peek_token.token_type != TokenType::LBrace {
+            eprintln!("❌ PARSER ERROR: Expected '{{' after class name");
+            return None;
+        }
+        self.next_token(); // '{'
+        self.next_token(); // first member or '}'
+
+        let mut constructor: Option<ClassConstructor> = None;
+        let mut methods: Vec<ClassMethod> = Vec::new();
+
+        while self.current_token.token_type != TokenType::RBrace
+            && self.current_token.token_type != TokenType::Eof
+        {
+            // visibility modifier
+            let is_member_public = match self.current_token.token_type {
+                TokenType::KwPublic => true,
+                TokenType::KwPrivate => false,
+                _ => {
+                    eprintln!(
+                        "❌ PARSER ERROR: Expected 'public' or 'private' for class member, got '{}'",
+                        self.current_token.literal
+                    );
+                    return None;
+                }
+            };
+            self.next_token(); // after visibility
+
+            // Optional return type keyword (void, int, decimal, etc.)
+            let return_type = if is_type_keyword(&self.current_token.token_type) {
+                let rt = self.parse_type_string();
+                self.next_token();
+                rt
+            } else {
+                None
+            };
+
+            // Member name (constructor or method)
+            if self.current_token.token_type != TokenType::Ident {
+                eprintln!("❌ PARSER ERROR: Expected method name in class body");
+                return None;
+            }
+            let member_name = self.current_token.literal.clone();
+
+            if self.peek_token.token_type != TokenType::LParen {
+                eprintln!("❌ PARSER ERROR: Expected '(' after '{}' in class", member_name);
+                return None;
+            }
+            self.next_token(); // '('
+            let parameters = self.parse_function_parameters()?;
+
+            if self.peek_token.token_type != TokenType::LBrace {
+                eprintln!("❌ PARSER ERROR: Expected '{{' to start body of '{}'", member_name);
+                return None;
+            }
+            self.next_token();
+            let body_stmt = self.parse_block_statement()?;
+            let body = match body_stmt {
+                Statement::Block(b) => b,
+                _ => return None,
+            };
+
+            if member_name == name {
+                // Constructor
+                if constructor.is_some() {
+                    eprintln!("❌ PARSER ERROR: Duplicate constructor in class '{}'", name);
+                    return None;
+                }
+                constructor = Some(ClassConstructor { parameters, body });
+            } else {
+                methods.push(ClassMethod {
+                    name: member_name,
+                    is_public: is_member_public,
+                    return_type,
+                    parameters,
+                    body,
+                });
+            }
+
+            self.next_token(); // advance past closing '}' of method/constructor
+        }
+
+        Some(Statement::ClassDeclaration(ClassDeclaration {
+            name,
+            is_public,
+            parent,
+            constructor,
+            methods,
+        }))
+    }
+
+    // ── Visibility prefix (public/private class|interface) ────────────────────
+    fn parse_visibility_statement(&mut self) -> Option<Statement> {
+        let is_public = self.current_token.token_type == TokenType::KwPublic;
+        match self.peek_token.token_type {
+            TokenType::KwClass => {
+                self.next_token();
+                self.parse_class_declaration(is_public)
+            }
+            TokenType::KwInterface => {
+                self.next_token();
+                self.parse_interface_declaration(is_public)
+            }
+            _ => {
+                eprintln!(
+                    "❌ PARSER ERROR: Expected 'class' or 'interface' after visibility modifier"
+                );
+                None
+            }
+        }
+    }
+
     fn parse_array_literal(&mut self) -> Option<Expression> {
         let mut elements = Vec::new();
 
@@ -1139,11 +1513,30 @@ fn parse_interpolated_string(raw: &str) -> Option<Expression> {
             parts.push(StringPart::Literal(rest[..open].to_string()));
         }
         let after_open = &rest[open + 1..];
-        let close = match after_open.find('}') {
-            Some(c) => c,
-            None => {
-                eprintln!("❌ PARSER ERROR: Unclosed '{{' in string interpolation");
-                return None;
+        // Find the matching '}', skipping nested braces and inner strings
+        let close = {
+            let mut depth: usize = 0;
+            let mut in_str = false;
+            let mut found = None;
+            for (i, c) in after_open.char_indices() {
+                if in_str {
+                    if c == '"' { in_str = false; }
+                } else {
+                    match c {
+                        '"' => in_str = true,
+                        '{' => depth += 1,
+                        '}' if depth > 0 => depth -= 1,
+                        '}' => { found = Some(i); break; }
+                        _ => {}
+                    }
+                }
+            }
+            match found {
+                Some(c) => c,
+                None => {
+                    eprintln!("❌ PARSER ERROR: Unclosed '{{' in string interpolation");
+                    return None;
+                }
             }
         };
         let expr_src = after_open[..close].trim();

@@ -37,7 +37,46 @@ pub enum OwnedValue {
         body: BlockStatement,
         captured: Vec<(String, OwnedValue)>,
     },
+    Instance {
+        class_name: String,
+        fields: Vec<(String, OwnedValue)>,
+    },
     Null,
+}
+
+impl OwnedValue {
+    pub fn display_str(&self) -> String {
+        match self {
+            OwnedValue::Integer(i) => format!("{}", i),
+            OwnedValue::Decimal(d) => {
+                if d.fract() == 0.0 { format!("{:.1}", d) }
+                else {
+                    let s = format!("{:.10}", d);
+                    s.trim_end_matches('0').trim_end_matches('.').to_string()
+                }
+            }
+            OwnedValue::Boolean(b) => format!("{}", b),
+            OwnedValue::Str(s) => s.clone(),
+            OwnedValue::Array { elements, .. } => {
+                let inner: Vec<String> = elements.iter().map(|v| v.display_str()).collect();
+                format!("[{}]", inner.join(", "))
+            }
+            OwnedValue::Dict { entries, .. } => {
+                let pairs: Vec<String> = entries.iter()
+                    .map(|(k, v)| format!("{}: {}", k.display_str(), v.display_str()))
+                    .collect();
+                format!("{{{}}}", pairs.join(", "))
+            }
+            OwnedValue::Function { .. } => "Function".to_string(),
+            OwnedValue::Instance { class_name, fields } => {
+                let pairs: Vec<String> = fields.iter()
+                    .map(|(n, v)| format!("{}: {}", n, v.display_str()))
+                    .collect();
+                format!("{}{{ {} }}", class_name, pairs.join(", "))
+            }
+            OwnedValue::Null => "null".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +100,11 @@ pub enum ObjectData {
         body: BlockStatement,
         captured: Vec<(String, OwnedValue)>,
     },
+    // Fields stored as OwnedValues (embedded, arena-independent) to avoid cross-scope refs.
+    Instance {
+        class_name: String,
+        fields: Vec<(String, OwnedValue)>,
+    },
     Null,
 }
 
@@ -77,6 +121,7 @@ impl std::fmt::Display for ObjectData {
                 write!(f, "Dict<{},{}>{{...}}", key_type, value_type)
             }
             ObjectData::Function { .. } => write!(f, "Function"),
+            ObjectData::Instance { class_name, .. } => write!(f, "{}{{...}}", class_name),
             ObjectData::Null => write!(f, "Null"),
         }
     }
@@ -128,6 +173,7 @@ impl ObjectData {
             ObjectData::Array { .. } => "array",
             ObjectData::Dict { .. } => "dict",
             ObjectData::Function { .. } => "function",
+            ObjectData::Instance { class_name, .. } => class_name.as_str(),
             ObjectData::Null => "null",
         }
     }
