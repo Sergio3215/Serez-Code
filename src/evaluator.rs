@@ -17,6 +17,8 @@ struct StoredClass {
 pub enum EvalResult {
     Value(ObjectRef),  // Ejecución normal (retorno implícito)
     Return(ObjectRef), // Ejecución interrumpida por `return`
+    Break,             // Señal de break — capturada por while/for
+    Continue,          // Señal de continue — capturada por while/for
     Error,             // Ocurrió un error
 }
 
@@ -35,6 +37,8 @@ pub struct Evaluator {
     interface_registry: HashMap<String, Vec<ast::InterfaceField>>,
     class_registry: HashMap<String, StoredClass>,
     constructing_class: Option<String>,
+    // Tracks the class whose method is currently executing (allows private access)
+    executing_class: Option<String>,
 }
 
 impl Evaluator {
@@ -55,6 +59,7 @@ impl Evaluator {
             interface_registry: HashMap::new(),
             class_registry: HashMap::new(),
             constructing_class: None,
+            executing_class: None,
         }
     }
 
@@ -297,18 +302,22 @@ impl Evaluator {
                     }
                 }
                 EvalResult::Return(_) => {
-                    if let Some(mark) = scratch_mark {
-                        self.global_arena.reset_to(mark);
-                    }
-                    eprintln!(
-                        "❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a function or conditional or loops."
-                    );
+                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
+                    eprintln!("❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a function or conditional or loops.");
+                    return None;
+                }
+                EvalResult::Break => {
+                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
+                    eprintln!("❌ FLASH SCOPE ERROR: 'break' cannot be used outside of a loop.");
+                    return None;
+                }
+                EvalResult::Continue => {
+                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
+                    eprintln!("❌ FLASH SCOPE ERROR: 'continue' cannot be used outside of a loop.");
                     return None;
                 }
                 EvalResult::Error => {
-                    if let Some(mark) = scratch_mark {
-                        self.global_arena.reset_to(mark);
-                    }
+                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
                     return None;
                 }
             }
@@ -403,6 +412,7 @@ impl Evaluator {
                         EvalResult::Value(v) => v,
                         EvalResult::Error => return EvalResult::Error,
                         EvalResult::Return(v) => return EvalResult::Return(v),
+                        _ => return EvalResult::Error,
                     };
 
                     let condition_data = self.resolve(condition_ref).unwrap().clone();
@@ -419,10 +429,9 @@ impl Evaluator {
                     // 2. Evaluate body — body value is discarded (while is a statement, not expression)
                     match self.eval_block(&while_stmt.body) {
                         EvalResult::Value(_) => {}
-                        EvalResult::Return(v) => {
-                            // Un return dentro de un while interrumpe el while y sube el return
-                            return EvalResult::Return(v);
-                        }
+                        EvalResult::Break    => break,
+                        EvalResult::Continue => continue,
+                        EvalResult::Return(v) => return EvalResult::Return(v),
                         EvalResult::Error => return EvalResult::Error,
                     }
                 }
@@ -436,14 +445,9 @@ impl Evaluator {
                 // Init: declare the loop variable
                 let init_val = match self.eval_expression(&for_stmt.init.value) {
                     EvalResult::Value(v) => v,
-                    EvalResult::Error => {
-                        self.scopes.pop();
-                        return EvalResult::Error;
-                    }
-                    EvalResult::Return(v) => {
-                        self.scopes.pop();
-                        return EvalResult::Return(v);
-                    }
+                    EvalResult::Error => { self.scopes.pop(); return EvalResult::Error; }
+                    EvalResult::Return(v) => { self.scopes.pop(); return EvalResult::Return(v); }
+                    _ => { self.scopes.pop(); return EvalResult::Error; }
                 };
                 self.scopes.declare(for_stmt.init.name.clone(), init_val);
 
@@ -458,14 +462,9 @@ impl Evaluator {
                     let cond_mark = self.scopes.arena.watermark();
                     let condition_ref = match self.eval_expression(&for_stmt.condition) {
                         EvalResult::Value(v) => v,
-                        EvalResult::Error => {
-                            loop_error = true;
-                            break;
-                        }
-                        EvalResult::Return(v) => {
-                            loop_return = Some(self.extract(v));
-                            break;
-                        }
+                        EvalResult::Error => { loop_error = true; break; }
+                        EvalResult::Return(v) => { loop_return = Some(self.extract(v)); break; }
+                        _ => { loop_error = true; break; }
                     };
                     let condition_data = self.resolve(condition_ref).unwrap().clone();
                     self.scopes.arena.reset_to(cond_mark);
@@ -477,8 +476,9 @@ impl Evaluator {
                     // Execute body — eval_block handles its own push/pop
                     match self.eval_block(&for_stmt.body) {
                         EvalResult::Value(_) => {}
+                        EvalResult::Break => break,
+                        EvalResult::Continue => {} // fall through to update
                         EvalResult::Return(v) => {
-                            // Extract while for-scope (and its sub-allocs) is still live
                             loop_return = Some(self.extract(v));
                             break;
                         }
@@ -647,6 +647,9 @@ impl Evaluator {
                 }
             }
 
+            Statement::Break    => EvalResult::Break,
+            Statement::Continue => EvalResult::Continue,
+
             Statement::Out(out_stmt) => match self.eval_expression(&out_stmt.value) {
                 EvalResult::Value(v) => {
                     println!("{}", self.display(v));
@@ -654,6 +657,7 @@ impl Evaluator {
                 }
                 EvalResult::Return(v) => EvalResult::Return(v),
                 EvalResult::Error => EvalResult::Error,
+                other => other,
             },
 
             Statement::Expression(expr) => self.eval_expression(expr),
@@ -713,21 +717,17 @@ impl Evaluator {
         for s in &block.statements {
             match self.eval_statement(s) {
                 EvalResult::Value(v) => result = EvalResult::Value(v),
-                EvalResult::Return(v) => {
-                    result = EvalResult::Return(v);
-                    break;
-                }
-                EvalResult::Error => {
-                    result = EvalResult::Error;
-                    break;
-                }
+                EvalResult::Return(v) => { result = EvalResult::Return(v); break; }
+                EvalResult::Break    => { result = EvalResult::Break;      break; }
+                EvalResult::Continue => { result = EvalResult::Continue;   break; }
+                EvalResult::Error    => { result = EvalResult::Error;      break; }
             }
         }
 
         // Deep-extract ANTES del pop: preserva elementos de arrays y valores anidados.
         let owned = match &result {
             EvalResult::Value(v) | EvalResult::Return(v) => Some(self.extract(*v)),
-            EvalResult::Error => None,
+            EvalResult::Break | EvalResult::Continue | EvalResult::Error => None,
         };
 
         self.scopes.pop();
@@ -736,12 +736,12 @@ impl Evaluator {
             Some(val) => {
                 let promoted = self.plant(val);
                 match result {
-                    EvalResult::Value(_) => EvalResult::Value(promoted),
+                    EvalResult::Value(_)  => EvalResult::Value(promoted),
                     EvalResult::Return(_) => EvalResult::Return(promoted),
-                    EvalResult::Error => unreachable!(),
+                    _ => unreachable!(),
                 }
             }
-            None => EvalResult::Error,
+            None => result, // Break, Continue, or Error — pass through as-is
         }
     }
 
@@ -814,10 +814,13 @@ impl Evaluator {
                 // Built-in global functions (intercept before variable lookup)
                 if let Expression::Identifier(name) = call_expr.function.as_ref() {
                     match name.as_str() {
-                        "parseInt" => return self.eval_parse_int(&call_expr.arguments),
-                        "parseDecimal" => return self.eval_parse_decimal(&call_expr.arguments),
-                        "readLine" => return self.eval_read_line(&call_expr.arguments),
-                        "super" => return self.eval_super_call(&call_expr.arguments),
+                        "parseInt"    => return self.eval_parse_int(&call_expr.arguments),
+                        "parseDecimal"=> return self.eval_parse_decimal(&call_expr.arguments),
+                        "readLine"    => return self.eval_read_line(&call_expr.arguments),
+                        "super"       => return self.eval_super_call(&call_expr.arguments),
+                        "abs" | "sqrt" | "floor" | "ceil" | "round"
+                        | "min" | "max" | "pow" | "log" | "log2" | "log10"
+                            => return self.eval_math_builtin(name, &call_expr.arguments),
                         _ => {}
                     }
                 }
@@ -929,18 +932,21 @@ impl Evaluator {
                 let mut result_ref = self.null_ref;
                 for s in &body.statements {
                     match self.eval_statement(s) {
-                        EvalResult::Value(v) => result_ref = v,
-                        EvalResult::Return(v) => {
-                            result_ref = v;
-                            break;
-                        }
+                        EvalResult::Value(_) => {} // implicit — function result is null unless explicit return
+                        EvalResult::Return(v) => { result_ref = v; break; }
                         EvalResult::Error => {
                             self.scopes.pop();
                             self.call_stack.pop();
                             return EvalResult::Error;
                         }
+                        _ => { // Break/Continue inside a function body is an error
+                            eprintln!("❌ ERROR: 'break'/'continue' cannot be used outside of a loop");
+                            self.scopes.pop();
+                            self.call_stack.pop();
+                            return EvalResult::Error;
+                        }
                     }
-                } // <--- Added missing brace
+                }
 
                 // Deep-extract ANTES del pop — preserva elementos de arrays anidados
                 let owned = self.extract(result_ref);
@@ -1001,7 +1007,7 @@ impl Evaluator {
                 let condition_ref = match self.eval_expression(&if_expr.condition) {
                     EvalResult::Value(r) => r,
                     EvalResult::Return(v) => return EvalResult::Return(v),
-                    EvalResult::Error => return EvalResult::Error,
+                    other => return other,
                 };
 
                 let condition_data = self.resolve(condition_ref).unwrap().clone();
@@ -1109,6 +1115,18 @@ impl Evaluator {
             }
 
             Expression::DotCall(dot_call) => {
+                // Detect chained mutation pattern: instance.field.mutate(args)
+                // After mutation we write the modified array/dict back to the instance field
+                let writeback_ctx: Option<(Expression, String)> =
+                    if let Expression::DotCall(inner) = dot_call.object.as_ref() {
+                        if inner.arguments.is_empty() {
+                            const MUTATING: &[&str] = &["push", "pop", "remove", "Add", "Remove", "RemoveAll", "clear"];
+                            if MUTATING.contains(&dot_call.method.as_str()) {
+                                Some((*inner.object.clone(), inner.method.clone()))
+                            } else { None }
+                        } else { None }
+                    } else { None };
+
                 let obj_ref = match self.eval_expression(&dot_call.object) {
                     EvalResult::Value(r) => r,
                     _ => return EvalResult::Error,
@@ -1122,7 +1140,7 @@ impl Evaluator {
                     }
                 };
 
-                match obj_data {
+                let result = match obj_data {
                     // ── Array methods ─────────────────────────────────────────
                     ObjectData::Array { element_type, elements: ref elems } => {
                         self.eval_array_method(obj_ref, element_type.clone(), elems.clone(), dot_call)
@@ -1284,7 +1302,25 @@ impl Evaluator {
                         eprintln!("❌ ERROR: '.' method call not supported for type '{}'", obj_data.type_name());
                         EvalResult::Error
                     }
+                };
+
+                // Write back mutated array/dict to its instance field after mutation
+                if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+                    if let EvalResult::Value(inst_ref) = self.eval_expression(&inner_obj_expr) {
+                        if let Some(ObjectData::Instance { class_name, mut fields }) = self.resolve(inst_ref).cloned() {
+                            let updated = self.extract(obj_ref);
+                            if let Some(f) = fields.iter_mut().find(|(n, _)| n == &field_name) {
+                                f.1 = updated;
+                            }
+                            match inst_ref.region {
+                                RegionId::Global => self.global_arena.update(inst_ref.index, ObjectData::Instance { class_name, fields }),
+                                RegionId::Scoped => self.scopes.arena.update(inst_ref.index, ObjectData::Instance { class_name, fields }),
+                            }
+                        }
+                    }
                 }
+
+                result
             }
 
             Expression::New(new_expr) => {
@@ -1310,6 +1346,18 @@ impl Evaluator {
                 };
                 let right_data = self.resolve(right_ref).unwrap().clone();
                 self.eval_prefix(op, right_data)
+            }
+
+            // Null coalescing: left ?? right — returns left if not null, else right
+            Expression::Infix(infix_expr) if infix_expr.operator == "??" => {
+                let left_ref = match self.eval_expression(&infix_expr.left) {
+                    EvalResult::Value(r) => r,
+                    other => return other,
+                };
+                if !matches!(self.resolve(left_ref), Some(ObjectData::Null)) {
+                    return EvalResult::Value(left_ref);
+                }
+                self.eval_expression(&infix_expr.right)
             }
 
             Expression::Infix(infix_expr)
@@ -1408,6 +1456,21 @@ impl Evaluator {
     ) -> EvalResult {
         // Null equality: any value can be compared to null with == / !=
         if matches!(left, ObjectData::Null) || matches!(right, ObjectData::Null) {
+            // Allow string + null and null + string concatenation
+            if op == "+" {
+                let s = match (&left, &right) {
+                    (ObjectData::Str(s), ObjectData::Null) => format!("{}null", s),
+                    (ObjectData::Null, ObjectData::Str(s)) => format!("null{}", s),
+                    _ => {
+                        eprintln!(
+                            "❌ ERROR: Operator '+' cannot be applied to null - [{}:{}]",
+                            line, column
+                        );
+                        return EvalResult::Error;
+                    }
+                };
+                return EvalResult::Value(self.alloc(ObjectData::Str(s)));
+            }
             return match op {
                 "==" => {
                     let eq = matches!(left, ObjectData::Null) && matches!(right, ObjectData::Null);
@@ -1525,6 +1588,10 @@ impl Evaluator {
                         if r == 0.0 { eprintln!("❌ ERROR: Division by zero"); return EvalResult::Error; }
                         ObjectData::Decimal(l / r)
                     }
+                    "%" => {
+                        if r == 0.0 { eprintln!("❌ ERROR: Modulus by zero"); return EvalResult::Error; }
+                        ObjectData::Decimal(l % r)
+                    }
                     "<"  => ObjectData::Boolean(l < r),
                     ">"  => ObjectData::Boolean(l > r),
                     "<=" => ObjectData::Boolean(l <= r),
@@ -1544,6 +1611,10 @@ impl Evaluator {
                     "/" => {
                         if r == 0.0 { eprintln!("❌ ERROR: Division by zero"); return EvalResult::Error; }
                         ObjectData::Decimal(l / r)
+                    }
+                    "%" => {
+                        if r == 0.0 { eprintln!("❌ ERROR: Modulus by zero"); return EvalResult::Error; }
+                        ObjectData::Decimal(l % r)
                     }
                     "<"  => ObjectData::Boolean(l < r),
                     ">"  => ObjectData::Boolean(l > r),
@@ -1577,17 +1648,129 @@ impl Evaluator {
                         }
                         ObjectData::Str(s.repeat(n as usize))
                     }
+                    "+" => ObjectData::Str(format!("{}{}", s, n)),
+                    "==" => ObjectData::Boolean(false),
+                    "!=" => ObjectData::Boolean(true),
                     _ => {
-                        eprintln!(
-                            "❌ ERROR: Operator '{}' not supported between String and Integer",
-                            op
-                        );
+                        eprintln!("❌ ERROR: Operator '{}' not supported between String and Integer", op);
+                        return EvalResult::Error;
+                    }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Integer(n), ObjectData::Str(s)) => {
+                let result = match op {
+                    "+" => ObjectData::Str(format!("{}{}", n, s)),
+                    "==" => ObjectData::Boolean(false),
+                    "!=" => ObjectData::Boolean(true),
+                    _ => {
+                        eprintln!("❌ ERROR: Operator '{}' not supported between Integer and String", op);
+                        return EvalResult::Error;
+                    }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Str(s), ObjectData::Decimal(d)) => {
+                let result = match op {
+                    "+" => {
+                        let ds = if d == d.floor() && d.abs() < 1e15 {
+                            format!("{:.1}", d)
+                        } else {
+                            format!("{}", d)
+                        };
+                        ObjectData::Str(format!("{}{}", s, ds))
+                    }
+                    "==" => ObjectData::Boolean(false),
+                    "!=" => ObjectData::Boolean(true),
+                    _ => {
+                        eprintln!("❌ ERROR: Operator '{}' not supported between String and Decimal", op);
+                        return EvalResult::Error;
+                    }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Decimal(d), ObjectData::Str(s)) => {
+                let result = match op {
+                    "+" => {
+                        let ds = if d == d.floor() && d.abs() < 1e15 {
+                            format!("{:.1}", d)
+                        } else {
+                            format!("{}", d)
+                        };
+                        ObjectData::Str(format!("{}{}", ds, s))
+                    }
+                    "==" => ObjectData::Boolean(false),
+                    "!=" => ObjectData::Boolean(true),
+                    _ => {
+                        eprintln!("❌ ERROR: Operator '{}' not supported between Decimal and String", op);
+                        return EvalResult::Error;
+                    }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Str(s), ObjectData::Boolean(b)) => {
+                let result = match op {
+                    "+" => ObjectData::Str(format!("{}{}", s, b)),
+                    "==" => ObjectData::Boolean(false),
+                    "!=" => ObjectData::Boolean(true),
+                    _ => {
+                        eprintln!("❌ ERROR: Operator '{}' not supported between String and Boolean", op);
+                        return EvalResult::Error;
+                    }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Boolean(b), ObjectData::Str(s)) => {
+                let result = match op {
+                    "+" => ObjectData::Str(format!("{}{}", b, s)),
+                    "==" => ObjectData::Boolean(false),
+                    "!=" => ObjectData::Boolean(true),
+                    _ => {
+                        eprintln!("❌ ERROR: Operator '{}' not supported between Boolean and String", op);
+                        return EvalResult::Error;
+                    }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Str(s), ObjectData::Null) => {
+                let result = match op {
+                    "+" => ObjectData::Str(format!("{}null", s)),
+                    "==" => ObjectData::Boolean(false),
+                    "!=" => ObjectData::Boolean(true),
+                    _ => {
+                        eprintln!("❌ ERROR: Operator '{}' not supported between String and Null", op);
+                        return EvalResult::Error;
+                    }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Null, ObjectData::Str(s)) => {
+                let result = match op {
+                    "+" => ObjectData::Str(format!("null{}", s)),
+                    "==" => ObjectData::Boolean(false),
+                    "!=" => ObjectData::Boolean(true),
+                    _ => {
+                        eprintln!("❌ ERROR: Operator '{}' not supported between Null and String", op);
+                        return EvalResult::Error;
+                    }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+            (ObjectData::Boolean(l), ObjectData::Boolean(r)) => {
+                let result = match op {
+                    "==" => ObjectData::Boolean(l == r),
+                    "!=" => ObjectData::Boolean(l != r),
+                    _ => {
+                        eprintln!("❌ ERROR: Operator '{}' not supported between booleans (use && / ||)", op);
                         return EvalResult::Error;
                     }
                 };
                 EvalResult::Value(self.alloc(result))
             }
             _ => {
+                // Cross-type equality: different types are never equal
+                if op == "==" { return EvalResult::Value(self.alloc(ObjectData::Boolean(false))); }
+                if op == "!=" { return EvalResult::Value(self.alloc(ObjectData::Boolean(true))); }
                 eprint!(
                     "❌ ERROR: Type mismatch — operator '{}' cannot be applied between '{}' and '{}' - [{}:{}]",
                     op, left_type, right_type, line, column
@@ -1853,9 +2036,14 @@ impl Evaluator {
                 let mut result_ref = self.null_ref;
                 for s in &body.statements {
                     match self.eval_statement(s) {
-                        EvalResult::Value(v) => result_ref = v,
+                        EvalResult::Value(_) => {} // only explicit return contributes result
                         EvalResult::Return(v) => { result_ref = v; break; }
                         EvalResult::Error => { self.scopes.pop(); return EvalResult::Error; }
+                        EvalResult::Break | EvalResult::Continue => {
+                            eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                            self.scopes.pop();
+                            return EvalResult::Error;
+                        }
                     }
                 }
                 let owned = self.extract(result_ref);
@@ -1924,6 +2112,115 @@ impl Evaluator {
         }
     }
 
+    // ── Math built-ins ────────────────────────────────────────────────────────
+
+    fn eval_math_builtin(&mut self, name: &str, args: &[ast::Expression]) -> EvalResult {
+        // Helper: resolve one numeric argument to f64
+        let resolve_num = |evaluator: &mut Self, expr: &ast::Expression| -> Option<f64> {
+            match evaluator.eval_expression(expr) {
+                EvalResult::Value(r) => match evaluator.resolve(r).cloned() {
+                    Some(ObjectData::Integer(i)) => Some(i as f64),
+                    Some(ObjectData::Decimal(d)) => Some(d),
+                    _ => { eprintln!("❌ ERROR: Math function '{}' expects numeric argument", name); None }
+                },
+                _ => None,
+            }
+        };
+
+        match name {
+            // --- Single-argument ---
+            "abs" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: abs() expects 1 argument"); return EvalResult::Error; }
+                let r = match self.eval_expression(&args[0]) {
+                    EvalResult::Value(r) => r,
+                    _ => return EvalResult::Error,
+                };
+                match self.resolve(r).cloned() {
+                    Some(ObjectData::Integer(i)) => EvalResult::Value(self.alloc(ObjectData::Integer(i.abs()))),
+                    Some(ObjectData::Decimal(d)) => EvalResult::Value(self.alloc(ObjectData::Decimal(d.abs()))),
+                    _ => { eprintln!("❌ ERROR: abs() expects a numeric argument"); EvalResult::Error }
+                }
+            }
+            "sqrt" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: sqrt() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v < 0.0 { eprintln!("❌ ERROR: sqrt() of negative number"); return EvalResult::Error; }
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.sqrt())))
+            }
+            "floor" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: floor() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Integer(v.floor() as i64)))
+            }
+            "ceil" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: ceil() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Integer(v.ceil() as i64)))
+            }
+            "round" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: round() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Integer(v.round() as i64)))
+            }
+            "log" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: log() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v <= 0.0 { eprintln!("❌ ERROR: log() of non-positive number"); return EvalResult::Error; }
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.ln())))
+            }
+            "log2" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: log2() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v <= 0.0 { eprintln!("❌ ERROR: log2() of non-positive number"); return EvalResult::Error; }
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.log2())))
+            }
+            "log10" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: log10() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v <= 0.0 { eprintln!("❌ ERROR: log10() of non-positive number"); return EvalResult::Error; }
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.log10())))
+            }
+            // --- Two-argument ---
+            "min" => {
+                if args.len() != 2 { eprintln!("❌ ERROR: min() expects 2 arguments"); return EvalResult::Error; }
+                let ra = match self.eval_expression(&args[0]) { EvalResult::Value(r) => self.resolve(r).cloned(), _ => return EvalResult::Error };
+                let rb = match self.eval_expression(&args[1]) { EvalResult::Value(r) => self.resolve(r).cloned(), _ => return EvalResult::Error };
+                match (ra, rb) {
+                    (Some(ObjectData::Integer(ia)), Some(ObjectData::Integer(ib))) =>
+                        EvalResult::Value(self.alloc(ObjectData::Integer(ia.min(ib)))),
+                    (Some(a), Some(b)) => {
+                        let fa = match &a { ObjectData::Decimal(d) => *d, ObjectData::Integer(i) => *i as f64, _ => { eprintln!("❌ ERROR: min() expects numeric arguments"); return EvalResult::Error; } };
+                        let fb = match &b { ObjectData::Decimal(d) => *d, ObjectData::Integer(i) => *i as f64, _ => { eprintln!("❌ ERROR: min() expects numeric arguments"); return EvalResult::Error; } };
+                        EvalResult::Value(self.alloc(ObjectData::Decimal(fa.min(fb))))
+                    }
+                    _ => { eprintln!("❌ ERROR: min() expects numeric arguments"); EvalResult::Error }
+                }
+            }
+            "max" => {
+                if args.len() != 2 { eprintln!("❌ ERROR: max() expects 2 arguments"); return EvalResult::Error; }
+                let ra = match self.eval_expression(&args[0]) { EvalResult::Value(r) => self.resolve(r).cloned(), _ => return EvalResult::Error };
+                let rb = match self.eval_expression(&args[1]) { EvalResult::Value(r) => self.resolve(r).cloned(), _ => return EvalResult::Error };
+                match (ra, rb) {
+                    (Some(ObjectData::Integer(ia)), Some(ObjectData::Integer(ib))) =>
+                        EvalResult::Value(self.alloc(ObjectData::Integer(ia.max(ib)))),
+                    (Some(a), Some(b)) => {
+                        let fa = match &a { ObjectData::Decimal(d) => *d, ObjectData::Integer(i) => *i as f64, _ => { eprintln!("❌ ERROR: max() expects numeric arguments"); return EvalResult::Error; } };
+                        let fb = match &b { ObjectData::Decimal(d) => *d, ObjectData::Integer(i) => *i as f64, _ => { eprintln!("❌ ERROR: max() expects numeric arguments"); return EvalResult::Error; } };
+                        EvalResult::Value(self.alloc(ObjectData::Decimal(fa.max(fb))))
+                    }
+                    _ => { eprintln!("❌ ERROR: max() expects numeric arguments"); EvalResult::Error }
+                }
+            }
+            "pow" => {
+                if args.len() != 2 { eprintln!("❌ ERROR: pow() expects 2 arguments (base, exp)"); return EvalResult::Error; }
+                let base = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                let exp  = match resolve_num(self, &args[1]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(base.powf(exp))))
+            }
+            _ => { eprintln!("❌ ERROR: Unknown math function '{}'", name); EvalResult::Error }
+        }
+    }
+
     fn eval_read_line(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.len() > 1 {
             eprintln!("❌ ERROR: readLine expects 0 or 1 argument");
@@ -1962,6 +2259,14 @@ impl Evaluator {
                 return EvalResult::Error;
             }
         };
+
+        // Check for extra fields not declared in the interface
+        for (provided_name, _) in &provided {
+            if !iface_fields.iter().any(|f| &f.name == provided_name) {
+                eprintln!("❌ ERROR: Field '{}' is not declared in interface '{}'", provided_name, new_expr.class_name);
+                return EvalResult::Error;
+            }
+        }
 
         let mut fields: Vec<(String, OwnedValue)> = Vec::new();
         for iface_field in &iface_fields {
@@ -2042,6 +2347,11 @@ impl Evaluator {
                     EvalResult::Error => { body_error = true; break; }
                     EvalResult::Return(_) => break,
                     EvalResult::Value(_) => {}
+                    EvalResult::Break | EvalResult::Continue => {
+                        eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                        body_error = true;
+                        break;
+                    }
                 }
             }
 
@@ -2117,6 +2427,11 @@ impl Evaluator {
                 EvalResult::Error => { error = true; break; }
                 EvalResult::Return(_) => break,
                 EvalResult::Value(_) => {}
+                EvalResult::Break | EvalResult::Continue => {
+                    eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                    error = true;
+                    break;
+                }
             }
         }
 
@@ -2183,12 +2498,6 @@ impl Evaluator {
     ) -> EvalResult {
         let method_name = &dot_call.method;
 
-        // toString() available on all types
-        if method_name == "toString" {
-            let s = self.display(obj_ref);
-            return EvalResult::Value(self.alloc(ObjectData::Str(s)));
-        }
-
         // Field read: no args and field exists
         if dot_call.arguments.is_empty() {
             if let Some((_, owned)) = fields.iter().find(|(n, _)| n == method_name) {
@@ -2216,10 +2525,13 @@ impl Evaluator {
                     return EvalResult::Error;
                 }
 
-                if !m.is_public {
+                if !m.is_public && self.executing_class.as_deref() != Some(class_name.as_str()) {
                     eprintln!("❌ ERROR: Method '{}' is private and cannot be called externally", method_name);
                     return EvalResult::Error;
                 }
+
+                let old_executing_class = self.executing_class.take();
+                self.executing_class = Some(class_name.clone());
 
                 self.scopes.push();
                 self.scopes.declare("this".to_string(), obj_ref);
@@ -2233,14 +2545,20 @@ impl Evaluator {
                 let mut error = false;
                 for stmt in &m.body.statements {
                     match self.eval_statement(stmt) {
-                        EvalResult::Value(v) => result_ref = v,
+                        EvalResult::Value(_) => {} // implicit — method result is null unless explicit return
                         EvalResult::Return(v) => { result_ref = v; break; }
                         EvalResult::Error => { error = true; break; }
+                        EvalResult::Break | EvalResult::Continue => {
+                            eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                            error = true;
+                            break;
+                        }
                     }
                 }
 
                 let owned = self.extract(result_ref);
                 self.scopes.pop();
+                self.executing_class = old_executing_class;
 
                 if error { return EvalResult::Error; }
 
@@ -2259,6 +2577,11 @@ impl Evaluator {
                 EvalResult::Value(result)
             }
             None => {
+                // Fallback: toString() is available on all instance types
+                if method_name == "toString" {
+                    let s = self.display(obj_ref);
+                    return EvalResult::Value(self.alloc(ObjectData::Str(s)));
+                }
                 eprintln!("❌ ERROR: '{}' has no field or method named '{}'", class_name, method_name);
                 EvalResult::Error
             }

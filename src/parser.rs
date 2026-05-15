@@ -5,19 +5,21 @@ use crate::token::{Token, TokenType};
 #[derive(PartialEq, PartialOrd)]
 pub enum Precedence {
     Lowest,
-    LogicalOr,   // ||
-    LogicalAnd,  // &&
-    Equals,      // ==
-    LessGreater, // > or <
-    Sum,         // +
-    Product,     // *
-    Prefix,      // -X or !X
-    Call,        // myFunction(X)
-    Index,       // array[index]
+    NullCoalesce, // ??
+    LogicalOr,    // ||
+    LogicalAnd,   // &&
+    Equals,       // ==
+    LessGreater,  // > or <
+    Sum,          // +
+    Product,      // *
+    Prefix,       // -X or !X
+    Call,         // myFunction(X)
+    Index,        // array[index]
 }
 
 pub fn token_precedence(token_type: &TokenType) -> Precedence {
     match token_type {
+        TokenType::NullCoalesce => Precedence::NullCoalesce,
         TokenType::Or => Precedence::LogicalOr,
         TokenType::And => Precedence::LogicalAnd,
         TokenType::Eq | TokenType::NotEq => Precedence::Equals,
@@ -89,7 +91,9 @@ impl Parser {
                 | TokenType::KwClass
                 | TokenType::KwInterface
                 | TokenType::KwPublic
-                | TokenType::KwPrivate => return,
+                | TokenType::KwPrivate
+                | TokenType::KwBreak
+                | TokenType::KwContinue => return,
                 _ => self.next_token(),
             }
         }
@@ -104,6 +108,18 @@ impl Parser {
             TokenType::Function => self.parse_function_statement(),
             TokenType::While => self.parse_while_statement(),
             TokenType::For => self.parse_for_statement(),
+            TokenType::KwBreak => {
+                if self.peek_token.token_type == TokenType::Semicolon {
+                    self.next_token(); // current_token = ';'
+                }
+                Some(Statement::Break)
+            }
+            TokenType::KwContinue => {
+                if self.peek_token.token_type == TokenType::Semicolon {
+                    self.next_token(); // current_token = ';'
+                }
+                Some(Statement::Continue)
+            }
             TokenType::KwClass => self.parse_class_declaration(true),
             TokenType::KwInterface => self.parse_interface_declaration(true),
             TokenType::KwPublic | TokenType::KwPrivate => self.parse_visibility_statement(),
@@ -656,16 +672,12 @@ impl Parser {
 
         self.next_token();
 
-        if let Some(expr) = self.parse_expression(Precedence::Lowest) {
-            args.push(expr);
-        }
+        args.push(self.parse_expression(Precedence::Lowest)?);
 
         while self.peek_token.token_type == TokenType::Comma {
             self.next_token();
             self.next_token();
-            if let Some(expr) = self.parse_expression(Precedence::Lowest) {
-                args.push(expr);
-            }
+            args.push(self.parse_expression(Precedence::Lowest)?);
         }
 
         if self.peek_token.token_type != TokenType::RParen {
@@ -720,6 +732,7 @@ impl Parser {
                 | TokenType::GtEq
                 | TokenType::And
                 | TokenType::Or
+                | TokenType::NullCoalesce
                 | TokenType::LParen
                 | TokenType::Dot
                 | TokenType::LBracket => true,
@@ -858,7 +871,8 @@ impl Parser {
                 if s.contains('{') {
                     parse_interpolated_string(&s)
                 } else {
-                    Some(Expression::String(s))
+                    // Replace \{ sentinel (\x01) with literal { in non-interpolated strings
+                    Some(Expression::String(s.replace('\x01', "{")))
                 }
             }
 
@@ -1510,7 +1524,8 @@ fn parse_interpolated_string(raw: &str) -> Option<Expression> {
 
     while let Some(open) = rest.find('{') {
         if open > 0 {
-            parts.push(StringPart::Literal(rest[..open].to_string()));
+            // \x01 is the sentinel for \{ (escaped brace) — restore it as a literal {
+            parts.push(StringPart::Literal(rest[..open].replace('\x01', "{")));
         }
         let after_open = &rest[open + 1..];
         // Find the matching '}', skipping nested braces and inner strings
@@ -1550,7 +1565,7 @@ fn parse_interpolated_string(raw: &str) -> Option<Expression> {
     }
 
     if !rest.is_empty() {
-        parts.push(StringPart::Literal(rest.to_string()));
+        parts.push(StringPart::Literal(rest.replace('\x01', "{")));
     }
 
     if parts.len() == 1 {

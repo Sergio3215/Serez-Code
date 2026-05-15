@@ -17,15 +17,18 @@ impl TypeChecker {
     }
 
     pub fn check(&mut self) {
+        // Clone once so we can mutate self.functions/var_types while iterating
+        let stmts: Vec<Statement> = self.program.statements.clone();
+
         // Pass 1: collect all function declarations into the lookup table
-        for stmt in &self.program.statements.clone() {
+        for stmt in &stmts {
             if let Statement::FunctionDeclaration(f) = stmt {
                 self.functions.insert(f.name.clone(), f.function.clone());
             }
         }
 
         // Pass 2: infer types for all top-level let bindings
-        for stmt in &self.program.statements.clone() {
+        for stmt in &stmts {
             if let Statement::Let(l) = stmt {
                 if let Some(t) = self.infer_type(&l.value) {
                     self.var_types.insert(l.name.clone(), t);
@@ -33,8 +36,8 @@ impl TypeChecker {
             }
         }
 
-        // Pass 3: full type checking
-        for stmt in &self.program.statements.clone() {
+        // Pass 3: full type checking (check_statement is &self — no extra clone needed)
+        for stmt in &stmts {
             self.check_statement(stmt, None);
         }
     }
@@ -121,6 +124,8 @@ impl TypeChecker {
             Statement::ClassDeclaration(_) => {}
             Statement::InterfaceDeclaration(_) => {}
             Statement::FieldAssign(_) => {}
+            Statement::Break => {}
+            Statement::Continue => {}
         }
     }
 

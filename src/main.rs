@@ -11,7 +11,7 @@ mod type_checker;
 use std::env;
 use std::fs;
 
-fn main() {
+fn run() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() > 1 {
@@ -70,4 +70,11 @@ fn main() {
         println!("Feel free to type in commands");
         repl::start();
     }
+}
+
+fn main() {
+    // Run on a thread with 64 MB stack to support deep recursion in user programs
+    let builder = std::thread::Builder::new().stack_size(64 * 1024 * 1024);
+    let handler = builder.spawn(run).expect("Failed to spawn interpreter thread");
+    handler.join().expect("Interpreter thread panicked");
 }

@@ -182,12 +182,19 @@ impl Lexer {
                 self.column,
             ),
             '.' => Token::new(TokenType::Dot, ".".to_string(), self.line, self.column),
-            '?' => Token::new(TokenType::Question, "?".to_string(), self.line, self.column),
+            '?' => {
+                if self.peek_char() == '?' {
+                    self.read_char();
+                    Token::new(TokenType::NullCoalesce, "??".to_string(), self.line, self.column)
+                } else {
+                    Token::new(TokenType::Question, "?".to_string(), self.line, self.column)
+                }
+            }
             ':' => Token::new(TokenType::Colon, ":".to_string(), self.line, self.column),
             '"' => {
-                let literal = self.read_string();
                 let start_line = self.line;
                 let start_column = self.column;
+                let literal = self.read_string();
                 Token::new(TokenType::String, literal, start_line, start_column)
             }
             '\0' => Token::new(TokenType::Eof, "".to_string(), self.line, self.column),
@@ -225,27 +232,49 @@ impl Lexer {
 
     fn read_string(&mut self) -> String {
         // self.ch == '"' (opening quote); read_position points to first content byte
-        let start = self.read_position;
+        let mut result = String::new();
         let mut brace_depth: usize = 0;
         loop {
             self.read_char();
             match self.ch {
                 '\0' => break,
-                '{' => brace_depth += 1,
-                '}' if brace_depth > 0 => brace_depth -= 1,
+                // Escape sequences (only outside interpolation blocks)
+                '\\' if brace_depth == 0 => {
+                    match self.peek_char() {
+                        'n'  => { self.read_char(); result.push('\n'); }
+                        't'  => { self.read_char(); result.push('\t'); }
+                        'r'  => { self.read_char(); result.push('\r'); }
+                        '\\' => { self.read_char(); result.push('\\'); }
+                        '"'  => { self.read_char(); result.push('"');  }
+                        // \{ → sentinel \x01 so the parser won't treat it as interpolation
+                        '{'  => { self.read_char(); result.push('\x01'); }
+                        c    => { result.push('\\'); result.push(c);   }
+                    }
+                }
+                '{' => { brace_depth += 1; result.push('{'); }
+                '}' if brace_depth > 0 => { brace_depth -= 1; result.push('}'); }
                 // Skip inner quoted strings inside {…} interpolation blocks
                 '"' if brace_depth > 0 => {
+                    result.push('"');
                     loop {
                         self.read_char();
-                        if self.ch == '"' || self.ch == '\0' { break; }
+                        if self.ch == '\\' && self.peek_char() == '"' {
+                            self.read_char();
+                            result.push('\\');
+                            result.push('"');
+                        } else if self.ch == '"' || self.ch == '\0' {
+                            result.push('"');
+                            break;
+                        } else {
+                            result.push(self.ch);
+                        }
                     }
                 }
                 '"' => break, // closing quote at depth 0
-                _ => {}
+                c => result.push(c),
             }
         }
-        // self.position == byte offset of closing '"' (or EOF)
-        self.input[start..self.position].to_string()
+        result
     }
 
     fn read_identifier(&mut self) -> String {

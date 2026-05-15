@@ -1853,6 +1853,10 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] Interfaces — typed record schemas: `interface Point { x: decimal, y: decimal }`, `new Point({ x:1.0, y:2.0 })`, field read/write, object patch `p = { x: 5.0 }`
 - [x] Classes — C#-style OOP: `public class Foo`, constructor `public Foo(args)`, `this.field`, `public`/`private` methods, field assignment `obj.field = val`
 - [x] Single inheritance — `public class Bar : Foo`, `super(args)` constructor delegation, method override, inherited method lookup
+- [x] `break` / `continue` — loop control flow inside `while` and `for`
+- [x] Null coalescing — `a ?? b` returns `a` if non-null, else evaluates `b`
+- [x] Escape sequences — `\n`, `\t`, `\r`, `\\`, `\"`, `\{` inside string literals
+- [x] Math built-ins — `abs`, `sqrt`, `floor`, `ceil`, `round`, `min`, `max`, `pow`, `log`, `log2`, `log10`
 
 ### Type system
 - [x] Typed arrays — `[int]`, `[string]`, `[decimal]`, `[T?]` with element-level enforcement on `push`, `unshift`, index-assign, and construction
@@ -1861,7 +1865,7 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 
 ### Tooling
 - [ ] Span-aware error diagnostics with source line preview
-- [ ] Standard library (math utilities, string formatting)
+- [ ] Standard library (string formatting, file I/O)
 - [ ] `.sz` file formatter
 - [ ] LSP server for editor support
 

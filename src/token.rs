@@ -24,9 +24,10 @@ pub enum TokenType {
     GtEq,
     Eq,
     NotEq,
-    And,   // &&
-    Or,    // ||
-    Arrow, // =>
+    And,          // &&
+    Or,           // ||
+    Arrow,        // =>
+    NullCoalesce, // ??
 
     // Delimiters
     Comma,
@@ -71,6 +72,10 @@ pub enum TokenType {
     KwAny,
     KwNull,
     Question, // ?
+
+    // Loop control
+    KwBreak,
+    KwContinue,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -111,6 +116,8 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "bool" => TokenType::KwBool,
         "any" => TokenType::KwAny,
         "null" => TokenType::KwNull,
+        "break" => TokenType::KwBreak,
+        "continue" => TokenType::KwContinue,
         "class" => TokenType::KwClass,
         "interface" => TokenType::KwInterface,
         "new" => TokenType::KwNew,

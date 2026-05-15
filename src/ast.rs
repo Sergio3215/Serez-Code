@@ -21,6 +21,8 @@ pub enum Statement {
     ClassDeclaration(ClassDeclaration),           // class / public class ...
     InterfaceDeclaration(InterfaceDeclaration),   // interface ...
     FieldAssign(FieldAssignStatement),            // obj.field = expr  /  this.field = expr
+    Break,                                        // break;
+    Continue,                                     // continue;
 }
 
 // Estructura específica para "let nombre = valor;"
