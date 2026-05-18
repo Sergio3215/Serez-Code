@@ -318,6 +318,63 @@ let age = 23;
 out "Sergio con " + age + " años";   // → Sergio con 23 años
 ```
 
+#### Compound assignment
+
+`+=`, `-=`, `*=`, `/=`, and `%=` are shorthand for reading, computing, and writing back in one step:
+
+```serez
+let n = 10;
+n += 5;    // n = 15
+n -= 3;    // n = 12
+n *= 2;    // n = 24
+n /= 4;    // n = 6
+n %= 4;    // n = 2
+```
+
+#### Increment / decrement
+
+`++` and `--` increment or decrement a variable by 1. Both postfix and prefix forms are supported and produce the same effect (the value is not returned — they are pure statements):
+
+```serez
+let i = 0;
+i++;     // i = 1   (postfix)
+++i;     // i = 2   (prefix)
+i--;     // i = 1
+--i;     // i = 0
+```
+
+Typical use inside loops:
+
+```serez
+let count = 0;
+while (count < 5) {
+    out count;
+    count++;
+}
+// → 0, 1, 2, 3, 4
+```
+
+#### Ternary operator
+
+The `? :` operator evaluates a condition and returns one of two expressions. Only the chosen branch is evaluated (lazy):
+
+```serez
+let x = 10;
+let label = x > 5 ? "big" : "small";
+out label;   // → big
+
+out true ? 1 : 2;    // → 1
+out false ? 1 : 2;   // → 2
+```
+
+Ternary is right-associative — chained ternaries read naturally:
+
+```serez
+let n = 2;
+let name = n == 1 ? "one" : n == 2 ? "two" : "other";
+out name;   // → two
+```
+
 #### Operator precedence
 
 From lowest to highest:
@@ -325,6 +382,8 @@ From lowest to highest:
 | Level | Operators |
 |---|---|
 | `Lowest` | — |
+| `Ternary` | `? :` |
+| `NullCoalesce` | `??` |
 | `LogicalOr` | `\|\|` |
 | `LogicalAnd` | `&&` |
 | `Equals` | `==` `!=` |
@@ -592,6 +651,65 @@ out firstOver(200);  // → -1
 ```
 
 Like `while`, the condition and update temporaries are freed each iteration — loops do not accumulate allocations.
+
+---
+
+#### `for-in`
+
+Iterates over every element of an array or every character of a string. The loop variable is declared with `let` and is scoped to the loop body.
+
+```
+for (let <var> in <iterable>) { <body> }
+```
+
+```serez
+let nums [int] = [10, 20, 30];
+let sum = 0;
+
+for (let n in nums) {
+    sum += n;
+}
+out sum;   // → 60
+```
+
+Iterating over a string visits each character:
+
+```serez
+let result = "";
+for (let c in "abc") {
+    result = result + c + "-";
+}
+out result;   // → a-b-c-
+```
+
+`break` and `continue` work the same as in `while`/`for`:
+
+```serez
+let nums [int] = [1, 2, 3, 4, 5];
+let sum = 0;
+for (let n in nums) {
+    if (n == 3) { continue; }   // skip 3
+    sum += n;
+}
+out sum;   // → 1 + 2 + 4 + 5 = 12
+```
+
+Nested `for-in` loops each have their own independent variable:
+
+```serez
+let outer [int] = [1, 2, 3];
+let inner [int] = [10, 20];
+let total = 0;
+
+for (let a in outer) {
+    for (let b in inner) {
+        total += a * b;
+    }
+}
+out total;   // → 180
+```
+
+`return` inside a `for-in` propagates immediately and exits the enclosing function.
 
 ---
 

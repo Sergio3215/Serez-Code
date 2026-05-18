@@ -29,6 +29,13 @@ pub enum TokenType {
     Arrow,        // =>
     NullCoalesce, // ??
 
+    // Compound assignment
+    PlusEq,    // +=
+    MinusEq,   // -=
+    StarEq,    // *=
+    SlashEq,   // /=
+    PercentEq, // %=
+
     // Delimiters
     Comma,
     Semicolon,
@@ -76,6 +83,24 @@ pub enum TokenType {
     // Loop control
     KwBreak,
     KwContinue,
+
+    // Switch
+    KwSwitch,
+    KwCase,
+    KwDefault,
+
+    // Exception handling
+    KwTry,
+    KwCatch,
+    KwFinally,
+    KwThrow,
+
+    // For-each
+    KwIn,
+
+    // Increment / decrement
+    PlusPlus,   // ++
+    MinusMinus, // --
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -123,6 +148,14 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "new" => TokenType::KwNew,
         "public" => TokenType::KwPublic,
         "private" => TokenType::KwPrivate,
+        "switch" => TokenType::KwSwitch,
+        "case" => TokenType::KwCase,
+        "default" => TokenType::KwDefault,
+        "try" => TokenType::KwTry,
+        "catch" => TokenType::KwCatch,
+        "finally" => TokenType::KwFinally,
+        "throw" => TokenType::KwThrow,
+        "in"    => TokenType::KwIn,
         _ => TokenType::Ident,
     }
 }

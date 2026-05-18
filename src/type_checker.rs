@@ -109,6 +109,12 @@ impl TypeChecker {
                     self.check_statement(s, expected_return);
                 }
             }
+            Statement::ForEach(fe) => {
+                self.check_expression(&fe.iterable, expected_return);
+                for s in &fe.body.statements {
+                    self.check_statement(s, expected_return);
+                }
+            }
             Statement::Block(b) => {
                 for s in &b.statements {
                     self.check_statement(s, expected_return);
@@ -126,6 +132,40 @@ impl TypeChecker {
             Statement::FieldAssign(_) => {}
             Statement::Break => {}
             Statement::Continue => {}
+            Statement::Throw(e) => {
+                self.check_expression(e, expected_return);
+            }
+            Statement::Switch(sw) => {
+                self.check_expression(&sw.value, expected_return);
+                for case in &sw.cases {
+                    for v in &case.values {
+                        self.check_expression(v, expected_return);
+                    }
+                    for s in &case.body.statements {
+                        self.check_statement(s, expected_return);
+                    }
+                }
+                if let Some(ref d) = sw.default {
+                    for s in &d.statements {
+                        self.check_statement(s, expected_return);
+                    }
+                }
+            }
+            Statement::Try(t) => {
+                for s in &t.body.statements {
+                    self.check_statement(s, expected_return);
+                }
+                if let Some(ref cb) = t.catch_body {
+                    for s in &cb.statements {
+                        self.check_statement(s, expected_return);
+                    }
+                }
+                if let Some(ref fb) = t.finally_body {
+                    for s in &fb.statements {
+                        self.check_statement(s, expected_return);
+                    }
+                }
+            }
         }
     }
 
@@ -149,6 +189,11 @@ impl TypeChecker {
                 for arg in &dc.arguments {
                     self.check_expression(arg, expected_return);
                 }
+            }
+            Expression::Ternary(t) => {
+                self.check_expression(&t.condition, expected_return);
+                self.check_expression(&t.then_expr, expected_return);
+                self.check_expression(&t.else_expr, expected_return);
             }
             _ => {}
         }

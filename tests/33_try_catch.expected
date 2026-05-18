@@ -1,0 +1,17 @@
+algo salió mal
+42
+true
+finally ran
+no error finally
+5
+caught: division by zero
+no throw
+caught from fn: inner error
+inner caught: inner
+outer continues
+finally in fn
+caught
+70.0
+caught: Insufficient funds: requested 200.0 but balance is 70.0
+70.0
+done

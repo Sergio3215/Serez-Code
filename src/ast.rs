@@ -16,6 +16,7 @@ pub enum Statement {
     Expression(Expression),                       // Expresiones sueltas: ii, 1 + 1, etc.
     While(WhileStatement),                        // Bucle while: while (cond) { ... }
     For(ForStatement),                            // Bucle for: for (let i = 0; ...) { ... }
+    ForEach(ForEachStatement),                    // Bucle for-in: for (let x in arr) { ... }
     IndexAssign(IndexAssignStatement),            // Mutación de array: arr[i] = expr
     Out(OutStatement),                            // Salida a consola: out expr;
     ClassDeclaration(ClassDeclaration),           // class / public class ...
@@ -23,6 +24,9 @@ pub enum Statement {
     FieldAssign(FieldAssignStatement),            // obj.field = expr  /  this.field = expr
     Break,                                        // break;
     Continue,                                     // continue;
+    Switch(SwitchStatement),                      // switch (expr) { case ...: {} }
+    Try(TryStatement),                            // try {} catch (e) {} finally {}
+    Throw(Expression),                            // throw expr;
 }
 
 // Estructura específica para "let nombre = valor;"
@@ -92,6 +96,13 @@ pub struct ForStatement {
 }
 
 #[derive(Debug, Clone)]
+pub struct ForEachStatement {
+    pub var_name: String,
+    pub iterable: Expression,
+    pub body: BlockStatement,
+}
+
+#[derive(Debug, Clone)]
 pub struct OutStatement {
     pub value: Expression,
 }
@@ -144,6 +155,31 @@ pub struct FieldAssignStatement {
     pub value: Expression,
 }
 
+// ── Switch ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct SwitchStatement {
+    pub value: Expression,
+    pub cases: Vec<SwitchCase>,
+    pub default: Option<BlockStatement>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SwitchCase {
+    pub values: Vec<Expression>,       // one case can match multiple values: case 1, 2:
+    pub body: BlockStatement,
+}
+
+// ── Try / Catch / Finally ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct TryStatement {
+    pub body: BlockStatement,
+    pub catch_var: Option<String>,          // catch (e) → Some("e"), bare catch → None
+    pub catch_body: Option<BlockStatement>,
+    pub finally_body: Option<BlockStatement>,
+}
+
 // 3. LAS EXPRESIONES (Expressions)
 // Son las piezas de código que se evalúan para producir un valor.
 #[allow(dead_code)]
@@ -169,6 +205,14 @@ pub enum Expression {
     InterpolatedString(Vec<StringPart>),             // "Hello, {name}!"
     New(NewExpression),                              // new ClassName(args)
     ObjectPatch(Vec<(String, Expression)>),          // { field: val, ... } for interface update
+    Ternary(TernaryExpression),                      // cond ? then : else
+}
+
+#[derive(Debug, Clone)]
+pub struct TernaryExpression {
+    pub condition: Box<Expression>,
+    pub then_expr: Box<Expression>,
+    pub else_expr: Box<Expression>,
 }
 
 #[derive(Debug, Clone)]

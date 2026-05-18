@@ -5,6 +5,7 @@ use crate::token::{Token, TokenType};
 #[derive(PartialEq, PartialOrd)]
 pub enum Precedence {
     Lowest,
+    Ternary,      // ? :
     NullCoalesce, // ??
     LogicalOr,    // ||
     LogicalAnd,   // &&
@@ -19,6 +20,7 @@ pub enum Precedence {
 
 pub fn token_precedence(token_type: &TokenType) -> Precedence {
     match token_type {
+        TokenType::Question     => Precedence::Ternary,
         TokenType::NullCoalesce => Precedence::NullCoalesce,
         TokenType::Or => Precedence::LogicalOr,
         TokenType::And => Precedence::LogicalAnd,
@@ -93,7 +95,10 @@ impl Parser {
                 | TokenType::KwPublic
                 | TokenType::KwPrivate
                 | TokenType::KwBreak
-                | TokenType::KwContinue => return,
+                | TokenType::KwContinue
+                | TokenType::KwSwitch
+                | TokenType::KwTry
+                | TokenType::KwThrow => return,
                 _ => self.next_token(),
             }
         }
@@ -123,14 +128,123 @@ impl Parser {
             TokenType::KwClass => self.parse_class_declaration(true),
             TokenType::KwInterface => self.parse_interface_declaration(true),
             TokenType::KwPublic | TokenType::KwPrivate => self.parse_visibility_statement(),
+            TokenType::KwSwitch => self.parse_switch_statement(),
+            TokenType::KwTry => self.parse_try_statement(),
+            TokenType::KwThrow => self.parse_throw_statement(),
             TokenType::Ident if self.peek_token.token_type == TokenType::Assign => {
                 self.parse_assign_statement()
+            }
+            TokenType::Ident if self.is_compound_assign(&self.peek_token.token_type) => {
+                self.parse_compound_assign_statement()
             }
             TokenType::Ident if self.peek_token.token_type == TokenType::LBracket => {
                 self.parse_index_assign_or_expr_statement()
             }
+            // Postfix: i++  →  i = i + 1
+            TokenType::Ident if self.peek_token.token_type == TokenType::PlusPlus => {
+                let name = self.current_token.literal.clone();
+                let line = self.current_token.line;
+                let col  = self.current_token.column;
+                self.next_token(); // '++'
+                if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                Some(Statement::Assign(AssignStatement {
+                    name: name.clone(),
+                    value: Expression::Infix(InfixExpression {
+                        left: Box::new(Expression::Identifier(name)),
+                        operator: "+".to_string(),
+                        right: Box::new(Expression::Integer(1)),
+                        line, column: col,
+                    }),
+                }))
+            }
+            // Postfix: i--  →  i = i - 1
+            TokenType::Ident if self.peek_token.token_type == TokenType::MinusMinus => {
+                let name = self.current_token.literal.clone();
+                let line = self.current_token.line;
+                let col  = self.current_token.column;
+                self.next_token(); // '--'
+                if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                Some(Statement::Assign(AssignStatement {
+                    name: name.clone(),
+                    value: Expression::Infix(InfixExpression {
+                        left: Box::new(Expression::Identifier(name)),
+                        operator: "-".to_string(),
+                        right: Box::new(Expression::Integer(1)),
+                        line, column: col,
+                    }),
+                }))
+            }
+            // Prefix: ++i  →  i = i + 1
+            TokenType::PlusPlus => {
+                self.next_token(); // current = identifier
+                let name = self.current_token.literal.clone();
+                let line = self.current_token.line;
+                let col  = self.current_token.column;
+                if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                Some(Statement::Assign(AssignStatement {
+                    name: name.clone(),
+                    value: Expression::Infix(InfixExpression {
+                        left: Box::new(Expression::Identifier(name)),
+                        operator: "+".to_string(),
+                        right: Box::new(Expression::Integer(1)),
+                        line, column: col,
+                    }),
+                }))
+            }
+            // Prefix: --i  →  i = i - 1
+            TokenType::MinusMinus => {
+                self.next_token(); // current = identifier
+                let name = self.current_token.literal.clone();
+                let line = self.current_token.line;
+                let col  = self.current_token.column;
+                if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                Some(Statement::Assign(AssignStatement {
+                    name: name.clone(),
+                    value: Expression::Infix(InfixExpression {
+                        left: Box::new(Expression::Identifier(name)),
+                        operator: "-".to_string(),
+                        right: Box::new(Expression::Integer(1)),
+                        line, column: col,
+                    }),
+                }))
+            }
             _ => self.parse_expression_statement(),
         }
+    }
+
+    fn is_compound_assign(&self, tt: &TokenType) -> bool {
+        matches!(tt, TokenType::PlusEq | TokenType::MinusEq | TokenType::StarEq | TokenType::SlashEq | TokenType::PercentEq)
+    }
+
+    fn compound_op(tt: &TokenType) -> &'static str {
+        match tt {
+            TokenType::PlusEq    => "+",
+            TokenType::MinusEq   => "-",
+            TokenType::StarEq    => "*",
+            TokenType::SlashEq   => "/",
+            TokenType::PercentEq => "%",
+            _ => unreachable!(),
+        }
+    }
+
+    /// Desugar `x += rhs` → `x = x + rhs`
+    fn parse_compound_assign_statement(&mut self) -> Option<Statement> {
+        let name = self.current_token.literal.clone();
+        let line = self.current_token.line;
+        let column = self.current_token.column;
+        let op = Self::compound_op(&self.peek_token.token_type).to_string();
+        self.next_token(); // compound token
+        self.next_token(); // first token of rhs
+        let rhs = self.parse_expression(Precedence::Lowest)?;
+        if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+        let value = Expression::Infix(InfixExpression {
+            left: Box::new(Expression::Identifier(name.clone())),
+            operator: op,
+            right: Box::new(rhs),
+            line,
+            column,
+        });
+        Some(Statement::Assign(AssignStatement { name, value }))
     }
 
     fn parse_block_statement(&mut self) -> Option<Statement> {
@@ -152,31 +266,101 @@ impl Parser {
     fn parse_expression_statement(&mut self) -> Option<Statement> {
         let expr = self.parse_expression(Precedence::Lowest)?;
 
-        // Detect obj.field = value  or  this.field = value
-        if self.peek_token.token_type == TokenType::Assign {
+        let is_assign = self.peek_token.token_type == TokenType::Assign;
+        let is_compound = self.is_compound_assign(&self.peek_token.token_type);
+
+        if is_assign || is_compound {
+            // obj.field = val  or  obj.field += val
             if let Expression::DotCall(ref dot) = expr {
                 if dot.arguments.is_empty() {
                     if let Expression::Identifier(ref obj_name) = *dot.object {
                         let object = obj_name.clone();
                         let field = dot.method.clone();
-                        self.next_token(); // '='
-                        self.next_token(); // first token of value
-                        let value = self.parse_expression(Precedence::Lowest)?;
-                        if self.peek_token.token_type == TokenType::Semicolon {
-                            self.next_token();
-                        }
-                        return Some(Statement::FieldAssign(FieldAssignStatement {
-                            object,
-                            field,
-                            value,
-                        }));
+                        let line = dot.line;
+                        let column = dot.column;
+                        let op_str = if is_compound {
+                            Some(Self::compound_op(&self.peek_token.token_type).to_string())
+                        } else { None };
+                        self.next_token(); // '=' or compound token
+                        self.next_token(); // first token of rhs
+                        let rhs = self.parse_expression(Precedence::Lowest)?;
+                        let value = if let Some(op) = op_str {
+                            Expression::Infix(InfixExpression {
+                                left: Box::new(Expression::DotCall(DotCallExpression {
+                                    object: Box::new(Expression::Identifier(object.clone())),
+                                    method: field.clone(),
+                                    arguments: vec![],
+                                    has_parens: false,
+                                    line, column,
+                                })),
+                                operator: op,
+                                right: Box::new(rhs),
+                                line, column,
+                            })
+                        } else { rhs };
+                        if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                        return Some(Statement::FieldAssign(FieldAssignStatement { object, field, value }));
                     }
                 }
             }
 
-            // Detect expr[idx] = value — handles this.arr[idx] = val and other non-Ident targets
+            // expr[idx] = val  or  expr[idx] += val
             if let Expression::Index(_) = &expr {
-                return self.try_build_index_assign(expr);
+                if is_assign {
+                    return self.try_build_index_assign(expr);
+                } else {
+                    return self.try_build_index_compound_assign(expr);
+                }
+            }
+        }
+
+        // obj.field++  /  this.field++  /  obj.field--  /  this.field--
+        // Also catches Index targets arriving via expression_statement path (e.g. this.arr[i]++)
+        let is_incr = self.peek_token.token_type == TokenType::PlusPlus;
+        let is_decr = self.peek_token.token_type == TokenType::MinusMinus;
+        if is_incr || is_decr {
+            let op  = if is_incr { "+" } else { "-" };
+            let line   = self.current_token.line;
+            let column = self.current_token.column;
+
+            if let Expression::DotCall(ref dot) = expr {
+                if dot.arguments.is_empty() {
+                    if let Expression::Identifier(ref obj_name) = *dot.object {
+                        let object = obj_name.clone();
+                        let field  = dot.method.clone();
+                        let dline  = dot.line;
+                        let dcol   = dot.column;
+                        self.next_token(); // ++ or --
+                        if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                        let value = Expression::Infix(InfixExpression {
+                            left: Box::new(Expression::DotCall(DotCallExpression {
+                                object:     Box::new(Expression::Identifier(object.clone())),
+                                method:     field.clone(),
+                                arguments:  vec![],
+                                has_parens: false,
+                                line: dline, column: dcol,
+                            })),
+                            operator: op.to_string(),
+                            right: Box::new(Expression::Integer(1)),
+                            line, column,
+                        });
+                        return Some(Statement::FieldAssign(FieldAssignStatement { object, field, value }));
+                    }
+                }
+            }
+
+            if let Expression::Index(ref idx_expr) = expr {
+                let target = (*idx_expr.left).clone();
+                let index  = (*idx_expr.index).clone();
+                self.next_token(); // ++ or --
+                if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                let value = Expression::Infix(InfixExpression {
+                    left:     Box::new(expr.clone()),
+                    operator: op.to_string(),
+                    right:    Box::new(Expression::Integer(1)),
+                    line, column,
+                });
+                return Some(Statement::IndexAssign(IndexAssignStatement { target, index, value }));
             }
         }
 
@@ -257,6 +441,28 @@ impl Parser {
 
     fn parse_index_assign_or_expr_statement(&mut self) -> Option<Statement> {
         let expr = self.parse_expression(Precedence::Lowest)?;
+        if self.is_compound_assign(&self.peek_token.token_type) {
+            return self.try_build_index_compound_assign(expr);
+        }
+        // arr[i]++  /  arr[i]--
+        if matches!(self.peek_token.token_type, TokenType::PlusPlus | TokenType::MinusMinus) {
+            if let Expression::Index(ref idx_expr) = expr {
+                let target = (*idx_expr.left).clone();
+                let index  = (*idx_expr.index).clone();
+                let line   = self.current_token.line;
+                let column = self.current_token.column;
+                let op = if self.peek_token.token_type == TokenType::PlusPlus { "+" } else { "-" };
+                self.next_token(); // ++ or --
+                if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                let value = Expression::Infix(InfixExpression {
+                    left: Box::new(expr),
+                    operator: op.to_string(),
+                    right: Box::new(Expression::Integer(1)),
+                    line, column,
+                });
+                return Some(Statement::IndexAssign(IndexAssignStatement { target, index, value }));
+            }
+        }
         self.try_build_index_assign(expr)
     }
 
@@ -265,27 +471,38 @@ impl Parser {
             if let Expression::Index(idx_expr) = &expr {
                 let target = (*idx_expr.left).clone();
                 let index = (*idx_expr.index).clone();
-
                 self.next_token(); // '='
                 self.next_token(); // first token of value
-
                 let value = self.parse_expression(Precedence::Lowest)?;
-
-                if self.peek_token.token_type == TokenType::Semicolon {
-                    self.next_token();
-                }
-
-                return Some(Statement::IndexAssign(IndexAssignStatement {
-                    target,
-                    index,
-                    value,
-                }));
+                if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                return Some(Statement::IndexAssign(IndexAssignStatement { target, index, value }));
             }
         }
+        if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+        Some(Statement::Expression(expr))
+    }
 
-        if self.peek_token.token_type == TokenType::Semicolon {
-            self.next_token();
+    /// Desugar `arr[i] += rhs` → `arr[i] = arr[i] + rhs`
+    fn try_build_index_compound_assign(&mut self, expr: Expression) -> Option<Statement> {
+        if let Expression::Index(ref idx_expr) = expr {
+            let target = (*idx_expr.left).clone();
+            let index = (*idx_expr.index).clone();
+            let line = self.current_token.line;
+            let column = self.current_token.column;
+            let op = Self::compound_op(&self.peek_token.token_type).to_string();
+            self.next_token(); // compound token
+            self.next_token(); // first token of rhs
+            let rhs = self.parse_expression(Precedence::Lowest)?;
+            let value = Expression::Infix(InfixExpression {
+                left: Box::new(expr.clone()),
+                operator: op,
+                right: Box::new(rhs),
+                line, column,
+            });
+            if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+            return Some(Statement::IndexAssign(IndexAssignStatement { target, index, value }));
         }
+        if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
         Some(Statement::Expression(expr))
     }
 
@@ -294,26 +511,64 @@ impl Parser {
             eprintln!("❌ PARSER ERROR: Expected '(' after 'for'");
             return None;
         }
-        self.next_token();
-        self.next_token();
+        self.next_token(); // current = '('
+        self.next_token(); // current = 'let'
 
         if self.current_token.token_type != TokenType::Let {
             eprintln!("❌ PARSER ERROR: Expected 'let' as for-loop initializer");
             return None;
         }
-        let init = match self.parse_let_statement()? {
-            Statement::Let(l) => l,
-            _ => return None,
-        };
-        if self.current_token.token_type != TokenType::Semicolon {
-            if self.peek_token.token_type == TokenType::Semicolon {
-                self.next_token();
-            } else {
-                eprintln!("❌ PARSER ERROR: Expected ';' after for-loop initializer");
+        if self.peek_token.token_type != TokenType::Ident {
+            eprintln!("❌ PARSER ERROR: Expected identifier after 'let' in for");
+            return None;
+        }
+        self.next_token(); // current = var_name
+        let var_name = self.current_token.literal.clone();
+
+        // ── ForEach: for (let x in iterable) { body } ────────────────────────
+        if self.peek_token.token_type == TokenType::KwIn {
+            self.next_token(); // current = 'in'
+            self.next_token(); // current = first token of iterable
+            let iterable = self.parse_expression(Precedence::Lowest)?;
+
+            if self.peek_token.token_type != TokenType::RParen {
+                eprintln!("❌ PARSER ERROR: Expected ')' after for-in iterable");
                 return None;
             }
+            self.next_token(); // current = ')'
+
+            if self.peek_token.token_type != TokenType::LBrace {
+                eprintln!("❌ PARSER ERROR: Expected '{{' to start for-in body");
+                return None;
+            }
+            self.next_token(); // current = '{'
+
+            let body = match self.parse_block_statement()? {
+                Statement::Block(b) => b,
+                _ => return None,
+            };
+
+            return Some(Statement::ForEach(ForEachStatement { var_name, iterable, body }));
         }
-        self.next_token();
+
+        // ── Classic for: for (let i = 0; i < n; i = i + 1) { body } ─────────
+        if self.peek_token.token_type != TokenType::Assign {
+            eprintln!("❌ PARSER ERROR: Expected '=' or 'in' after variable name in for");
+            return None;
+        }
+        self.next_token(); // current = '='
+        self.next_token(); // current = first token of init value
+        let init_value = self.parse_expression(Precedence::Lowest)?;
+
+        if self.peek_token.token_type == TokenType::Semicolon {
+            self.next_token(); // current = ';'
+        } else if self.current_token.token_type != TokenType::Semicolon {
+            eprintln!("❌ PARSER ERROR: Expected ';' after for-loop initializer");
+            return None;
+        }
+        self.next_token(); // current = first token of condition
+
+        let init = LetStatement { name: var_name, value: init_value };
 
         let condition = self.parse_expression(Precedence::Lowest)?;
 
@@ -352,12 +607,7 @@ impl Parser {
             _ => return None,
         };
 
-        Some(Statement::For(ForStatement {
-            init,
-            condition,
-            update,
-            body,
-        }))
+        Some(Statement::For(ForStatement { init, condition, update, body }))
     }
 
     fn parse_if_expression(&mut self) -> Option<Expression> {
@@ -745,6 +995,7 @@ impl Parser {
                 | TokenType::And
                 | TokenType::Or
                 | TokenType::NullCoalesce
+                | TokenType::Question
                 | TokenType::LParen
                 | TokenType::Dot
                 | TokenType::LBracket => true,
@@ -792,6 +1043,30 @@ impl Parser {
                     } else {
                         return None;
                     }
+                }
+            } else if self.current_token.token_type == TokenType::Question {
+                // Ternary: condition ? then_expr : else_expr
+                if let Some(condition) = left_exp {
+                    self.next_token(); // first token of then_expr
+                    let then_expr = match self.parse_expression(Precedence::Lowest) {
+                        Some(e) => e,
+                        None => return None,
+                    };
+                    if self.peek_token.token_type != TokenType::Colon {
+                        eprintln!("❌ PARSER ERROR: Expected ':' in ternary expression after '?'");
+                        return None;
+                    }
+                    self.next_token(); // ':'
+                    self.next_token(); // first token of else_expr
+                    let else_expr = match self.parse_expression(Precedence::Lowest) {
+                        Some(e) => e,
+                        None => return None,
+                    };
+                    left_exp = Some(Expression::Ternary(TernaryExpression {
+                        condition: Box::new(condition),
+                        then_expr: Box::new(then_expr),
+                        else_expr: Box::new(else_expr),
+                    }));
                 }
             } else if self.current_token.token_type == TokenType::Dot {
                 let dot_line = self.current_token.line;
@@ -1565,6 +1840,155 @@ impl Parser {
         }
 
         Some(Expression::ArrayLiteral(ArrayLiteral { element_type: None, elements }))
+    }
+
+    // ── switch (expr) { case v1, v2: { body } ... default: { body } } ─────────
+    fn parse_switch_statement(&mut self) -> Option<Statement> {
+        // switch (expr)
+        if self.peek_token.token_type != TokenType::LParen {
+            eprintln!("❌ PARSER ERROR: Expected '(' after 'switch'");
+            return None;
+        }
+        self.next_token(); // '('
+        self.next_token(); // first token of expr
+        let value = self.parse_expression(Precedence::Lowest)?;
+        if self.peek_token.token_type != TokenType::RParen {
+            eprintln!("❌ PARSER ERROR: Expected ')' after switch expression");
+            return None;
+        }
+        self.next_token(); // ')'
+        if self.peek_token.token_type != TokenType::LBrace {
+            eprintln!("❌ PARSER ERROR: Expected '{{' after switch(...)");
+            return None;
+        }
+        self.next_token(); // '{'
+        self.next_token(); // first token inside
+
+        let mut cases = Vec::new();
+        let mut default = None;
+
+        while self.current_token.token_type != TokenType::RBrace
+            && self.current_token.token_type != TokenType::Eof
+        {
+            if self.current_token.token_type == TokenType::KwDefault {
+                // default: { body }
+                if self.peek_token.token_type != TokenType::Colon {
+                    eprintln!("❌ PARSER ERROR: Expected ':' after 'default'");
+                    return None;
+                }
+                self.next_token(); // ':'
+                if self.peek_token.token_type != TokenType::LBrace {
+                    eprintln!("❌ PARSER ERROR: Expected '{{' after 'default:'");
+                    return None;
+                }
+                self.next_token(); // '{'
+                let body = self.parse_inner_block()?;
+                default = Some(body);
+            } else if self.current_token.token_type == TokenType::KwCase {
+                // case v1, v2, ...: { body }
+                let mut values = Vec::new();
+                self.next_token(); // first value
+                let first = self.parse_expression(Precedence::Lowest)?;
+                values.push(first);
+                while self.peek_token.token_type == TokenType::Comma {
+                    self.next_token(); // ','
+                    self.next_token(); // next value
+                    let v = self.parse_expression(Precedence::Lowest)?;
+                    values.push(v);
+                }
+                if self.peek_token.token_type != TokenType::Colon {
+                    eprintln!("❌ PARSER ERROR: Expected ':' after case value(s)");
+                    return None;
+                }
+                self.next_token(); // ':'
+                if self.peek_token.token_type != TokenType::LBrace {
+                    eprintln!("❌ PARSER ERROR: Expected '{{' after 'case ...:'");
+                    return None;
+                }
+                self.next_token(); // '{'
+                let body = self.parse_inner_block()?;
+                cases.push(SwitchCase { values, body });
+            } else {
+                eprintln!("❌ PARSER ERROR: Expected 'case' or 'default' inside switch, got '{}'", self.current_token.literal);
+                return None;
+            }
+            self.next_token(); // move past '}' of the case body
+        }
+
+        Some(Statement::Switch(SwitchStatement { value, cases, default }))
+    }
+
+    /// Parse `{ stmts }` — current_token is `{`, leaves current_token on `}`
+    fn parse_inner_block(&mut self) -> Option<BlockStatement> {
+        self.next_token(); // skip '{'
+        let mut statements = Vec::new();
+        while self.current_token.token_type != TokenType::RBrace
+            && self.current_token.token_type != TokenType::Eof
+        {
+            if let Some(s) = self.parse_statement() { statements.push(s); }
+            self.next_token();
+        }
+        Some(BlockStatement { statements })
+    }
+
+    // ── try { } catch (e) { } finally { } ────────────────────────────────────
+    fn parse_try_statement(&mut self) -> Option<Statement> {
+        // try { body }
+        if self.peek_token.token_type != TokenType::LBrace {
+            eprintln!("❌ PARSER ERROR: Expected '{{' after 'try'");
+            return None;
+        }
+        self.next_token(); // '{'
+        let body = self.parse_inner_block()?;
+
+        let mut catch_var: Option<String> = None;
+        let mut catch_body: Option<BlockStatement> = None;
+        let mut finally_body: Option<BlockStatement> = None;
+
+        // optional: catch (e) { }
+        if self.peek_token.token_type == TokenType::KwCatch {
+            self.next_token(); // 'catch'
+            if self.peek_token.token_type == TokenType::LParen {
+                self.next_token(); // '('
+                self.next_token(); // variable name or ')'
+                if self.current_token.token_type == TokenType::Ident {
+                    catch_var = Some(self.current_token.literal.clone());
+                    self.next_token(); // ')'
+                }
+            }
+            if self.peek_token.token_type != TokenType::LBrace {
+                eprintln!("❌ PARSER ERROR: Expected '{{' after catch");
+                return None;
+            }
+            self.next_token(); // '{'
+            catch_body = Some(self.parse_inner_block()?);
+        }
+
+        // optional: finally { }
+        if self.peek_token.token_type == TokenType::KwFinally {
+            self.next_token(); // 'finally'
+            if self.peek_token.token_type != TokenType::LBrace {
+                eprintln!("❌ PARSER ERROR: Expected '{{' after 'finally'");
+                return None;
+            }
+            self.next_token(); // '{'
+            finally_body = Some(self.parse_inner_block()?);
+        }
+
+        if catch_body.is_none() && finally_body.is_none() {
+            eprintln!("❌ PARSER ERROR: 'try' must have at least one 'catch' or 'finally' block");
+            return None;
+        }
+
+        Some(Statement::Try(TryStatement { body, catch_var, catch_body, finally_body }))
+    }
+
+    // ── throw expr; ───────────────────────────────────────────────────────────
+    fn parse_throw_statement(&mut self) -> Option<Statement> {
+        self.next_token(); // first token of expr
+        let expr = self.parse_expression(Precedence::Lowest)?;
+        if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+        Some(Statement::Throw(expr))
     }
 }
 

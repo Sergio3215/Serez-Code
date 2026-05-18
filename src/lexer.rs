@@ -61,13 +61,28 @@ impl Lexer {
                     )
                 }
             }
-            '+' => Token::new(TokenType::Plus, self.ch.to_string(), self.line, self.column),
-            '-' => Token::new(
-                TokenType::Minus,
-                self.ch.to_string(),
-                self.line,
-                self.column,
-            ),
+            '+' => {
+                if self.peek_char() == '+' {
+                    self.read_char();
+                    Token::new(TokenType::PlusPlus, "++".to_string(), self.line, self.column)
+                } else if self.peek_char() == '=' {
+                    self.read_char();
+                    Token::new(TokenType::PlusEq, "+=".to_string(), self.line, self.column)
+                } else {
+                    Token::new(TokenType::Plus, "+".to_string(), self.line, self.column)
+                }
+            }
+            '-' => {
+                if self.peek_char() == '-' {
+                    self.read_char();
+                    Token::new(TokenType::MinusMinus, "--".to_string(), self.line, self.column)
+                } else if self.peek_char() == '=' {
+                    self.read_char();
+                    Token::new(TokenType::MinusEq, "-=".to_string(), self.line, self.column)
+                } else {
+                    Token::new(TokenType::Minus, "-".to_string(), self.line, self.column)
+                }
+            }
             '!' => {
                 if self.peek_char() == '=' {
                     self.read_char();
@@ -80,27 +95,29 @@ impl Lexer {
                 if self.peek_char() == '/' {
                     self.skip_comment();
                     return self.next_token();
+                } else if self.peek_char() == '=' {
+                    self.read_char();
+                    Token::new(TokenType::SlashEq, "/=".to_string(), self.line, self.column)
                 } else {
-                    Token::new(
-                        TokenType::Slash,
-                        self.ch.to_string(),
-                        self.line,
-                        self.column,
-                    )
+                    Token::new(TokenType::Slash, "/".to_string(), self.line, self.column)
                 }
             }
-            '*' => Token::new(
-                TokenType::Asterisk,
-                self.ch.to_string(),
-                self.line,
-                self.column,
-            ),
-            '%' => Token::new(
-                TokenType::Percent,
-                self.ch.to_string(),
-                self.line,
-                self.column,
-            ),
+            '*' => {
+                if self.peek_char() == '=' {
+                    self.read_char();
+                    Token::new(TokenType::StarEq, "*=".to_string(), self.line, self.column)
+                } else {
+                    Token::new(TokenType::Asterisk, "*".to_string(), self.line, self.column)
+                }
+            }
+            '%' => {
+                if self.peek_char() == '=' {
+                    self.read_char();
+                    Token::new(TokenType::PercentEq, "%=".to_string(), self.line, self.column)
+                } else {
+                    Token::new(TokenType::Percent, "%".to_string(), self.line, self.column)
+                }
+            }
             '<' => {
                 if self.peek_char() == '=' {
                     self.read_char();

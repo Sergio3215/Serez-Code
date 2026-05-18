@@ -20,6 +20,7 @@ pub enum EvalResult {
     Break,             // Señal de break — capturada por while/for
     Continue,          // Señal de continue — capturada por while/for
     Error,             // Ocurrió un error
+    Throw(ObjectRef),  // Excepción de usuario — propagada hasta try/catch
 }
 
 // ── Evaluator ─────────────────────────────────────────────────────────────────
@@ -330,6 +331,12 @@ impl Evaluator {
                     if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
                     return None;
                 }
+                EvalResult::Throw(r) => {
+                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
+                    let msg = self.display(r);
+                    eprintln!("❌ UNCAUGHT EXCEPTION: {msg}");
+                    return None;
+                }
             }
         }
         Some(result)
@@ -340,6 +347,7 @@ impl Evaluator {
             Statement::Let(let_stmt) => {
                 let val_ref = match self.eval_expression(&let_stmt.value) {
                     EvalResult::Value(v) => v,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
 
@@ -370,6 +378,7 @@ impl Evaluator {
 
                 let val_ref = match self.eval_expression(&assign_stmt.value) {
                     EvalResult::Value(v) => v,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let new_data = self.resolve(val_ref).unwrap().clone();
@@ -425,6 +434,7 @@ impl Evaluator {
                         EvalResult::Value(v) => v,
                         EvalResult::Error => return EvalResult::Error,
                         EvalResult::Return(v) => return EvalResult::Return(v),
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
 
@@ -446,6 +456,7 @@ impl Evaluator {
                         EvalResult::Continue => continue,
                         EvalResult::Return(v) => return EvalResult::Return(v),
                         EvalResult::Error => return EvalResult::Error,
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                     }
                 }
                 EvalResult::Value(self.null_ref)
@@ -468,10 +479,10 @@ impl Evaluator {
                 let fresh_init = self.alloc(init_data);
                 self.scopes.declare(for_stmt.init.name.clone(), fresh_init);
 
-                // loop_return holds an extracted (arena-independent) return value if a
-                // `return` was encountered inside the body — extracted BEFORE the for-scope
-                // is popped so the ObjectRef is still valid at extraction time.
+                // loop_return / loop_throw hold extracted values if a return/throw was
+                // encountered inside the body — extracted BEFORE the for-scope is popped.
                 let mut loop_return: Option<OwnedValue> = None;
+                let mut loop_throw:  Option<OwnedValue> = None;
                 let mut loop_error = false;
 
                 loop {
@@ -481,6 +492,7 @@ impl Evaluator {
                         EvalResult::Value(v) => v,
                         EvalResult::Error => { loop_error = true; break; }
                         EvalResult::Return(v) => { loop_return = Some(self.extract(v)); break; }
+                        EvalResult::Throw(v)  => { loop_throw  = Some(self.extract(v)); break; }
                         _ => { loop_error = true; break; }
                     };
                     let condition_data = self.resolve(condition_ref).unwrap().clone();
@@ -497,6 +509,10 @@ impl Evaluator {
                         EvalResult::Continue => {} // fall through to update
                         EvalResult::Return(v) => {
                             loop_return = Some(self.extract(v));
+                            break;
+                        }
+                        EvalResult::Throw(v) => {
+                            loop_throw = Some(self.extract(v));
                             break;
                         }
                         EvalResult::Error => {
@@ -536,15 +552,12 @@ impl Evaluator {
                     }
                 }
 
-                // Pop the for-scope AFTER extracting any return value above
+                // Pop the for-scope AFTER extracting any return/throw value above
                 self.scopes.pop();
 
-                if loop_error {
-                    return EvalResult::Error;
-                }
-                if let Some(owned) = loop_return {
-                    return EvalResult::Return(self.plant(owned));
-                }
+                if loop_error { return EvalResult::Error; }
+                if let Some(owned) = loop_throw  { return EvalResult::Throw(self.plant(owned)); }
+                if let Some(owned) = loop_return { return EvalResult::Return(self.plant(owned)); }
                 EvalResult::Value(self.null_ref)
             }
 
@@ -577,6 +590,7 @@ impl Evaluator {
                     },
                     _ => match self.eval_expression(&target) {
                         EvalResult::Value(r) => r,
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     },
                 };
@@ -587,10 +601,12 @@ impl Evaluator {
                 // Evaluate index and new value
                 let idx_ref = match self.eval_expression(&stmt.index) {
                     EvalResult::Value(v) => v,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let val_ref = match self.eval_expression(&stmt.value) {
                     EvalResult::Value(v) => v,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
 
@@ -717,6 +733,7 @@ impl Evaluator {
             Statement::Return(return_stmt) => {
                 match self.eval_expression(&return_stmt.return_value) {
                     EvalResult::Value(v) => EvalResult::Return(v),
+                    EvalResult::Throw(v) => EvalResult::Throw(v),
                     _ => EvalResult::Error,
                 }
             }
@@ -730,11 +747,25 @@ impl Evaluator {
                     EvalResult::Value(self.null_ref)
                 }
                 EvalResult::Return(v) => EvalResult::Return(v),
+                EvalResult::Throw(v)  => EvalResult::Throw(v),
                 EvalResult::Error => EvalResult::Error,
                 other => other,
             },
 
             Statement::Expression(expr) => self.eval_expression(expr),
+
+            Statement::Throw(expr) => {
+                let val = match self.eval_expression(expr) {
+                    EvalResult::Value(v) => v,
+                    other => return other,
+                };
+                EvalResult::Throw(val)
+            }
+
+            Statement::ForEach(fe) => self.eval_foreach(fe),
+
+            Statement::Switch(sw) => self.eval_switch(sw),
+            Statement::Try(try_stmt) => self.eval_try(try_stmt),
 
             Statement::InterfaceDeclaration(decl) => {
                 self.interface_registry.insert(decl.name.clone(), decl.fields.clone());
@@ -784,6 +815,55 @@ impl Evaluator {
         }
     }
 
+    fn eval_foreach(&mut self, stmt: &ast::ForEachStatement) -> EvalResult {
+        let iter_ref = match self.eval_expression(&stmt.iterable) {
+            EvalResult::Value(r) => r,
+            EvalResult::Throw(v) => return EvalResult::Throw(v),
+            _ => return EvalResult::Error,
+        };
+
+        let items: Vec<OwnedValue> = match self.resolve(iter_ref).cloned() {
+            Some(ObjectData::Array { elements, .. }) => {
+                elements.iter().map(|&r| self.extract(r)).collect()
+            }
+            Some(ObjectData::Str(s)) => {
+                s.chars().map(|c| OwnedValue::Str(c.to_string())).collect()
+            }
+            _ => {
+                eprintln!("❌ ERROR: for-in requires an array or string");
+                return EvalResult::Error;
+            }
+        };
+
+        self.scopes.push();
+        self.scopes.declare(stmt.var_name.clone(), self.null_ref);
+
+        let mut loop_return: Option<OwnedValue> = None;
+        let mut loop_throw:  Option<OwnedValue> = None;
+        let mut loop_error = false;
+
+        for item in items {
+            let item_ref = self.plant(item);
+            self.scopes.declare(stmt.var_name.clone(), item_ref);
+
+            match self.eval_block(&stmt.body) {
+                EvalResult::Value(_) => {}
+                EvalResult::Break    => break,
+                EvalResult::Continue => continue,
+                EvalResult::Return(v) => { loop_return = Some(self.extract(v)); break; }
+                EvalResult::Throw(v)  => { loop_throw  = Some(self.extract(v)); break; }
+                EvalResult::Error     => { loop_error = true; break; }
+            }
+        }
+
+        self.scopes.pop();
+
+        if let Some(owned) = loop_throw  { return EvalResult::Throw(self.plant(owned)); }
+        if let Some(owned) = loop_return { return EvalResult::Return(self.plant(owned)); }
+        if loop_error { return EvalResult::Error; }
+        EvalResult::Value(self.null_ref)
+    }
+
     fn eval_block(&mut self, block: &ast::BlockStatement) -> EvalResult {
         self.scopes.push();
         let mut result = EvalResult::Value(self.null_ref);
@@ -791,16 +871,17 @@ impl Evaluator {
         for s in &block.statements {
             match self.eval_statement(s) {
                 EvalResult::Value(v) => result = EvalResult::Value(v),
-                EvalResult::Return(v) => { result = EvalResult::Return(v); break; }
-                EvalResult::Break    => { result = EvalResult::Break;      break; }
-                EvalResult::Continue => { result = EvalResult::Continue;   break; }
-                EvalResult::Error    => { result = EvalResult::Error;      break; }
+                EvalResult::Return(v)  => { result = EvalResult::Return(v);  break; }
+                EvalResult::Break      => { result = EvalResult::Break;       break; }
+                EvalResult::Continue   => { result = EvalResult::Continue;    break; }
+                EvalResult::Error      => { result = EvalResult::Error;       break; }
+                EvalResult::Throw(v)   => { result = EvalResult::Throw(v);   break; }
             }
         }
 
         // Deep-extract ANTES del pop: preserva elementos de arrays y valores anidados.
         let owned = match &result {
-            EvalResult::Value(v) | EvalResult::Return(v) => Some(self.extract(*v)),
+            EvalResult::Value(v) | EvalResult::Return(v) | EvalResult::Throw(v) => Some(self.extract(*v)),
             EvalResult::Break | EvalResult::Continue | EvalResult::Error => None,
         };
 
@@ -812,6 +893,7 @@ impl Evaluator {
                 match result {
                     EvalResult::Value(_)  => EvalResult::Value(promoted),
                     EvalResult::Return(_) => EvalResult::Return(promoted),
+                    EvalResult::Throw(_)  => EvalResult::Throw(promoted),
                     _ => unreachable!(),
                 }
             }
@@ -892,6 +974,7 @@ impl Evaluator {
                         "parseDecimal"=> return self.eval_parse_decimal(&call_expr.arguments),
                         "readLine"    => return self.eval_read_line(&call_expr.arguments),
                         "super"       => return self.eval_super_call(&call_expr.arguments),
+                        "assert"      => return self.eval_assert(&call_expr.arguments),
                         "abs" | "sqrt" | "floor" | "ceil" | "round"
                         | "min" | "max" | "pow" | "log" | "log2" | "log10"
                             => return self.eval_math_builtin(name, &call_expr.arguments),
@@ -906,6 +989,7 @@ impl Evaluator {
 
                 let func_ref = match self.eval_expression(&call_expr.function) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
 
@@ -1017,6 +1101,13 @@ impl Evaluator {
                     match self.eval_statement(s) {
                         EvalResult::Value(_) => {} // implicit — function result is null unless explicit return
                         EvalResult::Return(v) => { result_ref = v; break; }
+                        EvalResult::Throw(v) => {
+                            let owned = self.extract(v);
+                            self.scopes.pop();
+                            self.call_depth -= 1;
+                            self.call_stack.pop();
+                            return EvalResult::Throw(self.plant(owned));
+                        }
                         EvalResult::Error => {
                             self.scopes.pop();
                             self.call_depth -= 1;
@@ -1080,6 +1171,7 @@ impl Evaluator {
                             }
                             refs.push(r);
                         }
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     }
                 }
@@ -1109,10 +1201,12 @@ impl Evaluator {
             Expression::Index(index_expr) => {
                 let left_ref = match self.eval_expression(&index_expr.left) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let idx_ref = match self.eval_expression(&index_expr.index) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
 
@@ -1159,10 +1253,12 @@ impl Evaluator {
                 for (key_expr, val_expr) in &dict_lit.entries {
                     let key_ref = match self.eval_expression(key_expr) {
                         EvalResult::Value(r) => r,
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
                     let val_ref = match self.eval_expression(val_expr) {
                         EvalResult::Value(r) => r,
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
 
@@ -1198,6 +1294,13 @@ impl Evaluator {
             }
 
             Expression::DotCall(dot_call) => {
+                // super.method(args) — dispatch to parent class method
+                if let Expression::Identifier(ref name) = *dot_call.object {
+                    if name == "super" {
+                        return self.eval_super_method_call(dot_call);
+                    }
+                }
+
                 // Detect chained mutation pattern: instance.field.mutate(args)
                 // After mutation we write the modified array/dict back to the instance field
                 let writeback_ctx: Option<(Expression, String)> =
@@ -1212,6 +1315,7 @@ impl Evaluator {
 
                 let obj_ref = match self.eval_expression(&dot_call.object) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
 
@@ -1246,10 +1350,12 @@ impl Evaluator {
                                     Expression::EntryLiteral(k_expr, v_expr) => {
                                         let k = match self.eval_expression(k_expr) {
                                             EvalResult::Value(r) => r,
+                                            EvalResult::Throw(v) => return EvalResult::Throw(v),
                                             _ => return EvalResult::Error,
                                         };
                                         let v = match self.eval_expression(v_expr) {
                                             EvalResult::Value(r) => r,
+                                            EvalResult::Throw(v) => return EvalResult::Throw(v),
                                             _ => return EvalResult::Error,
                                         };
                                         (k, v)
@@ -1316,6 +1422,7 @@ impl Evaluator {
                                 }
                                 let key_ref = match self.eval_expression(&dot_call.arguments[0]) {
                                     EvalResult::Value(r) => r,
+                                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                                     _ => return EvalResult::Error,
                                 };
                                 let key_data = self.resolve(key_ref).unwrap().clone();
@@ -1441,9 +1548,24 @@ impl Evaluator {
                 EvalResult::Error
             }
 
+            Expression::Ternary(ternary) => {
+                let cond_ref = match self.eval_expression(&ternary.condition) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let cond_data = self.resolve(cond_ref).cloned().unwrap_or(ObjectData::Null);
+                if self.is_truthy(&cond_data) {
+                    self.eval_expression(&ternary.then_expr)
+                } else {
+                    self.eval_expression(&ternary.else_expr)
+                }
+            }
+
             Expression::Prefix(op, right_expr) => {
                 let right_ref = match self.eval_expression(right_expr) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let right_data = self.resolve(right_ref).unwrap().clone();
@@ -1507,10 +1629,12 @@ impl Evaluator {
             Expression::Infix(infix_expr) => {
                 let left_ref = match self.eval_expression(&infix_expr.left) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let right_ref = match self.eval_expression(&infix_expr.right) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let left_data = self.resolve(left_ref).unwrap().clone();
@@ -1972,6 +2096,10 @@ impl Evaluator {
                         }
                     }
                 }
+                ast::Statement::ForEach(fe) => {
+                    local_mem += 8; // iteration variable
+                    local_mem += self.estimate_expression(&fe.iterable);
+                }
                 _ => {}
             }
         }
@@ -2084,6 +2212,13 @@ impl Evaluator {
             ast::Expression::ObjectPatch(fields) => {
                 32 + fields.iter().map(|(_, e)| self.estimate_expression(e)).sum::<usize>()
             }
+            ast::Expression::Ternary(t) => {
+                self.estimate_expression(&t.condition)
+                    + std::cmp::max(
+                        self.estimate_expression(&t.then_expr),
+                        self.estimate_expression(&t.else_expr),
+                    )
+            }
         }
     }
 
@@ -2136,10 +2271,12 @@ impl Evaluator {
                     self.scopes.declare(param.name.clone(), r);
                 }
                 let mut result_ref = self.null_ref;
+                let mut fn_throw: Option<ObjectRef> = None;
                 for s in &body.statements {
                     match self.eval_statement(s) {
                         EvalResult::Value(_) => {} // only explicit return contributes result
                         EvalResult::Return(v) => { result_ref = v; break; }
+                        EvalResult::Throw(v)  => { fn_throw = Some(v); break; }
                         EvalResult::Error => {
                             self.call_depth -= 1;
                             self.scopes.pop();
@@ -2152,6 +2289,12 @@ impl Evaluator {
                             return EvalResult::Error;
                         }
                     }
+                }
+                if let Some(thrown) = fn_throw {
+                    let owned = self.extract(thrown);
+                    self.call_depth -= 1;
+                    self.scopes.pop();
+                    return EvalResult::Throw(self.plant(owned));
                 }
                 let owned = self.extract(result_ref);
                 self.call_depth -= 1;
@@ -2174,6 +2317,33 @@ impl Evaluator {
 
     // ── Built-in global functions ─────────────────────────────────────────────
 
+    fn eval_assert(&mut self, args: &[ast::Expression]) -> EvalResult {
+        if args.is_empty() || args.len() > 2 {
+            eprintln!("❌ ERROR: assert(condition) or assert(condition, message)");
+            return EvalResult::Error;
+        }
+        let cond_ref = match self.eval_expression(&args[0]) {
+            EvalResult::Value(v) => v,
+            EvalResult::Throw(v) => return EvalResult::Throw(v),
+            _ => return EvalResult::Error,
+        };
+        let is_true = matches!(self.resolve(cond_ref), Some(ObjectData::Boolean(true)));
+        if !is_true {
+            let msg = if args.len() == 2 {
+                match self.eval_expression(&args[1]) {
+                    EvalResult::Value(r) => self.display(r),
+                    _ => "Assertion failed".to_string(),
+                }
+            } else {
+                "Assertion failed".to_string()
+            };
+            let msg_ref = self.alloc(ObjectData::Str(msg));
+            EvalResult::Throw(msg_ref)
+        } else {
+            EvalResult::Value(self.null_ref)
+        }
+    }
+
     fn eval_parse_int(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.len() != 1 {
             eprintln!("❌ ERROR: parseInt expects 1 argument");
@@ -2181,6 +2351,7 @@ impl Evaluator {
         }
         let r = match self.eval_expression(&args[0]) {
             EvalResult::Value(r) => r,
+            EvalResult::Throw(v) => return EvalResult::Throw(v),
             _ => return EvalResult::Error,
         };
         match self.resolve(r).cloned() {
@@ -2204,6 +2375,7 @@ impl Evaluator {
         }
         let r = match self.eval_expression(&args[0]) {
             EvalResult::Value(r) => r,
+            EvalResult::Throw(v) => return EvalResult::Throw(v),
             _ => return EvalResult::Error,
         };
         match self.resolve(r).cloned() {
@@ -2241,6 +2413,7 @@ impl Evaluator {
                 if args.len() != 1 { eprintln!("❌ ERROR: abs() expects 1 argument"); return EvalResult::Error; }
                 let r = match self.eval_expression(&args[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 match self.resolve(r).cloned() {
@@ -2341,6 +2514,7 @@ impl Evaluator {
                     print!("{}", prompt);
                     let _ = io::stdout().flush();
                 }
+                EvalResult::Throw(v) => return EvalResult::Throw(v),
                 _ => return EvalResult::Error,
             }
         }
@@ -2450,11 +2624,13 @@ impl Evaluator {
             let old_class = self.constructing_class.replace(new_expr.class_name.clone());
 
             let mut body_error = false;
+            let mut ctor_throw: Option<ObjectRef> = None;
             for stmt in &ctor.body.statements {
                 match self.eval_statement(stmt) {
                     EvalResult::Error => { body_error = true; break; }
                     EvalResult::Return(_) => break,
                     EvalResult::Value(_) => {}
+                    EvalResult::Throw(v) => { ctor_throw = Some(v); break; }
                     EvalResult::Break | EvalResult::Continue => {
                         eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
                         body_error = true;
@@ -2467,11 +2643,11 @@ impl Evaluator {
 
             // Extract instance state before popping constructor scope
             let instance_owned = self.extract(instance_ref);
+            let throw_owned = ctor_throw.map(|r| self.extract(r));
             self.scopes.pop();
 
-            if body_error {
-                return EvalResult::Error;
-            }
+            if body_error { return EvalResult::Error; }
+            if let Some(owned) = throw_owned { return EvalResult::Throw(self.plant(owned)); }
 
             // Re-plant instance in outer context with updated fields
             let final_ref = self.plant(instance_owned);
@@ -2530,11 +2706,13 @@ impl Evaluator {
         let old_class = self.constructing_class.replace(parent_name);
 
         let mut error = false;
+        let mut super_throw: Option<ObjectRef> = None;
         for stmt in &parent_ctor.body.statements {
             match self.eval_statement(stmt) {
                 EvalResult::Error => { error = true; break; }
                 EvalResult::Return(_) => break,
                 EvalResult::Value(_) => {}
+                EvalResult::Throw(v) => { super_throw = Some(v); break; }
                 EvalResult::Break | EvalResult::Continue => {
                     eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
                     error = true;
@@ -2544,9 +2722,110 @@ impl Evaluator {
         }
 
         self.constructing_class = old_class;
+        let throw_owned = super_throw.map(|r| self.extract(r));
         self.scopes.pop();
 
-        if error { EvalResult::Error } else { EvalResult::Value(self.null_ref) }
+        if error { return EvalResult::Error; }
+        if let Some(owned) = throw_owned { return EvalResult::Throw(self.plant(owned)); }
+        EvalResult::Value(self.null_ref)
+    }
+
+    fn eval_super_method_call(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
+        let current_class = match &self.executing_class {
+            Some(c) => c.clone(),
+            None => {
+                eprintln!("❌ ERROR: super.{}() called outside of a class method", dot_call.method);
+                return EvalResult::Error;
+            }
+        };
+
+        let parent_name = match self.class_registry.get(&current_class).and_then(|c| c.parent.clone()) {
+            Some(p) => p,
+            None => {
+                eprintln!("❌ ERROR: Class '{}' has no parent — cannot call super.{}()", current_class, dot_call.method);
+                return EvalResult::Error;
+            }
+        };
+
+        let method = match self.find_method(&parent_name, &dot_call.method) {
+            Some(m) => m,
+            None => {
+                eprintln!("❌ ERROR: Parent class '{}' has no method '{}'", parent_name, dot_call.method);
+                return EvalResult::Error;
+            }
+        };
+
+        let this_ref = match self.scopes.lookup("this") {
+            Some(r) => r,
+            None => {
+                eprintln!("❌ ERROR: super.{}() called with no 'this' in scope", dot_call.method);
+                return EvalResult::Error;
+            }
+        };
+
+        let mut arg_vals: Vec<OwnedValue> = Vec::new();
+        for expr in &dot_call.arguments {
+            match self.eval_expression(expr) {
+                EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                other => return other,
+            }
+        }
+
+        if arg_vals.len() != method.parameters.len() {
+            eprintln!("❌ ERROR: Method '{}::{}' expects {} arguments, got {}",
+                parent_name, dot_call.method, method.parameters.len(), arg_vals.len());
+            return EvalResult::Error;
+        }
+
+        if self.call_depth >= 1000 {
+            eprintln!("❌ ERROR: Stack overflow — maximum call depth (1000) exceeded");
+            return EvalResult::Error;
+        }
+
+        let old_executing_class = self.executing_class.take();
+        self.executing_class = Some(parent_name.clone());
+
+        self.call_stack.push(CallFrame {
+            name: format!("{}::{}", parent_name, dot_call.method),
+            line: dot_call.line,
+            column: dot_call.column,
+        });
+        self.scopes.push();
+        self.call_depth += 1;
+        self.scopes.declare("this".to_string(), this_ref);
+
+        for (i, param) in method.parameters.iter().enumerate() {
+            let arg_ref = self.plant(arg_vals[i].clone());
+            self.scopes.declare(param.name.clone(), arg_ref);
+        }
+
+        let mut result_ref = self.null_ref;
+        let mut error = false;
+        let mut method_throw: Option<ObjectRef> = None;
+        for stmt in &method.body.statements {
+            match self.eval_statement(stmt) {
+                EvalResult::Value(_) => {}
+                EvalResult::Return(v) => { result_ref = v; break; }
+                EvalResult::Throw(v)  => { method_throw = Some(v); break; }
+                EvalResult::Error => { error = true; break; }
+                EvalResult::Break | EvalResult::Continue => {
+                    eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                    error = true;
+                    break;
+                }
+            }
+        }
+
+        let owned = self.extract(result_ref);
+        let throw_owned = method_throw.map(|r| self.extract(r));
+        self.call_depth -= 1;
+        self.scopes.pop();
+        self.call_stack.pop();
+        self.executing_class = old_executing_class;
+
+        if error { return EvalResult::Error; }
+        if let Some(t) = throw_owned { return EvalResult::Throw(self.plant(t)); }
+        EvalResult::Value(self.plant(owned))
     }
 
     fn eval_object_patch(&mut self, var_name: &str, patch: Vec<(String, ast::Expression)>) -> EvalResult {
@@ -2662,10 +2941,12 @@ impl Evaluator {
 
                 let mut result_ref = self.null_ref;
                 let mut error = false;
+                let mut method_throw: Option<ObjectRef> = None;
                 for stmt in &m.body.statements {
                     match self.eval_statement(stmt) {
                         EvalResult::Value(_) => {} // implicit — method result is null unless explicit return
                         EvalResult::Return(v) => { result_ref = v; break; }
+                        EvalResult::Throw(v)  => { method_throw = Some(v); break; }
                         EvalResult::Error => { error = true; break; }
                         EvalResult::Break | EvalResult::Continue => {
                             eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
@@ -2676,12 +2957,14 @@ impl Evaluator {
                 }
 
                 let owned = self.extract(result_ref);
+                let throw_owned = method_throw.map(|r| self.extract(r));
                 self.call_depth -= 1;
                 self.scopes.pop();
                 self.call_stack.pop();
                 self.executing_class = old_executing_class;
 
                 if error { return EvalResult::Error; }
+                if let Some(t) = throw_owned { return EvalResult::Throw(self.plant(t)); }
 
                 let result = self.plant(owned);
 
@@ -2757,6 +3040,7 @@ impl Evaluator {
                 }
                 let val_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 if let Some(ref et) = element_type {
@@ -2810,6 +3094,7 @@ impl Evaluator {
                 }
                 let val_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 if let Some(ref et) = element_type {
@@ -2862,6 +3147,7 @@ impl Evaluator {
                 let arg_ref: Option<ObjectRef> = if dot_call.arguments.len() == 1 {
                     match self.eval_expression(&dot_call.arguments[0]) {
                         EvalResult::Value(r) => Some(r),
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     }
                 } else {
@@ -2962,6 +3248,7 @@ impl Evaluator {
                 }
                 let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let n_params = match self.callback_param_count(cb_ref) {
@@ -2978,6 +3265,7 @@ impl Evaluator {
                     };
                     match self.call_function(cb_ref, args) {
                         EvalResult::Value(r) => results.push(r),
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     }
                 }
@@ -2991,6 +3279,7 @@ impl Evaluator {
                 }
                 let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let n_params = match self.callback_param_count(cb_ref) {
@@ -3010,6 +3299,7 @@ impl Evaluator {
                             let d = self.resolve(r).cloned();
                             self.is_truthy(&d.unwrap_or(ObjectData::Null))
                         }
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
                     if keep {
@@ -3026,10 +3316,12 @@ impl Evaluator {
                 }
                 let init_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let cb_ref = match self.eval_expression(&dot_call.arguments[1]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
@@ -3038,6 +3330,7 @@ impl Evaluator {
                     let acc_val = self.extract(acc_ref);
                     acc_ref = match self.call_function(cb_ref, vec![acc_val, val]) {
                         EvalResult::Value(r) => r,
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
                 }
@@ -3155,6 +3448,7 @@ impl Evaluator {
                         Some(ObjectData::Str(t)) => t,
                         _ => { eprintln!("❌ ERROR: includes argument must be a string"); return EvalResult::Error; }
                     },
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 EvalResult::Value(self.alloc(ObjectData::Boolean(s.contains(&sub[..]))))
@@ -3238,6 +3532,105 @@ impl Evaluator {
             },
             _ => None,
         }
+    }
+
+    // ── switch ────────────────────────────────────────────────────────────────
+
+    fn eval_switch(&mut self, sw: &ast::SwitchStatement) -> EvalResult {
+        let val_ref = match self.eval_expression(&sw.value) {
+            EvalResult::Value(v) => v,
+            other => return other,
+        };
+        let val_data = match self.resolve(val_ref).cloned() {
+            Some(d) => d,
+            None => return EvalResult::Error,
+        };
+
+        for case in &sw.cases {
+            for case_expr in &case.values {
+                let case_ref = match self.eval_expression(case_expr) {
+                    EvalResult::Value(v) => v,
+                    other => return other,
+                };
+                let case_data = match self.resolve(case_ref).cloned() {
+                    Some(d) => d,
+                    None => return EvalResult::Error,
+                };
+                if self.values_equal(&val_data, &case_data) {
+                    return self.eval_block(&case.body);
+                }
+            }
+        }
+
+        if let Some(ref default_block) = sw.default {
+            return self.eval_block(default_block);
+        }
+
+        EvalResult::Value(self.null_ref)
+    }
+
+    fn values_equal(&self, a: &ObjectData, b: &ObjectData) -> bool {
+        match (a, b) {
+            (ObjectData::Integer(x), ObjectData::Integer(y)) => x == y,
+            (ObjectData::Decimal(x), ObjectData::Decimal(y)) => x == y,
+            (ObjectData::Str(x), ObjectData::Str(y)) => x == y,
+            (ObjectData::Boolean(x), ObjectData::Boolean(y)) => x == y,
+            (ObjectData::Null, ObjectData::Null) => true,
+            _ => false,
+        }
+    }
+
+    // ── try / catch / finally ─────────────────────────────────────────────────
+
+    fn eval_try(&mut self, try_stmt: &ast::TryStatement) -> EvalResult {
+        let body_result = self.eval_block(&try_stmt.body);
+
+        let result_after_catch = match body_result {
+            EvalResult::Throw(thrown_ref) => {
+                if let Some(ref catch_block) = try_stmt.catch_body {
+                    self.scopes.push();
+                    if let Some(ref var_name) = try_stmt.catch_var {
+                        self.scopes.declare(var_name.clone(), thrown_ref);
+                    }
+                    // Run catch body statement-by-statement (same pattern as eval_call)
+                    // so we can extract the result BEFORE the scope pop.
+                    let mut catch_val = self.null_ref;
+                    let mut catch_return: Option<ObjectRef> = None;
+                    let mut catch_throw:  Option<ObjectRef> = None;
+                    let mut catch_error  = false;
+                    for s in &catch_block.statements {
+                        match self.eval_statement(s) {
+                            EvalResult::Value(v) => catch_val = v,
+                            EvalResult::Return(v)  => { catch_return = Some(v); break; }
+                            EvalResult::Throw(v)   => { catch_throw  = Some(v); break; }
+                            EvalResult::Error      => { catch_error = true; break; }
+                            EvalResult::Break | EvalResult::Continue => { catch_error = true; break; }
+                        }
+                    }
+                    // Extract BEFORE pop so refs remain valid
+                    let primary = catch_return.or(catch_throw).unwrap_or(catch_val);
+                    let owned = self.extract(primary);
+                    self.scopes.pop();
+                    if catch_error             { EvalResult::Error }
+                    else if catch_return.is_some() { EvalResult::Return(self.plant(owned)) }
+                    else if catch_throw.is_some()  { EvalResult::Throw(self.plant(owned)) }
+                    else                           { EvalResult::Value(self.plant(owned)) }
+                } else {
+                    EvalResult::Throw(thrown_ref) // no catch — re-throw after finally
+                }
+            }
+            other => other,
+        };
+
+        // finally always runs — its result is discarded unless it throws
+        if let Some(ref finally_block) = try_stmt.finally_body {
+            let finally_result = self.eval_block(finally_block);
+            if let EvalResult::Throw(v) = finally_result {
+                return EvalResult::Throw(v); // throw from finally overrides
+            }
+        }
+
+        result_after_catch
     }
 }
 

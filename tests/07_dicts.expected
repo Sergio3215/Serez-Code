@@ -1,0 +1,19 @@
+{Ana: 25, Bob: 30, Carlos: 22}
+25
+30
+26
+{Ana: 26, Bob: 30, Carlos: 22, Diana: 28}
+{Ana: 26, Bob: 30, Diana: 28}
+[Ana, Bob, Diana]
+[[Ana, 26], [Bob, 30], [Diana, 28]]
+{ES: Espana, MX: Mexico, AR: Argentina}
+Sergio
+28
+{}
+{}
+Alice: 100
+Bob: 85
+Carol: 92
+20
+42
+valor

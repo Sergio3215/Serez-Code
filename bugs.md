@@ -52,6 +52,8 @@
 | [B-40](#b-40--method-calls-on-class-instances-omit-call_stack-frame) | Method calls on class instances omit `call_stack` frame — incomplete error traces | 🟡 High | ✅ |
 | [B-41](#b-41--remove-listed-in-mutating-but-not-implemented-for-arrays) | `remove` listed in MUTATING but not implemented for arrays | 🟡 High | ✅ |
 | [B-42](#b-42--seven-common-string-methods-missing) | Seven common string methods missing: `trim`, `toUpperCase`, `toLowerCase`, `startsWith`, `endsWith`, `indexOf`, `charAt` | 🟠 Medium | ✅ |
+| [B-43](#b-43--ternary-operator-parses-chained-expressions-left-associatively) | Ternary operator parses chained `?:` right branch left-associatively | 🔴 Critical | ✅ |
+| [B-44](#b-44--supermethodargs-fails-in-non-constructor-child-class-methods) | `super.method(args)` fails in non-constructor child class methods | 🔴 Critical | ✅ |
 
 ---
 
@@ -1505,7 +1507,7 @@ None => {
 
 ---
 
-*Last updated: 2026-05-17 — 42 bugs documented, 42 fixed, 0 open.*
+*Last updated: 2026-05-18 — 44 bugs documented, 44 fixed, 0 open.*
 
 ---
 
@@ -1604,6 +1606,70 @@ These seven methods were simply not implemented in `eval_string_method`.
 ### Fix
 
 Added all seven arms. `indexOf` operates on character indices (not byte offsets) for Unicode correctness. `charAt` returns an empty string for out-of-bounds indices (JavaScript semantics). `toUpperCase`/`lower` also accept short aliases `upper`/`lower`.
+
+---
+
+## B-43 — Ternary operator parses chained expressions left-associatively
+
+**Date:** 2026-05-18  
+**Files:** `src/parser.rs`  
+**Severity:** 🔴 Critical  
+**Status:** ✅ Fixed
+
+### Symptom
+
+A chained ternary like `n > 0 ? "positive" : n < 0 ? "negative" : "zero"` returned the wrong branch. With `n = 5` it returned `"negative"` instead of `"positive"`:
+
+```serez
+fn string sign(int n) {
+    return n > 0 ? "positive" : n < 0 ? "negative" : "zero";
+}
+out sign(5);   // → "negative"  (expected "positive")
+out sign(-3);  // → "zero"      (expected "negative")
+out sign(0);   // → "yes"       (expected "zero")
+```
+
+### Root cause
+
+In `parse_infix_chain`, the `else_expr` of a ternary was parsed with `Precedence::Ternary`:
+
+```rust
+let else_expr = match self.parse_expression(Precedence::Ternary) { ... };
+```
+
+`Precedence::Ternary` has value `1`. `parse_expression` enters the Pratt infix loop only when `current_precedence < peek_precedence()`. For the inner `?`, `peek_precedence()` is also `Ternary (1)`. Since `1 < 1` is false, the inner ternary was **not** absorbed as the `else_expr` of the outer one.
+
+The parser instead returned just `n < 0` as `else_expr` of the outer ternary. The outer Pratt loop then saw the remaining `?` with its left side being `(n > 0 ? "positive" : n < 0)` — a ternary used as a condition. For `n = 5`:
+- The condition `n > 0 ? "positive" : n < 0` evaluates to `"positive"` (a truthy non-empty string).
+- The second ternary then picks `"negative"` (the then-branch).
+
+This is the exact opposite of what the programmer intended. The ternary was parsing as:
+
+```
+// Actual (left-associative — wrong):
+(n > 0 ? "positive" : n < 0) ? "negative" : "zero"
+
+// Expected (right-associative — correct):
+n > 0 ? "positive" : (n < 0 ? "negative" : "zero")
+```
+
+### Fix
+
+Parse `else_expr` with `Precedence::Lowest` instead of `Precedence::Ternary`:
+
+```rust
+// Before (wrong):
+let else_expr = match self.parse_expression(Precedence::Ternary) { ... };
+
+// After (correct):
+let else_expr = match self.parse_expression(Precedence::Lowest) { ... };
+```
+
+With `Lowest (0)`, the condition `0 < 1 (Ternary)` is true, so the inner `?` IS absorbed into the `else_expr`, producing correct right-associative nesting.
+
+**Location:** `src/parser.rs`, `parse_infix_chain`, the `TokenType::Question` branch.
+
+**Lesson:** The `else_expr` of a ternary must always be parsed with `Precedence::Lowest` (or strictly below `Ternary`) to achieve right-associativity. Parsing it at `Ternary` precedence enforces left-associativity, which contradicts how every major language (C, JavaScript, Python, Rust) defines chained `?:`.
 
 ---
 
@@ -1796,3 +1862,82 @@ fn format_decimal(d: f64) -> String {
     }
 }
 ```
+
+---
+
+## B-44 — `super.method(args)` fails in non-constructor child class methods
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🔴 Critical  
+**Status:** ✅ Fixed
+
+### Symptom
+
+Calling `super.method()` from a regular (non-constructor) child class method produced a runtime error:
+
+```serez
+class Animal {
+    public Animal(string n) { this.name = n; }
+    public string label() { return "Animal"; }
+}
+
+class Dog : Animal {
+    public Dog(string n) { super(n); }
+    public string parentLabel() {
+        return super.label();  // ← fails
+    }
+}
+
+let d = new Dog("Rex");
+out d.parentLabel();
+// → ❌ ERROR: Variable not found: super
+```
+
+### Root cause
+
+The evaluator's `Expression::DotCall` handler called `eval_expression(&dot_call.object)` to resolve the receiver. When the object was `Expression::Identifier("super")`, this tried to look up `"super"` as a regular variable in scope — which doesn't exist. Only `super(args)` (the constructor-delegation path) was implemented, via `eval_super_call` which checks `self.constructing_class`. There was no equivalent path for `super.method(args)` from regular methods.
+
+### Fix
+
+Two changes in `src/evaluator.rs`:
+
+**1. Early intercept in `Expression::DotCall`** (before the `eval_expression` call):
+
+```rust
+Expression::DotCall(dot_call) => {
+    // super.method(args) — dispatch to parent class method
+    if let Expression::Identifier(ref name) = *dot_call.object {
+        if name == "super" {
+            return self.eval_super_method_call(dot_call);
+        }
+    }
+    // ... rest of DotCall handling
+}
+```
+
+**2. New `eval_super_method_call` function** that:
+- Reads `self.executing_class` (the currently executing class name)
+- Looks up its parent via `class_registry`
+- Calls `find_method(&parent_name, method_name)` to resolve the method starting from the parent (not the child), preserving correct dispatch in 3-level hierarchies
+- Gets `this` from scope via `self.scopes.lookup("this")`
+- Runs the method body with `this` bound to the current instance — so the parent's method can read/write the child's fields
+
+```rust
+fn eval_super_method_call(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
+    let current_class = match &self.executing_class {
+        Some(c) => c.clone(),
+        None => { eprintln!("❌ ERROR: super.{}() called outside of a class method", ...); return EvalResult::Error; }
+    };
+    let parent_name = self.class_registry.get(&current_class)
+        .and_then(|c| c.parent.clone())
+        .ok_or_else(|| eprintln!("❌ ERROR: Class '{}' has no parent", current_class))?;
+    let method = self.find_method(&parent_name, &dot_call.method)?;
+    let this_ref = self.scopes.lookup("this")?;
+    // ... eval args, push scope, declare this + params, run body, pop scope
+}
+```
+
+### Lesson
+
+`super.method()` requires a separate code path from regular `DotCall` dispatch because the receiver is not an object stored in a variable — it is a class reference resolved statically from `executing_class`. The fix mirrors how `eval_super_call` works for constructors but uses `executing_class` instead of `constructing_class` and dispatches the result to `find_method` starting from the parent class.
