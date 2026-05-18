@@ -1,7 +1,8 @@
 # Serez-Code — Bug Log
 
-> All bugs found and fixed during interpreter development.  
-> Each entry describes the symptom, root cause, fix, and affected files.
+> All bugs found during interpreter development.  
+> Each entry describes the symptom, root cause, fix (if applied), and affected files.  
+> Status: ✅ Fixed · 🔲 Open
 
 ---
 
@@ -32,6 +33,25 @@
 | [B-21](#b-21--decimal-display-imprecision-due-to-f64-binary-representation) | Decimal display imprecision due to `f64` binary representation | 🟡 High | ✅ |
 | [B-22](#b-22--push-inside-while-body-loses-elements-on-scoped-array) | `push` inside `while` body loses elements on scoped array | 🔴 Critical | ✅ |
 | [B-23](#b-23--sort-returned-null-instead-of-the-array) | `.sort` returned `null` instead of the array | 🟡 High | ✅ |
+| [B-24](#b-24--infinite-recursion-crashes-the-process-with-no-controlled-error) | Infinite recursion crashes the process with no controlled error | 🔴 Critical | ✅ |
+| [B-25](#b-25--duplicate-type-error-typechecker-and-evaluator-both-fire) | Duplicate type error — TypeChecker and Evaluator both fire | 🟠 Medium | ✅ |
+| [B-26](#b-26--dict-kv-indexassign-does-not-validate-value-type) | Dict `<K,V>` `IndexAssign` does not validate value type | 🟡 High | ✅ |
+| [B-27](#b-27--closures-capture-environment-by-copy--mutations-do-not-persist-across-calls) | Closures capture environment by copy — mutations do not persist across calls | 🟠 Medium | ✅ |
+| [B-28](#b-28--this-fieldiidx--val-silently-does-nothing-when-target-is-not-a-plain-identifier) | `this.field[idx] = val` silently does nothing inside class methods | 🔴 Critical | ✅ |
+| [B-29](#b-29--array-return-type-int-not-parsed-in-class-method-signatures) | Array return type `[int]` not parsed in class method signatures | 🔴 Critical | ✅ |
+| [B-30](#b-30--pop-and-shift-on-empty-array-errors-instead-of-returning-null) | `.pop()` and `.shift()` on empty array error instead of returning `null` | 🟡 High | ✅ |
+| [B-31](#b-31--dict-missing-key-access-errors-instead-of-returning-null) | Dict missing-key access errors instead of returning `null` | 🟡 High | ✅ |
+| [B-32](#b-32--sort-shift-unshift-on-instance-field-array-do-not-write-back) | `.sort()`, `.shift()`, `.unshift()` on instance field array do not write back | 🔴 Critical | ✅ |
+| [B-33](#b-33--interface-field-array-type-int-fails-to-parse) | Interface field with array type `[int]` fails to parse | 🔴 Critical | ✅ |
+| [B-34](#b-34--thisnfield_holding_a_function-is-not-callable-with-args) | `this.fn_field(args)` — calling a function stored in an instance field fails | 🟡 High | ✅ |
+| [B-35](#b-35--for-loop-init-does-not-allocate-a-fresh-slot-aliasing-risk) | `for` loop init does not allocate a fresh slot — aliasing risk | 🔴 Critical | ✅ |
+| [B-36](#b-36--prefix---on-i64min-produces-overflow-panic) | Prefix `-` on `i64::MIN` produces overflow panic | 🔴 Critical | ✅ |
+| [B-37](#b-37--sort-evaluates-its-argument-argument-up-to-3-times) | `sort` evaluates its argument up to 3 times — redundant allocations | 🟠 Medium | ✅ |
+| [B-38](#b-38--eprint-instead-of-eprintln-in-type-mismatch-error-corrupts-output-format) | `eprint!` instead of `eprintln!` corrupts error output format | 🟢 Low | ✅ |
+| [B-39](#b-39--str--decimal-concatenation-uses-inconsistent-float-formatting) | `Str + Decimal` concatenation inconsistent with `display()` | 🟢 Low | ✅ |
+| [B-40](#b-40--method-calls-on-class-instances-omit-call_stack-frame) | Method calls on class instances omit `call_stack` frame — incomplete error traces | 🟡 High | ✅ |
+| [B-41](#b-41--remove-listed-in-mutating-but-not-implemented-for-arrays) | `remove` listed in MUTATING but not implemented for arrays | 🟡 High | ✅ |
+| [B-42](#b-42--seven-common-string-methods-missing) | Seven common string methods missing: `trim`, `toUpperCase`, `toLowerCase`, `startsWith`, `endsWith`, `indexOf`, `charAt` | 🟠 Medium | ✅ |
 
 ---
 
@@ -955,4 +975,824 @@ EvalResult::Value(arr_ref)
 
 ---
 
-*Last updated: 2026-05-14 — 23 bugs documented, all fixed.*
+---
+
+## B-24 — Infinite recursion crashes the process with no controlled error
+
+**Date:** 2026-05-16  
+**Files:** `src/evaluator.rs`, `src/main.rs`  
+**Severity:** 🔴 Critical  
+**Status:** ✅ Fixed
+
+### Symptom
+
+A function that recurses without a base case causes the OS thread to overflow its stack. The process prints a low-level Rust diagnostic and terminates abruptly — no `❌` message is produced by the interpreter:
+
+```sz
+fn int inf(int n) { return inf(n + 1); }
+inf(0);
+// → thread '<unknown>' has overflowed its stack
+// → (process exits with non-zero code, no user-facing error)
+```
+
+### Root cause
+
+The evaluator uses native Rust call frames for each function invocation (`eval_expression` calls itself recursively for each `Call` expression). There is no interpreter-level depth counter. The 64 MB thread stack allocated in `main.rs` buys several hundred thousand frames before the OS kills the thread — but the termination is always abrupt.
+
+```rust
+// main.rs:77 — stack is large but has no depth limit in the interpreter
+let builder = std::thread::Builder::new().stack_size(64 * 1024 * 1024);
+```
+
+### Fix
+
+Add a `call_depth: usize` counter to `Evaluator`. Increment it on every function call entry and decrement on exit. If the counter exceeds a configurable limit (e.g. 1000) before allocating a new call frame, return a controlled error:
+
+```rust
+// evaluator.rs — Evaluator struct
+call_depth: usize,
+
+// In eval_expression, Expression::Call, before scopes.push():
+if self.call_depth >= 1000 {
+    eprintln!("❌ ERROR: Stack overflow — maximum call depth (1000) exceeded");
+    return EvalResult::Error;
+}
+self.call_depth += 1;
+
+// Before all return points in the Call arm:
+self.call_depth -= 1;
+```
+
+The same counter must also be applied to method dispatch in `eval_dot_call` for class instances (the `find_method` / body-execution path).
+
+---
+
+## B-25 — Duplicate type error — TypeChecker and Evaluator both fire
+
+**Date:** 2026-05-16  
+**Files:** `src/evaluator.rs`, `src/type_checker.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+When a function is called with an argument of the wrong type, **two** error messages are emitted for a single mistake — one from the TypeChecker pass (good, includes the actual type) and one from the runtime Evaluator (worse, says "another type"):
+
+```sz
+fn int suma(int a, int b) { return a + b; }
+suma("hola", 2);
+// ❌ TYPE ERROR [line 2:5]: Parameter 'a' of 'suma' expected 'int' but received 'string'.
+// ❌ TYPE ERROR: Parameter 'a' expected 'int' but received another type.
+//     called from 'suma' [line 2:5]
+```
+
+The first message is from the TypeChecker. The second, redundant and inferior, is from `eval_expression` at runtime. The user sees the same error twice in degraded form.
+
+### Root cause
+
+Both passes are independent and have no shared state. The TypeChecker runs first (producing message 1), but the Evaluator re-performs the same check unconditionally at call time (producing message 2). The runtime check also fails to include the actual received type:
+
+```rust
+// evaluator.rs:900-905
+eprintln!(
+    "❌ TYPE ERROR: Parameter '{}' expected '{}' but received another type.",
+    //                                                      ^^^^^^^^^^^
+    //                          actual type is available via actual_data.type_name()
+    //                          but is not used
+    param.name, expected_type
+);
+```
+
+### Fix
+
+Two independent improvements, either or both can be applied:
+
+**Option A — Include the actual type in the runtime message:**
+
+```rust
+eprintln!(
+    "❌ TYPE ERROR: Parameter '{}' expected '{}' but received '{}'.",
+    param.name, expected_type, actual_data.type_name()
+);
+```
+
+**Option B — Skip the runtime check when the TypeChecker already caught the error:**  
+This requires the TypeChecker to record which call sites it already diagnosed, or the Evaluator to honour a `--skip-runtime-type-checks` flag when `--check` was run first. More invasive; Option A is sufficient.
+
+---
+
+## B-26 — Dict `<K,V>` `IndexAssign` does not validate value type
+
+**Date:** 2026-05-16  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+A value of the wrong type can be silently stored in a typed dictionary. No error is produced:
+
+```sz
+let d <string,int> = ({"a", 1}, {"b", 2});
+d["a"] = "not_an_int";   // no ❌ ERROR
+out d["a"];              // → not_an_int
+```
+
+The dict now holds a `string` where it declared `int`, violating the type contract invisibly.
+
+### Root cause
+
+The `IndexAssign` handler in `eval_statement` branches on the target's runtime type. The `Array` branch validates the element against `element_type` before writing. The `Dict` branch performs no equivalent check on `value_type`:
+
+```rust
+// evaluator.rs — IndexAssign, Dict branch (~line 599)
+ObjectData::Dict { key_type, value_type, mut entries } => {
+    let search_key = obj_data_to_key_str(&idx_data);
+    let owned_val = self.extract(val_ref);
+    // ← no type validation of owned_val against value_type
+    ...
+}
+```
+
+Compare with the Array branch, which correctly rejects mismatched types:
+
+```rust
+ObjectData::Array { element_type, mut elements } => {
+    if let Some(ref et) = element_type {
+        let val_data = self.resolve(val_ref).unwrap();
+        if !type_matches(et, val_data) {
+            eprintln!("❌ TYPE ERROR: Cannot assign '{}' to [{}] array element", ...);
+            return EvalResult::Error;
+        }
+    }
+    ...
+}
+```
+
+### Fix
+
+Add the same guard to the Dict branch, before any mutation:
+
+```rust
+ObjectData::Dict { key_type, value_type, mut entries } => {
+    // Validate value type — mirrors the Array branch
+    {
+        let val_data = self.resolve(val_ref).unwrap();
+        if !type_matches(&value_type, val_data) {
+            eprintln!(
+                "❌ TYPE ERROR: Cannot assign '{}' to <{},{}> dict value",
+                val_data.type_name(), key_type, value_type
+            );
+            return EvalResult::Error;
+        }
+    }
+    let search_key = obj_data_to_key_str(&idx_data);
+    let owned_val = self.extract(val_ref);
+    ...
+}
+```
+
+---
+
+## B-27 — Closures capture environment by copy — mutations do not persist across calls
+
+**Date:** 2026-05-16  
+**Files:** `src/evaluator.rs`, `src/region.rs`, `src/scope.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+A closure that captures and mutates a local variable does not retain the updated value between invocations. The captured variable resets to its original value on each call:
+
+```sz
+fn any mkCounter() {
+    let count = 0;
+    return fn() {
+        count = count + 1;
+        return count;
+    };
+}
+let c = mkCounter();
+out c();   // → 1  (expected 1)
+out c();   // → 1  (expected 2)
+out c();   // → 1  (expected 3)
+```
+
+Any closure that relies on mutable captured state — counters, accumulators, generators — behaves incorrectly.
+
+### Root cause
+
+`capture_env()` serializes the current environment into `Vec<(String, OwnedValue)>` — a deep value copy completely detached from the live arena:
+
+```rust
+fn capture_env(&mut self) -> Vec<(String, OwnedValue)> {
+    // iterates scopes + global bindings, calls self.extract() on each
+    // extract() produces an OwnedValue — a full heap copy of the data
+}
+```
+
+When the closure is invoked, `plant()` re-materializes the captured values into fresh arena slots for that call:
+
+```rust
+for (name, owned) in captured {
+    let local_ref = self.plant(owned);   // new slot each time
+    self.scopes.declare(name, local_ref);
+}
+```
+
+Each call starts from the **snapshot taken at definition time**. The mutation `count = count + 1` modifies the freshly-planted slot for that invocation, but this local slot is destroyed when the call's scope pops. The next call plants a fresh copy of the original snapshot again.
+
+### Fix
+
+This is a **design-level issue** that conflicts with the Arena + Flash Scope memory model. A correct fix requires one of:
+
+**Option A — Shared mutable cells for captured variables:**  
+Use `Rc<RefCell<OwnedValue>>` (or equivalent) for variables that are both captured and assigned-to inside a closure. This introduces reference counting but only for the closure cells, not the whole runtime.
+
+**Option B — Allocate captures in the global arena:**  
+Instead of storing captures as `OwnedValue`, store them as `ObjectRef` pointing to the global arena. Since the global arena is never truncated, the refs remain valid across calls. Mutations inside the closure update the global slot directly. Requires distinguishing captured refs from regular refs to prevent unintended aliasing.
+
+**Option C — Document as intentional value semantics:**  
+Treat closure capture as value semantics by design (similar to Swift's capture of value types). Document the limitation and provide an explicit escape hatch (e.g. a mutable reference type or a dedicated `cell` type) for cases where shared mutable state is needed.
+
+Option C has the lowest implementation cost and is consistent with the existing arena model. Options A and B produce the semantics most users expect from languages like JavaScript or Python.
+
+---
+
+---
+
+## B-28 — `this.field[idx] = val` silently does nothing inside class methods
+
+**Date:** 2026-05-17  
+**Files:** `src/ast.rs`, `src/parser.rs`, `src/evaluator.rs`  
+**Severity:** 🔴 Critical  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+class Doubler {
+    public Doubler([int] list) { this.list = list; }
+    public void doubleAll() {
+        let i = 0;
+        while (i < this.list.length()) {
+            this.list[i] = this.list[i] * 2;  // ← silently ignored
+            i = i + 1;
+        }
+    }
+}
+let d = new Doubler([1, 2, 3]);
+d.doubleAll();
+out d.getList();   // [1, 2, 3] — expected [2, 4, 6]
+```
+
+### Root cause
+
+Three interacting issues:
+
+1. `IndexAssignStatement.target` was `String` — only simple identifier targets (`arr[i] = val`) were supported. `this.list[i] = val` starts with `this.` and was parsed by `parse_expression_statement`, which only checked for `obj.field = val` (FieldAssign), not `obj.field[i] = val` (IndexAssign).
+
+2. `parse_expression_statement` returned `Statement::Expression(expr)` for `this.list[i]` — the index and value were never consumed. Silent no-op.
+
+3. The evaluator's `Statement::IndexAssign` used `lookup_var(&stmt.target)` expecting a `String`, so any non-identifier target would fail to compile once the AST was fixed.
+
+### Fix
+
+- Changed `IndexAssignStatement.target: String` → `IndexAssignStatement.target: Expression`.
+- Refactored `parse_index_assign_or_expr_statement` into `try_build_index_assign(expr)`.
+- `parse_expression_statement` now checks: if `peek == Assign` and `expr` is `Index(...)`, calls `try_build_index_assign(expr)` — catches `this.list[i] = val`.
+- Evaluator `Statement::IndexAssign` evaluates `target` as an `Expression`. For `DotCall` targets (field access), adds writeback: after mutating the array, re-extracts it as `OwnedValue` and stores it back in the instance's field list.
+
+---
+
+## B-29 — Array return type `[int]` not parsed in class method signatures
+
+**Date:** 2026-05-17  
+**Files:** `src/parser.rs`  
+**Severity:** 🔴 Critical  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+class Doubler {
+    public [int] getList() { return this.list; }  // ← PARSER ERROR
+}
+// ❌ PARSER ERROR: Expected method name in class body
+```
+
+### Root cause
+
+The class body member parser handled `void`, `int`, `decimal`, `string`, `bool` (via `is_type_keyword`) and `ClassName[?]` (via Ident+Ident pattern) as return types, but not `[type]` array return types. When it saw `[`, it fell through to the "Expected method name" error.
+
+### Fix
+
+Added a `LBracket` branch in the class member return-type parser that reads `[elem_type]` and produces `Some("[elem_type]")`.
+
+---
+
+## B-30 — `.pop()` and `.shift()` on empty array error instead of returning `null`
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let a [int] = [];
+let v = a.pop();   // ❌ ERROR: pop on empty array
+```
+
+Calling `.pop()` or `.shift()` on an empty array produced a fatal error and stopped execution. The expected behavior (consistent with nullable return semantics) is `null`.
+
+### Root cause
+
+Both methods had an early guard:
+```rust
+if elems.is_empty() {
+    eprintln!("❌ ERROR: pop on empty array");
+    return EvalResult::Error;
+}
+```
+
+### Fix
+
+Changed both guards to return `null_ref` instead of erroring:
+```rust
+if elems.is_empty() {
+    return EvalResult::Value(self.null_ref);
+}
+```
+
+---
+
+## B-31 — Dict missing-key access errors instead of returning `null`
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let d <string,int> = ({"a", 1});
+let v = d["missing"];   // ❌ ERROR: Key 'missing' not found in dict
+out v ?? 0;             // never reached
+```
+
+Accessing a dict key that does not exist caused a fatal runtime error.
+
+### Root cause
+
+The dict index handler had:
+```rust
+None => {
+    eprintln!("❌ ERROR: Key '{}' not found in dict", search_key);
+    EvalResult::Error
+}
+```
+
+### Fix
+
+Returns `null_ref` instead, allowing `??` to provide a default:
+```rust
+None => EvalResult::Value(self.null_ref),
+```
+
+---
+
+## B-32 — `.sort()`, `.shift()`, `.unshift()` on instance field array do not write back
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🔴 Critical  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+class MyList {
+    public MyList([int] init) { this.data = init; }
+    public void doSort() { this.data.sort(); }
+    public [int] get() { return this.data; }
+}
+let ml = new MyList([3, 1, 2]);
+ml.doSort();
+out ml.get();   // [3, 1, 2] — expected [1, 2, 3]
+```
+
+Calling `.sort()`, `.shift()`, or `.unshift()` on an instance field array mutated a temporary copy but did not write the result back to the instance. The field remained unchanged.
+
+### Root cause
+
+The `writeback_ctx` mechanism detects chained calls of the form `this.field.method(args)` and writes the mutated collection back to the instance after the call. The detection list was:
+
+```rust
+const MUTATING: &[&str] = &["push", "pop", "remove", "Add", "Remove", "RemoveAll", "clear"];
+```
+
+`"sort"`, `"shift"`, and `"unshift"` were missing from this list, so their writeback was never triggered.
+
+### Fix
+
+Added the three missing methods:
+```rust
+const MUTATING: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove", "Add", "Remove", "RemoveAll", "clear"];
+```
+
+---
+
+---
+
+## B-33 — Interface field with array type `[int]` fails to parse
+
+**Date:** 2026-05-17  
+**Files:** `src/parser.rs`  
+**Severity:** 🔴 Critical  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+interface Playlist {
+    name: string;
+    songs: [string];   // ← PARSER ERROR
+    count: int;
+}
+// ❌ PARSER ERROR: Expected type after ':' for field 'songs' in interface
+```
+
+### Root cause
+
+The interface field type parser only accepted type-keyword tokens (`is_type_keyword`) — `void`, `int`, `decimal`, `string`, `bool`, `any`. When it encountered `[` (LBracket), it fell through to the error path. Similarly, class-name types (e.g., `fieldName: MyClass`) were not accepted.
+
+### Fix
+
+Extended the interface field type parser to support:
+1. `[elemType]` — array field types (e.g., `songs: [string]`)
+2. Plain `Ident` — class or interface type names (e.g., `owner: User`)
+
+Applied the same pattern already used in function parameter type parsing and class method return type parsing.
+
+---
+
+## B-34 — `this.fn_field(args)` — calling a function stored in an instance field fails
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+class Transformer {
+    public Transformer() {
+        this.transform = fn(int x) { return x; };
+    }
+    public int apply(int x) {
+        return this.transform(x);   // ← ERROR
+    }
+}
+let t = new Transformer();
+out t.apply(5);
+// ❌ ERROR: 'Transformer' has no field or method named 'transform'
+```
+
+A function value stored in an instance field cannot be called with arguments via `this.field(args)`.
+
+### Root cause
+
+`eval_instance_dot` uses `dot_call.arguments.is_empty()` as the condition for field reads:
+```rust
+if dot_call.arguments.is_empty() {
+    // field read path
+}
+```
+
+When `this.transform(x)` is called, arguments are **not empty** (one arg: `x`). So the field-read path is skipped entirely, and the code falls through to `find_method` — which finds no method named `transform` — and returns an error.
+
+Zero-arg calls work by accident (`this.field` with no parens goes through the field path). Non-zero-arg calls never reach the field path.
+
+### Fix
+
+Added a fallback in the `None` branch of the method dispatch (after `find_method` returns `None`): check if a field with the requested name exists, and if so, plant its value as an `ObjectRef` and call it as a function via `call_function`:
+
+```rust
+None => {
+    if method_name == "toString" { /* ... */ }
+    // Fallback: field holds a callable function (this.fn_field(args))
+    if let Some((_, owned)) = fields.iter().find(|(n, _)| n == method_name) {
+        let owned = owned.clone();
+        let fn_ref = self.plant(owned);
+        let mut arg_vals = Vec::new();
+        for arg_expr in &dot_call.arguments {
+            match self.eval_expression(arg_expr) {
+                EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                other => return other,
+            }
+        }
+        return self.call_function(fn_ref, arg_vals);
+    }
+    eprintln!("❌ ERROR: ...");
+    EvalResult::Error
+}
+```
+
+---
+
+*Last updated: 2026-05-17 — 42 bugs documented, 42 fixed, 0 open.*
+
+---
+
+## B-40 — Method calls on class instances omit `call_stack` frame
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+An error inside a class method showed only the call chain up to the method invocation, not the method itself:
+
+```
+❌ ERROR: Division by zero
+    called from 'main' [line 10:5]
+```
+
+Expected:
+```
+❌ ERROR: Division by zero
+    called from 'MyClass::divide' [line 5:12]
+    called from 'main' [line 10:5]
+```
+
+### Root cause
+
+`eval_instance_dot` increments `call_depth` and pushes a scope, but never called `self.call_stack.push(...)`. Compare with `Expression::Call` which always pushes a `CallFrame` before entering the function body. There was also no `call_stack.pop()` in the cleanup path.
+
+### Fix
+
+Added `call_stack.push(CallFrame { name: "ClassName::method", line, column })` before `scopes.push()`, and `call_stack.pop()` in the unified cleanup block (after `scopes.pop()`, before the error/success branch). This keeps `call_stack` synchronized on all paths including error returns.
+
+---
+
+## B-41 — `remove` listed in `MUTATING` but not implemented for arrays
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let a [int] = [1, 2, 3];
+a.remove(1);   // ❌ ERROR: Unknown array method 'remove'
+```
+
+Worse: `instance.field.remove(1)` set up writeback context but then failed with the same error, making the failure mode confusing.
+
+### Root cause
+
+`"remove"` was present in the `MUTATING` constant (used for writeback detection) but had no corresponding arm in `eval_array_method`. The `_` fallback caught it and errored.
+
+### Fix
+
+Added `"remove"` arm: validates the index, removes the element with `Vec::remove`, writes back the shortened array, and returns the extracted element (consistent with `pop`/`shift`):
+
+```rust
+"remove" => {
+    let idx = self.eval_int_arg(&dot_call.arguments[0])?;
+    if idx < 0 || idx as usize >= elems.len() { /* out of bounds error */ }
+    let removed = e.remove(idx as usize);
+    self.update_array(arr_ref, element_type, e);
+    EvalResult::Value(self.plant(self.extract(removed)))
+}
+```
+
+---
+
+## B-42 — Seven common string methods missing
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+out "  hello  ".trim();          // ❌ ERROR: Unknown string method 'trim'
+out "hello".toUpperCase();       // ❌ ERROR: Unknown string method 'toUpperCase'
+out "HELLO".toLowerCase();       // ❌ ERROR: Unknown string method 'toLowerCase'
+out "hello".startsWith("hel");   // ❌ ERROR: Unknown string method 'startsWith'
+out "hello".endsWith("llo");     // ❌ ERROR: Unknown string method 'endsWith'
+out "hello world".indexOf("wo"); // ❌ ERROR: Unknown string method 'indexOf'
+out "hello".charAt(1);           // ❌ ERROR: Unknown string method 'charAt'
+```
+
+### Root cause
+
+These seven methods were simply not implemented in `eval_string_method`.
+
+### Fix
+
+Added all seven arms. `indexOf` operates on character indices (not byte offsets) for Unicode correctness. `charAt` returns an empty string for out-of-bounds indices (JavaScript semantics). `toUpperCase`/`lower` also accept short aliases `upper`/`lower`.
+
+---
+
+## B-35 — `for` loop init does not allocate a fresh slot (aliasing risk)
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🔴 Critical  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let arr = [10, 20, 30];
+for (let i = arr[0]; i < 30; i = i + 1) { ... }
+out arr[0];  // → updated instead of 10
+```
+
+The for-loop update `i = i + 1` corrupted `arr[0]` because `i` aliased the same arena slot.
+
+### Root cause
+
+`eval_statement(Let)` was fixed by B-18 to allocate a fresh slot. However, the analogous code inside `Statement::For` for the `init` variable was never updated:
+
+```rust
+let init_val = match self.eval_expression(&for_stmt.init.value) { ... };
+self.scopes.declare(for_stmt.init.name.clone(), init_val); // ← no fresh slot
+```
+
+When `init.value` is `arr[0]`, `eval_expression` returns the `ObjectRef` of that element directly. Declaring `i` with that same ref means `i` shares the slot with `arr[0]`. On update, `scopes.assign("i", ...)` finds `i` is a Global ref and calls `global_arena.update(arr[0].index, new_data)`, corrupting the array.
+
+### Fix
+
+```rust
+let init_data = self.resolve(init_val).unwrap().clone();
+let fresh_init = self.alloc(init_data);
+self.scopes.declare(for_stmt.init.name.clone(), fresh_init);
+```
+
+---
+
+## B-36 — Prefix `-` on `i64::MIN` produces overflow panic
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🔴 Critical  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let x = -9223372036854775808;
+out -x;  // → panic: attempt to negate with overflow (debug) / UB (release)
+```
+
+### Root cause
+
+B-03 fixed overflow in binary arithmetic (`+`, `-`, `*`, `/`, `%`) with `checked_*` methods, but the unary prefix `-` operator was missed:
+
+```rust
+"-" => ObjectData::Integer(-i),  // panics for i64::MIN
+```
+
+### Fix
+
+```rust
+"-" => match i.checked_neg() {
+    Some(v) => EvalResult::Value(self.alloc(ObjectData::Integer(v))),
+    None => { eprintln!("❌ ERROR: Integer overflow in negation ..."); EvalResult::Error }
+},
+```
+
+---
+
+## B-37 — `sort` evaluates its argument argument up to 3 times
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+Calling `.sort(comparatorFn)` allocated two or three redundant arena slots for the same function reference.
+
+### Root cause
+
+The `sort` arm had three separate `eval_expression(&dot_call.arguments[0])` calls:
+
+1. One to detect if the argument is a function (`use_comparator` check).
+2. One inside `if use_comparator` to get `cb_ref`.
+3. One in the non-comparator path to get the `"asc"/"desc"` string.
+
+The first and second calls both allocated a ref to the same object without reusing the result.
+
+### Fix
+
+Evaluate the argument exactly once at the top of the `sort` arm, store the result in `arg_ref: Option<ObjectRef>`, and use it in all branches:
+
+```rust
+let arg_ref: Option<ObjectRef> = if dot_call.arguments.len() == 1 {
+    match self.eval_expression(&dot_call.arguments[0]) {
+        EvalResult::Value(r) => Some(r),
+        _ => return EvalResult::Error,
+    }
+} else {
+    None
+};
+let is_comparator = arg_ref.map_or(false, |r| {
+    matches!(self.resolve(r), Some(ObjectData::Function { .. }))
+});
+```
+
+---
+
+## B-38 — `eprint!` instead of `eprintln!` in type-mismatch error corrupts output format
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟢 Low  
+**Status:** ✅ Fixed
+
+### Symptom
+
+When a type mismatch error was emitted (e.g. `1 + "x"`), the error line and the first call-stack frame appeared on the same line:
+
+```
+❌ ERROR: Type mismatch — ...    called from 'main' [line 2:5]
+```
+
+### Root cause
+
+The type-mismatch branch in `eval_infix` used `eprint!` (no trailing newline) while every other error in the evaluator used `eprintln!`:
+
+```rust
+eprint!(   // ← missing newline
+    "❌ ERROR: Type mismatch — operator '{}' ...",
+    ...
+);
+for frame in self.call_stack.iter().rev() {
+    eprintln!("    called from '{}' [...]", ...);  // appended to same line
+}
+```
+
+### Fix
+
+Changed `eprint!` to `eprintln!`.
+
+---
+
+## B-39 — `Str + Decimal` concatenation uses inconsistent float formatting
+
+**Date:** 2026-05-17  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟢 Low  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let x = 3.14 + 0.01;
+out x;             // → 3.15      (correct, via display())
+out "val: " + x;  // → val: 3.1500000000000004  (wrong)
+```
+
+### Root cause
+
+The `(ObjectData::Str, ObjectData::Decimal)` and `(ObjectData::Decimal, ObjectData::Str)` branches in `eval_infix` used an ad-hoc formatting expression:
+
+```rust
+let ds = if d == d.floor() && d.abs() < 1e15 {
+    format!("{:.1}", d)
+} else {
+    format!("{}", d)  // ← exposes full f64 representation noise
+};
+```
+
+This differed from `display()` which uses `format!("{:.10}", d)` trimmed, eliminating binary-representation noise.
+
+### Fix
+
+Extracted `format_decimal(d: f64) -> String` as a free function with the same logic as `display()`. Both `Str + Decimal` branches now call `format_decimal(d)`, making string concatenation consistent with `out`.
+
+```rust
+fn format_decimal(d: f64) -> String {
+    if d.fract() == 0.0 { format!("{:.1}", d) }
+    else {
+        let s = format!("{:.10}", d);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+```

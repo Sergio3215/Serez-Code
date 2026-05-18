@@ -78,7 +78,7 @@ pub struct WhileStatement {
 
 #[derive(Debug, Clone)]
 pub struct IndexAssignStatement {
-    pub target: String,
+    pub target: Expression,  // Identifier or DotCall (for this.field[i] = val)
     pub index: Expression,
     pub value: Expression,
 }
@@ -208,6 +208,7 @@ pub struct DotCallExpression {
     pub object: Box<Expression>,
     pub method: String,
     pub arguments: Vec<Expression>,
+    pub has_parens: bool,  // true if written as obj.method(...), false if obj.field
     #[allow(dead_code)]
     pub line: usize,
     #[allow(dead_code)]

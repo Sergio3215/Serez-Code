@@ -64,10 +64,11 @@ impl ScopeStack {
     }
 
     /// Reasigna una variable existente en cualquier frame (inner → outer).
-    /// Actualiza el dato IN-PLACE en la arena (no aloca nuevo slot).
-    /// Retorna `true` si la variable fue encontrada y actualizada.
-    pub fn assign(&mut self, name: &str, new_data: ObjectData) -> bool {
-        // Buscamos el ObjectRef en los frames (solo lectura de frames)
+    /// - Si el ref es Scoped: actualiza la arena local y retorna Some(ref).
+    /// - Si el ref es Global (variable capturada por closure): retorna Some(ref)
+    ///   SIN actualizar — el caller debe hacer global_arena.update(r.index, new_data).
+    /// - Si no se encuentra: retorna None.
+    pub fn assign(&mut self, name: &str, new_data: ObjectData) -> Option<ObjectRef> {
         let existing_ref = {
             let mut found = None;
             for frame in self.frames.iter().rev() {
@@ -79,17 +80,13 @@ impl ScopeStack {
             found
         };
 
-        // Si encontramos el ref, actualizamos in-place en la arena
         if let Some(r) = existing_ref {
-            debug_assert_eq!(
-                r.region,
-                RegionId::Scoped,
-                "assign: ref en frame debería ser Scoped; un Global ref en frames indica corrupción de scope"
-            );
-            self.arena.update(r.index, new_data);
-            return true;
+            if r.region == RegionId::Scoped {
+                self.arena.update(r.index, new_data);
+            }
+            return Some(r);
         }
-        false
+        None
     }
 
     /// Busca el ObjectRef de una variable (inner → outer).

@@ -35,7 +35,7 @@ pub enum OwnedValue {
         return_type: Option<String>,
         parameters: Vec<Parameter>,
         body: BlockStatement,
-        captured: Vec<(String, OwnedValue)>,
+        captured: Vec<(String, ObjectRef)>,
     },
     Instance {
         class_name: String,
@@ -98,7 +98,7 @@ pub enum ObjectData {
         return_type: Option<String>,
         parameters: Vec<Parameter>,
         body: BlockStatement,
-        captured: Vec<(String, OwnedValue)>,
+        captured: Vec<(String, ObjectRef)>,
     },
     // Fields stored as OwnedValues (embedded, arena-independent) to avoid cross-scope refs.
     Instance {

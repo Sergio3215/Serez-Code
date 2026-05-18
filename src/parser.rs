@@ -173,6 +173,11 @@ impl Parser {
                     }
                 }
             }
+
+            // Detect expr[idx] = value — handles this.arr[idx] = val and other non-Ident targets
+            if let Expression::Index(_) = &expr {
+                return self.try_build_index_assign(expr);
+            }
         }
 
         if self.peek_token.token_type == TokenType::Semicolon {
@@ -252,46 +257,36 @@ impl Parser {
 
     fn parse_index_assign_or_expr_statement(&mut self) -> Option<Statement> {
         let expr = self.parse_expression(Precedence::Lowest)?;
+        self.try_build_index_assign(expr)
+    }
 
+    fn try_build_index_assign(&mut self, expr: Expression) -> Option<Statement> {
         if self.peek_token.token_type == TokenType::Assign {
-            let (target, index) = match &expr {
-                Expression::Index(idx_expr) => {
-                    let target = match idx_expr.left.as_ref() {
-                        Expression::Identifier(name) => name.clone(),
-                        _ => {
-                            eprintln!("❌ PARSER ERROR: Index assignment target must be a simple array variable");
-                            return None;
-                        }
-                    };
-                    let index = *idx_expr.index.clone();
-                    (target, index)
+            if let Expression::Index(idx_expr) = &expr {
+                let target = (*idx_expr.left).clone();
+                let index = (*idx_expr.index).clone();
+
+                self.next_token(); // '='
+                self.next_token(); // first token of value
+
+                let value = self.parse_expression(Precedence::Lowest)?;
+
+                if self.peek_token.token_type == TokenType::Semicolon {
+                    self.next_token();
                 }
-                _ => {
-                    eprintln!("❌ PARSER ERROR: Left side of '=' is not an index expression");
-                    return None;
-                }
-            };
 
-            self.next_token(); // '='
-            self.next_token(); // first token of value
-
-            let value = self.parse_expression(Precedence::Lowest)?;
-
-            if self.peek_token.token_type == TokenType::Semicolon {
-                self.next_token();
+                return Some(Statement::IndexAssign(IndexAssignStatement {
+                    target,
+                    index,
+                    value,
+                }));
             }
-
-            Some(Statement::IndexAssign(IndexAssignStatement {
-                target,
-                index,
-                value,
-            }))
-        } else {
-            if self.peek_token.token_type == TokenType::Semicolon {
-                self.next_token();
-            }
-            Some(Statement::Expression(expr))
         }
+
+        if self.peek_token.token_type == TokenType::Semicolon {
+            self.next_token();
+        }
+        Some(Statement::Expression(expr))
     }
 
     fn parse_for_statement(&mut self) -> Option<Statement> {
@@ -528,7 +523,17 @@ impl Parser {
 
         if self.peek_token.token_type == TokenType::Ident {
             self.next_token();
-            let name = self.current_token.literal.clone();
+            // parse_type_string also consumes an optional '?' (for nullable class types)
+            let first = self.parse_type_string().unwrap_or_default();
+
+            // Disambiguate: fn ClassName[?] funcName(...) vs fn funcName(...)
+            let name = if self.peek_token.token_type == TokenType::Ident {
+                return_type = Some(first);
+                self.next_token();
+                self.current_token.literal.clone()
+            } else {
+                first
+            };
 
             if self.peek_token.token_type != TokenType::LParen {
                 return None;
@@ -605,6 +610,13 @@ impl Parser {
                 type_name = Some(format!("[{}]", elem_type));
                 self.next_token(); // advance to param name
             } else if is_type_keyword(&self.current_token.token_type) {
+                type_name = self.parse_type_string();
+                self.next_token();
+            } else if self.current_token.token_type == TokenType::Ident
+                && (self.peek_token.token_type == TokenType::Ident
+                    || self.peek_token.token_type == TokenType::Question)
+            {
+                // Class type annotation (possibly nullable): fn void f(ClassName[?] param)
                 type_name = self.parse_type_string();
                 self.next_token();
             }
@@ -792,7 +804,8 @@ impl Parser {
                 self.next_token();
                 let method = self.current_token.literal.clone();
 
-                let arguments = if self.peek_token.token_type == TokenType::LParen {
+                let has_parens = self.peek_token.token_type == TokenType::LParen;
+                let arguments = if has_parens {
                     self.next_token();
                     self.parse_call_arguments().unwrap_or_default()
                 } else {
@@ -804,6 +817,7 @@ impl Parser {
                         object: Box::new(left),
                         method,
                         arguments,
+                        has_parens,
                         line: dot_line,
                         column: dot_column,
                     }));
@@ -885,6 +899,19 @@ impl Parser {
                 self.next_token();
                 let right = self.parse_expression(Precedence::Prefix)?;
                 Some(Expression::Prefix(operator, Box::new(right)))
+            }
+
+            // Zero-param lambda: () => body
+            TokenType::LParen if self.peek_token.token_type == TokenType::RParen => {
+                self.next_token(); // consume ')'
+                if self.peek_token.token_type == TokenType::Arrow {
+                    self.next_token(); // consume '=>'
+                    let body = self.parse_lambda_body()?;
+                    Some(Expression::Lambda(LambdaExpression { params: vec![], body }))
+                } else {
+                    eprintln!("❌ PARSER ERROR: Empty parentheses '()' are not a valid expression");
+                    None
+                }
             }
 
             // Multi-param lambda: (a, b) => body  /  (a) => body  /  (expr)
@@ -1301,13 +1328,40 @@ impl Parser {
                 return None;
             }
             self.next_token(); // ':'
-            self.next_token(); // type keyword
+            self.next_token(); // type
 
-            if !is_type_keyword(&self.current_token.token_type) {
+            let type_name = if self.current_token.token_type == TokenType::LBracket {
+                // Array field type: [int], [string], [ClassName], etc.
+                self.next_token(); // elem type
+                let elem = if is_type_keyword(&self.current_token.token_type) {
+                    self.parse_type_string().unwrap_or_default()
+                } else if self.current_token.token_type == TokenType::Ident {
+                    self.current_token.literal.clone()
+                } else {
+                    eprintln!("❌ PARSER ERROR: Expected element type inside '[...]' for field '{}' in interface", field_name);
+                    return None;
+                };
+                if self.peek_token.token_type != TokenType::RBracket {
+                    eprintln!("❌ PARSER ERROR: Expected ']' after array field type");
+                    return None;
+                }
+                self.next_token(); // ']'
+                format!("[{}]", elem)
+            } else if is_type_keyword(&self.current_token.token_type) {
+                match self.parse_type_string() {
+                    Some(t) => t,
+                    None => {
+                        eprintln!("❌ PARSER ERROR: Expected type after ':' for field '{}' in interface", field_name);
+                        return None;
+                    }
+                }
+            } else if self.current_token.token_type == TokenType::Ident {
+                // Class/interface type name (possibly nullable)
+                self.parse_type_string().unwrap_or_else(|| self.current_token.literal.clone())
+            } else {
                 eprintln!("❌ PARSER ERROR: Expected type after ':' for field '{}' in interface", field_name);
                 return None;
-            }
-            let type_name = self.parse_type_string()?;
+            };
             fields.push(InterfaceField { name: field_name, type_name });
 
             // consume ';' or ','
@@ -1372,8 +1426,31 @@ impl Parser {
             };
             self.next_token(); // after visibility
 
-            // Optional return type keyword (void, int, decimal, etc.)
-            let return_type = if is_type_keyword(&self.current_token.token_type) {
+            // Optional return type keyword (void, int, decimal, [type], class name, etc.)
+            let return_type = if self.current_token.token_type == TokenType::LBracket {
+                // Array return type: [int], [string], [ClassName], etc.
+                self.next_token(); // move to type inside brackets
+                let elem = if is_type_keyword(&self.current_token.token_type) {
+                    self.parse_type_string().unwrap_or_default()
+                } else {
+                    self.current_token.literal.clone()
+                };
+                if self.peek_token.token_type != TokenType::RBracket {
+                    eprintln!("❌ PARSER ERROR: Expected ']' after array return type");
+                    return None;
+                }
+                self.next_token(); // consume ']'
+                self.next_token(); // advance to method name
+                Some(format!("[{}]", elem))
+            } else if is_type_keyword(&self.current_token.token_type) {
+                let rt = self.parse_type_string();
+                self.next_token();
+                rt
+            } else if self.current_token.token_type == TokenType::Ident
+                && (self.peek_token.token_type == TokenType::Ident
+                    || self.peek_token.token_type == TokenType::Question)
+            {
+                // Class return type (possibly nullable): public ClassName[?] methodName()
                 let rt = self.parse_type_string();
                 self.next_token();
                 rt
