@@ -1,0 +1,103 @@
+// Edge cases: closures and higher-order functions
+
+test("lambda captures value at creation — basic", () => {
+    let base = 5;
+    let f = x => x + base;
+    assert(f(3)  == 8,  "f(3) uses captured base=5");
+    assert(f(10) == 15, "f(10) uses captured base=5");
+});
+
+test("lambda returned from function — make_adder pattern", () => {
+    fn any make_adder(int n) {
+        return x => x + n;
+    }
+    let add5  = make_adder(5);
+    let add10 = make_adder(10);
+    assert(add5(3)  == 8,  "add5(3) = 8");
+    assert(add10(3) == 13, "add10(3) = 13");
+    assert(add5(0)  == 5,  "add5(0) = 5");
+    assert(add10(0) == 10, "add10(0) = 10");
+});
+
+test("lambda returned from function — make_multiplier pattern", () => {
+    fn any make_mult(int factor) {
+        return x => x * factor;
+    }
+    let double = make_mult(2);
+    let triple = make_mult(3);
+    assert(double(7) == 14, "double(7) = 14");
+    assert(triple(7) == 21, "triple(7) = 21");
+    assert(double(triple(4)) == 24, "double(triple(4)) = double(12) = 24");
+});
+
+test("higher-order composition: compose(f, g)(x) = f(g(x))", () => {
+    fn any compose(any f, any g) {
+        return x => f(g(x));
+    }
+    let double      = x => x * 2;
+    let inc         = x => x + 1;
+    let double_then_inc = compose(inc, double);
+    let inc_then_double = compose(double, inc);
+    assert(double_then_inc(5) == 11, "inc(double(5)) = inc(10) = 11");
+    assert(inc_then_double(5) == 12, "double(inc(5)) = double(6) = 12");
+});
+
+test("apply_twice: f(f(x))", () => {
+    fn int apply_twice(any f, int x) {
+        return f(f(x));
+    }
+    assert(apply_twice(x => x * 2, 3)  == 12, "double twice: 3→6→12");
+    assert(apply_twice(x => x + 10, 5) == 25, "+10 twice: 5→15→25");
+    assert(apply_twice(x => x * x, 2)  == 16, "square twice: 2→4→16");
+});
+
+test("lambda as argument to user-defined higher-order function", () => {
+    fn [any] my_map([any] arr, any f) {
+        let result = [];
+        for (let i = 0; i < arr.length(); i = i + 1) {
+            result.push(f(arr[i]));
+        }
+        return result;
+    }
+    let nums = [1, 2, 3, 4, 5];
+    let doubled = my_map(nums, x => x * 2);
+    assert(doubled[0] == 2,  "doubled[0] = 2");
+    assert(doubled[2] == 6,  "doubled[2] = 6");
+    assert(doubled[4] == 10, "doubled[4] = 10");
+});
+
+test("lambda with block body and multiple returns", () => {
+    let classify = n => {
+        if (n < 0)  { return "negative"; }
+        if (n == 0) { return "zero"; }
+        return "positive";
+    };
+    assert(classify(-5) == "negative", "classify(-5) = negative");
+    assert(classify(0)  == "zero",     "classify(0) = zero");
+    assert(classify(7)  == "positive", "classify(7) = positive");
+});
+
+test("closures used in map — each closure independent", () => {
+    fn any make_adder(int n) {
+        return x => x + n;
+    }
+    let adders = [make_adder(1), make_adder(2), make_adder(3)];
+    assert(adders[0](10) == 11, "adders[0] adds 1");
+    assert(adders[1](10) == 12, "adders[1] adds 2");
+    assert(adders[2](10) == 13, "adders[2] adds 3");
+});
+
+test("lambda captures outer fn parameter — currying", () => {
+    fn any curry_add(int a) {
+        fn any inner(int b) {
+            return a + b;
+        }
+        return inner;
+    }
+    let add3 = curry_add(3);
+    let add7 = curry_add(7);
+    assert(add3(10) == 13, "curry add3(10) = 13");
+    assert(add7(10) == 17, "curry add7(10) = 17");
+});
+
+summary();

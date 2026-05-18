@@ -1,0 +1,107 @@
+// 06 - Arrays
+// NOTA: Sintaxis de array tipado: "let nombre [tipo] = [...]"
+
+// Array sin tipo
+let nums = [1, 2, 3, 4, 5];
+out nums;
+out nums.length();
+out nums[0];
+out nums[4];
+
+// Array tipado - nombre PRIMERO, tipo despues
+let enteros [int] = [10, 20, 30];
+out enteros;
+
+let nombres [string] = ["Ana", "Bob", "Carlos"];
+out nombres;
+
+let precios [decimal] = [1.5, 2.75, 3.0];
+out precios;
+
+// Modificacion por indice
+enteros[0] = 99;
+out enteros;
+
+// Metodos push/pop
+let lista = [1, 2, 3];
+lista.push(4);
+lista.push(5);
+out lista;
+
+let ultimo = lista.pop();
+out ultimo;
+out lista;
+
+// shift/unshift
+let cola = [10, 20, 30];
+let primero = cola.shift();
+out primero;
+out cola;
+cola.unshift(5);
+out cola;
+
+// sort
+let desordenado = [5, 1, 4, 2, 3];
+desordenado.sort();
+out desordenado;
+
+let desc = [3, 1, 4, 1, 5, 9, 2, 6];
+desc.sort("desc");
+out desc;
+
+// sort con strings
+let palabras = ["banana", "apple", "cherry", "date"];
+palabras.sort();
+out palabras;
+
+// map
+let dobles = nums.map(x => x * 2);
+out dobles;
+
+let cuadrados = nums.map(x => x * x);
+out cuadrados;
+
+// filter
+let pares = nums.filter(x => x % 2 == 0);
+out pares;
+
+let mayores3 = nums.filter(x => x > 3);
+out mayores3;
+
+// reduce
+let suma = nums.reduce(0, (acc, x) => acc + x);
+out suma;
+
+let producto = nums.reduce(1, (acc, x) => acc * x);
+out producto;
+
+// Chaining
+let resultado = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    .filter(x => x % 2 == 0)
+    .map(x => x * x);
+out resultado;
+
+// Array vacio
+let vacio = [];
+out vacio;
+out vacio.length();
+
+// Array con expresiones
+let a = 5;
+let b = 10;
+let mixto = [a, b, a + b, a * b];
+out mixto;
+
+// sort con comparador
+let numeros = [30, 1, 21, 2, 10];
+numeros.sort((a, b) => a - b);
+out numeros;
+
+// map con indice (2-param lambda)
+let indexados = ["a", "b", "c"].map((item, i) => "{i}:{item}");
+out indexados;
+
+// push en array tipado con verificacion de tipo
+let tipado [int] = [1, 2, 3];
+tipado.push(4);
+out tipado;

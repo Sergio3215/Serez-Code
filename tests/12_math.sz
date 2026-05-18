@@ -1,0 +1,71 @@
+// 12 - Funciones matematicas built-in
+
+// abs
+out abs(5);
+out abs(-5);
+out abs(-3.14);
+out abs(0);
+
+// sqrt
+out sqrt(4.0);
+out sqrt(9.0);
+out sqrt(2.0);
+out sqrt(144.0);
+
+// floor / ceil / round
+out floor(3.7);
+out floor(-3.7);
+out ceil(3.2);
+out ceil(-3.2);
+out round(3.5);
+out round(3.4);
+out round(-3.5);
+
+// min / max
+out min(3, 7);
+out min(7, 3);
+out max(3, 7);
+out max(7, 3);
+
+// min/max con decimales
+out min(3.5, 2.1);
+out max(3.5, 2.1);
+
+// min/max mixto int/decimal (Bug fix)
+out min(5, 3.2);
+out max(5, 3.2);
+
+// pow
+out pow(2.0, 10.0);
+out pow(3.0, 3.0);
+out pow(10.0, 0.0);
+
+// log
+out log(2.71828);
+out log10(100.0);
+out log2(8.0);
+out log2(1024.0);
+
+// Combinaciones
+let hipotenusa = sqrt(pow(3.0, 2.0) + pow(4.0, 2.0));
+out hipotenusa;
+
+// Fibonacci con abs para robustez
+fn int fib_iter(int n) {
+    let a = 0;
+    let b = 1;
+    for (let i = 0; i < n; i = i + 1) {
+        let temp = a + b;
+        a = b;
+        b = temp;
+    }
+    return a;
+}
+out fib_iter(10);
+out fib_iter(20);
+
+// Usar floor/ceil en calculo
+let precio = 19.99;
+out floor(precio);
+out ceil(precio);
+out round(precio);

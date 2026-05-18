@@ -1,0 +1,223 @@
+// 15 - Stress tests arquitectónicos: casos complejos e interacciones profundas
+
+// ── 1. Sort con comparador (posible doble-evaluación del argumento) ────────
+let nums = [5, 2, 8, 1, 9, 3, 7, 4, 6];
+let asc = nums.sort((a, b) => a - b);
+out asc;   // → [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+let nums2 = [5, 2, 8, 1, 9, 3];
+let desc = nums2.sort((a, b) => b - a);
+out desc;  // → [9, 8, 5, 3, 2, 1]
+
+// Sort por longitud de string (comparador numérico)
+let palabras = ["banana", "kiwi", "fresa", "mango", "uva"];
+let by_len = palabras.sort((a, b) => a.length() - b.length());
+out by_len;  // → [uva, kiwi, fresa, mango, banana]
+
+// ── 2. Typed array enforcement estricto ───────────────────────────────────
+let enteros [int] = [1, 2, 3];
+enteros.push(4);           // ✓
+out enteros;               // → [1, 2, 3, 4]
+out enteros.length();      // → 4
+
+fn int sumar([int] arr) {
+    return arr.reduce(0, (a, b) => a + b);
+}
+out sumar([10, 20, 30]);   // → 60
+
+// ── 3. Array de instancias de clase con push a campo ─────────────────────
+class Lista {
+    public Lista() {
+        this.items = [];
+        this.count = 0;
+    }
+    public void agregar(any item) {
+        this.items.push(item);
+        this.count = this.count + 1;
+    }
+    public int getCount() { return this.count; }
+    public any get(int i) { return this.items[i]; }
+    public void mostrar() {
+        for (let i = 0; i < this.count; i = i + 1) {
+            out this.items[i];
+        }
+    }
+}
+
+let lista = new Lista();
+lista.agregar("alpha");
+lista.agregar("beta");
+lista.agregar("gamma");
+out lista.getCount();  // → 3
+out lista.get(0);      // → alpha
+out lista.get(2);      // → gamma
+lista.mostrar();       // → alpha / beta / gamma
+
+// ── 4. Filter en array de pares del dict (pipeline complejo) ──────────────
+let scores <string, int> = ({"Alice", 90}, {"Bob", 75}, {"Carol", 88}, {"Dave", 60});
+let pairs = scores.toArray();
+let top = pairs.filter(pair => pair[1] >= 80);
+out top.length();  // → 2
+
+let names_top = top.map(pair => pair[0]);
+out names_top;     // → [Alice, Carol]
+
+// Suma de los top scores
+let sum_top = top.reduce(0, (acc, pair) => acc + pair[1]);
+out sum_top;       // → 178
+
+// ── 5. Herencia + polimorfismo (override de método) ───────────────────────
+class Animal {
+    public Animal(string nombre) {
+        this.nombre = nombre;
+    }
+    public string sonido() { return "..."; }
+    public string describir() {
+        return "{this.nombre} dice: {this.sonido()}";
+    }
+}
+
+class Perro : Animal {
+    public Perro(string nombre, string raza) {
+        super(nombre);
+        this.raza = raza;
+    }
+    public string sonido() { return "Guau!"; }  // override
+    public string getRaza() { return this.raza; }
+}
+
+class Gato : Animal {
+    public Gato(string nombre) {
+        super(nombre);
+    }
+    public string sonido() { return "Miau!"; }  // override
+}
+
+let perro = new Perro("Rex", "Labrador");
+let gato = new Gato("Misi");
+let animal_base = new Animal("Generico");
+
+out perro.describir();       // → Rex dice: Guau!
+out gato.describir();        // → Misi dice: Miau!
+out animal_base.describir(); // → Generico dice: ...
+
+// Polimorfismo: array de animales con comportamiento distinto
+let animales = [perro, gato, animal_base];
+for (let i = 0; i < animales.length(); i = i + 1) {
+    let a = animales[i];
+    out a.describir();
+}
+// → Rex dice: Guau!
+// → Misi dice: Miau!
+// → Generico dice: ...
+
+// ── 6. Closures anidadas y composición ────────────────────────────────────
+fn any componer(any f, any g) {
+    return x => f(g(x));
+}
+
+fn any escalar(decimal factor) {
+    return x => x * factor;
+}
+
+fn any desplazar(decimal offset) {
+    return x => x + offset;
+}
+
+let doble = escalar(2.0);
+let mas5 = desplazar(5.0);
+let doble_y_mas5 = componer(mas5, doble);  // primero doble, luego +5
+
+out doble(3.0);          // → 6.0
+out mas5(3.0);           // → 8.0
+out doble_y_mas5(3.0);   // → 11.0  (3*2 + 5)
+out doble_y_mas5(10.0);  // → 25.0  (10*2 + 5)
+
+// ── 7. Recursión mutua (dos funciones que se llaman entre sí) ─────────────
+fn bool es_par(int n) {
+    if (n == 0) { return true; }
+    return es_impar(n - 1);
+}
+
+fn bool es_impar(int n) {
+    if (n == 0) { return false; }
+    return es_par(n - 1);
+}
+
+out es_par(0);    // → true
+out es_par(4);    // → true
+out es_par(7);    // → false
+out es_impar(3);  // → true
+out es_impar(8);  // → false
+
+// ── 8. String interpolation con expresiones complejas ─────────────────────
+let d <string, int> = ({"uno", 1}, {"dos", 2}, {"tres", 3});
+out "uno vale {d["uno"]}";          // → uno vale 1
+out "suma: {d["dos"] + d["tres"]}"; // → suma: 5
+
+let arr = [100, 200, 300];
+out "elemento: {arr[1]}";           // → elemento: 200
+out "doble: {arr[0] * 2}";         // → doble: 200
+
+// ── 9. Función que retorna array de instancias ────────────────────────────
+interface Vec2 {
+    x: decimal,
+    y: decimal,
+}
+
+fn [any] crear_puntos(int n) {
+    let puntos = [];
+    for (let i = 0; i < n; i = i + 1) {
+        let pt = new Vec2({ x: i * 1.0, y: i * i * 1.0 });
+        puntos.push(pt);
+    }
+    return puntos;
+}
+
+let puntos = crear_puntos(4);
+out puntos.length();        // → 4
+out puntos[0].x;            // → 0.0
+out puntos[0].y;            // → 0.0
+out puntos[3].x;            // → 3.0
+out puntos[3].y;            // → 9.0
+
+// ── 10. continue en loop ──────────────────────────────────────────────────
+let pares = [];
+for (let i = 0; i < 10; i = i + 1) {
+    if (i % 2 != 0) { continue; }  // saltar impares
+    pares.push(i);
+}
+out pares;        // → [0, 2, 4, 6, 8]
+out pares.length();  // → 5
+
+// continue en while
+let i = 0;
+let suma_pares = 0;
+while (i < 10) {
+    i = i + 1;
+    if (i % 2 != 0) { continue; }
+    suma_pares = suma_pares + i;
+}
+out suma_pares;  // → 30  (2+4+6+8+10)
+
+// ── 11. Integer overflow ──────────────────────────────────────────────────
+let max_i64 = 9223372036854775807;
+out max_i64;     // → 9223372036854775807
+
+// ── 12. Null coalescing con función nullable ───────────────────────────────
+fn int? buscar(string target, [string] lista) {
+    for (let i = 0; i < lista.length(); i = i + 1) {
+        if (lista[i] == target) { return i; }
+    }
+    return null;
+}
+
+let nombres = ["Ana", "Bob", "Carol"];
+let idx1 = buscar("Bob", nombres);
+let idx2 = buscar("Dave", nombres);
+
+out idx1 ?? -1;                        // → 1
+out idx2 ?? -1;                        // → -1
+out (idx1 != null);                    // → true
+out (idx2 != null);                    // → false
+out "Bob está en posición {idx1}";     // → Bob está en posición 1

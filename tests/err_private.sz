@@ -1,0 +1,8 @@
+class Caja {
+    public Caja(int v) { this.v = v; }
+    private void secreto() { out "secreto"; }
+    public void publico() { out "publico"; }
+}
+let c = new Caja(1);
+c.publico();   // → publico
+c.secreto();   // → ❌ ERROR: private

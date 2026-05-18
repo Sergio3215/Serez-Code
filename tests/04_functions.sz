@@ -1,0 +1,76 @@
+// TEST: Funciones, recursión, closures, lambdas, HOF
+
+// Función básica con retorno
+fn int suma(int a, int b) {
+    return a + b;
+}
+out suma(3, 4);   // 7
+
+// Función void
+fn void greet(string name) {
+    out "Hola, {name}!";
+}
+greet("Sergio");   // Hola, Sergio!
+
+// Recursión: factorial
+fn int factorial(int n) {
+    if (n <= 1) { return 1; }
+    return n * factorial(n - 1);
+}
+out factorial(5);   // 120
+out factorial(0);   // 1
+out factorial(1);   // 1
+
+// Recursión: fibonacci
+fn int fib(int n) {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+out fib(10);   // 55
+
+// Función literal asignada a variable
+let doble = fn(int x) { return x * 2; };
+out doble(5);   // 10
+
+// Closure capturando variable exterior
+let base = 100;
+let addBase = fn(int x) { return base + x; };
+out addBase(50);   // 150
+
+// Lambda en HOF
+let nums [int] = [1, 2, 3, 4, 5];
+let doubled = nums.map(x => x * 2);
+out doubled;   // [2, 4, 6, 8, 10]
+
+let evens = nums.filter(x => x % 2 == 0);
+out evens;   // [2, 4]
+
+let total = nums.reduce(0, (acc, x) => acc + x);
+out total;   // 15
+
+// Función de orden superior
+fn void applyTwice(int x) {
+    let result = doble(doble(x));
+    out result;
+}
+applyTwice(3);   // 12
+
+// Función con tipo de retorno nullable
+fn int? findPositive(int n) {
+    if (n > 0) { return n; }
+    return null;
+}
+let r1 = findPositive(5);
+let r2 = findPositive(-3);
+out r1 ?? "no encontrado";   // 5
+out r2 ?? "no encontrado";   // no encontrado
+
+// Return temprano
+fn string classify(int n) {
+    if (n < 0) { return "negativo"; }
+    if (n == 0) { return "cero"; }
+    return "positivo";
+}
+out classify(-5);   // negativo
+out classify(0);    // cero
+out classify(7);    // positivo

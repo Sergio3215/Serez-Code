@@ -1,0 +1,95 @@
+// Edge cases: compound assignment operators
+
+test("-= on decimal", () => {
+    let d = 5.0;
+    d -= 1.5;
+    assert(d == 3.5, "5.0 -= 1.5 should be 3.5");
+});
+
+test("/= on decimal", () => {
+    let d = 10.0;
+    d /= 4.0;
+    assert(d == 2.5, "10.0 /= 4.0 should be 2.5");
+});
+
+test("*= on decimal", () => {
+    let d = 3.0;
+    d *= 2.5;
+    assert(d == 7.5, "3.0 *= 2.5 should be 7.5");
+});
+
+test("-= on array element", () => {
+    let arr = [10, 20, 30];
+    arr[1] -= 5;
+    assert(arr[1] == 15, "arr[1] -= 5 should be 15");
+    assert(arr[0] == 10, "other elements unchanged");
+    assert(arr[2] == 30, "other elements unchanged");
+});
+
+test("/= on array element", () => {
+    let arr = [100, 50, 25];
+    arr[0] /= 4;
+    assert(arr[0] == 25, "arr[0] /= 4 should be 25");
+});
+
+test("+= on dict entry", () => {
+    let scores <string, int> = ({"alice", 10}, {"bob", 20});
+    scores["alice"] += 5;
+    assert(scores["alice"] == 15, "dict entry += 5 should give 15");
+    assert(scores["bob"] == 20, "other entry unchanged");
+});
+
+test("*= on dict entry", () => {
+    let counts <string, int> = ({"x", 3});
+    counts["x"] *= 4;
+    assert(counts["x"] == 12, "dict entry *= 4 should give 12");
+});
+
+test("-= on dict entry", () => {
+    let data <string, int> = ({"n", 100});
+    data["n"] -= 37;
+    assert(data["n"] == 63, "dict entry -= 37 should give 63");
+});
+
+test("+= on instance field directly", () => {
+    class Counter {
+        public Counter(int start) { this.val = start; }
+        public int get() { return this.val; }
+    }
+    let c = new Counter(5);
+    c.val += 3;
+    assert(c.get() == 8, "c.val += 3 should make val = 8");
+});
+
+test("-= on instance field directly", () => {
+    class Box {
+        public Box(int n) { this.n = n; }
+        public int get() { return this.n; }
+    }
+    let b = new Box(20);
+    b.n -= 7;
+    assert(b.get() == 13, "b.n -= 7 should make n = 13");
+});
+
+test("compound assign chain on same variable", () => {
+    let x = 10;
+    x += 5;   // 15
+    x *= 2;   // 30
+    x -= 6;   // 24
+    x /= 4;   // 6
+    x %= 4;   // 2
+    assert(x == 2, "10+5=15, *2=30, -6=24, /4=6, %4=2");
+});
+
+test("+= accumulates across multiple iterations with different step", () => {
+    let total = 0;
+    let step = 3;
+    for (let i = 0; i < 5; i = i + 1) {
+        total += step;
+        step += 1;
+    }
+    // steps: 3, 4, 5, 6, 7 → total = 25
+    assert(total == 25, "accumulated with growing step should be 25");
+});
+
+summary();

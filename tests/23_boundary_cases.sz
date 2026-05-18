@@ -1,0 +1,48 @@
+// For-loop variable doesn't leak (should be caught at runtime)
+// We test by ensuring total is modified but i is not accessible
+
+// String * 0 → empty string
+out "hello" * 0;   // → (empty line)
+out ("abc" * 0).length;  // → 0
+
+// Empty array sort is a no-op
+let empty = [];
+empty.sort();
+out empty;   // → []
+
+// Empty string split
+let parts = "".split(",");
+out parts.length;   // → 1 (one empty element)
+
+// Dict Remove no-op for missing key
+let d <string,int> = ({"a",1},{"b",2});
+d.Remove("missing");   // no-op, no error
+out d;   // → {a: 1, b: 2}
+
+// Chained null coalescing
+let x = null;
+let y = null;
+let z = "found";
+out x ?? y ?? z;   // → found
+
+// Boolean comparisons
+out true == true;    // → true
+out false == false;  // → true
+out true == false;   // → false
+out true != false;   // → true
+
+// Decimal precision
+out 0.1 + 0.2;   // floating point: ~0.3 (not exactly 0.3)
+out 1.0 / 3.0;   // → 0.3333333333
+
+// Negative decimal
+out -3.14;   // → -3.14
+out 0.0 - 1.5;   // → -1.5
+
+// parseInt from decimal
+out parseInt(3.99);   // → 3 (truncated)
+out parseInt(-3.99);  // → -3
+
+// parseDecimal from int
+out parseDecimal(5);    // → 5.0
+out parseDecimal(-2);   // → -2.0

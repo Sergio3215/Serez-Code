@@ -1,0 +1,154 @@
+// 13 - Casos extremos y regresiones
+
+// 1. String vacio
+let vacio = "";
+out vacio;
+out vacio.length();
+out vacio == "";
+
+// 2. Array de un solo elemento
+let uno = [42];
+out uno;
+out uno[0];
+out uno.length();
+uno.push(43);
+out uno;
+
+// 3. Funcion sin argumentos
+fn int const42() {
+    return 42;
+}
+out const42();
+
+// 4. Return en medio de bucle
+fn int primero_par([any] arr) {
+    for (let i = 0; i < arr.length(); i = i + 1) {
+        let v = arr[i];
+        if (v % 2 == 0) {
+            return v;
+        }
+    }
+    return -1;
+}
+out primero_par([1, 3, 5, 6, 8]);
+out primero_par([1, 3, 5, 7]);
+
+// 5. Clausura captura por valor
+fn any hacer_sumador(int base) {
+    return n => n + base;
+}
+let sumar10 = hacer_sumador(10);
+let sumar20 = hacer_sumador(20);
+out sumar10(5);
+out sumar20(5);
+out sumar10(100);
+
+// 6. Interpolacion con llamada a funcion
+fn string doble_str(string s) {
+    return s + s;
+}
+let msg = "hola";
+out "Resultado: {doble_str(msg)}";
+
+// 7. Recursion con acumulador
+fn int suma_hasta(int n) {
+    if (n <= 0) { return 0; }
+    return n + suma_hasta(n - 1);
+}
+out suma_hasta(10);
+out suma_hasta(100);
+
+// 8. Clase con constructor publico
+class Caja {
+    public Caja(int v) {
+        this.valor = v;
+    }
+
+    public void setValor(int v) {
+        this.valor = v;
+    }
+
+    public int getValor() {
+        return this.valor;
+    }
+
+    public void duplicar() {
+        this.valor = this.valor * 2;
+    }
+}
+
+let caja = new Caja(5);
+out caja.getValor();
+caja.duplicar();
+out caja.getValor();
+caja.setValor(100);
+out caja.getValor();
+
+// 9. Comparacion entre tipos
+out 1 == 1;
+out "a" == "a";
+out "a" == "b";
+out null == null;
+out true == true;
+out false == false;
+out true == false;
+
+// 10. ?? con resultado de funcion
+fn any puede_fallar(bool falla) {
+    if (falla) { return null; }
+    return 42;
+}
+out puede_fallar(false) ?? -1;
+out puede_fallar(true) ?? -1;
+
+// 11. Funcion que recibe y retorna array
+fn [any] invertir([any] arr) {
+    let resultado = [];
+    let i = arr.length() - 1;
+    while (i >= 0) {
+        resultado.push(arr[i]);
+        i = i - 1;
+    }
+    return resultado;
+}
+out invertir([1, 2, 3, 4, 5]);
+out invertir(["a", "b", "c"]);
+
+// 12. Cadena de llamadas a metodos
+let texto = "Hola Mundo";
+out texto.replace("Hola", "Adios").length();
+out texto.split(" ").length();
+
+// 13. Entero maximo i64
+out 9223372036854775807;
+
+// 14. Anidacion profunda de if
+fn string clasificar(int n) {
+    if (n < 0) { return "negativo"; }
+    else if (n == 0) { return "cero"; }
+    else if (n < 10) { return "pequeno"; }
+    else if (n < 100) { return "mediano"; }
+    else { return "grande"; }
+}
+out clasificar(-5);
+out clasificar(0);
+out clasificar(7);
+out clasificar(42);
+out clasificar(999);
+
+// 15. Array de funciones
+let fns = [x => x + 1, x => x * 2, x => x * x];
+out fns[0](5);
+out fns[1](5);
+out fns[2](5);
+
+// 16. Boolean equality (Bug fix verificado)
+out true == true;
+out false == false;
+out true == false;
+out true != false;
+
+// 17. Modulo mixto int/decimal (Bug fix verificado)
+out 10 % 3.0;
+out 10.5 % 3;
+out 7.5 % 2.5;

@@ -1,0 +1,2 @@
+let mixed = [1, "hello", true];
+mixed.sort();

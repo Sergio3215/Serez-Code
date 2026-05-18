@@ -1,0 +1,136 @@
+// Unit tests — arrays: métodos, mutación, typed, HOF
+
+test("push / pop", () => {
+    let a [int] = [1, 2, 3];
+    a.push(4);
+    assert(a.length() == 4, "push length");
+    assert(a[3] == 4, "push value");
+    let v = a.pop();
+    assert(v == 4, "pop value");
+    assert(a.length() == 3, "pop length");
+});
+
+test("shift / unshift", () => {
+    let a [int] = [1, 2, 3];
+    a.unshift(0);
+    assert(a[0] == 0, "unshift front");
+    assert(a.length() == 4, "unshift length");
+    let v = a.shift();
+    assert(v == 0, "shift value");
+    assert(a.length() == 3, "shift length restored");
+});
+
+test("pop / shift en array vacío retorna null", () => {
+    let a [int] = [];
+    assert(a.pop()   == null, "pop empty null");
+    assert(a.shift() == null, "shift empty null");
+});
+
+test("indexOf / includes / contains", () => {
+    let a [int] = [10, 20, 30, 40, 50];
+    assert(a.indexOf(30)  == 2,    "indexOf found");
+    assert(a.indexOf(99)  == -1,   "indexOf missing");
+    assert(a.includes(20) == true,  "includes true");
+    assert(a.includes(99) == false, "includes false");
+    assert(a.contains(50) == true,  "contains true");
+    assert(a.contains(0)  == false, "contains false");
+});
+
+test("indexOf — sin confusión de tipos", () => {
+    let a = [1, "1", true];
+    assert(a.indexOf(1)    == 0, "int 1");
+    assert(a.indexOf("1")  == 1, "str '1'");
+    assert(a.indexOf(true) == 2, "bool true");
+});
+
+test("sort ascendente y descendente", () => {
+    let a [int] = [5, 3, 1, 4, 2];
+    a.sort();
+    assert(a[0] == 1 && a[4] == 5, "sort asc default");
+    a.sort("desc");
+    assert(a[0] == 5 && a[4] == 1, "sort desc");
+    a.sort("asc");
+    assert(a[0] == 1, "sort asc explicit");
+});
+
+test("sort con comparador custom", () => {
+    let a [int] = [3, 1, 4, 1, 5];
+    a.sort((x, y) => x - y);
+    assert(a[0] == 1 && a[4] == 5, "sort custom asc");
+});
+
+test("remove por índice", () => {
+    let a [int] = [10, 20, 30, 40, 50];
+    a.remove(2);
+    assert(a.length() == 4,  "remove length");
+    assert(a[0] == 10,       "remove: [0] intacto");
+    assert(a[1] == 20,       "remove: [1] intacto");
+    assert(a[2] == 40,       "remove: [2] era el [3]");
+    assert(a[3] == 50,       "remove: [3] era el [4]");
+});
+
+test("join", () => {
+    assert([1, 2, 3].join("-") == "1-2-3", "join int");
+    assert(["a","b","c"].join(", ") == "a, b, c", "join str");
+    assert([42].join(",") == "42", "join single");
+});
+
+test("map", () => {
+    let doubled = [1, 2, 3, 4].map(x => x * 2);
+    assert(doubled[0] == 2 && doubled[3] == 8, "map double");
+    let upper = ["a","b","c"].map(x => x.toUpperCase());
+    assert(upper[0] == "A" && upper[2] == "C", "map toUpper");
+});
+
+test("map con índice", () => {
+    let indexed = ["a","b","c"].map((item, i) => i);
+    assert(indexed[0] == 0 && indexed[2] == 2, "map with index");
+});
+
+test("filter", () => {
+    let evens = [1,2,3,4,5,6].filter(x => x % 2 == 0);
+    assert(evens.length() == 3, "filter length");
+    assert(evens[0] == 2 && evens[2] == 6, "filter values");
+});
+
+test("reduce", () => {
+    let sum = [1,2,3,4,5].reduce(0, (acc, x) => acc + x);
+    assert(sum == 15, "reduce sum");
+    let product = [1,2,3,4].reduce(1, (acc, x) => acc * x);
+    assert(product == 24, "reduce product");
+});
+
+test("encadenado map + filter + reduce", () => {
+    let result = [1,2,3,4,5,6,7,8,9,10]
+        .filter(x => x % 2 == 0)
+        .map(x => x * x)
+        .reduce(0, (acc, x) => acc + x);
+    assert(result == 220, "chain: pares cuadrados sumados 4+16+36+64+100=220");
+});
+
+test("indexación y mutación directa", () => {
+    let a [int] = [10, 20, 30];
+    a[1] = 99;
+    assert(a[1] == 99, "index assign");
+    a[0] = a[0] + 5;
+    assert(a[0] == 15, "index compound read-write");
+});
+
+test("array de strings", () => {
+    let words [string] = ["hello", "world", "serez"];
+    assert(words.length() == 3, "str array length");
+    assert(words[2] == "serez", "str array index");
+    words.push("code");
+    assert(words.length() == 4, "str array push");
+});
+
+test("array vacío y dinámica", () => {
+    let a = [];
+    assert(a.length() == 0, "empty length");
+    a.push(1);
+    a.push(2);
+    assert(a.length() == 2, "dynamic push");
+    assert(a[0] == 1, "dynamic index");
+});
+
+summary();

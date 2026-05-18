@@ -1,0 +1,4 @@
+fn int alwaysNull() {
+}
+
+alwaysNull();

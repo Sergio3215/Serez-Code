@@ -1,0 +1,188 @@
+// Edge cases: try/catch/throw/finally
+
+test("return in try — return value preserved through finally", () => {
+    fn string test_fn() {
+        try {
+            return "from-try";
+        } finally {
+            // finally runs; we verify it does not corrupt the return value
+        }
+        return "unreachable";
+    }
+    assert(test_fn() == "from-try", "return from try body should be the final result");
+});
+
+test("throw in finally overrides try return", () => {
+    fn string safe_fn() {
+        try {
+            return "ok";
+        } finally {
+            throw "finally-error";
+        }
+    }
+    let caught = "none";
+    try {
+        safe_fn();
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "finally-error", "throw from finally should override try return");
+});
+
+test("throw in finally overrides normal try completion", () => {
+    fn int normal_fn() {
+        try {
+            let x = 1 + 1;
+        } finally {
+            throw "boom";
+        }
+        return 0;
+    }
+    let caught = "none";
+    try {
+        normal_fn();
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "boom", "throw from finally overrides normal completion");
+});
+
+test("throw inside for loop propagates to outer catch", () => {
+    let caught = "none";
+    try {
+        for (let i = 0; i < 5; i = i + 1) {
+            if (i == 2) { throw "loop-error"; }
+        }
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "loop-error", "throw from inside for loop should be caught");
+});
+
+test("throw inside while loop propagates to outer catch", () => {
+    let caught = "none";
+    let i = 0;
+    try {
+        while (i < 5) {
+            i = i + 1;
+            if (i == 3) { throw "while-error"; }
+        }
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "while-error", "throw from while loop should be caught");
+});
+
+test("try with only finally — local variable modified correctly", () => {
+    fn int test_fn() {
+        let x = 0;
+        try {
+            x = 5;
+        } finally {
+            x = x + 1;
+        }
+        return x;
+    }
+    assert(test_fn() == 6, "try-only-finally: x should be 5+1=6");
+});
+
+test("finally-only try propagates throw to outer catch", () => {
+    let caught = "none";
+    try {
+        try {
+            throw "inner";
+        } finally {
+            // no catch here — throw should propagate after finally runs
+        }
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "inner", "throw should propagate through finally-only try");
+});
+
+test("catch body throws — propagates to outer catch", () => {
+    let outer = "none";
+    try {
+        try {
+            throw "first";
+        } catch (e) {
+            throw "second-" + e;
+        }
+    } catch (e) {
+        outer = e;
+    }
+    assert(outer == "second-first", "exception from catch body should propagate");
+});
+
+test("three-level nested try/rethrow chain", () => {
+    let result = "none";
+    try {
+        try {
+            try {
+                throw "deep";
+            } catch (e) {
+                throw e + "+mid";
+            }
+        } catch (e) {
+            throw e + "+outer";
+        }
+    } catch (e) {
+        result = e;
+    }
+    assert(result == "deep+mid+outer", "exception should thread through 3 catch levels");
+});
+
+test("throw propagates through multiple function calls", () => {
+    fn void thrower() {
+        throw "from-thrower";
+    }
+    fn void middle() {
+        thrower();
+    }
+    let caught = "none";
+    try {
+        middle();
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "from-thrower", "throw propagates through multiple call frames");
+});
+
+test("break en catch sale del for loop (B-54)", () => {
+    let sum = 0;
+    for (let i = 0; i < 10; i++) {
+        try {
+            if (i == 3) { throw "stop"; }
+            sum += i;
+        } catch (e) {
+            break;
+        }
+    }
+    assert(sum == 3, "break en catch: 0+1+2=3, break en i=3");
+});
+
+test("continue en catch salta a siguiente iteración (B-54)", () => {
+    let sum = 0;
+    for (let i = 0; i < 6; i++) {
+        try {
+            if (i % 2 == 0) { throw "par"; }
+            sum += i;
+        } catch (e) {
+            continue;
+        }
+    }
+    assert(sum == 9, "continue en catch: 1+3+5=9, pares salteados");
+});
+
+test("throw en for-init se captura (B-55)", () => {
+    fn int tira() { throw "init_err"; return 0; }
+    let caught = false;
+    try {
+        for (let i = tira(); i < 5; i++) {}
+    } catch (e) {
+        caught = (e == "init_err");
+    }
+    assert(caught, "throw en init del for se propaga al catch");
+});
+
+summary();

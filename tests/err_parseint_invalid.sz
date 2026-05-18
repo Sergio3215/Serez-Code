@@ -1,0 +1,2 @@
+// parseInt con string no numérico debe producir error de runtime
+out parseInt("abc");

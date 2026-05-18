@@ -1,0 +1,5 @@
+// for-in over a boolean must produce a runtime error (not iterable)
+let b = true;
+for (let x in b) {
+    out x;
+}

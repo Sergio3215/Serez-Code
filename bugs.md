@@ -54,6 +54,21 @@
 | [B-42](#b-42--seven-common-string-methods-missing) | Seven common string methods missing: `trim`, `toUpperCase`, `toLowerCase`, `startsWith`, `endsWith`, `indexOf`, `charAt` | 🟠 Medium | ✅ |
 | [B-43](#b-43--ternary-operator-parses-chained-expressions-left-associatively) | Ternary operator parses chained `?:` right branch left-associatively | 🔴 Critical | ✅ |
 | [B-44](#b-44--supermethodargs-fails-in-non-constructor-child-class-methods) | `super.method(args)` fails in non-constructor child class methods | 🔴 Critical | ✅ |
+| [B-45](#b-45--typeof-builtin-not-implemented) | `type_of()` builtin function not implemented | 🟢 Low | ✅ |
+| [B-46](#b-46--for-loop-update-only-accepted-i--expr) | `for` loop update only accepted `i = expr` — no `i++`, `i--`, `i += n` | 🟠 Medium | ✅ |
+| [B-47](#b-47--indexof-and-includescontains-missing-for-arrays) | `indexOf` and `includes`/`contains` missing for arrays | 🟠 Medium | ✅ |
+| [B-48](#b-48--indexofincludes-type-confusion-via-display) | `indexOf`/`includes` type confusion — used `display()` for comparison | 🟢 Low | ✅ |
+| [B-49](#b-49--switch10--case-1-inconsistency-with-==) | `switch(1.0) { case 1: }` doesn't match despite `1.0 == 1` being true | 🟡 High | ✅ |
+| [B-50](#b-50--try-finally-doesnt-propagate-return-or-error-from-finally) | `try-finally`: `return`/`Error` in finally silently discarded | 🟡 High | ✅ |
+| [B-51](#b-51--for-in-doesnt-support-dict-iteration) | `for-in` doesn't support `Dict` — only `Array` and `string` | 🟠 Medium | ✅ |
+| [B-52](#b-52--substring-requires-exactly-2-arguments) | `substring(start)` 1-arg overload not supported | 🟠 Medium | ✅ |
+| [B-53](#b-53--string-index-stri-not-supported) | String indexing `str[i]` not supported — only `Array` and `Dict` | 🟡 High | ✅ |
+| [B-54](#b-54--breakcontinue-inside-catch-converted-to-error) | `break`/`continue` inside `catch` block converted to `Error` | 🟡 High | ✅ |
+| [B-55](#b-55--for-loop-init-throw-silenced--return-dangling-ref) | `for`-loop init: `Throw` silenced as `Error`, `Return` is dangling ref | 🟡 High | ✅ |
+| [B-56](#b-56--breakcontinue-in-call_op_method-silently-swallowed) | `Break`/`Continue` in operator method body silently swallowed | 🟠 Medium | ✅ |
+| [B-57](#b-57--op_str-throw-silently-swallowed-in-out--interpolation) | `op_str()` exception silently swallowed — `out` falls back to default display | 🟡 High | ✅ |
+| [B-58](#b-58--instances-in-arrays-dont-use-op_str-in-display) | Instances inside arrays don't use `op_str` when displayed | 🟠 Medium | ✅ |
+| [B-59](#b-59--replace-only-replaced-first-occurrence) | `replace` only replaced the first occurrence instead of all | 🟢 Low | ✅ |
 
 ---
 
@@ -1507,7 +1522,7 @@ None => {
 
 ---
 
-*Last updated: 2026-05-18 — 44 bugs documented, 44 fixed, 0 open.*
+*Last updated: 2026-05-18 — 58 bugs documented, 58 fixed, 0 open.*
 
 ---
 
@@ -1941,3 +1956,777 @@ fn eval_super_method_call(&mut self, dot_call: &ast::DotCallExpression) -> EvalR
 ### Lesson
 
 `super.method()` requires a separate code path from regular `DotCall` dispatch because the receiver is not an object stored in a variable — it is a class reference resolved statically from `executing_class`. The fix mirrors how `eval_super_call` works for constructors but uses `executing_class` instead of `constructing_class` and dispatches the result to `find_method` starting from the parent class.
+
+---
+
+## B-45 — `type_of()` builtin not implemented
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟢 Low  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let x = 42;
+out type_of(x);   // ❌ ERROR: Variable not found: type_of
+```
+
+The function `type_of` was not recognized as a builtin, causing a variable-lookup failure at runtime.
+
+### Root cause
+
+The evaluator's `Expression::Call` handler dispatched named builtins like `assert`, `out`, etc., but `type_of` was never added to that list. Any call to `type_of(expr)` fell through to the regular function lookup (`lookup_var("type_of")`), which found nothing.
+
+### Fix
+
+Added `eval_type_of` method and wired it into the builtin dispatch table:
+
+```rust
+// Dispatch (alongside "assert"):
+"type_of" => return self.eval_type_of(&call_expr.arguments),
+
+// Implementation:
+fn eval_type_of(&mut self, args: &[ast::Expression]) -> EvalResult {
+    if args.len() != 1 { eprintln!("❌ ERROR: type_of expects 1 argument"); return EvalResult::Error; }
+    let r = match self.eval_expression(&args[0]) { EvalResult::Value(v) => v, ... };
+    let type_name = match self.resolve(r) {
+        Some(ObjectData::Integer(_))      => "int",
+        Some(ObjectData::Decimal(_))      => "decimal",
+        Some(ObjectData::Boolean(_))      => "bool",
+        Some(ObjectData::Str(_))          => "string",
+        Some(ObjectData::Array { .. })    => "array",
+        Some(ObjectData::Dict { .. })     => "dict",
+        Some(ObjectData::Function { .. }) => "function",
+        Some(ObjectData::Instance { class_name, .. }) => {
+            let name = class_name.clone();
+            let s = self.alloc(ObjectData::Str(name));
+            return EvalResult::Value(s);
+        }
+        Some(ObjectData::Null) | None => "null",
+    };
+    EvalResult::Value(self.alloc(ObjectData::Str(type_name.to_string())))
+}
+```
+
+For `Instance`, the class name is cloned and returned as a string directly (e.g. `"MyClass"` instead of `"instance"`), which allows `type_of` to be used as a dynamic dispatcher.
+
+---
+
+## B-46 — `for` loop update only accepted `i = expr`
+
+**Date:** 2026-05-18  
+**Files:** `src/parser.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+for (let i = 0; i < 10; i++) { }       // ❌ PARSER ERROR: Expected assignment as for-loop update
+for (let i = 0; i < 10; i--) { }       // ❌ PARSER ERROR
+for (let i = 0; i < 10; i += 2) { }    // ❌ PARSER ERROR
+```
+
+Only the `i = expr` form was accepted as the update clause of a `for` loop. The three most common forms — post-increment, post-decrement, and compound assignment — all failed to parse.
+
+### Root cause
+
+`parse_for_statement` had a hard-coded check:
+
+```rust
+if self.current_token.token_type != TokenType::Ident
+    || self.peek_token.token_type != TokenType::Assign {
+    eprintln!("❌ PARSER ERROR: Expected assignment as for-loop update");
+    return None;
+}
+let update = match self.parse_assign_statement()? { Statement::Assign(a) => a, _ => return None };
+```
+
+It rejected any update clause whose second token was not `=`.
+
+### Fix
+
+Extended `parse_for_statement` to branch on the peek token before parsing:
+
+```rust
+let update = match self.peek_token.token_type {
+    // Classic i = i + 1
+    TokenType::Assign => match self.parse_assign_statement()? {
+        Statement::Assign(a) => a, _ => return None
+    },
+    // i++ / i-- desugared to i = i + 1 / i = i - 1
+    TokenType::PlusPlus | TokenType::MinusMinus => {
+        let name = self.current_token.literal.clone();
+        let op   = if self.peek_token.token_type == TokenType::PlusPlus { "+" } else { "-" };
+        self.next_token(); // consume ++ / --
+        AssignStatement { name: name.clone(), value: Expression::Infix(InfixExpression {
+            left: Box::new(Expression::Identifier(name)), operator: op.to_string(),
+            right: Box::new(Expression::Integer(1)), ...
+        })}
+    }
+    // i += n, i -= n, i *= n, i /= n
+    ref tt if self.is_compound_assign(&tt.clone()) => {
+        match self.parse_compound_assign_statement()? { Statement::Assign(a) => a, _ => return None }
+    }
+    _ => { eprintln!("❌ PARSER ERROR: Expected assignment as for-loop update"); return None; }
+};
+```
+
+---
+
+## B-47 — `indexOf` and `includes`/`contains` missing for arrays
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let nums [int] = [10, 20, 30];
+out nums.indexOf(20);    // ❌ ERROR: Unknown array method 'indexOf'
+out nums.includes(30);   // ❌ ERROR: Unknown array method 'includes'
+out nums.contains(10);   // ❌ ERROR: Unknown array method 'contains'
+```
+
+`indexOf`, `includes`, and `contains` existed for `string` values but were never implemented for arrays.
+
+### Root cause
+
+`eval_array_method` had no arm for `"indexOf"`, `"includes"`, or `"contains"`. All three fell to the `_` catch-all and errored.
+
+### Fix
+
+Added two new arms in `eval_array_method`, using `obj_data_eq` (see B-48) for type-safe element comparison:
+
+```rust
+"indexOf" => {
+    let needle_r = match self.eval_expression(&dot_call.arguments[0]) { ... };
+    let needle_d = self.resolve(needle_r).cloned();
+    for (i, &elem) in elems.iter().enumerate() {
+        let elem_d = self.resolve(elem).cloned();
+        if obj_data_eq(&needle_d, &elem_d) {
+            return EvalResult::Value(self.alloc(ObjectData::Integer(i as i64)));
+        }
+    }
+    EvalResult::Value(self.alloc(ObjectData::Integer(-1)))
+}
+
+"includes" | "contains" => {
+    let needle_r = match self.eval_expression(&dot_call.arguments[0]) { ... };
+    let needle_d = self.resolve(needle_r).cloned();
+    let found = elems.iter().any(|&elem| obj_data_eq(&needle_d, &self.resolve(elem).cloned()));
+    EvalResult::Value(self.alloc(ObjectData::Boolean(found)))
+}
+```
+
+---
+
+## B-48 — `indexOf`/`includes` type confusion via `display()`
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟢 Low  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let mixed = [1, "1", true];
+out mixed.indexOf("1");  // → 0  (wrong — expected 1)
+```
+
+The string `"1"` was found at index 0 (where `Integer(1)` lives) because the comparison serialized both to their display string, and `display(Integer(1))` produces `"1"`.
+
+### Root cause
+
+The initial implementation of `indexOf` for arrays (written during the B-47 fix) used `self.display(elem)` as the key for comparison:
+
+```rust
+// Broken: display("1") == display(1) == "1"
+let needle_str = self.display(needle_r);
+elems.iter().position(|&e| self.display(e) == needle_str)
+```
+
+This collapsed the type information — `Integer(1)`, `String("1")`, and `Boolean(true)` all produce distinct display strings in most cases, but `Integer(1)` and `String("1")` collided at `"1"`.
+
+### Fix
+
+Introduced a free function `obj_data_eq` that compares `ObjectData` values by both type and value:
+
+```rust
+fn obj_data_eq(a: &Option<ObjectData>, b: &Option<ObjectData>) -> bool {
+    match (a, b) {
+        (Some(ObjectData::Integer(x)),  Some(ObjectData::Integer(y)))  => x == y,
+        (Some(ObjectData::Decimal(x)),  Some(ObjectData::Decimal(y)))  => x == y,
+        (Some(ObjectData::Boolean(x)),  Some(ObjectData::Boolean(y)))  => x == y,
+        (Some(ObjectData::Str(x)),      Some(ObjectData::Str(y)))      => x == y,
+        (Some(ObjectData::Null),        Some(ObjectData::Null))        => true,
+        _ => false,   // different types → never equal
+    }
+}
+```
+
+`indexOf` and `includes`/`contains` now use `obj_data_eq` exclusively. Cross-type matches (e.g. `Integer(1)` vs `String("1")`) correctly return false.
+
+---
+
+## B-49 — `switch(1.0) { case 1: }` inconsistency with `==`
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+out (1.0 == 1);   // → true  (infix == coerces numeric types)
+
+let res = "no match";
+switch (1.0) {
+    case 1:   { res = "matched"; }
+    default:  { res = "default"; }
+}
+out res;   // → "default"  (expected "matched")
+```
+
+`switch` fell to `default` even though the same comparison via `==` returned `true`. The two code paths were inconsistent.
+
+### Root cause
+
+`switch` uses `values_equal` (a private method on `Evaluator`) to compare the subject against each case value. The original implementation only accepted same-type pairs:
+
+```rust
+fn values_equal(&self, a: &ObjectData, b: &ObjectData) -> bool {
+    match (a, b) {
+        (ObjectData::Integer(x), ObjectData::Integer(y)) => x == y,
+        (ObjectData::Decimal(x), ObjectData::Decimal(y)) => x == y,
+        (ObjectData::Str(x),     ObjectData::Str(y))     => x == y,
+        (ObjectData::Boolean(x), ObjectData::Boolean(y)) => x == y,
+        (ObjectData::Null,       ObjectData::Null)        => true,
+        _ => false,  // ← Decimal vs Integer always false
+    }
+}
+```
+
+The infix `==` operator, on the other hand, already handled cross-type numeric comparison correctly via the `(Decimal, Integer)` and `(Integer, Decimal)` arms in `eval_infix`. The two comparison paths had diverged.
+
+### Fix
+
+Added the two cross-type numeric arms to `values_equal`:
+
+```rust
+fn values_equal(&self, a: &ObjectData, b: &ObjectData) -> bool {
+    match (a, b) {
+        (ObjectData::Integer(x),  ObjectData::Integer(y))  => x == y,
+        (ObjectData::Decimal(x),  ObjectData::Decimal(y))  => x == y,
+        (ObjectData::Decimal(x),  ObjectData::Integer(y))  => *x == (*y as f64),  // ← new
+        (ObjectData::Integer(x),  ObjectData::Decimal(y))  => (*x as f64) == *y,  // ← new
+        (ObjectData::Str(x),      ObjectData::Str(y))      => x == y,
+        (ObjectData::Boolean(x),  ObjectData::Boolean(y))  => x == y,
+        (ObjectData::Null,        ObjectData::Null)         => true,
+        _ => false,
+    }
+}
+```
+
+`switch(1.0) { case 1: }` now matches, consistent with the `==` operator.
+
+**Lesson:** Any time there are two independent comparison code paths in the evaluator (`values_equal` for `switch`, `eval_infix` for `==`), they must be kept in sync. A divergence between them produces counter-intuitive behavior that is very hard to debug.
+
+---
+
+## B-50 — `try-finally`: `return`/`Error` in finally silently discarded
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+fn string f() {
+    try {
+        throw "err";
+    } catch (e) {
+        return "caught";
+    } finally {
+        return "from_finally";  // ← should override
+    }
+}
+out f();  // → "caught"  (expected "from_finally")
+```
+
+A `return` statement inside a `finally` block was silently ignored: the value from `catch` was returned instead. Similarly, an `Error` produced inside `finally` was discarded and execution continued with the prior result, masking the error entirely.
+
+### Root cause
+
+`eval_try` ran the finally block but only intercepted `Throw` from it:
+
+```rust
+if let Some(ref finally_block) = try_stmt.finally_body {
+    let finally_result = self.eval_block(finally_block);
+    if let EvalResult::Throw(v) = finally_result {
+        return EvalResult::Throw(v); // only this was handled
+    }
+}
+result_after_catch  // ← always returned, ignoring Return/Error from finally
+```
+
+`EvalResult::Return(v)` and `EvalResult::Error` from the finally block fell through the pattern match unchanged, so `result_after_catch` was returned as if finally had completed normally.
+
+### Fix
+
+Match all overriding outcomes from the finally block:
+
+```rust
+if let Some(ref finally_block) = try_stmt.finally_body {
+    match self.eval_block(finally_block) {
+        EvalResult::Throw(v)  => return EvalResult::Throw(v),
+        EvalResult::Return(v) => return EvalResult::Return(v),
+        EvalResult::Error     => return EvalResult::Error,
+        _ => {} // Value / Break / Continue — preserve result_after_catch
+    }
+}
+result_after_catch
+```
+
+This matches Java/JavaScript/Python semantics: `throw`, `return`, and runtime errors from `finally` override the `try`/`catch` result; normal completion preserves it.
+
+---
+
+## B-51 — `for-in` doesn't support `Dict` iteration
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let d <string,int> = ({"a",1},{"b",2},{"c",3});
+for (let k in d) {
+    out k;
+}
+// ❌ ERROR: for-in requires an array or string
+```
+
+`for-in` only accepted `Array` and `string` iterables. Passing a `Dict` produced a runtime error.
+
+### Root cause
+
+`eval_foreach` matched only two variants of `ObjectData`:
+
+```rust
+let items: Vec<OwnedValue> = match self.resolve(iter_ref).cloned() {
+    Some(ObjectData::Array { elements, .. }) => { ... }
+    Some(ObjectData::Str(s)) => { ... }
+    _ => {
+        eprintln!("❌ ERROR: for-in requires an array or string");
+        return EvalResult::Error;
+    }
+};
+```
+
+The `Dict` variant fell into the `_` catch-all and errored.
+
+### Fix
+
+Added a `Dict` arm that iterates over the keys:
+
+```rust
+Some(ObjectData::Dict { entries, .. }) => {
+    entries.iter().map(|(k, _)| self.extract(*k)).collect()
+}
+```
+
+The error message was also updated to reflect the new set of supported types:
+
+```
+❌ ERROR: for-in requires an array, string, or dict
+```
+
+Iterating over a dict yields its keys (strings), which can then be used to access values via `d[k]`. This matches Python's `for k in dict` semantics.
+
+---
+
+## B-52 — `substring` requires exactly 2 arguments
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+out "hello".substring(1);    // ❌ ERROR: substring expects 2 arguments (start, end)
+out "hello".substring(1, 3); // → "el" (worked)
+```
+
+The 1-argument form `substring(start)` — meaning "from start to end of string" — caused a fatal error.
+
+### Root cause
+
+The implementation had a hard-coded arity check:
+
+```rust
+if dot_call.arguments.len() != 2 {
+    eprintln!("❌ ERROR: substring expects 2 arguments (start, end)");
+    return EvalResult::Error;
+}
+```
+
+### Fix
+
+Changed the guard to accept 1 or 2 arguments, defaulting `end` to `len` when omitted:
+
+```rust
+if dot_call.arguments.is_empty() || dot_call.arguments.len() > 2 {
+    eprintln!("❌ ERROR: substring expects 1 or 2 arguments (start [, end])");
+    return EvalResult::Error;
+}
+let end = if dot_call.arguments.len() == 2 {
+    match self.eval_int_arg(&dot_call.arguments[1]) { ... }
+} else {
+    len  // default: rest of string
+};
+```
+
+---
+
+## B-53 — String indexing `str[i]` not supported
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let s = "hello";
+out s[0];   // ❌ ERROR: Index operator not supported for these types
+out s[1];   // same
+```
+
+Array and Dict indexing worked, but applying `[i]` to a string produced a runtime error.
+
+### Root cause
+
+The `Expression::Index` evaluator matched only `(Array, Integer)` and `(Dict, _)`. The `(Str, Integer)` combination fell to the `_` catch-all:
+
+```rust
+match (&left_data, &idx_data) {
+    (ObjectData::Array { .. }, ObjectData::Integer(i)) => { ... }
+    (ObjectData::Dict  { .. }, _)                      => { ... }
+    _ => { eprintln!("❌ ERROR: Index operator not supported ..."); EvalResult::Error }
+}
+```
+
+### Fix
+
+Added a `(Str, Integer)` arm before the others, returning the character at that position as a single-character string (or `null` for out-of-bounds, consistent with array behavior):
+
+```rust
+(ObjectData::Str(s), ObjectData::Integer(i)) => {
+    let chars: Vec<char> = s.chars().collect();
+    if *i < 0 || *i as usize >= chars.len() {
+        EvalResult::Value(self.null_ref)
+    } else {
+        let c = chars[*i as usize].to_string();
+        EvalResult::Value(self.alloc(ObjectData::Str(c)))
+    }
+}
+```
+
+---
+
+## B-54 — `break`/`continue` inside `catch` block converted to `Error`
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+for (let i = 0; i < 10; i++) {
+    try {
+        if (i == 4) { throw "stop"; }
+    } catch (e) {
+        break;   // ← intended to exit the loop
+    }
+}
+// ❌ ERROR: ... (loop keeps running or crashes)
+```
+
+A `break` or `continue` inside a `catch` block was not propagated to the enclosing loop — it was silently converted to `EvalResult::Error`.
+
+### Root cause
+
+The catch-body statement loop in `eval_try` lumped `Break` and `Continue` together with `Error`:
+
+```rust
+EvalResult::Break | EvalResult::Continue => { catch_error = true; break; }
+// ...
+if catch_error { EvalResult::Error }   // ← Break became Error
+```
+
+### Fix
+
+Track `break` and `continue` with dedicated flags and propagate them correctly:
+
+```rust
+let mut catch_break    = false;
+let mut catch_continue = false;
+// ...
+EvalResult::Break    => { catch_break    = true; break; }
+EvalResult::Continue => { catch_continue = true; break; }
+// ...
+if catch_break    { EvalResult::Break }
+else if catch_continue { EvalResult::Continue }
+```
+
+The `Break`/`Continue` signals carry no ref, so no extract/plant is needed.
+
+---
+
+## B-55 — `for`-loop init: `Throw` silenced as `Error`, `Return` is dangling ref
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+fn int lanzar() { throw "init_error"; return 0; }
+try {
+    for (let i = lanzar(); i < 10; i++) { }
+} catch (e) {
+    out e;   // ← never reached; exception was swallowed
+}
+```
+
+If the init expression of a `for` loop throws, the exception was silently converted to `Error` and could not be caught. Additionally, if a `return` value was produced by the init expression, it was returned without being extracted before `scopes.pop()`, creating a dangling reference.
+
+### Root cause
+
+The init expression handler in `Statement::For`:
+
+```rust
+let init_val = match self.eval_expression(&for_stmt.init.value) {
+    EvalResult::Value(v) => v,
+    EvalResult::Error    => { self.scopes.pop(); return EvalResult::Error; }
+    EvalResult::Return(v) => { self.scopes.pop(); return EvalResult::Return(v); }  // dangling!
+    _ => { self.scopes.pop(); return EvalResult::Error; }  // Throw silenced here!
+};
+```
+
+`Throw(v)` matched `_` and was returned as `Error`. `Return(v)` was propagated but `v` might live in the newly-pushed for-scope that was just popped.
+
+### Fix
+
+```rust
+EvalResult::Return(v) => {
+    let owned = self.extract(v);   // extract before pop
+    self.scopes.pop();
+    return EvalResult::Return(self.plant(owned));
+}
+EvalResult::Throw(v) => {
+    let owned = self.extract(v);   // extract before pop
+    self.scopes.pop();
+    return EvalResult::Throw(self.plant(owned));   // propagate, don't silence
+}
+```
+
+Same extract-before-pop pattern established in B-12 for the loop body, now applied to the init expression.
+
+---
+
+## B-56 — `Break`/`Continue` in operator method body silently swallowed
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+public class Bad {
+    public Bad() {}
+    public int op_add(Bad other) {
+        for (let i = 0; i < 1; i++) { break; }  // break inside op method
+        return 0;
+    }
+}
+```
+
+The `break` inside the operator method was silently absorbed by the `_` arm of the statement loop, and the method continued to the next statement. No error was reported.
+
+### Root cause
+
+`call_op_method`'s body loop used `_` to swallow all unhandled results:
+
+```rust
+for stmt in &method.body.statements {
+    match self.eval_statement(stmt) {
+        EvalResult::Value(_)  => {}
+        EvalResult::Return(v) => { result_ref = v; break; }
+        EvalResult::Throw(v)  => { method_throw = Some(v); break; }
+        EvalResult::Error     => { error = true; break; }
+        _                     => {}  // ← Break and Continue fall here silently
+    }
+}
+```
+
+Compare with `call_function` which already had the explicit error for `Break`/`Continue`.
+
+### Fix
+
+```rust
+EvalResult::Break | EvalResult::Continue => {
+    eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop in operator method '{}'.", method_name);
+    error = true;
+    break;
+}
+```
+
+---
+
+## B-57 — `op_str()` exception silently swallowed in `out` / interpolation
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟡 High  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+public class Broken {
+    public Broken() {}
+    public string op_str() { throw "format_error"; return ""; }
+}
+let b = new Broken();
+out b;   // ← no error, prints default display instead of propagating throw
+```
+
+An exception thrown inside `op_str()` was silently discarded. The `out` statement fell back to the default `display()` format as if nothing happened.
+
+### Root cause
+
+The original `try_op_str` helper returned `Option<String>` and mapped all non-`Value` results (including `Throw` and `Error`) to `None`:
+
+```rust
+match self.call_op_method(...) {
+    EvalResult::Value(r) => Some(...),
+    _ => None,   // ← Throw silently swallowed here
+}
+```
+
+The caller used `try_op_str(v).unwrap_or_else(|| self.display(v))`, so `None` silently fell back to default display.
+
+### Fix
+
+Replaced `try_op_str: Option<String>` with `fmt_value: Result<String, EvalResult>`. All callers now propagate `Err`:
+
+```rust
+fn fmt_value(&mut self, obj_ref: ObjectRef) -> Result<String, EvalResult> {
+    // ... Instance branch:
+    match self.call_op_method(obj_ref, &cn, "op_str", vec![], 0, 0) {
+        EvalResult::Value(r) => Ok(s.clone()),
+        EvalResult::Throw(v) => Err(EvalResult::Throw(v)),  // ← propagated
+        EvalResult::Error    => Err(EvalResult::Error),
+        other                => Err(other),
+    }
+}
+
+// Statement::Out:
+match self.fmt_value(v) {
+    Ok(s)  => println!("{}", s),
+    Err(e) => return e,   // ← throw propagates to enclosing try/catch
+}
+```
+
+---
+
+## B-58 — Instances inside arrays don't use `op_str` when displayed
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟠 Medium  
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+public class Punto {
+    public Punto(int x, int y) { this.x = x; this.y = y; }
+    public string op_str() { return "({this.x},{this.y})"; }
+}
+let puntos = [new Punto(1,2), new Punto(3,4)];
+out puntos;
+// → [Punto{ x: 1, y: 2 }, Punto{ x: 3, y: 4 }]   (wrong)
+// expected: [(1,2), (3,4)]
+```
+
+Instances at the top level of `out` called `op_str()` correctly, but instances nested inside an array used the default `display()` format.
+
+### Root cause
+
+`display()` is `&self` (immutable). For arrays, it recursively called `self.display(elem_ref)`. Since `try_op_str` is `&mut self`, it could not be called inside `display()`. The top-level `out` called `try_op_str` only on the outermost value — if that was an array, it fell back to `display()` for all elements.
+
+### Fix
+
+Replaced `try_op_str` with `fmt_value(&mut self, obj_ref) -> Result<String, EvalResult>` which:
+- For `Instance`: calls `op_str()` if the method exists
+- For `Array`: recursively calls `fmt_value()` on each element (mutable, so `op_str` is available)
+- For everything else: delegates to `display()`
+
+```rust
+Some(ObjectData::Array { elements, .. }) => {
+    let mut parts = Vec::with_capacity(elements.len());
+    for elem_ref in elements {
+        parts.push(self.fmt_value(elem_ref)?);  // ← recursive, mutable
+    }
+    Ok(format!("[{}]", parts.join(", ")))
+}
+```
+
+---
+
+## B-59 — `replace` only replaced the first occurrence
+
+**Date:** 2026-05-18  
+**Files:** `src/evaluator.rs`  
+**Severity:** 🟢 Low
+
+### Symptom
+
+`"hello".replace("l", "r")` returned `"hero"` instead of `"herro"` — only the first occurrence of `"l"` was replaced.
+
+### Root cause
+
+The `"replace"` string method branch used Rust's `replacen(&from, &to, 1)` which replaces only the first match.
+
+### Fix
+
+Changed to `s.replace(&from[..], &to)` (Rust's `replace` replaces all occurrences). `replaceAll` was already correct and remains as an alias.
+
+```rust
+// Before
+EvalResult::Value(self.alloc(ObjectData::Str(s.replacen(&from[..], &to, 1))))
+// After
+EvalResult::Value(self.alloc(ObjectData::Str(s.replace(&from[..], &to))))
+```

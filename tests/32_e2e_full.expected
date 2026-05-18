@@ -1,0 +1,38 @@
+── 1. Primitivos ──
+OK
+── 2. type_of ──
+OK
+── 3. String ──
+OK
+── 4. Arrays ──
+OK
+── 5. Dicts ──
+OK
+── 6. For loops ──
+OK
+── 7. Switch ──
+OK
+── 8. Try/Catch/Finally ──
+OK
+── 9. Closures y HOF ──
+OK
+── 10. Clases y herencia ──
+OK
+── 11. Operator Overloading ──
+(1.0,2.0)
+(1.0,2.0,3.0)
+OK
+── 12. Null coalescing ──
+OK
+── 13. is type check ──
+OK
+── 14. Ternario ──
+OK
+── 15. Recursión + dict memo ──
+OK
+── 16. Demo integrador ──
+OK
+
+══════════════════════════════════════════════════
+  E2E COMPLETO — TODOS LOS TESTS PASARON ✓
+══════════════════════════════════════════════════

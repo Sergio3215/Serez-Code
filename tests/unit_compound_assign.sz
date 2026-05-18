@@ -1,0 +1,78 @@
+// Unit tests: compound assignment operators
+
+test("+= on int", () => {
+    let x = 10;
+    x += 5;
+    assert(x == 15, "10 += 5 should be 15");
+});
+
+test("-= on int", () => {
+    let x = 10;
+    x -= 3;
+    assert(x == 7, "10 -= 3 should be 7");
+});
+
+test("*= on int", () => {
+    let x = 4;
+    x *= 3;
+    assert(x == 12, "4 *= 3 should be 12");
+});
+
+test("/= on int", () => {
+    let x = 20;
+    x /= 4;
+    assert(x == 5, "20 /= 4 should be 5");
+});
+
+test("%= on int", () => {
+    let x = 17;
+    x %= 5;
+    assert(x == 2, "17 %= 5 should be 2");
+});
+
+test("+= on string", () => {
+    let s = "hello";
+    s += " world";
+    assert(s == "hello world", "+= should concatenate strings");
+});
+
+test("+= on decimal", () => {
+    let d = 1.5;
+    d += 0.5;
+    assert(d == 2.0, "1.5 += 0.5 should be 2.0");
+});
+
+test("+= accumulates in loop", () => {
+    let sum = 0;
+    for (let i = 1; i <= 10; i = i + 1) {
+        sum += i;
+    }
+    assert(sum == 55, "sum 1..10 should be 55");
+});
+
+test("+= on array element", () => {
+    let arr = [10, 20, 30];
+    arr[1] += 5;
+    assert(arr[1] == 25, "arr[1] += 5 should be 25");
+    assert(arr[0] == 10, "other elements unchanged");
+});
+
+test("*= on array element", () => {
+    let arr = [2, 4, 6];
+    arr[0] *= 3;
+    assert(arr[0] == 6, "arr[0] *= 3 should be 6");
+});
+
+test("+= on instance field", () => {
+    class Box {
+        public Box(int v) { this.val = v; }
+        public void add(int n) { this.val += n; }
+        public int get() { return this.val; }
+    }
+    let b = new Box(10);
+    b.add(5);
+    b.add(3);
+    assert(b.get() == 18, "10 + 5 + 3 should be 18");
+});
+
+summary();

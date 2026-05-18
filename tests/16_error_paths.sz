@@ -1,0 +1,98 @@
+// 16 - Caminos de error: verificar que el intérprete da el mensaje correcto
+// Cada bloque prueba UN error. Si el intérprete se cuelga en vez de dar error = BUG.
+// Corremos cada caso en un archivo separado; aquí probamos los que NO detienen ejecución.
+
+// ── 1. División por cero ───────────────────────────────────────────────────
+// (probado en archivo separado — detiene el programa)
+
+// ── 2. Overflow de entero ─────────────────────────────────────────────────
+// (probado en archivo separado)
+
+// ── 3. Index fuera de rango — acceso de lectura ───────────────────────────
+// (probado en archivo separado)
+
+// ── 4. Tipo incorrecto en parámetro tipado ────────────────────────────────
+fn int duplicar(int n) { return n * 2; }
+// duplicar("hola")  ← esto daría TYPE ERROR en runtime
+
+// ── 5. String * int (repetición) ─────────────────────────────────────────
+out "ha" * 3;        // → hahaha
+out "ab" * 4;        // → abababab
+out "-" * 10;        // → ----------
+out "x" * 0;         // → (string vacío)
+out "x" * 1;         // → x
+
+// ── 6. string + int (concatenación mixta) ─────────────────────────────────
+let edad = 23;
+out "Sergio con " + edad + " años";    // → Sergio con 23 años
+let pi = 3.14;
+out "pi = " + pi;                      // → pi = 3.14
+out "activo: " + true;                 // → activo: true
+out "null: " + null;                   // → null: null
+
+// ── 7. unshift() ──────────────────────────────────────────────────────────
+let arr = [2, 3, 4];
+arr.unshift(1);
+out arr;         // → [1, 2, 3, 4]
+arr.unshift(0);
+out arr;         // → [0, 1, 2, 3, 4]
+
+let vacio = [];
+vacio.unshift(99);
+out vacio;       // → [99]
+
+// ── 8. Dict assignment por índice ─────────────────────────────────────────
+let precios <string, int> = ({"jamon", 12}, {"queso", 8});
+out precios["jamon"];   // → 12
+precios["jamon"] = 15;  // reemplazar valor existente
+out precios["jamon"];   // → 15
+precios["pan"] = 3;     // insertar nueva clave
+out precios["pan"];     // → 3
+out precios;            // → {jamon: 15, queso: 8, pan: 3}
+
+// ── 9. Typed array [int?] con elementos null ──────────────────────────────
+let maybes [int?] = [1, null, 3];
+out maybes;          // → [1, null, 3]
+out maybes[0];       // → 1
+out maybes[1];       // → null
+maybes.push(null);
+maybes.push(4);
+out maybes;          // → [1, null, 3, null, 4]
+out maybes.length(); // → 5
+
+// Null coalescing sobre elemento nullable
+out maybes[1] ?? -1;  // → -1
+out maybes[0] ?? -1;  // → 1
+
+// ── 10. Array global modificado desde función ─────────────────────────────
+let datos = [10, 20, 30];
+
+fn void doblar_en(int idx) {
+    datos[idx] = datos[idx] * 2;
+}
+
+doblar_en(0);
+doblar_en(2);
+out datos;     // → [20, 20, 60]
+
+fn void agregar(int val) {
+    datos.push(val);
+}
+
+agregar(99);
+agregar(100);
+out datos;     // → [20, 20, 60, 99, 100]
+out datos.length();  // → 5
+
+// ── 11. sort("asc") y sort("desc") explícito ─────────────────────────────
+let ns = [5, 2, 8, 1, 4];
+ns.sort("asc");
+out ns;   // → [1, 2, 4, 5, 8]
+ns.sort("desc");
+out ns;   // → [8, 5, 4, 2, 1]
+
+let words = ["banana", "apple", "cherry", "mango"];
+words.sort("asc");
+out words;   // → [apple, banana, cherry, mango]
+words.sort("desc");
+out words;   // → [mango, cherry, banana, apple]

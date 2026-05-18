@@ -1,0 +1,100 @@
+// 29 - Regression tests for fixed bugs (B-35 through B-42 + key earlier fixes)
+// Each section is labeled with the bug ID it covers.
+
+// ── B-35: for-loop init does not alias the source slot ───────────────────────
+// If init aliased arr[0], mutating i inside the loop would corrupt arr[0].
+let arr35 [int] = [10, 20, 30];
+let sum35 = 0;
+for (let i = arr35[0]; i < 100; i = i + 1) {
+    sum35 = sum35 + 1;
+    if (sum35 > 5) { break; }
+}
+out arr35[0];   // → 10  (must NOT be mutated by the loop counter)
+out sum35;      // → 6
+
+// ── B-36: prefix negation overflow ───────────────────────────────────────────
+// -(-1) should work; very-negative values handled gracefully
+let n36 = -1;
+out -n36;       // → 1
+let pos = 9223372036854775806;   // i64::MAX - 1
+out -pos;       // → -9223372036854775806
+
+// ── B-39: Str + Decimal concatenation matches display() ──────────────────────
+let d39 = 3.14;
+out "pi=" + d39;          // → pi=3.14       (not pi=3.1400000000)
+let d39b = 2.0;
+out "val=" + d39b;        // → val=2.0       (not val=2)
+let d39c = 0.1 + 0.2;
+out "sum=" + d39c;        // → sum=0.3       (B-21 display fix)
+out d39 + " is pi";       // → 3.14 is pi
+
+// ── B-41: remove() on arrays ─────────────────────────────────────────────────
+let r41 [int] = [10, 20, 30, 40, 50];
+let removed = r41.remove(1);    // remove index 1 (value 20)
+out removed;    // → 20
+out r41;        // → [10, 30, 40, 50]
+
+let r41b [string] = ["a", "b", "c"];
+let removed2 = r41b.remove(0);  // remove first element
+out removed2;   // → a
+out r41b;       // → [b, c]
+
+let r41c [int] = [99];
+let removed3 = r41c.remove(0);  // remove last remaining element
+out removed3;   // → 99
+out r41c;       // → []
+
+// ── B-42: new string methods ─────────────────────────────────────────────────
+
+// trim
+out "  hola  ".trim();          // → hola
+out "\thello\n".trim();         // → hello
+out "nospaces".trim();          // → nospaces
+
+// toUpperCase / upper
+out "hello".toUpperCase();      // → HELLO
+out "hello".upper();            // → HELLO
+out "Hello World".toUpperCase(); // → HELLO WORLD
+
+// toLowerCase / lower
+out "HELLO".toLowerCase();      // → hello
+out "HELLO".lower();            // → hello
+out "Hello World".toLowerCase(); // → hello world
+
+// startsWith
+out "hello world".startsWith("hello");   // → true
+out "hello world".startsWith("world");   // → false
+out "".startsWith("");                   // → true
+
+// endsWith
+out "hello world".endsWith("world");    // → true
+out "hello world".endsWith("hello");    // → false
+out "abc".endsWith("c");               // → true
+
+// indexOf
+out "hello world".indexOf("world");    // → 6
+out "hello world".indexOf("xyz");      // → -1
+out "abcabc".indexOf("bc");            // → 1
+
+// charAt
+out "hello".charAt(0);    // → h
+out "hello".charAt(4);    // → o
+out "hello".charAt(2);    // → l
+
+// ── B-30: pop/shift on empty array returns null ───────────────────────────────
+let empty [int] = [];
+let p30 = empty.pop();
+out p30;        // → null
+let s30 = empty.shift();
+out s30;        // → null
+
+// ── B-31: dict missing key returns null ───────────────────────────────────────
+let d31 <string,int> = ({"a",1},{"b",2});
+out d31["a"];          // → 1
+out d31["missing"];    // → null
+
+// ── B-03/B-36: arithmetic overflow detection ──────────────────────────────────
+// Regular arithmetic that stays in range should work fine
+out 1000000 * 1000000;    // → 1000000000000
+out 100 % 7;              // → 2
+out -42 + 42;             // → 0

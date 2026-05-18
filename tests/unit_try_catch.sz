@@ -1,0 +1,144 @@
+// Unit tests: try / catch / throw / finally / assert
+
+test("catch receives thrown string", () => {
+    let caught = "none";
+    try {
+        throw "oops";
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "oops", "catch should receive the thrown value");
+});
+
+test("catch receives thrown int", () => {
+    let caught = 0;
+    try {
+        throw 42;
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == 42, "catch should receive integer 42");
+});
+
+test("code after throw in try does not run", () => {
+    let x = 0;
+    try {
+        throw "stop";
+        x = 99;
+    } catch (e) {}
+    assert(x == 0, "code after throw should not execute");
+});
+
+test("finally runs on normal path", () => {
+    let ran = false;
+    try {
+        let dummy = 1;
+    } finally {
+        ran = true;
+    }
+    assert(ran == true, "finally should run on normal path");
+});
+
+test("finally runs on throw path", () => {
+    let ran = false;
+    try {
+        throw "err";
+    } catch (e) {}
+    finally {
+        ran = true;
+    }
+    assert(ran == true, "finally should run after catch");
+});
+
+test("exception from function propagates to caller catch", () => {
+    fn void fail() {
+        throw "inner";
+    }
+    let caught = "none";
+    try {
+        fail();
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "inner", "exception should propagate from called function");
+});
+
+test("nested try — inner catch, outer never sees it", () => {
+    let outer_caught = false;
+    try {
+        try {
+            throw "inner";
+        } catch (e) {
+            // handled here
+        }
+    } catch (e) {
+        outer_caught = true;
+    }
+    assert(outer_caught == false, "outer catch should not fire when inner handles it");
+});
+
+test("nested try — inner re-throws, outer catches", () => {
+    let caught = "none";
+    try {
+        try {
+            throw "problem";
+        } catch (e) {
+            throw e + " (rethrown)";
+        }
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "problem (rethrown)", "rethrown exception should reach outer catch");
+});
+
+test("catch with return in function", () => {
+    fn string safeDiv(int a, int b) {
+        try {
+            if (b == 0) { throw "div/0"; }
+            return "ok:" + (a / b);
+        } catch (e) {
+            return "err:" + e;
+        }
+    }
+    assert(safeDiv(10, 2) == "ok:5", "safeDiv(10,2) should return ok:5");
+    assert(safeDiv(10, 0) == "err:div/0", "safeDiv(10,0) should return err:div/0");
+});
+
+test("assert throws on false", () => {
+    let thrown = false;
+    try {
+        assert(1 == 2, "should fail");
+    } catch (e) {
+        thrown = true;
+        assert(e == "should fail", "assert message should propagate");
+    }
+    assert(thrown == true, "assert(false) should throw");
+});
+
+test("assert does NOT throw on true", () => {
+    assert(1 == 1, "1==1 is always true");
+    assert("a" == "a", "string equality");
+    assert(true, "literal true");
+});
+
+test("exception from class method propagates", () => {
+    class Bank {
+        public Bank(decimal bal) { this.bal = bal; }
+        public void debit(decimal n) {
+            if (n > this.bal) { throw "insufficient"; }
+            this.bal -= n;
+        }
+        public decimal balance() { return this.bal; }
+    }
+    let b = new Bank(100.0);
+    let caught = "none";
+    try {
+        b.debit(200.0);
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "insufficient", "method throw should propagate");
+    assert(b.balance() == 100.0, "balance unchanged after failed debit");
+});
+
+summary();

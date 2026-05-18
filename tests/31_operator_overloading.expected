@@ -1,0 +1,22 @@
+── Aritmética binaria ──
+OK
+── Comparación ──
+OK
+── Unario op_neg ──
+OK
+── op_str en out e interpolación ──
+(1.0, 2.0)
+OK
+── Fraccion: suma y comparación ──
+5/6
+OK
+── Encadenado ──
+OK
+── Uso en if ──
+OK
+── Acumulador en while ──
+OK
+
+══════════════════════════════════════
+  OPERATOR OVERLOADING ✓
+══════════════════════════════════════

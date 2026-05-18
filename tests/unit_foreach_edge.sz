@@ -1,0 +1,186 @@
+// ── ForEach / Ternary / ++ edge cases ────────────────────────────────────────
+
+// ── for-in: control flow propagation ─────────────────────────────────────────
+
+test("for-in return from function exits immediately", () => {
+    fn int firstOver(int limit, [int] arr) {
+        for (let n in arr) {
+            if (n > limit) { return n; }
+        }
+        return -1;
+    }
+    let nums [int] = [1, 5, 3, 8, 2];
+    assert(firstOver(4, nums) == 5, "first value over 4 is 5");
+    assert(firstOver(99, nums) == -1, "no value over 99");
+});
+
+test("for-in throw caught by enclosing try-catch", () => {
+    let nums [int] = [1, 2, 0, 3];
+    let caught = "";
+    try {
+        for (let n in nums) {
+            if (n == 0) { throw "zero"; }
+        }
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "zero", "should catch throw from inside for-in");
+});
+
+test("for-in over expression (split result)", () => {
+    let result = "";
+    for (let w in "a,b,c".split(",")) {
+        result = result + w + "|";
+    }
+    assert(result == "a|b|c|", "should iterate split result");
+});
+
+test("for-in does not mutate the source array", () => {
+    let nums [int] = [1, 2, 3];
+    let doubled = [];
+    for (let n in nums) {
+        doubled.push(n * 2);
+    }
+    assert(nums[0] == 1, "source array unchanged");
+    assert(nums[2] == 3, "source array unchanged at end");
+    assert(doubled[0] == 2, "doubled[0] = 2");
+    assert(doubled[2] == 6, "doubled[2] = 6");
+});
+
+test("for-in closures capture each iteration independently", () => {
+    fn [any] makeAdders([int] vals) {
+        let result = [];
+        for (let v in vals) {
+            let f = () => v + 100;
+            result.push(f);
+        }
+        return result;
+    }
+    let adders = makeAdders([1, 2, 3]);
+    assert(adders[0]() == 101, "first closure captures 1");
+    assert(adders[1]() == 102, "second closure captures 2");
+    assert(adders[2]() == 103, "third closure captures 3");
+});
+
+test("for-in inside class method mutates this field", () => {
+    public class Acum {
+        public Acum() { this.total = 0; }
+        public void addAll([int] nums) {
+            for (let n in nums) { this.total += n; }
+        }
+        public int getTotal() { return this.total; }
+    }
+    let a = new Acum();
+    let nums [int] = [10, 20, 30];
+    a.addAll(nums);
+    assert(a.getTotal() == 60, "sum inside class method = 60");
+});
+
+test("for-in ternary in body selects sign", () => {
+    let nums [int] = [1, -2, 3, -4, 5];
+    let result = "";
+    for (let n in nums) {
+        result = result + (n > 0 ? "+" : "-");
+    }
+    assert(result == "+-+-+", "sign sequence = +-+-+");
+});
+
+test("for-in with ++ counter", () => {
+    let nums [int] = [10, 20, 30, 40];
+    let count = 0;
+    for (let n in nums) {
+        count++;
+    }
+    assert(count == 4, "counted 4 elements");
+});
+
+// ── Ternary: advanced cases ───────────────────────────────────────────────────
+
+test("ternary as function return value", () => {
+    fn string sign(int n) {
+        return n > 0 ? "positive" : n < 0 ? "negative" : "zero";
+    }
+    assert(sign(5) == "positive", "5 is positive");
+    assert(sign(-3) == "negative", "-3 is negative");
+    assert(sign(0) == "zero", "0 is zero");
+});
+
+test("ternary result in array literal", () => {
+    let a = 3;
+    let b = 7;
+    let arr = [a > b ? a : b, a < b ? a : b];
+    assert(arr[0] == 7, "max = 7");
+    assert(arr[1] == 3, "min = 3");
+});
+
+test("ternary inside while condition", () => {
+    let i = 0;
+    let limit = 3;
+    while (i < (limit > 2 ? 5 : 3)) {
+        i++;
+    }
+    assert(i == 5, "limit > 2, so runs to 5");
+});
+
+test("ternary in string interpolation", () => {
+    let x = 7;
+    let s = "x is {x > 0 ? "positive" : "negative"}";
+    assert(s == "x is positive", "interpolated ternary works");
+});
+
+test("ternary with ?? — ?? binds tighter", () => {
+    let val = null;
+    // Parses as (val ?? "default") ? "yes" : "no"
+    let r = val ?? "default" ? "yes" : "no";
+    assert(r == "yes", "null??default is truthy, picks yes");
+});
+
+test("ternary lazy — false branch with throw not evaluated", () => {
+    fn string boom() { throw "should not run"; }
+    let result = true ? "safe" : boom();
+    assert(result == "safe", "boom() was not called");
+});
+
+// ── ++/-- edge cases ─────────────────────────────────────────────────────────
+
+test("++ on global variable works", () => {
+    let g = 0;
+    g++;
+    g++;
+    ++g;
+    assert(g == 3, "three increments = 3");
+});
+
+test("-- to zero and below", () => {
+    let n = 2;
+    n--;
+    n--;
+    n--;
+    assert(n == -1, "2 minus 3 = -1");
+});
+
+test("++ inside for-in body", () => {
+    let nums [int] = [1, 2, 3, 4, 5];
+    let evens = 0;
+    for (let n in nums) {
+        if (n % 2 == 0) { evens++; }
+    }
+    assert(evens == 2, "two even numbers: 2 and 4");
+});
+
+test("++ and -- in nested while loops", () => {
+    let outer = 0;
+    let inner_total = 0;
+    while (outer < 3) {
+        let inner = 0;
+        while (inner < 3) {
+            inner_total++;
+            inner++;
+        }
+        outer++;
+    }
+    assert(outer == 3, "outer ran 3 times");
+    assert(inner_total == 9, "inner ran 3*3 = 9 times");
+});
+
+summary();

@@ -470,7 +470,16 @@ impl Evaluator {
                 let init_val = match self.eval_expression(&for_stmt.init.value) {
                     EvalResult::Value(v) => v,
                     EvalResult::Error => { self.scopes.pop(); return EvalResult::Error; }
-                    EvalResult::Return(v) => { self.scopes.pop(); return EvalResult::Return(v); }
+                    EvalResult::Return(v) => {
+                        let owned = self.extract(v);
+                        self.scopes.pop();
+                        return EvalResult::Return(self.plant(owned));
+                    }
+                    EvalResult::Throw(v) => {
+                        let owned = self.extract(v);
+                        self.scopes.pop();
+                        return EvalResult::Throw(self.plant(owned));
+                    }
                     _ => { self.scopes.pop(); return EvalResult::Error; }
                 };
                 // Fresh slot to prevent aliasing (e.g. `for (let i = arr[0]; ...)` would
@@ -743,7 +752,10 @@ impl Evaluator {
 
             Statement::Out(out_stmt) => match self.eval_expression(&out_stmt.value) {
                 EvalResult::Value(v) => {
-                    println!("{}", self.display(v));
+                    match self.fmt_value(v) {
+                        Ok(s)  => println!("{}", s),
+                        Err(e) => return e,
+                    }
                     EvalResult::Value(self.null_ref)
                 }
                 EvalResult::Return(v) => EvalResult::Return(v),
@@ -829,8 +841,11 @@ impl Evaluator {
             Some(ObjectData::Str(s)) => {
                 s.chars().map(|c| OwnedValue::Str(c.to_string())).collect()
             }
+            Some(ObjectData::Dict { entries, .. }) => {
+                entries.iter().map(|(k, _)| self.extract(*k)).collect()
+            }
             _ => {
-                eprintln!("❌ ERROR: for-in requires an array or string");
+                eprintln!("❌ ERROR: for-in requires an array, string, or dict");
                 return EvalResult::Error;
             }
         };
@@ -957,7 +972,12 @@ impl Evaluator {
                         ast::StringPart::Literal(s) => result.push_str(s),
                         ast::StringPart::Expr(expr) => {
                             match self.eval_expression(expr) {
-                                EvalResult::Value(r) => result.push_str(&self.display(r)),
+                                EvalResult::Value(r) => {
+                                    match self.fmt_value(r) {
+                                        Ok(s)  => result.push_str(&s),
+                                        Err(e) => return e,
+                                    }
+                                }
                                 other => return other,
                             }
                         }
@@ -975,6 +995,7 @@ impl Evaluator {
                         "readLine"    => return self.eval_read_line(&call_expr.arguments),
                         "super"       => return self.eval_super_call(&call_expr.arguments),
                         "assert"      => return self.eval_assert(&call_expr.arguments),
+                        "type_of"     => return self.eval_type_of(&call_expr.arguments),
                         "abs" | "sqrt" | "floor" | "ceil" | "round"
                         | "min" | "max" | "pow" | "log" | "log2" | "log10"
                             => return self.eval_math_builtin(name, &call_expr.arguments),
@@ -1214,6 +1235,15 @@ impl Evaluator {
                 let idx_data = self.resolve(idx_ref).unwrap().clone();
 
                 match (&left_data, &idx_data) {
+                    (ObjectData::Str(s), ObjectData::Integer(i)) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        if *i < 0 || *i as usize >= chars.len() {
+                            EvalResult::Value(self.null_ref)
+                        } else {
+                            let c = chars[*i as usize].to_string();
+                            EvalResult::Value(self.alloc(ObjectData::Str(c)))
+                        }
+                    }
                     (ObjectData::Array { elements, .. }, ObjectData::Integer(i)) => {
                         if *i < 0 || *i as usize >= elements.len() {
                             eprintln!("❌ ERROR: Index out of bounds");
@@ -1569,7 +1599,7 @@ impl Evaluator {
                     _ => return EvalResult::Error,
                 };
                 let right_data = self.resolve(right_ref).unwrap().clone();
-                self.eval_prefix(op, right_data)
+                self.eval_prefix(op, right_ref, right_data)
             }
 
             // Null coalescing: left ?? right — returns left if not null, else right
@@ -1650,7 +1680,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_prefix(&mut self, op: &str, right: ObjectData) -> EvalResult {
+    fn eval_prefix(&mut self, op: &str, right_ref: ObjectRef, right: ObjectData) -> EvalResult {
         match op {
             "-" => match right {
                 ObjectData::Integer(i) => match i.checked_neg() {
@@ -1661,19 +1691,36 @@ impl Evaluator {
                     }
                 },
                 ObjectData::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(-d))),
+                ObjectData::Instance { ref class_name, .. } => {
+                    let cn = class_name.clone();
+                    if self.find_method(&cn, "op_neg").is_some() {
+                        self.call_op_method(right_ref, &cn, "op_neg", vec![], 0, 0)
+                    } else {
+                        eprintln!("❌ ERROR: Prefix '-' not supported for this type (define op_neg to enable it)");
+                        EvalResult::Error
+                    }
+                }
                 _ => {
                     eprintln!("❌ ERROR: Prefix '-' not supported for this type");
                     EvalResult::Error
                 }
             },
-            "!" => {
-                if let ObjectData::Boolean(b) = right {
-                    EvalResult::Value(self.alloc(ObjectData::Boolean(!b)))
-                } else {
+            "!" => match right {
+                ObjectData::Boolean(b) => EvalResult::Value(self.alloc(ObjectData::Boolean(!b))),
+                ObjectData::Instance { ref class_name, .. } => {
+                    let cn = class_name.clone();
+                    if self.find_method(&cn, "op_not").is_some() {
+                        self.call_op_method(right_ref, &cn, "op_not", vec![], 0, 0)
+                    } else {
+                        eprintln!("❌ ERROR: Prefix '!' only applies to booleans (define op_not to enable it on instances)");
+                        EvalResult::Error
+                    }
+                }
+                _ => {
                     eprintln!("❌ ERROR: Prefix '!' only applies to booleans");
                     EvalResult::Error
                 }
-            }
+            },
             _ => EvalResult::Error,
         }
     }
@@ -1989,7 +2036,28 @@ impl Evaluator {
                 };
                 EvalResult::Value(self.alloc(result))
             }
-            _ => {
+            (left, right) => {
+                // ── Operator overloading ─────────────────────────────────────
+                // Check BEFORE the equality short-circuit so op_eq/op_ne get a chance.
+                let method_name = operator_to_method_name(op);
+                let maybe_class = if !method_name.is_empty() {
+                    if let ObjectData::Instance { ref class_name, .. } = left {
+                        let has = self.find_method(class_name, method_name).is_some();
+                        if has { Some(class_name.clone()) } else { None }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(class_name) = maybe_class {
+                    let inst_ref  = self.alloc(left);
+                    let arg_ref   = self.alloc(right);
+                    let arg_owned = self.extract(arg_ref);
+                    return self.call_op_method(inst_ref, &class_name, method_name, vec![arg_owned], line, column);
+                }
+
                 // Cross-type equality: different types are never equal
                 if op == "==" { return EvalResult::Value(self.alloc(ObjectData::Boolean(false))); }
                 if op == "!=" { return EvalResult::Value(self.alloc(ObjectData::Boolean(true))); }
@@ -2244,6 +2312,117 @@ impl Evaluator {
         }
     }
 
+    // ── fmt_value: display respecting op_str / op_str on array elements ────────
+
+    /// Rich display: calls `op_str()` on Instances if defined, recurses into Arrays,
+    /// falls back to `display()` for everything else.
+    /// Returns `Err(EvalResult)` if `op_str` throws or errors, so callers can propagate.
+    fn fmt_value(&mut self, obj_ref: ObjectRef) -> Result<String, EvalResult> {
+        match self.resolve(obj_ref).cloned() {
+            Some(ObjectData::Instance { ref class_name, .. }) => {
+                let cn = class_name.clone();
+                if self.find_method(&cn, "op_str").is_some() {
+                    match self.call_op_method(obj_ref, &cn, "op_str", vec![], 0, 0) {
+                        EvalResult::Value(r) => {
+                            if let Some(ObjectData::Str(s)) = self.resolve(r) {
+                                return Ok(s.clone());
+                            }
+                            Ok(self.display(r))
+                        }
+                        EvalResult::Throw(v) => Err(EvalResult::Throw(v)),
+                        EvalResult::Error    => Err(EvalResult::Error),
+                        other                => Err(other),
+                    }
+                } else {
+                    Ok(self.display(obj_ref))
+                }
+            }
+            Some(ObjectData::Array { elements, .. }) => {
+                let mut parts = Vec::with_capacity(elements.len());
+                for elem_ref in elements {
+                    parts.push(self.fmt_value(elem_ref)?);
+                }
+                Ok(format!("[{}]", parts.join(", ")))
+            }
+            _ => Ok(self.display(obj_ref)),
+        }
+    }
+
+    // ── Operator overloading dispatch ─────────────────────────────────────────
+
+    /// Calls an `op_*` overload method on `inst_ref`. `arg_vals` are the already-extracted
+    /// arguments (0 for unary like `op_neg`, 1 for binary like `op_add`).
+    fn call_op_method(
+        &mut self,
+        inst_ref: ObjectRef,
+        class_name: &str,
+        method_name: &str,
+        arg_vals: Vec<OwnedValue>,
+        line: usize,
+        column: usize,
+    ) -> EvalResult {
+        let method = match self.find_method(class_name, method_name) {
+            Some(m) => m,
+            None => {
+                eprintln!("❌ ERROR: no operator overload '{}' on class '{}'", method_name, class_name);
+                return EvalResult::Error;
+            }
+        };
+
+        if self.call_depth >= 1000 {
+            eprintln!("❌ ERROR: Stack overflow — maximum call depth (1000) exceeded");
+            return EvalResult::Error;
+        }
+
+        let old_executing_class = self.executing_class.take();
+        self.executing_class = Some(class_name.to_string());
+        self.call_stack.push(CallFrame {
+            name: format!("{}::{}", class_name, method_name),
+            line,
+            column,
+        });
+        self.scopes.push();
+        self.call_depth += 1;
+        self.scopes.declare("this".to_string(), inst_ref);
+
+        for (i, param) in method.parameters.iter().enumerate() {
+            let arg_ref = if i < arg_vals.len() {
+                self.plant(arg_vals[i].clone())
+            } else {
+                self.null_ref
+            };
+            self.scopes.declare(param.name.clone(), arg_ref);
+        }
+
+        let mut result_ref = self.null_ref;
+        let mut error = false;
+        let mut method_throw: Option<ObjectRef> = None;
+        for stmt in &method.body.statements {
+            match self.eval_statement(stmt) {
+                EvalResult::Value(_)  => {}
+                EvalResult::Return(v) => { result_ref = v; break; }
+                EvalResult::Throw(v)  => { method_throw = Some(v); break; }
+                EvalResult::Error     => { error = true; break; }
+                EvalResult::Break | EvalResult::Continue => {
+                    eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop in operator method '{}'.", method_name);
+                    error = true;
+                    break;
+                }
+            }
+        }
+
+        let owned = self.extract(result_ref);
+        let throw_owned = method_throw.map(|r| self.extract(r));
+        self.call_depth -= 1;
+        self.scopes.pop();
+        self.call_stack.pop();
+        self.executing_class = old_executing_class;
+
+        if error { return EvalResult::Error; }
+        if let Some(t) = throw_owned { return EvalResult::Throw(self.plant(t)); }
+        EvalResult::Value(self.plant(owned))
+    }
+
     // ── Callback calling helper ───────────────────────────────────────────────
 
     fn call_function(&mut self, func_ref: ObjectRef, arg_vals: Vec<OwnedValue>) -> EvalResult {
@@ -2342,6 +2521,35 @@ impl Evaluator {
         } else {
             EvalResult::Value(self.null_ref)
         }
+    }
+
+    fn eval_type_of(&mut self, args: &[ast::Expression]) -> EvalResult {
+        if args.len() != 1 {
+            eprintln!("❌ ERROR: type_of expects 1 argument");
+            return EvalResult::Error;
+        }
+        let r = match self.eval_expression(&args[0]) {
+            EvalResult::Value(v) => v,
+            EvalResult::Throw(v) => return EvalResult::Throw(v),
+            _ => return EvalResult::Error,
+        };
+        let type_name = match self.resolve(r) {
+            Some(ObjectData::Integer(_))  => "int",
+            Some(ObjectData::Decimal(_))  => "decimal",
+            Some(ObjectData::Boolean(_))  => "bool",
+            Some(ObjectData::Str(_))      => "string",
+            Some(ObjectData::Array { .. }) => "array",
+            Some(ObjectData::Dict { .. }) => "dict",
+            Some(ObjectData::Function { .. }) => "function",
+            Some(ObjectData::Instance { class_name, .. }) => {
+                // class_name vive en la arena, necesitamos clonar antes de alloc
+                let name = class_name.clone();
+                let s = self.alloc(ObjectData::Str(name));
+                return EvalResult::Value(s);
+            }
+            Some(ObjectData::Null) | None => "null",
+        };
+        EvalResult::Value(self.alloc(ObjectData::Str(type_name.to_string())))
     }
 
     fn eval_parse_int(&mut self, args: &[ast::Expression]) -> EvalResult {
@@ -3357,6 +3565,42 @@ impl Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Str(s)))
             }
 
+            "indexOf" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: indexOf expects 1 argument");
+                    return EvalResult::Error;
+                }
+                let needle_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let needle_data = self.resolve(needle_ref).cloned();
+                let idx = elems.iter().enumerate().find(|(_, elem)| {
+                    let elem_data = self.resolve(**elem).cloned();
+                    obj_data_eq(&elem_data, &needle_data)
+                }).map(|(i, _)| i as i64).unwrap_or(-1);
+                EvalResult::Value(self.alloc(ObjectData::Integer(idx)))
+            }
+
+            "includes" | "contains" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: includes expects 1 argument");
+                    return EvalResult::Error;
+                }
+                let needle_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let needle_data = self.resolve(needle_ref).cloned();
+                let found = elems.iter().any(|elem| {
+                    let elem_data = self.resolve(*elem).cloned();
+                    obj_data_eq(&elem_data, &needle_data)
+                });
+                EvalResult::Value(self.alloc(ObjectData::Boolean(found)))
+            }
+
             _ => {
                 eprintln!("❌ ERROR: Unknown array method '{}'", dot_call.method);
                 EvalResult::Error
@@ -3490,14 +3734,18 @@ impl Evaluator {
             }
 
             "substring" => {
-                if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: substring expects 2 arguments (start, end)");
+                if dot_call.arguments.is_empty() || dot_call.arguments.len() > 2 {
+                    eprintln!("❌ ERROR: substring expects 1 or 2 arguments (start [, end])");
                     return EvalResult::Error;
                 }
                 let start = match self.eval_int_arg(&dot_call.arguments[0]) { Some(v) => v, None => return EvalResult::Error };
-                let end   = match self.eval_int_arg(&dot_call.arguments[1]) { Some(v) => v, None => return EvalResult::Error };
                 let chars: Vec<char> = s.chars().collect();
                 let len = chars.len() as i64;
+                let end = if dot_call.arguments.len() == 2 {
+                    match self.eval_int_arg(&dot_call.arguments[1]) { Some(v) => v, None => return EvalResult::Error }
+                } else {
+                    len
+                };
                 let start = start.max(0).min(len) as usize;
                 let end   = end.max(0).min(len) as usize;
                 let start = start.min(end);
@@ -3571,11 +3819,14 @@ impl Evaluator {
 
     fn values_equal(&self, a: &ObjectData, b: &ObjectData) -> bool {
         match (a, b) {
-            (ObjectData::Integer(x), ObjectData::Integer(y)) => x == y,
-            (ObjectData::Decimal(x), ObjectData::Decimal(y)) => x == y,
-            (ObjectData::Str(x), ObjectData::Str(y)) => x == y,
-            (ObjectData::Boolean(x), ObjectData::Boolean(y)) => x == y,
-            (ObjectData::Null, ObjectData::Null) => true,
+            (ObjectData::Integer(x),  ObjectData::Integer(y))  => x == y,
+            (ObjectData::Decimal(x),  ObjectData::Decimal(y))  => x == y,
+            // Cross-type numeric: same coercion that == uses in infix expressions
+            (ObjectData::Decimal(x),  ObjectData::Integer(y))  => *x == (*y as f64),
+            (ObjectData::Integer(x),  ObjectData::Decimal(y))  => (*x as f64) == *y,
+            (ObjectData::Str(x),      ObjectData::Str(y))      => x == y,
+            (ObjectData::Boolean(x),  ObjectData::Boolean(y))  => x == y,
+            (ObjectData::Null,        ObjectData::Null)         => true,
             _ => false,
         }
     }
@@ -3595,16 +3846,19 @@ impl Evaluator {
                     // Run catch body statement-by-statement (same pattern as eval_call)
                     // so we can extract the result BEFORE the scope pop.
                     let mut catch_val = self.null_ref;
-                    let mut catch_return: Option<ObjectRef> = None;
-                    let mut catch_throw:  Option<ObjectRef> = None;
-                    let mut catch_error  = false;
+                    let mut catch_return:   Option<ObjectRef> = None;
+                    let mut catch_throw:    Option<ObjectRef> = None;
+                    let mut catch_error    = false;
+                    let mut catch_break    = false;
+                    let mut catch_continue = false;
                     for s in &catch_block.statements {
                         match self.eval_statement(s) {
-                            EvalResult::Value(v) => catch_val = v,
-                            EvalResult::Return(v)  => { catch_return = Some(v); break; }
-                            EvalResult::Throw(v)   => { catch_throw  = Some(v); break; }
-                            EvalResult::Error      => { catch_error = true; break; }
-                            EvalResult::Break | EvalResult::Continue => { catch_error = true; break; }
+                            EvalResult::Value(v)   => catch_val = v,
+                            EvalResult::Return(v)  => { catch_return   = Some(v); break; }
+                            EvalResult::Throw(v)   => { catch_throw    = Some(v); break; }
+                            EvalResult::Error      => { catch_error    = true;    break; }
+                            EvalResult::Break      => { catch_break    = true;    break; }
+                            EvalResult::Continue   => { catch_continue = true;    break; }
                         }
                     }
                     // Extract BEFORE pop so refs remain valid
@@ -3612,6 +3866,8 @@ impl Evaluator {
                     let owned = self.extract(primary);
                     self.scopes.pop();
                     if catch_error             { EvalResult::Error }
+                    else if catch_break        { EvalResult::Break }
+                    else if catch_continue     { EvalResult::Continue }
                     else if catch_return.is_some() { EvalResult::Return(self.plant(owned)) }
                     else if catch_throw.is_some()  { EvalResult::Throw(self.plant(owned)) }
                     else                           { EvalResult::Value(self.plant(owned)) }
@@ -3622,11 +3878,13 @@ impl Evaluator {
             other => other,
         };
 
-        // finally always runs — its result is discarded unless it throws
+        // finally always runs — throw/return/error from it override the try/catch result
         if let Some(ref finally_block) = try_stmt.finally_body {
-            let finally_result = self.eval_block(finally_block);
-            if let EvalResult::Throw(v) = finally_result {
-                return EvalResult::Throw(v); // throw from finally overrides
+            match self.eval_block(finally_block) {
+                EvalResult::Throw(v)  => return EvalResult::Throw(v),
+                EvalResult::Return(v) => return EvalResult::Return(v),
+                EvalResult::Error     => return EvalResult::Error,
+                _ => {} // Value / Break / Continue — preserve result_after_catch
             }
         }
 
@@ -3636,6 +3894,25 @@ impl Evaluator {
 
 // ── Free helpers ──────────────────────────────────────────────────────────────
 
+/// Maps a binary operator symbol to its overload method name on instances.
+/// Returns `""` for operators that cannot be overloaded.
+fn operator_to_method_name(op: &str) -> &'static str {
+    match op {
+        "+"  => "op_add",
+        "-"  => "op_sub",
+        "*"  => "op_mul",
+        "/"  => "op_div",
+        "%"  => "op_mod",
+        "==" => "op_eq",
+        "!=" => "op_ne",
+        "<"  => "op_lt",
+        "<=" => "op_le",
+        ">"  => "op_gt",
+        ">=" => "op_ge",
+        _    => "",
+    }
+}
+
 /// Formats a decimal the same way `display()` does — trims trailing zeros beyond 10 decimal places.
 fn format_decimal(d: f64) -> String {
     if d.fract() == 0.0 {
@@ -3643,6 +3920,17 @@ fn format_decimal(d: f64) -> String {
     } else {
         let s = format!("{:.10}", d);
         s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+fn obj_data_eq(a: &Option<ObjectData>, b: &Option<ObjectData>) -> bool {
+    match (a, b) {
+        (Some(ObjectData::Integer(x)),  Some(ObjectData::Integer(y)))  => x == y,
+        (Some(ObjectData::Decimal(x)),  Some(ObjectData::Decimal(y)))  => x == y,
+        (Some(ObjectData::Boolean(x)),  Some(ObjectData::Boolean(y)))  => x == y,
+        (Some(ObjectData::Str(x)),      Some(ObjectData::Str(y)))      => x == y,
+        (Some(ObjectData::Null),        Some(ObjectData::Null))        => true,
+        _ => false,
     }
 }
 

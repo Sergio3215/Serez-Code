@@ -579,15 +579,41 @@ impl Parser {
         self.next_token();
         self.next_token();
 
-        if self.current_token.token_type != TokenType::Ident
-            || self.peek_token.token_type != TokenType::Assign
-        {
+        if self.current_token.token_type != TokenType::Ident {
             eprintln!("❌ PARSER ERROR: Expected assignment as for-loop update");
             return None;
         }
-        let update = match self.parse_assign_statement()? {
-            Statement::Assign(a) => a,
-            _ => return None,
+        let update = match self.peek_token.token_type {
+            TokenType::Assign => match self.parse_assign_statement()? {
+                Statement::Assign(a) => a,
+                _ => return None,
+            },
+            TokenType::PlusPlus | TokenType::MinusMinus => {
+                let name = self.current_token.literal.clone();
+                let line = self.current_token.line;
+                let col  = self.current_token.column;
+                let op   = if self.peek_token.token_type == TokenType::PlusPlus { "+" } else { "-" };
+                self.next_token(); // consume ++ / --
+                AssignStatement {
+                    name: name.clone(),
+                    value: Expression::Infix(InfixExpression {
+                        left: Box::new(Expression::Identifier(name)),
+                        operator: op.to_string(),
+                        right: Box::new(Expression::Integer(1)),
+                        line, column: col,
+                    }),
+                }
+            }
+            ref tt if self.is_compound_assign(&tt.clone()) => {
+                match self.parse_compound_assign_statement()? {
+                    Statement::Assign(a) => a,
+                    _ => return None,
+                }
+            }
+            _ => {
+                eprintln!("❌ PARSER ERROR: Expected assignment as for-loop update");
+                return None;
+            }
         };
 
         if self.peek_token.token_type != TokenType::RParen {

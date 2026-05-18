@@ -1,0 +1,14 @@
+// Escape sequences in string literals
+out "line1\nline2";     // → line1 (newline) line2
+out "tab\there";        // → tab (tab) here
+out "quote: \"hello\""; // → quote: "hello"
+out "back\\slash";      // → back\slash
+
+// Literal brace with \{
+let x = 42;
+out "value: {x}";        // → value: 42  (interpolated)
+out "literal: \{x}";     // → literal: {x}  (not interpolated)
+
+// Backslash-r (carriage return — might print strangely but shouldn't error)
+let s = "before\rafter";
+out s.length;   // → 12 (before=6, \r=1, after=5)

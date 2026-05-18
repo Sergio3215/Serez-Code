@@ -1,0 +1,27 @@
+// Math built-ins edge cases
+out abs(-7);       // → 7
+out abs(7);        // → 7
+out sqrt(4.0);     // → 2.0
+out floor(3.9);    // → 3.0
+out ceil(3.1);     // → 4.0
+out round(3.5);    // → 4.0
+out min(2, 8);     // → 2
+out max(2, 8);     // → 8
+out pow(2.0, 10.0);  // → 1024.0
+
+// Integer + decimal mixed arithmetic
+out 1 + 0.5;       // → 1.5
+out 10.0 / 4;      // → 2.5
+out -3.14;         // → -3.14
+
+// Decimal display: always shows at least one decimal place
+out 5.0 * 1.0;     // → 5.0
+out 10.0 / 5.0;    // → 2.0
+
+// Integer division truncates
+out 10 / 3;    // → 3
+out -7 / 2;    // → -3
+
+// Modulo
+out 10 % 3;    // → 1
+out -10 % 3;   // → -1

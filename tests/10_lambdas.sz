@@ -1,0 +1,107 @@
+// 10 - Lambdas y funciones de orden superior
+
+// Lambda de un parametro
+let cuadrado = x => x * x;
+out cuadrado(5);
+out cuadrado(9);
+
+// Lambda de dos parametros
+let suma = (a, b) => a + b;
+out suma(3, 4);
+out suma(10, 20);
+
+// Lambda con cuerpo bloque
+let mayor = (a, b) => {
+    if (a > b) {
+        return a;
+    }
+    return b;
+};
+out mayor(5, 8);
+out mayor(10, 3);
+
+// Pasar lambda a funcion con 'any'
+fn int aplicar(int x, any f) {
+    return f(x);
+}
+
+out aplicar(4, x => x * 3);
+out aplicar(10, x => x - 1);
+
+// map con lambda
+let nums = [1, 2, 3, 4, 5];
+out nums.map(x => x * 2);
+out nums.map(x => x * x);
+out nums.map(x => "{x}!");
+
+// filter con lambda
+out nums.filter(x => x > 2);
+out nums.filter(x => x % 2 == 0);
+out nums.filter(x => x != 3);
+
+// reduce con lambda
+out nums.reduce(0, (acc, x) => acc + x);
+out nums.reduce(1, (acc, x) => acc * x);
+out nums.reduce("", (acc, x) => acc + "{x},");
+
+// sort con comparador
+let desordenado = [5, 1, 4, 2, 3];
+desordenado.sort((a, b) => a - b);
+out desordenado;
+
+desordenado.sort((a, b) => b - a);
+out desordenado;
+
+// Lambda captura variables del entorno (por valor en el momento de creacion)
+let factor = 3;
+let multiplicar = x => x * factor;
+out multiplicar(5);
+out multiplicar(7);
+
+// Funciones de orden superior propias con any
+fn [any] mi_map([any] arr, any f) {
+    let resultado = [];
+    for (let i = 0; i < arr.length(); i = i + 1) {
+        resultado.push(f(arr[i]));
+    }
+    return resultado;
+}
+
+let res = mi_map([1, 2, 3, 4], x => x * 10);
+out res;
+
+fn [any] mi_filter([any] arr, any pred) {
+    let resultado = [];
+    for (let i = 0; i < arr.length(); i = i + 1) {
+        if (pred(arr[i])) {
+            resultado.push(arr[i]);
+        }
+    }
+    return resultado;
+}
+
+let pares = mi_filter([1, 2, 3, 4, 5, 6], x => x % 2 == 0);
+out pares;
+
+// Chaining
+let pipeline = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    .filter(x => x % 2 == 0)
+    .map(x => x * x)
+    .filter(x => x > 10);
+out pipeline;
+
+// Lambda de dos params en map (item + indice)
+let lista = ["a", "b", "c", "d"];
+let indexado = lista.map((item, i) => "{i}: {item}");
+out indexado;
+
+// Composicion de funciones
+fn any componer(any f, any g) {
+    return x => f(g(x));
+}
+
+let doblar = x => x * 2;
+let sumar1 = x => x + 1;
+let doblar_y_sumar = componer(sumar1, doblar);
+out doblar_y_sumar(5);
+out doblar_y_sumar(10);

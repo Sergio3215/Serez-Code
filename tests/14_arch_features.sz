@@ -1,0 +1,168 @@
+// 14 - Características documentadas en README que no tenían test
+
+// ── 1. arr.length como propiedad (sin paréntesis) ──────────────────────────
+let a = [10, 20, 30, 40];
+out a.length;      // → 4
+out a.length();    // → 4  (ambas formas deben dar igual)
+let empty = [];
+out empty.length;  // → 0
+
+let s = "hello world";
+out s.length;      // → 11
+out s.length();    // → 11
+
+// ── 2. Escape sequences ────────────────────────────────────────────────────
+out "backslash: \\";       // → backslash: \
+out "brace literal: \{x}"; // → brace literal: {x}  (no interpolado)
+// \n y \t: verificar que se emiten como caracteres reales
+let nl = "A\nB";
+out nl.length();   // → 3  (A + newline + B)
+let tb = "A\tB";
+out tb.length();   // → 3  (A + tab + B)
+
+// ── 3. Mutación externa de campo de clase ──────────────────────────────────
+class Coche {
+    public Coche(string marca, int velocidad) {
+        this.marca = marca;
+        this.velocidad = velocidad;
+    }
+    public int getVelocidad() { return this.velocidad; }
+    public string getMarca()  { return this.marca; }
+}
+
+let coche = new Coche("Toyota", 100);
+out coche.getVelocidad();  // → 100
+coche.velocidad = 200;     // mutación directa desde fuera
+out coche.getVelocidad();  // → 200
+coche.marca = "BMW";
+out coche.getMarca();      // → BMW
+
+// ── 4. Object patch en interface ───────────────────────────────────────────
+interface Punto {
+    x: decimal,
+    y: decimal,
+}
+let p = new Punto({ x: 0.0, y: 0.0 });
+out p.x;  // → 0.0
+out p.y;  // → 0.0
+p = { x: 5.0, y: 12.0 };
+out p.x;  // → 5.0
+out p.y;  // → 12.0
+p = { x: 99.0 };          // patch parcial — sólo x cambia
+out p.x;  // → 99.0
+out p.y;  // → 12.0  (y sin cambios)
+
+// ── 5. Herencia de 3 niveles con super() encadenado ────────────────────────
+class Figura {
+    public Figura(string nombre) {
+        this.nombre = nombre;
+        this.color = "blanco";
+    }
+    public void setColor(string c) { this.color = c; }
+    public string info() { return "{this.nombre} [{this.color}]"; }
+}
+
+class Rectangulo : Figura {
+    public Rectangulo(string nombre, decimal ancho, decimal alto) {
+        super(nombre);
+        this.ancho = ancho;
+        this.alto = alto;
+    }
+    public decimal area() { return this.ancho * this.alto; }
+}
+
+class Cuadrado : Rectangulo {
+    public Cuadrado(string nombre, decimal lado) {
+        super(nombre, lado, lado);
+        this.lado = lado;
+    }
+}
+
+let cuad = new Cuadrado("Tile", 4.0);
+cuad.setColor("azul");
+out cuad.area();    // → 16.0
+out cuad.color;     // → azul
+out cuad.nombre;    // → Tile
+out cuad.lado;      // → 4.0
+out cuad.info();    // → Tile [azul]
+
+// ── 6. break en loop anidado no rompe el externo ───────────────────────────
+let cuenta = 0;
+for (let i = 0; i < 3; i = i + 1) {
+    for (let j = 0; j < 5; j = j + 1) {
+        if (j == 2) { break; }  // rompe sólo el loop interno
+        cuenta = cuenta + 1;
+    }
+}
+out cuenta;  // → 6  (3 iteraciones externas × 2 contribuciones cada una)
+
+// ── 7. Short-circuit && y || ───────────────────────────────────────────────
+let eval_count = 0;
+fn bool conta(bool val) {
+    eval_count = eval_count + 1;
+    return val;
+}
+
+eval_count = 0;
+let r1 = conta(false) && conta(true);  // right NO debe evaluarse
+out r1;           // → false
+out eval_count;   // → 1  (sólo se evaluó el lado izquierdo)
+
+eval_count = 0;
+let r2 = conta(true) || conta(false);  // right NO debe evaluarse
+out r2;           // → true
+out eval_count;   // → 1
+
+eval_count = 0;
+let r3 = conta(true) && conta(false);  // ambos se evalúan
+out r3;           // → false
+out eval_count;   // → 2
+
+eval_count = 0;
+let r4 = conta(false) || conta(true);  // ambos se evalúan
+out r4;           // → true
+out eval_count;   // → 2
+
+// ── 8. return desde loops anidados dentro de función ──────────────────────
+fn int buscarEnMatriz([any] matrix, any target) {
+    for (let i = 0; i < matrix.length(); i = i + 1) {
+        let row = matrix[i];
+        for (let j = 0; j < row.length(); j = j + 1) {
+            if (row[j] == target) {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+out buscarEnMatriz([[1, 2, 3], [4, 5, 6], [7, 8, 9]], 5);  // → 1
+out buscarEnMatriz([[1, 2], [3, 4]], 99);                   // → -1
+out buscarEnMatriz([[10, 20], [30, 40]], 10);               // → 0
+
+// ── 9. Closures capturando variable de loop (by value) ────────────────────
+let closures = [];
+for (let i = 0; i < 4; i = i + 1) {
+    closures.push(x => x + i);
+}
+// Cada closure debe haber capturado el valor de i en su iteración
+out closures[0](10);  // → 10  (10 + 0)
+out closures[1](10);  // → 11  (10 + 1)
+out closures[2](10);  // → 12  (10 + 2)
+out closures[3](10);  // → 13  (10 + 3)
+
+// ── 10. Dict mutado desde función ─────────────────────────────────────────
+let contadores <string, int> = ({"visitas", 0}, {"errores", 0});
+
+fn void registrarVisita() {
+    contadores.Add({"visitas", contadores["visitas"] + 1});
+}
+fn void registrarError() {
+    contadores.Add({"errores", contadores["errores"] + 1});
+}
+
+registrarVisita();
+registrarVisita();
+registrarVisita();
+registrarError();
+out contadores["visitas"];  // → 3
+out contadores["errores"];  // → 1

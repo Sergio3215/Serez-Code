@@ -1,0 +1,117 @@
+// Unit tests — lambdas, closures y higher-order functions
+
+test("lambda expresión simple", () => {
+    let doble = x => x * 2;
+    assert(doble(5)  == 10, "doble 5");
+    assert(doble(0)  == 0,  "doble 0");
+    assert(doble(-3) == -6, "doble negativo");
+});
+
+test("lambda con dos parámetros", () => {
+    let sumar = (a, b) => a + b;
+    assert(sumar(3, 4)   == 7,  "sumar 3+4");
+    assert(sumar(0, 100) == 100,"sumar 0+100");
+});
+
+test("lambda con bloque body", () => {
+    let clasif = x => {
+        if (x > 0) { return "positivo"; }
+        if (x < 0) { return "negativo"; }
+        return "cero";
+    };
+    assert(clasif(1)  == "positivo", "block body +");
+    assert(clasif(-1) == "negativo", "block body -");
+    assert(clasif(0)  == "cero",     "block body 0");
+});
+
+test("closure captura variable del scope", () => {
+    let factor = 3;
+    let triplicar = x => x * factor;
+    assert(triplicar(4)  == 12, "capture factor 3");
+    assert(triplicar(10) == 30, "capture factor 10");
+});
+
+test("closure mantiene estado entre llamadas", () => {
+    let count = 0;
+    let inc = () => { count = count + 1; return count; };
+    assert(inc() == 1, "count 1");
+    assert(inc() == 2, "count 2");
+    assert(inc() == 3, "count 3");
+    // la variable exterior no se modifica; el closure tiene su propia copia
+    assert(count == 0, "outer var no afectada");
+});
+
+test("currying con closures", () => {
+    fn any mult_por(int n) { return x => x * n; }
+    let triple  = mult_por(3);
+    let por_100 = mult_por(100);
+    assert(triple(7)   == 21,  "triple");
+    assert(por_100(5)  == 500, "por_100");
+    assert(triple(por_100(2)) == 600, "composición");
+});
+
+test("composición funcional", () => {
+    fn any componer(any f, any g) { return x => f(g(x)); }
+    let inc   = x => x + 1;
+    let doble = x => x * 2;
+    let inc_doble = componer(inc, doble);
+    assert(inc_doble(3) == 7,  "inc(doble(3)) = 7");
+    assert(inc_doble(5) == 11, "inc(doble(5)) = 11");
+});
+
+test("map con lambda", () => {
+    let cuadrados = [1,2,3,4,5].map(x => x * x);
+    assert(cuadrados[0] == 1  && cuadrados[4] == 25, "map cuadrados");
+    let upper = ["a","b"].map(x => x.toUpperCase());
+    assert(upper[0] == "A" && upper[1] == "B", "map toUpper");
+});
+
+test("filter con lambda", () => {
+    let mayores = [1,5,2,8,3,7].filter(x => x > 4);
+    assert(mayores.length() == 3, "filter length");
+    assert(mayores.includes(5) && mayores.includes(8), "filter values");
+});
+
+test("reduce con lambda", () => {
+    let sum  = [1,2,3,4,5].reduce(0, (acc, x) => acc + x);
+    let prod = [1,2,3,4].reduce(1, (acc, x) => acc * x);
+    assert(sum  == 15, "reduce suma");
+    assert(prod == 24, "reduce producto");
+});
+
+test("lambda pasada como argumento", () => {
+    fn any ejecutar(any f, int x) { return f(x); }
+    assert(ejecutar(x => x + 10, 5)  == 15, "exec +10");
+    assert(ejecutar(x => x * x,  4)  == 16, "exec cuadrado");
+});
+
+test("array de lambdas", () => {
+    let ops = [x => x + 1, x => x * 2, x => x - 3];
+    assert(ops[0](10) == 11, "op[0] +1");
+    assert(ops[1](10) == 20, "op[1] *2");
+    assert(ops[2](10) == 7,  "op[2] -3");
+});
+
+test("lambda captura en loop — cada iteración su valor", () => {
+    let fns = [];
+    let i = 0;
+    while (i < 4) {
+        let cap = i;
+        fns.push(x => x + cap);
+        i++;
+    }
+    assert(fns[0](0) == 0, "cap 0");
+    assert(fns[1](0) == 1, "cap 1");
+    assert(fns[2](0) == 2, "cap 2");
+    assert(fns[3](0) == 3, "cap 3");
+});
+
+test("pipeline map + filter + reduce encadenado", () => {
+    let res = [1,2,3,4,5,6,7,8,9,10]
+        .filter(x => x % 2 == 0)
+        .map(x => x * x)
+        .reduce(0, (a, b) => a + b);
+    assert(res == 220, "pipeline: pares²=4+16+36+64+100=220");
+});
+
+summary();

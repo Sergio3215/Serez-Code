@@ -1,0 +1,78 @@
+// Nested 2D array access
+let matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+out matrix[1][2];   // → 6
+out matrix[0][0];   // → 1
+out matrix[2][2];   // → 9
+
+// 2D array traversal
+let sum = 0;
+for (let i = 0; i < 3; i = i + 1) {
+    for (let j = 0; j < 3; j = j + 1) {
+        sum = sum + matrix[i][j];
+    }
+}
+out sum;   // → 45
+
+// Global variable modified inside nested function
+let counter = 0;
+fn void inc() {
+    counter = counter + 1;
+}
+inc();
+inc();
+inc();
+out counter;   // → 3
+
+// Return from nested if inside while
+fn int search(int target) {
+    let i = 0;
+    while (i < 10) {
+        if (i == target) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+out search(7);    // → 7
+out search(99);   // → -1
+
+// Dict with 'any' values
+let mixed <string,any> = ({"count",0},{"active",true},{"name","Sergio"});
+out mixed["count"];    // → 0
+out mixed["active"];   // → true
+out mixed["name"];     // → Sergio
+
+// Class instance in array
+public class Persona {
+    public Persona(string nombre, int edad) {
+        this.nombre = nombre;
+        this.edad = edad;
+    }
+    public string info() {
+        return "{this.nombre} ({this.edad})";
+    }
+}
+
+let personas = [];
+personas.push(new Persona("Ana", 25));
+personas.push(new Persona("Bob", 30));
+personas.push(new Persona("Carol", 22));
+
+out personas[0].info();   // → Ana (25)
+out personas[1].nombre;   // → Bob
+out personas[2].edad;     // → 22
+
+// Multiple closures capturing different values
+let adders = [];
+let i = 0;
+while (i < 4) {
+    let step = i;
+    let adder = (x) => { return x + step; }
+    adders.push(adder);
+    i = i + 1;
+}
+out adders[0](10);   // → 10
+out adders[1](10);   // → 11
+out adders[2](10);   // → 12
+out adders[3](10);   // → 13

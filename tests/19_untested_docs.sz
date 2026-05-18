@@ -1,0 +1,57 @@
+// Test behaviors documented in README but not yet stress-tested
+
+// 1. reduce with string accumulator
+let words = ["hello", " ", "world", "!"];
+let sentence = words.reduce("", (acc, w) => acc + w);
+out sentence;   // → hello world!
+
+// 2. filter + reduce chaining
+let sum_evens = [1,2,3,4,5,6,7,8,9,10].filter(x => x % 2 == 0).reduce(0, (a,x) => a+x);
+out sum_evens;  // → 30
+
+// 3. toArray() then filter on 2D array
+let scores <string,int> = ({"Alice",90},{"Bob",75},{"Carol",88});
+let pairs = scores.toArray();
+let top = pairs.filter(pair => pair[1] >= 85);
+out top;        // → [[Alice, 90], [Carol, 88]]
+
+// 4. parseInt whitespace trimming
+out parseInt("  7 ");   // → 7
+
+// 5. replace first-only vs replaceAll
+let s = "hello world hello";
+out s.replace("hello", "hi");     // → hi world hello (first only)
+out s.replaceAll("hello", "hi");  // → hi world hi (all)
+
+// 6. split empty separator
+out "abc".split("");    // → [a, b, c]
+
+// 7. sort("asc") explicit
+let arr = [5, 2, 8, 1, 4];
+arr.sort("asc");
+out arr;    // → [1, 2, 4, 5, 8]
+
+// 8. map with index
+let indexed = ["a","b","c"].map((item, idx) => idx);
+out indexed;    // → [0, 1, 2]
+
+// 9. Standalone block: outer mutation + inner variable scoping
+let total = 0;
+{
+    let local = 42;
+    total = local;
+}
+out total;   // → 42
+
+// 10. Closure capturing outer variable
+let multiplier = 3;
+let tripled = [1, 2, 3, 4].map(x => x * multiplier);
+out tripled;    // → [3, 6, 9, 12]
+
+// 11. toString on primitives
+out 42.toString();      // → 42
+out true.toString();    // → true
+
+// 12. contains alias for includes
+out "hello world".contains("world");   // → true
+out "hello world".contains("xyz");     // → false

@@ -1,0 +1,70 @@
+// 07 - Diccionarios
+// NOTA: Sintaxis de dict tipado: "let nombre <ktipo, vtipo> = (...)"
+
+// Declaracion basica - nombre primero, tipos despues
+let edades <string, int> = ({"Ana", 25}, {"Bob", 30}, {"Carlos", 22});
+out edades;
+
+// Acceso por clave
+out edades["Ana"];
+out edades["Bob"];
+
+// Modificacion
+edades["Ana"] = 26;
+out edades["Ana"];
+
+// Add nuevo par
+edades.Add({"Diana", 28});
+out edades;
+
+// Remove
+edades.Remove("Carlos");
+out edades;
+
+// toList - lista de claves
+let claves = edades.toList();
+out claves;
+
+// toArray - pares [[k,v],...]
+let pares = edades.toArray();
+out pares;
+
+// Dict vacio y poblado
+let paises <string, string> = ();
+paises.Add({"ES", "Espana"});
+paises.Add({"MX", "Mexico"});
+paises.Add({"AR", "Argentina"});
+out paises;
+
+// Dict con valor any
+let persona <string, any> = ({"nombre", "Sergio"}, {"edad", 28}, {"activo", true});
+out persona["nombre"];
+out persona["edad"];
+
+// RemoveAll
+let temp <int, string> = ({1, "a"}, {2, "b"}, {3, "c"});
+temp.RemoveAll();
+out temp;
+
+// clear (alias de RemoveAll)
+let temp2 <string, int> = ({"x", 1}, {"y", 2});
+temp2.clear();
+out temp2;
+
+// Iteracion sobre dict via toArray
+let puntos <string, int> = ({"Alice", 100}, {"Bob", 85}, {"Carol", 92});
+let lista = puntos.toArray();
+for (let i = 0; i < lista.length(); i = i + 1) {
+    let par = lista[i];
+    out "{par[0]}: {par[1]}";
+}
+
+// Sobreescritura con []
+let stock <string, int> = ({"manzana", 10}, {"pera", 5});
+stock["manzana"] = 20;
+out stock["manzana"];
+
+// Dict any,any para datos mixtos
+let meta <any, any> = ({"clave1", 42}, {"clave2", "valor"});
+out meta["clave1"];
+out meta["clave2"];

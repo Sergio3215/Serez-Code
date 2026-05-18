@@ -1,0 +1,43 @@
+// 01 - Variables y tipos primitivos
+
+// Enteros
+let x = 42;
+let negativo = -10;
+out x;
+out negativo;
+out x + negativo;
+
+// Decimales
+let pi = 3.14159;
+let e = 2.71828;
+out pi;
+out pi + e;
+
+// Strings
+let nombre = "Serez";
+let version = "1.0";
+out nombre;
+out nombre + " v" + version;
+
+// Booleanos
+let activo = true;
+let inactivo = false;
+out activo;
+out inactivo;
+out activo == true;
+out inactivo == false;
+
+// Null
+let vacio = null;
+out vacio;
+out vacio == null;
+
+// Reasignacion
+let a = 1;
+a = 2;
+out a;
+
+// Variables con nombres largos
+let contador_principal = 100;
+let _privado = 200;
+out contador_principal + _privado;

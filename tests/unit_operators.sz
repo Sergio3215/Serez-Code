@@ -1,0 +1,112 @@
+// Operator edge cases: short-circuit, precedence, comparisons
+
+test("&& short-circuits when left is false — right not evaluated", () => {
+    // If && does NOT short-circuit, boom() throws and the framework catches it as FAIL
+    fn bool boom() { throw "right side was evaluated — no short-circuit"; }
+    let result = false && boom();
+    assert(result == false, "false && anything should be false without calling right side");
+});
+
+test("|| short-circuits when left is true — right not evaluated", () => {
+    fn bool boom() { throw "right side was evaluated — no short-circuit"; }
+    let result = true || boom();
+    assert(result == true, "true || anything should be true without calling right side");
+});
+
+test("&& evaluates right side when left is true", () => {
+    assert((true && true)  == true,  "true && true = true");
+    assert((true && false) == false, "true && false = false");
+});
+
+test("|| evaluates right side when left is false", () => {
+    assert((false || true)  == true,  "false || true = true");
+    assert((false || false) == false, "false || false = false");
+});
+
+test("?? short-circuits when left is not null", () => {
+    fn string boom() { throw "right side evaluated — ?? did not short-circuit"; }
+    let left = "has-value";
+    let result = left ?? boom();
+    assert(result == "has-value", "?? should return left without evaluating right");
+});
+
+test("?? evaluates right when left is null", () => {
+    let left = null;
+    let result = left ?? "fallback";
+    assert(result == "fallback", "?? should return right when left is null");
+});
+
+test("&& evaluates right side — throw from right propagates when left is true", () => {
+    fn bool right_side() {
+        throw "right-was-evaluated";
+    }
+    let caught = "none";
+    try {
+        let dummy = true && right_side();
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "right-was-evaluated", "when left is true, right is called and throw propagates");
+});
+
+test("operator precedence: * before +", () => {
+    assert(2 + 3 * 4 == 14, "2 + 3 * 4 = 14 (multiplication first)");
+    assert(10 - 2 * 3 == 4, "10 - 2 * 3 = 4");
+    assert(6 / 2 + 1 == 4,  "6 / 2 + 1 = 4");
+});
+
+test("operator precedence: comparison after arithmetic", () => {
+    assert(2 + 3 > 4,     "2 + 3 > 4 is true");
+    assert(10 / 2 == 5,   "10 / 2 == 5 is true");
+    assert(3 * 3 >= 9,    "3 * 3 >= 9 is true");
+    assert(4 - 1 != 4,    "4 - 1 != 4 is true");
+});
+
+test("chained boolean operations", () => {
+    assert(true && true && true,       "true && true && true = true");
+    assert(false || false || true,     "false || false || true = true");
+    assert((true && false) || true,    "(true && false) || true = true");
+    assert((false || true) && true,    "(false || true) && true = true");
+    assert(!((true && false) || false), "!((true&&false)||false) = true");
+});
+
+test("unary negation on int and decimal", () => {
+    assert(-5 == 0 - 5,   "unary negation of 5 is -5");
+    assert(-(-3) == 3,    "double negation cancels out");
+    assert(-1.5 == 0.0 - 1.5, "negation of decimal");
+    let x = 10;
+    assert(-x == -10,     "unary negation of variable");
+});
+
+test("! operator", () => {
+    assert(!false == true,  "!false is true");
+    assert(!true  == false, "!true is false");
+    assert(!(1 > 2),        "!(1 > 2) is true");
+    assert(!!(true),        "double ! on true = true");
+});
+
+test("string equality and inequality", () => {
+    assert("hello" == "hello",   "equal strings");
+    assert("hello" != "world",   "unequal strings");
+    assert(!("a" == "b"),        "a != b via negation");
+});
+
+test("integer comparison operators", () => {
+    assert(5 > 3,    "5 > 3");
+    assert(3 < 5,    "3 < 5");
+    assert(5 >= 5,   "5 >= 5");
+    assert(3 <= 3,   "3 <= 3");
+    assert(5 >= 4,   "5 >= 4");
+    assert(4 <= 5,   "4 <= 5");
+    assert(!(3 > 5), "not (3 > 5)");
+});
+
+test("decimal comparison operators", () => {
+    assert(1.5 > 1.0,   "1.5 > 1.0");
+    assert(0.5 < 1.0,   "0.5 < 1.0");
+    assert(2.0 >= 2.0,  "2.0 >= 2.0");
+    assert(1.5 == 1.5,  "1.5 == 1.5");
+    assert(1.5 != 2.5,  "1.5 != 2.5");
+});
+
+summary();

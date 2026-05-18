@@ -1,0 +1,31 @@
+// String interpolation with dict key access (nested quotes)
+let d <string,string> = ({"name","Alice"},{"city","Lima"});
+out "Name: {d["name"]}, City: {d["city"]}";   // → Name: Alice, City: Lima
+
+// String interpolation with array index
+let nums = [10, 20, 30];
+out "First: {nums[0]}, Last: {nums[2]}";   // → First: 10, Last: 30
+
+// String interpolation with method call
+let words = ["hello", "world"];
+out "Joined: {words[0]} {words[1]}";   // → Joined: hello world
+
+// String interpolation with arithmetic
+let x = 5;
+let y = 3;
+out "Sum: {x + y}, Product: {x * y}";   // → Sum: 8, Product: 15
+
+// Nested interpolation with class field
+interface Point {
+    x: decimal,
+    y: decimal,
+}
+let p = new Point({ x: 3.0, y: 4.0 });
+out "Point: ({p.x}, {p.y})";   // → Point: (3.0, 4.0)
+
+// Null coalescing in various scenarios
+let a = null;
+let b = "default";
+out a ?? b;          // → default
+out b ?? "other";    // → default (b is not null)
+out null ?? null ?? "last";   // → last (chained)

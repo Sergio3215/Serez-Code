@@ -935,11 +935,14 @@ let s = "hello world";
 out s.length;                     // → 11
 out s.substring(0, 5);            // → hello
 out s.split(" ");                 // → [hello, world]
-out s.replace("world", "Serez");  // → hello Serez
-out s.replaceAll("l", "L");       // → heLLo worLd
 out s.includes("world");          // → true
 out s.includes("xyz");            // → false
 out "abc".split("");              // → [a, b, c]
+
+// replace vs replaceAll
+let r = "one two one two one";
+out r.replace("one", "X");        // → "X two one two one"   (first only)
+out r.replaceAll("one", "X");     // → "X two X two X"       (all)
 ```
 
 `.toString()` also works on `int`, `decimal`, and `bool` values, returning their string representation:

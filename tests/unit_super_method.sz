@@ -1,0 +1,137 @@
+// unit_super_method.sz — super.method() in non-constructor child class methods (B-44)
+
+class Counter {
+    public Counter(int start) {
+        this.value = start;
+    }
+
+    public string label() {
+        return "Counter";
+    }
+
+    public int doubled() {
+        return this.value * 2;
+    }
+
+    public string describe() {
+        return "Counter:" + this.value;
+    }
+
+    public int add(int x) {
+        return this.value + x;
+    }
+}
+
+class NamedCounter : Counter {
+    public NamedCounter(string n, int start) {
+        super(start);
+        this.tag = n;
+    }
+
+    public string label() {
+        return "Named:" + this.tag;
+    }
+
+    public string describe() {
+        return "Named:" + this.tag + ":" + this.value;
+    }
+
+    // super.label() calls Counter::label (literal "Counter")
+    public string parentLabel() {
+        return super.label();
+    }
+
+    // super.doubled() calls Counter::doubled (returns value * 2)
+    public int parentDoubled() {
+        return super.doubled();
+    }
+
+    // super.add() with argument
+    public int parentAdd(int x) {
+        return super.add(x);
+    }
+
+    // super.describe() calls Counter::describe (not NamedCounter::describe)
+    public string parentDescribe() {
+        return super.describe();
+    }
+
+    // super in an expression
+    public string combinedLabel() {
+        return super.label() + " vs " + this.label();
+    }
+}
+
+class TaggedCounter : NamedCounter {
+    public TaggedCounter(string n, int start) {
+        super(n, start);
+        this.extra = "!";
+    }
+
+    public string label() {
+        return "Tagged:" + this.tag;
+    }
+
+    // super.label() should call NamedCounter::label (not Counter::label)
+    public string parentLabel() {
+        return super.label();
+    }
+
+    // super.parentLabel() chains to NamedCounter::parentLabel which calls super.label() = Counter::label
+    public string grandparentLabel() {
+        return super.parentLabel();
+    }
+}
+
+test("super.method() with no args dispatches to parent class", () => {
+    let c = new NamedCounter("x", 5);
+    assert(c.parentLabel() == "Counter", "super.label() should return Counter::label literal");
+});
+
+test("own overridden method not affected", () => {
+    let c = new NamedCounter("x", 5);
+    assert(c.label() == "Named:x", "own label() should return NamedCounter::label");
+});
+
+test("super.method() returns value using this fields", () => {
+    let c = new NamedCounter("x", 7);
+    assert(c.parentDoubled() == 14, "super.doubled() uses this.value = 7");
+});
+
+test("super.method() with argument", () => {
+    let c = new NamedCounter("x", 3);
+    assert(c.parentAdd(10) == 13, "super.add(10) should return 3+10=13");
+});
+
+test("super.method() dispatches to parent override not own override", () => {
+    let c = new NamedCounter("x", 5);
+    let pd = c.parentDescribe();
+    assert(pd == "Counter:5", "super.describe() should call Counter::describe not NamedCounter::describe");
+});
+
+test("super.method() result used in expression", () => {
+    let c = new NamedCounter("x", 5);
+    assert(c.combinedLabel() == "Counter vs Named:x", "combinedLabel uses super and own label");
+});
+
+test("3-level: super.label() dispatches to NamedCounter::label", () => {
+    let t = new TaggedCounter("y", 4);
+    assert(t.parentLabel() == "Named:y", "TaggedCounter.super.label() calls NamedCounter::label");
+});
+
+test("3-level: own label() overrides all", () => {
+    let t = new TaggedCounter("y", 4);
+    assert(t.label() == "Tagged:y", "own label() returns TaggedCounter override");
+});
+
+test("3-level: chained super through NamedCounter::parentLabel to Counter::label", () => {
+    let t = new TaggedCounter("y", 4);
+    assert(t.grandparentLabel() == "Counter", "grandparentLabel chains to Counter::label literal");
+});
+
+test("3-level: this.value accessible via inherited super method", () => {
+    let t = new TaggedCounter("y", 9);
+    assert(t.parentDoubled() == 18, "parentDoubled via NamedCounter::parentDoubled returns 9*2=18");
+});
+
+summary();

@@ -1,0 +1,57 @@
+// Dict insertion order preserved
+let d <string,int> = ({"c",3},{"a",1},{"b",2});
+out d;   // → {c: 3, a: 1, b: 2}  (insertion order)
+
+// toList and toArray
+let keys = d.toList();
+out keys;   // → [c, a, b]
+let pairs = d.toArray();
+out pairs;  // → [[c, 3], [a, 1], [b, 2]]
+
+// Multiple return paths
+fn string grade(int score) {
+    if (score >= 90) {
+        return "A";
+    } else if (score >= 75) {
+        return "B";
+    } else if (score >= 60) {
+        return "C";
+    } else {
+        return "F";
+    }
+}
+out grade(95);   // → A
+out grade(80);   // → B
+out grade(65);   // → C
+out grade(50);   // → F
+
+// Nullable function returning null or value
+fn int? findValue(int target, [int] arr) {
+    let i = 0;
+    while (i < arr.length()) {
+        if (arr[i] == target) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return null;
+}
+let found = findValue(3, [1, 2, 3, 4, 5]);
+let notfound = findValue(99, [1, 2, 3, 4, 5]);
+out found;      // → 2
+out notfound;   // → null
+out found != null;    // → true
+out notfound == null; // → true
+
+// Function calling another function
+fn int triple(int n) {
+    return n * 3;
+}
+fn int sextuple(int n) {
+    return triple(triple(n));
+}
+out sextuple(2);   // → 18
+
+// String methods on result of another method
+out "Hello World".split(" ").map(w => w.substring(0, 1)).reduce("", (acc, c) => acc + c);
+// → HW

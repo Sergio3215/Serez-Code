@@ -1,0 +1,74 @@
+// 09 - Interfaces
+
+interface Persona {
+    nombre: string;
+    edad: int;
+    activo: bool;
+}
+
+// Instanciacion
+let p = new Persona({ nombre: "Ana", edad: 25, activo: true });
+out p.nombre;
+out p.edad;
+out p.activo;
+
+// Acceso en interpolacion
+out "Persona: {p.nombre}, {p.edad} anos";
+
+// Modificacion via FieldAssign
+p.nombre = "Ana Garcia";
+out p.nombre;
+
+// Patch completo
+p = { nombre: "Maria", edad: 30, activo: false };
+out p.nombre;
+out p.edad;
+out p.activo;
+
+// Interface con tipos numericos
+interface Producto {
+    nombre: string;
+    precio: decimal;
+    stock: int;
+}
+
+let prod = new Producto({ nombre: "Laptop", precio: 999.99, stock: 5 });
+out prod.nombre;
+out prod.precio;
+out prod.stock;
+
+prod.precio = 899.99;
+out "Precio rebajado: {prod.precio}";
+
+// Array de interfaces (sintaxis correcta: nombre [tipo] = [...])
+let personas [any] = [
+    new Persona({ nombre: "Alice", edad: 28, activo: true }),
+    new Persona({ nombre: "Bob", edad: 35, activo: false }),
+    new Persona({ nombre: "Carol", edad: 22, activo: true })
+];
+
+out personas.length();
+for (let i = 0; i < personas.length(); i = i + 1) {
+    let per = personas[i];
+    out per.nombre;
+}
+
+// Filtrar activos
+let activos = personas.filter(per => per.activo);
+out activos.length();
+
+// Interface con config
+interface Config {
+    host: string;
+    puerto: int;
+}
+
+let cfg = new Config({ host: "localhost", puerto: 8080 });
+out "{cfg.host}:{cfg.puerto}";
+
+cfg = { host: "produccion.com", puerto: 443 };
+out "{cfg.host}:{cfg.puerto}";
+
+// Interface anidada en dict
+let datos <string, any> = ({"cfg", "valor"});
+out datos["cfg"];

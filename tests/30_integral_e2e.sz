@@ -1,0 +1,750 @@
+// ══════════════════════════════════════════════════════════════════
+// TEST INTEGRAL E2E — cubre todas las features de Serez-Code
+// Cada sección usa assert() para verificar correctitud automática
+// ══════════════════════════════════════════════════════════════════
+
+out "── 1. TIPOS PRIMITIVOS Y type_of ──";
+let n = 42;
+let d = 3.14;
+let s = "hola";
+let b = true;
+let nl = null;
+
+assert(type_of(n)  == "int",     "type_of int");
+assert(type_of(d)  == "decimal", "type_of decimal");
+assert(type_of(s)  == "string",  "type_of string");
+assert(type_of(b)  == "bool",    "type_of bool");
+assert(type_of(nl) == "null",    "type_of null");
+assert(type_of([1,2]) == "array",    "type_of array");
+assert(type_of(x => x) == "function","type_of function");
+
+let dict_t <string,int> = ({"a",1});
+assert(type_of(dict_t) == "dict", "type_of dict");
+out "OK";
+
+// ── 2. ARITMÉTICA ─────────────────────────────────────────────────
+out "── 2. ARITMÉTICA ──";
+assert(2 + 3   == 5,   "suma");
+assert(10 - 4  == 6,   "resta");
+assert(3 * 7   == 21,  "mult");
+assert(15 / 4  == 3,   "div entera");
+assert(15 % 4  == 3,   "modulo");
+assert(2.5 + 1.5 == 4.0, "decimal suma");
+assert(10 / 3  == 3,   "div truncada");
+
+// operadores compuestos
+let x = 10;
+x += 5;  assert(x == 15, "+=");
+x -= 3;  assert(x == 12, "-=");
+x *= 2;  assert(x == 24, "*=");
+x /= 4;  assert(x == 6,  "/=");
+x %= 4;  assert(x == 2,  "%=");
+
+// incremento / decremento
+let c = 0;
+c++;  assert(c == 1, "++");
+c--;  assert(c == 0, "--");
+out "OK";
+
+// ── 3. OPERADORES LÓGICOS Y COMPARACIÓN ──────────────────────────
+out "── 3. OPERADORES LÓGICOS ──";
+assert(true && true   == true,  "&&");
+assert(true && false  == false, "&& false");
+assert(false || true  == true,  "||");
+assert(!false         == true,  "!");
+assert(1 < 2,   "<");
+assert(2 > 1,   ">");
+assert(2 <= 2,  "<=");
+assert(2 >= 2,  ">=");
+assert(1 != 2,  "!=");
+assert(1 == 1,  "==");
+out "OK";
+
+// ── 4. TERNARIO ───────────────────────────────────────────────────
+out "── 4. TERNARIO ──";
+let edad = 20;
+let estado = edad >= 18 ? "mayor" : "menor";
+assert(estado == "mayor", "ternario true");
+let est2 = 15 >= 18 ? "mayor" : "menor";
+assert(est2 == "menor", "ternario false");
+out "OK";
+
+// ── 5. NULL COALESCING ────────────────────────────────────────────
+out "── 5. NULL COALESCING ──";
+let val_null = null;
+let val_ok   = "real";
+assert((val_null ?? "default") == "default", "?? con null");
+assert((val_ok   ?? "default") == "real",    "?? con valor");
+out "OK";
+
+// ── 6. STRINGS ───────────────────────────────────────────────────
+out "── 6. STRINGS ──";
+let str1 = "Hola Mundo";
+assert(str1.length()         == 10,          "length");
+assert(str1.toUpperCase()    == "HOLA MUNDO","upper");
+assert(str1.toLowerCase()    == "hola mundo","lower");
+assert(str1.trim()           == "Hola Mundo","trim");
+assert("  spaces  ".trim()   == "spaces",    "trim spaces");
+assert(str1.includes("Mundo")== true,        "includes true");
+assert(str1.includes("xyz")  == false,       "includes false");
+assert(str1.indexOf("Mundo") == 5,           "indexOf");
+assert(str1.replace("Mundo","Serez") == "Hola Serez", "replace");
+assert(str1.substring(0, 4)  == "Hola",     "substring");
+let parts = "a,b,c".split(",");
+assert(parts.length() == 3, "split length");
+assert(parts[0] == "a",     "split[0]");
+assert(parts[2] == "c",     "split[2]");
+
+// interpolación
+let nombre = "Sergio";
+let saludo = "Hola {nombre}!";
+assert(saludo == "Hola Sergio!", "interpolacion");
+let num_interp = 42;
+assert("valor={num_interp}" == "valor=42", "interpolacion numero");
+out "OK";
+
+// ── 7. CONVERSIONES ──────────────────────────────────────────────
+out "── 7. CONVERSIONES ──";
+assert(parseInt("42")      == 42,   "parseInt string");
+assert(parseInt(3.9)       == 3,    "parseInt decimal trunca");
+assert(parseDecimal("3.14") == 3.14,"parseDecimal string");
+assert(parseDecimal(5)     == 5.0,  "parseDecimal int");
+out "OK";
+
+// ── 8. MATH BUILT-INS ────────────────────────────────────────────
+out "── 8. MATH ──";
+assert(abs(-5)     == 5,    "abs");
+assert(abs(5)      == 5,    "abs pos");
+assert(floor(3.9)  == 3,    "floor");
+assert(ceil(3.1)   == 4,    "ceil");
+assert(round(3.5)  == 4,    "round up");
+assert(round(3.4)  == 3,    "round down");
+assert(pow(2, 10)  == 1024, "pow");
+assert(sqrt(16)    == 4.0,  "sqrt");
+assert(min(3, 7)   == 3,    "min");
+assert(max(3, 7)   == 7,    "max");
+assert(log(1)      == 0.0,  "log(1)");
+out "OK";
+
+// ── 9. IF / ELSE IF / ELSE ───────────────────────────────────────
+out "── 9. IF/ELSE ──";
+fn string clasificar(int n) {
+    if (n > 0) {
+        return "positivo";
+    } else if (n < 0) {
+        return "negativo";
+    } else {
+        return "cero";
+    }
+}
+assert(clasificar(5)  == "positivo", "if pos");
+assert(clasificar(-3) == "negativo", "if neg");
+assert(clasificar(0)  == "cero",     "if cero");
+out "OK";
+
+// ── 10. WHILE + BREAK/CONTINUE ───────────────────────────────────
+out "── 10. WHILE ──";
+let suma_w = 0;
+let i_w = 1;
+while (i_w <= 10) {
+    suma_w += i_w;
+    i_w++;
+}
+assert(suma_w == 55, "while suma 1..10");
+
+let suma_cont = 0;
+let j_w = 0;
+while (j_w < 10) {
+    j_w++;
+    if (j_w % 2 == 0) { continue; }
+    suma_cont += j_w;
+}
+assert(suma_cont == 25, "while continue impares");
+
+let break_val = 0;
+let k_w = 0;
+while (true) {
+    k_w++;
+    if (k_w == 5) { break; }
+}
+assert(k_w == 5, "while break");
+out "OK";
+
+// ── 11. FOR CLÁSICO ──────────────────────────────────────────────
+out "── 11. FOR ──";
+let suma_f = 0;
+for (let i = 1; i <= 100; i++) {
+    suma_f += i;
+}
+assert(suma_f == 5050, "for 1..100");
+
+let evens = 0;
+for (let i = 0; i < 20; i++) {
+    if (i % 2 != 0) { continue; }
+    evens += i;
+}
+assert(evens == 90, "for continue pares");
+out "OK";
+
+// ── 12. FOR-IN (forEach) ──────────────────────────────────────────
+out "── 12. FOR-IN ──";
+let arr_fi = [10, 20, 30, 40, 50];
+let suma_fi = 0;
+for (let item in arr_fi) {
+    suma_fi += item;
+}
+assert(suma_fi == 150, "for-in suma");
+
+let upper_words = [];
+for (let w in ["hola","mundo","serez"]) {
+    upper_words.push(w.toUpperCase());
+}
+assert(upper_words[0] == "HOLA",  "for-in upper[0]");
+assert(upper_words[2] == "SEREZ", "for-in upper[2]");
+out "OK";
+
+// ── 13. SWITCH ────────────────────────────────────────────────────
+out "── 13. SWITCH ──";
+fn string dia(int n) {
+    switch (n) {
+        case 1: { return "Lunes"; }
+        case 2: { return "Martes"; }
+        case 3: { return "Miercoles"; }
+        default: { return "Otro"; }
+    }
+}
+assert(dia(1) == "Lunes",     "switch 1");
+assert(dia(2) == "Martes",    "switch 2");
+assert(dia(3) == "Miercoles", "switch 3");
+assert(dia(9) == "Otro",      "switch default");
+
+fn string semaforo(string color) {
+    switch (color) {
+        case "rojo":  { return "parar"; }
+        case "verde": { return "avanzar"; }
+        default:      { return "esperar"; }
+    }
+}
+assert(semaforo("rojo")   == "parar",   "switch string rojo");
+assert(semaforo("verde")  == "avanzar", "switch string verde");
+assert(semaforo("amarillo")== "esperar","switch string default");
+out "OK";
+
+// ── 14. FUNCIONES ─────────────────────────────────────────────────
+out "── 14. FUNCIONES ──";
+fn int factorial(int n) {
+    if (n <= 1) { return 1; }
+    return n * factorial(n - 1);
+}
+assert(factorial(0)  == 1,   "factorial 0");
+assert(factorial(1)  == 1,   "factorial 1");
+assert(factorial(5)  == 120, "factorial 5");
+assert(factorial(10) == 3628800, "factorial 10");
+
+fn int fibonacci(int n) {
+    if (n <= 1) { return n; }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+assert(fibonacci(0)  == 0,  "fib 0");
+assert(fibonacci(1)  == 1,  "fib 1");
+assert(fibonacci(10) == 55, "fib 10");
+
+// múltiples parámetros
+fn string saludar(string prefijo, string nombre) {
+    return "{prefijo} {nombre}";
+}
+assert(saludar("Hola",  "Sergio") == "Hola Sergio",   "multi param");
+assert(saludar("Buenas","Sergio") == "Buenas Sergio", "multi param 2");
+out "OK";
+
+// ── 15. LAMBDAS Y CLOSURES ───────────────────────────────────────
+out "── 15. LAMBDAS/CLOSURES ──";
+let doble = x => x * 2;
+assert(doble(5)  == 10, "lambda doble");
+assert(doble(21) == 42, "lambda doble 21");
+
+let sumar = (a, b) => a + b;
+assert(sumar(3, 4) == 7, "lambda 2 params");
+
+// closure captura variable
+fn any make_counter() {
+    let count = 0;
+    return () => {
+        count++;
+        return count;
+    };
+}
+let cnt = make_counter();
+assert(cnt() == 1, "closure count 1");
+assert(cnt() == 2, "closure count 2");
+assert(cnt() == 3, "closure count 3");
+
+// currying
+fn any multiplicar_por(int n) {
+    return x => x * n;
+}
+let triple = multiplicar_por(3);
+let por10  = multiplicar_por(10);
+assert(triple(7)  == 21,  "curry triple");
+assert(por10(5)   == 50,  "curry por10");
+out "OK";
+
+// ── 16. ARRAYS ───────────────────────────────────────────────────
+out "── 16. ARRAYS ──";
+let arr [int] = [1, 2, 3, 4, 5];
+assert(arr.length() == 5, "array length");
+assert(arr[0] == 1, "array idx 0");
+assert(arr[4] == 5, "array idx 4");
+
+// push / pop
+arr.push(6);
+assert(arr.length() == 6, "push length");
+assert(arr[5] == 6,       "push value");
+let popped = arr.pop();
+assert(popped == 6,        "pop value");
+assert(arr.length() == 5,  "pop length");
+
+// unshift / shift
+arr.unshift(0);
+assert(arr[0] == 0,       "unshift front");
+assert(arr.length() == 6, "unshift length");
+let shifted = arr.shift();
+assert(shifted == 0,       "shift value");
+assert(arr.length() == 5,  "shift length");
+
+// indexOf / includes
+assert(arr.indexOf(3)  == 2,   "indexOf");
+assert(arr.indexOf(99) == -1,  "indexOf missing");
+assert(arr.includes(3) == true, "includes true");
+assert(arr.includes(99)== false,"includes false");
+
+// sort
+let unsorted [int] = [5, 1, 4, 2, 3];
+unsorted.sort();
+assert(unsorted[0] == 1, "sort[0]");
+assert(unsorted[4] == 5, "sort[4]");
+
+// join
+assert([1,2,3].join("-") == "1-2-3", "join");
+
+// map / filter / reduce
+let nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+let cuadrados = nums.map(x => x * x);
+assert(cuadrados[0] == 1,  "map[0]");
+assert(cuadrados[9] == 100,"map[9]");
+
+let pares = nums.filter(x => x % 2 == 0);
+assert(pares.length() == 5, "filter length");
+assert(pares[0] == 2,       "filter[0]");
+
+let suma_red = nums.reduce(0, (acc, x) => acc + x);
+assert(suma_red == 55, "reduce suma");
+
+// encadenado
+let res_chain = nums.filter(x => x % 2 == 0).map(x => x * x).reduce(0, (a,b) => a + b);
+assert(res_chain == 220, "chain filter-map-reduce");
+
+// indexado y mutación directa
+let mut_arr [int] = [10, 20, 30];
+mut_arr[1] = 99;
+assert(mut_arr[1] == 99, "index assign");
+out "OK";
+
+// ── 17. DICTS ────────────────────────────────────────────────────
+out "── 17. DICTS ──";
+let dic <string,int> = ({"uno",1},{"dos",2},{"tres",3});
+assert(dic["uno"]  == 1, "dict get");
+assert(dic["dos"]  == 2, "dict get 2");
+assert(dic["tres"] == 3, "dict get 3");
+assert(dic["nope"] == null, "dict missing null");
+
+// keys / values
+let ks = dic.keys();
+assert(ks.length() == 3, "dict keys length");
+let vs = dic.values();
+assert(vs.length() == 3, "dict values length");
+
+// toList / toArray
+let kl = dic.toList();
+assert(kl.length() == 3, "toList length");
+let pairs = dic.toArray();
+assert(pairs.length() == 3, "toArray length");
+
+// dict any
+let mixed <string,any> = ({"num",42},{"ok",true},{"txt","hola"});
+assert(mixed["num"] == 42,     "dict any int");
+assert(mixed["ok"]  == true,   "dict any bool");
+assert(mixed["txt"] == "hola", "dict any str");
+out "OK";
+
+// ── 18. IS TYPE CHECK ────────────────────────────────────────────
+out "── 18. IS TYPE CHECK ──";
+assert(42    is int,     "is int");
+assert(3.14  is decimal, "is decimal");
+assert("hi"  is string,  "is string");
+assert(true  is bool,    "is bool");
+assert(null  is null,    "is null");
+out "OK";
+
+// ── 19. CLASES ───────────────────────────────────────────────────
+out "── 19. CLASES ──";
+public class Rectangulo {
+    public Rectangulo(int ancho, int alto) {
+        this.ancho = ancho;
+        this.alto  = alto;
+    }
+    public int area() {
+        return this.ancho * this.alto;
+    }
+    public int perimetro() {
+        return 2 * (this.ancho + this.alto);
+    }
+    public string describe() {
+        return "{this.ancho}x{this.alto}";
+    }
+}
+let rect = new Rectangulo(4, 5);
+assert(rect.area()       == 20,    "clase area");
+assert(rect.perimetro()  == 18,    "clase perimetro");
+assert(rect.describe()   == "4x5", "clase describe");
+assert(type_of(rect) == "Rectangulo", "type_of clase");
+
+// mutación de campos
+rect.ancho = 10;
+assert(rect.area() == 50, "campo mutado");
+out "OK";
+
+// ── 20. HERENCIA ─────────────────────────────────────────────────
+out "── 20. HERENCIA ──";
+public class Animal {
+    public Animal(string nombre) {
+        this.nombre = nombre;
+    }
+    public string hablar() {
+        return "{this.nombre} dice ...";
+    }
+    public string tipo() {
+        return "Animal";
+    }
+}
+
+public class Perro : Animal {
+    public Perro(string nombre) {
+        this.nombre = nombre;
+    }
+    public string hablar() {
+        return "{this.nombre} dice Guau!";
+    }
+    public string tipo() {
+        return "Perro";
+    }
+}
+
+public class Gato : Animal {
+    public Gato(string nombre) {
+        this.nombre = nombre;
+    }
+    public string hablar() {
+        return "{this.nombre} dice Miau!";
+    }
+}
+
+let perro = new Perro("Rex");
+let gato  = new Gato("Misi");
+
+assert(perro.hablar() == "Rex dice Guau!",  "herencia perro hablar");
+assert(gato.hablar()  == "Misi dice Miau!", "herencia gato hablar");
+assert(perro.tipo()   == "Perro",           "override tipo");
+assert(gato.tipo()    == "Animal",          "heredado tipo");
+assert(type_of(perro) == "Perro",           "type_of herencia");
+out "OK";
+
+// ── 21. HERENCIA MULTINIVEL ───────────────────────────────────────
+out "── 21. HERENCIA MULTINIVEL ──";
+public class Vehiculo {
+    public Vehiculo(string marca) {
+        this.marca = marca;
+        this.velocidad = 0;
+    }
+    public void acelerar(int v) {
+        this.velocidad += v;
+    }
+    public string estado() {
+        return "{this.marca} a {this.velocidad} km/h";
+    }
+}
+
+public class Coche : Vehiculo {
+    public Coche(string marca, int puertas) {
+        this.marca    = marca;
+        this.velocidad = 0;
+        this.puertas  = puertas;
+    }
+}
+
+public class Deportivo : Coche {
+    public Deportivo(string marca) {
+        this.marca    = marca;
+        this.velocidad = 0;
+        this.puertas  = 2;
+        this.turbo    = true;
+    }
+    public void acelerar(int v) {
+        this.velocidad += v * 2;
+    }
+}
+
+let dep = new Deportivo("Ferrari");
+dep.acelerar(100);
+assert(dep.velocidad == 200,               "multinivel turbo");
+assert(dep.estado()  == "Ferrari a 200 km/h", "multinivel estado");
+assert(dep.puertas   == 2,                 "multinivel campo");
+out "OK";
+
+// ── 22. INTERFACES ───────────────────────────────────────────────
+out "── 22. INTERFACES ──";
+interface IPunto {
+    x: int;
+    y: int;
+}
+
+let pt = new IPunto({ x: 3, y: 4 });
+assert(pt.x == 3, "interface field x");
+assert(pt.y == 4, "interface field y");
+
+pt.x = 10;
+assert(pt.x == 10, "interface field mutado");
+
+// Interface con más campos
+interface IPersona {
+    nombre: string;
+    edad: int;
+}
+let ip = new IPersona({ nombre: "Ana", edad: 25 });
+assert(ip.nombre == "Ana", "interface nombre");
+assert(ip.edad   == 25,    "interface edad");
+out "OK";
+
+// ── 23. TRY/CATCH/FINALLY ────────────────────────────────────────
+out "── 23. TRY/CATCH/FINALLY ──";
+let resultado_try = "sin cambio";
+try {
+    throw "error de prueba";
+} catch (e) {
+    resultado_try = "capturado: {e}";
+} finally {
+    out "finally ejecutado";
+}
+assert(resultado_try == "capturado: error de prueba", "try catch");
+
+// catch sin throw (no ejecuta catch)
+let try_ok = false;
+try {
+    try_ok = true;
+} catch (e) {
+    try_ok = false;
+}
+assert(try_ok == true, "try sin error");
+
+// throw en función propagado
+fn int dividir_seguro(int a, int b) {
+    if (b == 0) {
+        throw "division por cero";
+    }
+    return a / b;
+}
+let div_err = false;
+try {
+    dividir_seguro(10, 0);
+} catch (e) {
+    div_err = true;
+}
+assert(div_err == true, "throw propagado desde funcion");
+assert(dividir_seguro(10, 2) == 5, "funcion sin error");
+out "OK";
+
+// ── 24. NULLABLE ─────────────────────────────────────────────────
+out "── 24. NULLABLE ──";
+fn int? buscar(int target, [int] arr) {
+    let i = 0;
+    while (i < arr.length()) {
+        if (arr[i] == target) { return i; }
+        i++;
+    }
+    return null;
+}
+let idx_ok  = buscar(3, [1, 2, 3, 4, 5]);
+let idx_no  = buscar(99, [1, 2, 3, 4, 5]);
+assert(idx_ok != null,  "nullable found");
+assert(idx_ok == 2,     "nullable value");
+assert(idx_no == null,  "nullable not found");
+
+let safe = idx_no ?? -1;
+assert(safe == -1, "nullable ?? fallback");
+out "OK";
+
+// ── 25. FUNCIONES DE ORDEN SUPERIOR ──────────────────────────────
+out "── 25. HOF ──";
+fn any aplicar(any f, int x) {
+    return f(x);
+}
+assert(aplicar(x => x * x, 5) == 25, "HOF cuadrado");
+assert(aplicar(x => x + 1,  9) == 10,"HOF +1");
+
+fn any componer(any f, any g) {
+    return x => f(g(x));
+}
+let inc   = x => x + 1;
+let doble2 = x => x * 2;
+let inc_doble = componer(inc, doble2);
+assert(inc_doble(3) == 7, "composicion");
+assert(inc_doble(5) == 11,"composicion 5");
+
+// pipeline funcional completo
+let pipe_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+let pipe_res  = pipe_data
+    .filter(x => x % 2 == 0)
+    .map(x => x * x)
+    .reduce(0, (a, b) => a + b);
+assert(pipe_res == 220, "pipeline completo");
+out "OK";
+
+// ── 26. ARRAYS DE OBJETOS ────────────────────────────────────────
+out "── 26. ARRAYS DE OBJETOS ──";
+public class Producto {
+    public Producto(string nombre, int precio) {
+        this.nombre = nombre;
+        this.precio = precio;
+    }
+}
+let productos = [];
+productos.push(new Producto("Manzana", 100));
+productos.push(new Producto("Pan",     50));
+productos.push(new Producto("Leche",   80));
+
+assert(productos.length()     == 3,        "productos length");
+assert(productos[0].nombre    == "Manzana","prod[0] nombre");
+assert(productos[1].precio    == 50,       "prod[1] precio");
+
+// total con reduce sobre objetos
+let total = 0;
+for (let p in productos) {
+    total += p.precio;
+}
+assert(total == 230, "total productos for-in");
+out "OK";
+
+// ── 27. CLOSURES EN ARRAYS ───────────────────────────────────────
+out "── 27. CLOSURES EN ARRAYS ──";
+let fns = [];
+let ci = 0;
+while (ci < 5) {
+    let captured = ci;
+    fns.push(x => x + captured);
+    ci++;
+}
+assert(fns[0](10) == 10, "closure en array 0");
+assert(fns[1](10) == 11, "closure en array 1");
+assert(fns[4](10) == 14, "closure en array 4");
+out "OK";
+
+// ── 28. CLASE CON ARRAY Y DICT EN CAMPOS ─────────────────────────
+out "── 28. CLASE CON ARRAY/DICT ──";
+public class Inventario {
+    public Inventario() {
+        this.items   = [];
+        let empty_map <string,int> = ({"_",0});
+        this.precios = empty_map;
+    }
+    public void agregar(string nombre, int precio) {
+        this.items.push(nombre);
+        this.precios[nombre] = precio;
+    }
+    public int total() {
+        let t = 0;
+        for (let it in this.items) {
+            t += this.precios[it];
+        }
+        return t;
+    }
+    public int cantidad() {
+        return this.items.length();
+    }
+}
+let inv = new Inventario();
+inv.agregar("A", 10);
+inv.agregar("B", 20);
+inv.agregar("C", 30);
+assert(inv.cantidad() == 3,  "inventario cantidad");
+assert(inv.total()    == 60, "inventario total");
+out "OK";
+
+// ── 29. TIPO_OF CON HERENCIA ──────────────────────────────────────
+out "── 29. TYPE_OF HERENCIA ──";
+public class Base { public Base() {} }
+public class Hijo : Base { public Hijo() {} }
+public class Nieto : Hijo { public Nieto() {} }
+
+let b2 = new Base();
+let h2 = new Hijo();
+let n2 = new Nieto();
+assert(type_of(b2) == "Base",  "type_of Base");
+assert(type_of(h2) == "Hijo",  "type_of Hijo");
+assert(type_of(n2) == "Nieto", "type_of Nieto");
+out "OK";
+
+// ── 30. DEMO INTEGRADOR FINAL ─────────────────────────────────────
+out "── 30. DEMO INTEGRADOR ──";
+public class Banco {
+    public Banco(string nombre) {
+        this.nombre  = nombre;
+        let empty_cuentas <string,int> = ({"_",0});
+        this.cuentas = empty_cuentas;
+    }
+    public void depositar(string id, int monto) {
+        if (monto <= 0) { throw "monto invalido"; }
+        let actual = this.cuentas[id] ?? 0;
+        this.cuentas[id] = actual + monto;
+    }
+    public void retirar(string id, int monto) {
+        let actual = this.cuentas[id] ?? 0;
+        if (monto > actual) { throw "saldo insuficiente"; }
+        this.cuentas[id] = actual - monto;
+    }
+    public int saldo(string id) {
+        return this.cuentas[id] ?? 0;
+    }
+}
+
+let banco = new Banco("SerezBank");
+banco.depositar("alice", 1000);
+banco.depositar("bob",   500);
+banco.depositar("alice", 250);
+banco.retirar("bob", 200);
+
+assert(banco.saldo("alice") == 1250, "banco alice");
+assert(banco.saldo("bob")   == 300,  "banco bob");
+assert(banco.saldo("nuevo") == 0,    "banco nuevo");
+assert(type_of(banco) == "Banco",    "banco type_of");
+
+let error_ok = false;
+try {
+    banco.depositar("x", -100);
+} catch (e) {
+    error_ok = true;
+}
+assert(error_ok == true, "banco monto invalido");
+
+let error_saldo = false;
+try {
+    banco.retirar("bob", 9999);
+} catch (e) {
+    error_saldo = true;
+}
+assert(error_saldo == true, "banco saldo insuficiente");
+out "OK";
+
+out "";
+out "══════════════════════════════════════";
+out "  TODOS LOS TESTS PASARON ✓";
+out "══════════════════════════════════════";

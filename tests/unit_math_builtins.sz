@@ -1,0 +1,72 @@
+// Unit tests — math builtins y conversiones
+
+test("abs", () => {
+    assert(abs(-5)    == 5,   "abs negativo");
+    assert(abs(5)     == 5,   "abs positivo");
+    assert(abs(0)     == 0,   "abs cero");
+    assert(abs(-3.5)  == 3.5, "abs decimal");
+});
+
+test("floor / ceil / round", () => {
+    assert(floor(3.9)  == 3, "floor 3.9");
+    assert(floor(3.1)  == 3, "floor 3.1");
+    assert(floor(-1.5) == -2,"floor negativo");
+    assert(ceil(3.1)   == 4, "ceil 3.1");
+    assert(ceil(3.9)   == 4, "ceil 3.9");
+    assert(ceil(-1.5)  == -1,"ceil negativo");
+    assert(round(3.5)  == 4, "round .5 up");
+    assert(round(3.4)  == 3, "round .4 down");
+    assert(round(2.5)  == 3, "round 2.5 up");
+});
+
+test("pow", () => {
+    assert(pow(2, 0)   == 1,    "2^0");
+    assert(pow(2, 10)  == 1024, "2^10");
+    assert(pow(3, 3)   == 27,   "3^3");
+    assert(pow(10, 3)  == 1000, "10^3");
+});
+
+test("sqrt", () => {
+    assert(sqrt(4)   == 2.0,  "sqrt 4");
+    assert(sqrt(9)   == 3.0,  "sqrt 9");
+    assert(sqrt(16)  == 4.0,  "sqrt 16");
+    assert(sqrt(2)   > 1.41 && sqrt(2) < 1.42, "sqrt 2 aprox");
+});
+
+test("min / max", () => {
+    assert(min(3, 7)   == 3,  "min");
+    assert(min(7, 3)   == 3,  "min reversed");
+    assert(min(-5, -1) == -5, "min negatives");
+    assert(max(3, 7)   == 7,  "max");
+    assert(max(7, 3)   == 7,  "max reversed");
+    assert(max(-5, -1) == -1, "max negatives");
+});
+
+test("log", () => {
+    assert(log(1)  == 0.0, "log(1) = 0");
+    assert(log(2)  > 0.69 && log(2) < 0.70, "log(2) ≈ 0.693");
+});
+
+test("parseInt", () => {
+    assert(parseInt("42")    == 42, "parseInt string int");
+    assert(parseInt("0")     == 0,  "parseInt cero");
+    assert(parseInt("-7")    == -7, "parseInt negativo");
+    assert(parseInt(3.9)     == 3,  "parseInt decimal trunca");
+    assert(parseInt(3.1)     == 3,  "parseInt decimal trunca 2");
+    assert(parseInt("  7 ")  == 7,  "parseInt trim spaces");
+});
+
+test("parseDecimal", () => {
+    assert(parseDecimal("3.14") == 3.14, "parseDecimal string");
+    assert(parseDecimal("0.5")  == 0.5,  "parseDecimal 0.5");
+    assert(parseDecimal(5)      == 5.0,  "parseDecimal int");
+    assert(parseDecimal(-2)     == -2.0, "parseDecimal negativo");
+});
+
+test("composición de math", () => {
+    assert(round(sqrt(pow(3, 2) + pow(4, 2))) == 5, "hipotenusa 3-4-5");
+    assert(abs(min(-10, -5)) == 10, "abs(min)");
+    assert(max(floor(3.7), ceil(2.1)) == 3, "max(floor, ceil)");
+});
+
+summary();

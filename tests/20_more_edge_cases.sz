@@ -1,0 +1,70 @@
+// String interpolation with .length property (no parens)
+let arr = [1, 2, 3, 4];
+out "Array has {arr.length} items";   // → Array has 4 items
+
+// String interpolation with method call inside {}
+let s = "hello";
+out "Upper: {s.substring(0, 3)}";    // → Upper: hel
+
+// Dict index assignment (alternative to Add)
+let precios <string,int> = ({"jamon",12});
+precios["queso"] = 8;
+precios["jamon"] = 15;
+out precios["queso"];    // → 8
+out precios["jamon"];   // → 15
+
+// Chained method calls: map then filter then reduce
+let result = [1,2,3,4,5,6,7,8,9,10]
+    .map(x => x * x)
+    .filter(x => x > 20)
+    .reduce(0, (acc, x) => acc + x);
+out result;   // → 25+36+49+64+81+100 = 355
+
+// Passing function as value
+fn int double(int n) {
+    return n * 2;
+}
+let op = double;
+out op(21);   // → 42
+
+// Nested if as expression
+fn string classify(int n) {
+    if (n > 0) {
+        return "positive";
+    } else if (n < 0) {
+        return "negative";
+    } else {
+        return "zero";
+    }
+}
+out classify(5);    // → positive
+out classify(-3);   // → negative
+out classify(0);    // → zero
+
+// for loop returning from inside
+fn int firstOver(int limit) {
+    for (let k = 0; k < 100; k = k + 1) {
+        if (k > limit) {
+            return k;
+        }
+    }
+    return -1;
+}
+out firstOver(7);    // → 8
+out firstOver(200);  // → -1
+
+// Array from function
+fn make_arr() {
+    return [7, 8, 9];
+}
+let res = make_arr();
+out res[0];   // → 7
+out res[2];   // → 9
+
+// wrap function
+fn wrap(a, b) {
+    return [a, b];
+}
+let pair = wrap(42, 99);
+out pair[0];   // → 42
+out pair[1];   // → 99

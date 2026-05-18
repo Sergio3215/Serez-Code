@@ -1,0 +1,132 @@
+// Unit tests — operator overloading: op_add, op_sub, op_mul, op_eq, op_ne, op_lt, op_neg, op_str
+
+public class Vec {
+    public Vec(decimal x, decimal y) {
+        this.x = x;
+        this.y = y;
+    }
+    public Vec  op_add(Vec o) { return new Vec(this.x + o.x, this.y + o.y); }
+    public Vec  op_sub(Vec o) { return new Vec(this.x - o.x, this.y - o.y); }
+    public Vec  op_mul(Vec o) { return new Vec(this.x * o.x, this.y * o.y); }
+    public bool op_eq(Vec o)  { return this.x == o.x && this.y == o.y; }
+    public bool op_ne(Vec o)  { return !(this.x == o.x && this.y == o.y); }
+    public bool op_lt(Vec o)  {
+        let ma = this.x * this.x + this.y * this.y;
+        let mb = o.x * o.x + o.y * o.y;
+        return ma < mb;
+    }
+    public Vec  op_neg()      { return new Vec(-this.x, -this.y); }
+    public string op_str()    { return "({this.x},{this.y})"; }
+}
+
+test("op_add", () => {
+    let a = new Vec(1.0, 2.0);
+    let b = new Vec(3.0, 4.0);
+    let c = a + b;
+    assert(c.x == 4.0, "add x");
+    assert(c.y == 6.0, "add y");
+});
+
+test("op_sub", () => {
+    let a = new Vec(5.0, 7.0);
+    let b = new Vec(2.0, 3.0);
+    let c = a - b;
+    assert(c.x == 3.0, "sub x");
+    assert(c.y == 4.0, "sub y");
+});
+
+test("op_mul", () => {
+    let a = new Vec(2.0, 3.0);
+    let b = new Vec(4.0, 5.0);
+    let c = a * b;
+    assert(c.x == 8.0,  "mul x");
+    assert(c.y == 15.0, "mul y");
+});
+
+test("op_eq / op_ne", () => {
+    let a = new Vec(1.0, 2.0);
+    let b = new Vec(1.0, 2.0);
+    let c = new Vec(3.0, 4.0);
+    assert(a == b,    "eq true");
+    assert(!(a == c), "eq false");
+    assert(a != c,    "ne true");
+    assert(!(a != b), "ne false");
+});
+
+test("op_lt (por magnitud)", () => {
+    let pequeño = new Vec(1.0, 0.0);
+    let grande  = new Vec(3.0, 4.0);
+    assert(pequeño < grande,    "lt true");
+    assert(!(grande < pequeño), "lt false");
+});
+
+test("op_neg", () => {
+    let a   = new Vec(2.0, -3.0);
+    let neg = -a;
+    assert(neg.x == -2.0, "neg x");
+    assert(neg.y ==  3.0, "neg y");
+});
+
+test("op_str en out", () => {
+    let a = new Vec(1.0, 2.0);
+    let s = "{a}";
+    assert(s == "(1.0,2.0)", "op_str interpolacion");
+});
+
+test("op_str en array de instancias", () => {
+    let a = new Vec(1.0, 2.0);
+    let b = new Vec(3.0, 4.0);
+    let arr = [a, b];
+    assert("{arr}" == "[(1.0,2.0), (3.0,4.0)]", "op_str en array");
+});
+
+test("op_add encadenado", () => {
+    let a = new Vec(1.0, 1.0);
+    let b = new Vec(2.0, 2.0);
+    let c = new Vec(3.0, 3.0);
+    let total = a + b + c;
+    assert(total.x == 6.0 && total.y == 6.0, "encadenado 1+2+3");
+});
+
+test("operador en condicional if", () => {
+    let pequeño = new Vec(1.0, 0.0);
+    let grande  = new Vec(3.0, 4.0);
+    let label = "no";
+    if (pequeño < grande) { label = "si"; }
+    assert(label == "si", "op_lt en if");
+});
+
+test("acumulador con op_add en while", () => {
+    let acc  = new Vec(0.0, 0.0);
+    let step = new Vec(1.0, 2.0);
+    let i = 0;
+    while (i < 3) { acc = acc + step; i++; }
+    assert(acc.x == 3.0, "acumulador x");
+    assert(acc.y == 6.0, "acumulador y");
+});
+
+test("op_str throw se propaga", () => {
+    public class Roto {
+        public Roto() {}
+        public string op_str() { throw "str_error"; return ""; }
+    }
+    let r = new Roto();
+    let lanzó = false;
+    try { let s = "{r}"; } catch (e) { lanzó = (e == "str_error"); }
+    assert(lanzó, "op_str throw propagado");
+});
+
+test("herencia hereda op_add", () => {
+    public class Vec3 : Vec {
+        public Vec3(decimal x, decimal y, decimal z) {
+            this.x = x; this.y = y; this.z = z;
+        }
+        public string op_str() { return "({this.x},{this.y},{this.z})"; }
+    }
+    let a = new Vec3(1.0, 2.0, 0.0);
+    let b = new Vec3(4.0, 5.0, 0.0);
+    let s = a + b;
+    assert(s.x == 5.0 && s.y == 7.0, "op_add heredado en Vec3");
+});
+
+summary();

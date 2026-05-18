@@ -1,0 +1,88 @@
+// Unit tests — string interpolation: todas las formas de {expr}
+
+test("interpolación de variable simple", () => {
+    let nombre = "Sergio";
+    let msg = "Hola, {nombre}!";
+    assert(msg == "Hola, Sergio!", "var string");
+
+    let n = 42;
+    assert("valor={n}" == "valor=42", "var int");
+
+    let pi = 3.14;
+    assert("pi={pi}" == "pi=3.14", "var decimal");
+
+    let ok = true;
+    assert("flag={ok}" == "flag=true", "var bool");
+});
+
+test("interpolación de expresión aritmética", () => {
+    let a = 3;
+    let b = 4;
+    assert("suma={a + b}"     == "suma=7",   "expr suma");
+    assert("producto={a * b}" == "producto=12", "expr mult");
+    assert("doble={a * 2}"    == "doble=6",  "expr con literal");
+});
+
+test("interpolación de llamada a función", () => {
+    fn int cuadrado(int x) { return x * x; }
+    assert("4²={cuadrado(4)}" == "4²=16", "fn call");
+    assert("longitud={\"hola\".length()}" == "longitud=4", "method call");
+});
+
+test("interpolación de acceso a campo de objeto", () => {
+    public class Punto {
+        public Punto(int x, int y) { this.x = x; this.y = y; }
+    }
+    let p = new Punto(3, 4);
+    assert("punto=({p.x},{p.y})" == "punto=(3,4)", "obj.field");
+});
+
+test("interpolación de índice de array", () => {
+    let arr = [10, 20, 30];
+    assert("primero={arr[0]}" == "primero=10", "arr[0]");
+    assert("ultimo={arr[2]}"  == "ultimo=30",  "arr[2]");
+});
+
+test("interpolación de índice de string", () => {
+    let s = "hola";
+    assert("inicial={s[0]}" == "inicial=h", "str[0]");
+});
+
+test("múltiples interpolaciones en un string", () => {
+    let x = 1;
+    let y = 2;
+    let z = 3;
+    assert("{x}+{y}+{z}={x+y+z}" == "1+2+3=6", "multi interp");
+});
+
+test("interpolación de acceso a dict", () => {
+    let d <string,int> = ({"a",100});
+    assert("val={d[\"a\"]}" == "val=100", "dict access interp");
+});
+
+test("interpolación con ternario", () => {
+    let n = 5;
+    assert("es {n > 0 ? \"positivo\" : \"negativo\"}" == "es positivo", "ternario en interp");
+});
+
+test("interpolación en concatenación", () => {
+    let nombre = "Serez";
+    let prefijo = "Lenguaje: ";
+    assert(prefijo + "{nombre}-Code" == "Lenguaje: Serez-Code", "concat + interp");
+});
+
+test("op_str en interpolación", () => {
+    public class Color {
+        public Color(string n) { this.nombre = n; }
+        public string op_str() { return "Color({this.nombre})"; }
+    }
+    let c = new Color("rojo");
+    assert("Color: {c}" == "Color: Color(rojo)", "op_str en interp");
+});
+
+test("null en interpolación", () => {
+    let v = null;
+    assert("val={v}" == "val=null", "null interp");
+});
+
+summary();

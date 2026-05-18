@@ -1,0 +1,87 @@
+// Unit tests: switch statement
+
+test("switch matches exact int", () => {
+    let result = "none";
+    switch (2) {
+        case 1: { result = "one"; }
+        case 2: { result = "two"; }
+        case 3: { result = "three"; }
+    }
+    assert(result == "two", "switch should match case 2");
+});
+
+test("switch matches exact string", () => {
+    let result = "none";
+    switch ("rust") {
+        case "python": { result = "script"; }
+        case "rust":   { result = "systems"; }
+        case "js":     { result = "web"; }
+    }
+    assert(result == "systems", "switch should match 'rust'");
+});
+
+test("switch default when no case matches", () => {
+    let result = "none";
+    switch (99) {
+        case 1: { result = "one"; }
+        default: { result = "other"; }
+    }
+    assert(result == "other", "default should run when no case matches");
+});
+
+test("switch with multiple values per case", () => {
+    let result = "none";
+    switch (3) {
+        case 1, 2:    { result = "low"; }
+        case 3, 4, 5: { result = "mid"; }
+        default:      { result = "high"; }
+    }
+    assert(result == "mid", "case 3,4,5 should match 3");
+});
+
+test("switch no match no default — skips cleanly", () => {
+    let x = 42;
+    switch (x) {
+        case 1: { x = 1; }
+        case 2: { x = 2; }
+    }
+    assert(x == 42, "x should be unchanged when no case matches");
+});
+
+test("switch with expression as value", () => {
+    let arr = [10, 20, 30];
+    let result = "none";
+    switch (arr[1] / 10) {
+        case 1: { result = "ten"; }
+        case 2: { result = "twenty"; }
+        case 3: { result = "thirty"; }
+    }
+    assert(result == "twenty", "arr[1]/10 = 2 should match case 2");
+});
+
+test("switch inside function returns correctly", () => {
+    fn string grade(int score) {
+        switch (score / 10) {
+            case 10, 9: { return "A"; }
+            case 8:     { return "B"; }
+            case 7:     { return "C"; }
+            default:    { return "F"; }
+        }
+        return "?";
+    }
+    assert(grade(95) == "A", "95 should be A");
+    assert(grade(85) == "B", "85 should be B");
+    assert(grade(75) == "C", "75 should be C");
+    assert(grade(55) == "F", "55 should be F");
+});
+
+test("switch with bool", () => {
+    let result = "none";
+    switch (1 > 0) {
+        case true:  { result = "yes"; }
+        case false: { result = "no"; }
+    }
+    assert(result == "yes", "1 > 0 is true");
+});
+
+summary();

@@ -1,0 +1,13 @@
+// ── 03_control_flow.sz ───────────────────────────────────────────────────────
+let a = 10;
+if (a > 5) { out "mayor"; } else { out "menor"; }
+
+let i = 0;
+while (i < 5) { out i; i = i + 1; }
+
+for (let j = 0; j < 5; j = j + 1) { out j; }
+
+let k = 0;
+while (true) { if (k == 3) { break; } out k; k = k + 1; }
+
+for (let n = 0; n < 6; n = n + 1) { if (n == 3) { continue; } out n; }

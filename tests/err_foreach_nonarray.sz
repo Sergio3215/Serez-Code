@@ -1,0 +1,4 @@
+// for-in over a non-iterable (integer) must produce a runtime error
+for (let x in 42) {
+    out x;
+}

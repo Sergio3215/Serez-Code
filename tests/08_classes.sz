@@ -1,0 +1,160 @@
+// 08 - Clases y herencia
+// SINTAXIS: Todos los miembros (incluido constructor) requieren public/private
+
+class Animal {
+    public Animal(string n, int e) {
+        this.nombre = n;
+        this.edad = e;
+    }
+
+    public string getNombre() {
+        return this.nombre;
+    }
+
+    public int getEdad() {
+        return this.edad;
+    }
+
+    public string describir() {
+        return "Animal: {this.nombre}, edad: {this.edad}";
+    }
+}
+
+let a = new Animal("Rex", 3);
+out a.getNombre();
+out a.getEdad();
+out a.describir();
+
+// Herencia basica
+class Perro : Animal {
+    public Perro(string n, int e, string r) {
+        super(n, e);
+        this.raza = r;
+    }
+
+    public string getRaza() {
+        return this.raza;
+    }
+
+    public string describir() {
+        return "Perro {this.getNombre()} ({this.raza}), edad: {this.getEdad()}";
+    }
+}
+
+let p = new Perro("Max", 2, "Labrador");
+out p.getNombre();
+out p.getEdad();
+out p.getRaza();
+out p.describir();
+
+// Clase con logica en metodos
+class Contador {
+    public Contador(int inicial) {
+        this.valor = inicial;
+    }
+
+    public void incrementar() {
+        this.valor = this.valor + 1;
+    }
+
+    public void decrementar() {
+        this.valor = this.valor - 1;
+    }
+
+    public void sumar(int n) {
+        this.valor = this.valor + n;
+    }
+
+    public int get() {
+        return this.valor;
+    }
+
+    public void reset() {
+        this.valor = 0;
+    }
+}
+
+let c = new Contador(10);
+out c.get();
+c.incrementar();
+c.incrementar();
+out c.get();
+c.decrementar();
+out c.get();
+c.sumar(5);
+out c.get();
+c.reset();
+out c.get();
+
+// Clase con calculos matematicos
+class Punto {
+    public Punto(decimal px, decimal py) {
+        this.x = px;
+        this.y = py;
+    }
+
+    public decimal getX() { return this.x; }
+    public decimal getY() { return this.y; }
+
+    public decimal distancia(decimal ox, decimal oy) {
+        let dx = this.x - ox;
+        let dy = this.y - oy;
+        return sqrt(dx * dx + dy * dy);
+    }
+
+    public string toString() {
+        return "({this.x}, {this.y})";
+    }
+}
+
+let p1 = new Punto(0.0, 0.0);
+let p2 = new Punto(3.0, 4.0);
+out p1.toString();
+out p2.toString();
+out p2.distancia(0.0, 0.0);
+
+// Herencia de tres niveles
+class Vehiculo {
+    public Vehiculo(string m) {
+        this.marca = m;
+    }
+
+    public string getMarca() { return this.marca; }
+    public string tipo() { return "Vehiculo"; }
+}
+
+class Coche : Vehiculo {
+    public Coche(string m, int p) {
+        super(m);
+        this.puertas = p;
+    }
+
+    public string tipo() { return "Coche"; }
+    public int getPuertas() { return this.puertas; }
+}
+
+class CocheElectrico : Coche {
+    public CocheElectrico(string m, int p, int b) {
+        super(m, p);
+        this.bateria = b;
+    }
+
+    public string tipo() { return "Coche Electrico"; }
+    public int getBateria() { return this.bateria; }
+}
+
+let ce = new CocheElectrico("Tesla", 4, 100);
+out ce.getMarca();
+out ce.tipo();
+out ce.getPuertas();
+out ce.getBateria();
+
+// Clase sin constructor (metodos estaticos)
+class Util {
+    public int doblar(int n) { return n * 2; }
+    public string saludar(string nombre) { return "Hola, {nombre}!"; }
+}
+
+let util = new Util();
+out util.doblar(21);
+out util.saludar("Mundo");

@@ -1,0 +1,160 @@
+// ══════════════════════════════════════════════════════════════════
+// OPERATOR OVERLOADING — test integral
+// ══════════════════════════════════════════════════════════════════
+
+// ── Vector2D: aritmética y comparación ───────────────────────────
+public class Vector2D {
+    public Vector2D(decimal x, decimal y) {
+        this.x = x;
+        this.y = y;
+    }
+    public Vector2D op_add(Vector2D other) {
+        return new Vector2D(this.x + other.x, this.y + other.y);
+    }
+    public Vector2D op_sub(Vector2D other) {
+        return new Vector2D(this.x - other.x, this.y - other.y);
+    }
+    public Vector2D op_mul(Vector2D other) {
+        return new Vector2D(this.x * other.x, this.y * other.y);
+    }
+    public bool op_eq(Vector2D other) {
+        return this.x == other.x && this.y == other.y;
+    }
+    public bool op_ne(Vector2D other) {
+        return !(this.x == other.x && this.y == other.y);
+    }
+    public bool op_lt(Vector2D other) {
+        return (this.x * this.x + this.y * this.y) < (other.x * other.x + other.y * other.y);
+    }
+    public Vector2D op_neg() {
+        return new Vector2D(-this.x, -this.y);
+    }
+    public string op_str() {
+        return "({this.x}, {this.y})";
+    }
+}
+
+out "── Aritmética binaria ──";
+let a = new Vector2D(1.0, 2.0);
+let b = new Vector2D(3.0, 4.0);
+
+let c = a + b;
+assert(c.x == 4.0, "op_add x");
+assert(c.y == 6.0, "op_add y");
+
+let d = b - a;
+assert(d.x == 2.0, "op_sub x");
+assert(d.y == 2.0, "op_sub y");
+
+let e = a * b;
+assert(e.x == 3.0, "op_mul x");
+assert(e.y == 8.0, "op_mul y");
+out "OK";
+
+out "── Comparación ──";
+let v1 = new Vector2D(1.0, 0.0);
+let v2 = new Vector2D(1.0, 0.0);
+let v3 = new Vector2D(2.0, 0.0);
+
+assert(v1 == v2,    "op_eq true");
+assert(!(v1 == v3), "op_eq false");
+assert(v1 != v3,    "op_ne true");
+assert(!(v1 != v2), "op_ne false");
+assert(v1 < v3,     "op_lt true (menor magnitud)");
+assert(!(v3 < v1),  "op_lt false");
+out "OK";
+
+out "── Unario op_neg ──";
+let neg_a = -a;
+assert(neg_a.x == -1.0, "op_neg x");
+assert(neg_a.y == -2.0, "op_neg y");
+out "OK";
+
+out "── op_str en out e interpolación ──";
+out a;                            // debe usar op_str → "(1.0, 2.0)"
+let s = "vector={a}";
+assert(s == "vector=(1.0, 2.0)", "op_str en interpolacion");
+out "OK";
+
+// ── Fraccion: div, mod, order ─────────────────────────────────────
+public class Fraccion {
+    public Fraccion(int num, int den) {
+        this.num = num;
+        this.den = den;
+    }
+    public Fraccion op_add(Fraccion other) {
+        return new Fraccion(this.num * other.den + other.num * this.den,
+                            this.den * other.den);
+    }
+    public Fraccion op_sub(Fraccion other) {
+        return new Fraccion(this.num * other.den - other.num * this.den,
+                            this.den * other.den);
+    }
+    public bool op_eq(Fraccion other) {
+        return this.num * other.den == other.num * this.den;
+    }
+    public bool op_lt(Fraccion other) {
+        return this.num * other.den < other.num * this.den;
+    }
+    public string op_str() {
+        return "{this.num}/{this.den}";
+    }
+}
+
+out "── Fraccion: suma y comparación ──";
+let f1 = new Fraccion(1, 2);
+let f2 = new Fraccion(1, 3);
+let f3 = f1 + f2;   // 1/2 + 1/3 = 5/6
+assert(f3.num == 5, "fraccion suma num");
+assert(f3.den == 6, "fraccion suma den");
+
+let f4 = new Fraccion(1, 2);
+assert(f1 == f4,    "fracciones iguales");
+assert(f2 < f1,     "1/3 < 1/2");
+assert(!(f1 < f2),  "1/2 no es < 1/3");
+
+out f3;   // debe imprimir "5/6"
+let fs = "resultado={f3}";
+assert(fs == "resultado=5/6", "Fraccion op_str en interpolacion");
+out "OK";
+
+// ── Encadenado: (a + b) + c ──────────────────────────────────────
+out "── Encadenado ──";
+let x = new Vector2D(1.0, 1.0);
+let y = new Vector2D(2.0, 2.0);
+let z = new Vector2D(3.0, 3.0);
+let total = x + y + z;
+assert(total.x == 6.0, "encadenado x: 1+2+3");
+assert(total.y == 6.0, "encadenado y: 1+2+3");
+out "OK";
+
+// ── Operador en condicional if ────────────────────────────────────
+out "── Uso en if ──";
+let big   = new Vector2D(10.0, 10.0);
+let small = new Vector2D(1.0, 1.0);
+let bigger_label = "no";
+if (small < big) { bigger_label = "si"; }
+assert(bigger_label == "si", "op_lt en if");
+out "OK";
+
+// ── Operador en while / acumulador ───────────────────────────────
+out "── Acumulador en while ──";
+let acc = new Vector2D(0.0, 0.0);
+let step = new Vector2D(1.0, 2.0);
+let iter = 0;
+while (iter < 3) {
+    acc = acc + step;
+    iter += 1;
+}
+assert(acc.x == 3.0, "acumulador while x");
+assert(acc.y == 6.0, "acumulador while y");
+out "OK";
+
+// ── Sin overload: instancia que NO tiene op_ → error esperado ────
+// (No podemos testar el error en assert sin manejo de try/catch)
+// Se deja como documentación del comportamiento
+
+out "";
+out "══════════════════════════════════════";
+out "  OPERATOR OVERLOADING ✓";
+out "══════════════════════════════════════";

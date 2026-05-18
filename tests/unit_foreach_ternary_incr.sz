@@ -1,0 +1,178 @@
+// ── ForEach, Ternary, and ++/-- unit tests ───────────────────────────────────
+
+// ── ForEach ──────────────────────────────────────────────────────────────────
+
+test("for-in sums array elements", () => {
+    let nums [int] = [1, 2, 3, 4, 5];
+    let sum = 0;
+    for (let n in nums) {
+        sum += n;
+    }
+    assert(sum == 15, "sum should be 15");
+});
+
+test("for-in iterates in order", () => {
+    let nums [int] = [10, 20, 30];
+    let result = "";
+    for (let n in nums) {
+        result = result + n + ",";
+    }
+    assert(result == "10,20,30,", "result should be 10,20,30,");
+});
+
+test("for-in over empty array does nothing", () => {
+    let empty [int] = [];
+    let count = 0;
+    for (let x in empty) {
+        count++;
+    }
+    assert(count == 0, "count should be 0");
+});
+
+test("for-in over string iterates characters", () => {
+    let result = "";
+    for (let c in "abc") {
+        result = result + c;
+    }
+    assert(result == "abc", "should iterate over each character");
+});
+
+test("for-in break exits early", () => {
+    let nums [int] = [1, 2, 3, 4, 5];
+    let sum = 0;
+    for (let n in nums) {
+        if (n == 3) { break; }
+        sum += n;
+    }
+    assert(sum == 3, "sum should stop at 3 (1+2)");
+});
+
+test("for-in continue skips elements", () => {
+    let nums [int] = [1, 2, 3, 4, 5];
+    let sum = 0;
+    for (let n in nums) {
+        if (n == 3) { continue; }
+        sum += n;
+    }
+    assert(sum == 12, "sum should skip 3 (1+2+4+5=12)");
+});
+
+test("for-in nested loops", () => {
+    let outer [int] = [1, 2, 3];
+    let inner [int] = [10, 20];
+    let total = 0;
+    for (let a in outer) {
+        for (let b in inner) {
+            total += a * b;
+        }
+    }
+    assert(total == 180, "1*(10+20) + 2*(10+20) + 3*(10+20) = 180");
+});
+
+test("for-in with method on elements", () => {
+    let words [string] = ["hello", "world"];
+    let result = "";
+    for (let w in words) {
+        result = result + w.length() + ",";
+    }
+    assert(result == "5,5,", "each word has length 5");
+});
+
+// ── Ternary ──────────────────────────────────────────────────────────────────
+
+test("ternary selects true branch", () => {
+    let x = true ? 1 : 2;
+    assert(x == 1, "should be 1");
+});
+
+test("ternary selects false branch", () => {
+    let x = false ? 1 : 2;
+    assert(x == 2, "should be 2");
+});
+
+test("ternary with expression condition", () => {
+    let n = 10;
+    let label = n > 5 ? "big" : "small";
+    assert(label == "big", "10 > 5 so big");
+});
+
+test("ternary is lazy - only evaluates chosen branch", () => {
+    let called = 0;
+    fn int side() { called++; return 99; }
+    let x = true ? 42 : side();
+    assert(called == 0, "side() should not be called");
+    assert(x == 42, "x should be 42");
+});
+
+test("ternary chained (right-associative)", () => {
+    let n = 2;
+    let r = n == 1 ? "one" : n == 2 ? "two" : "other";
+    assert(r == "two", "should be two");
+});
+
+test("ternary in expression", () => {
+    let a = 3;
+    let b = 7;
+    let max = a > b ? a : b;
+    assert(max == 7, "max(3,7) = 7");
+});
+
+test("ternary with null check", () => {
+    let val = null;
+    let result = val == null ? "was null" : "not null";
+    assert(result == "was null", "should detect null");
+});
+
+// ── Increment / Decrement ────────────────────────────────────────────────────
+
+test("postfix i++ increments by 1", () => {
+    let i = 5;
+    i++;
+    assert(i == 6, "i should be 6");
+});
+
+test("postfix i-- decrements by 1", () => {
+    let i = 5;
+    i--;
+    assert(i == 4, "i should be 4");
+});
+
+test("prefix ++i increments by 1", () => {
+    let i = 5;
+    ++i;
+    assert(i == 6, "i should be 6");
+});
+
+test("prefix --i decrements by 1", () => {
+    let i = 5;
+    --i;
+    assert(i == 4, "i should be 4");
+});
+
+test("++ inside while loop", () => {
+    let count = 0;
+    while (count < 5) {
+        count++;
+    }
+    assert(count == 5, "count should reach 5");
+});
+
+test("-- countdown", () => {
+    let n = 3;
+    let sum = 0;
+    while (n > 0) {
+        sum += n;
+        n--;
+    }
+    assert(sum == 6, "3+2+1=6");
+});
+
+test("++ and -- together", () => {
+    let a = 10;
+    let b = 10;
+    a++;
+    b--;
+    assert(a == 11 && b == 9, "a=11, b=9");
+});
+
+summary();

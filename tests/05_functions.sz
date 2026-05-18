@@ -1,0 +1,109 @@
+// 05 - Funciones
+
+// Funcion basica
+fn int suma(int a, int b) {
+    return a + b;
+}
+out suma(3, 4);
+
+// Funcion void (sin return explicito)
+fn void saludar(string nombre) {
+    out "Hola, {nombre}!";
+}
+saludar("Sergio");
+
+// Recursion: factorial
+fn int factorial(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+out factorial(5);
+out factorial(10);
+
+// Funcion con decimales
+fn decimal promedio(decimal a, decimal b) {
+    return (a + b) / 2.0;
+}
+out promedio(3.0, 7.0);
+
+// Funcion con bool
+fn bool es_par(int n) {
+    return n % 2 == 0;
+}
+out es_par(4);
+out es_par(7);
+
+// Funcion que retorna string
+fn string repetir(string s, int n) {
+    return s * n;
+}
+out repetir("ab", 3);
+
+// Recursion: fibonacci
+fn int fib(int n) {
+    if (n <= 1) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+out fib(0);
+out fib(1);
+out fib(7);
+out fib(10);
+
+// Funciones como variables (fn literal)
+let duplicar = fn int(int x) {
+    return x * 2;
+};
+out duplicar(5);
+out duplicar(21);
+
+// Funcion de orden superior con 'any' para el tipo funcion
+fn int aplicar(int x, any f) {
+    return f(x);
+}
+out aplicar(10, duplicar);
+out aplicar(4, x => x * 3);
+
+// Closure: captura por valor (las modificaciones internas no afectan al exterior)
+fn void demostrar_closure() {
+    let base = 10;
+    let sumar_base = x => x + base;
+    out sumar_base(5);
+    out sumar_base(20);
+    out sumar_base(100);
+}
+demostrar_closure();
+
+// Funcion que retorna funcion (return type: any)
+fn any multiplicador(int factor) {
+    let mul = fn int(int x) {
+        return x * factor;
+    };
+    return mul;
+}
+let por3 = multiplicador(3);
+let por5 = multiplicador(5);
+out por3(7);
+out por5(7);
+
+// Param any para cualquier tipo
+fn void imprimir_todo(any valor) {
+    out valor;
+}
+imprimir_todo(42);
+imprimir_todo("texto");
+imprimir_todo(true);
+
+// Funciones anidadas
+fn int potencia(int base, int exp) {
+    fn int pot_interna(int b, int e) {
+        if (e == 0) { return 1; }
+        return b * pot_interna(b, e - 1);
+    }
+    return pot_interna(base, exp);
+}
+out potencia(2, 8);
+out potencia(3, 4);

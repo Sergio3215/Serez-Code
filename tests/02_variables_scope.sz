@@ -1,0 +1,42 @@
+// TEST: Variables, reasignación y scoping
+
+// Declaración y reasignación
+let x = 10;
+out x;   // 10
+x = 20;
+out x;   // 20
+
+// Scoping de bloque: variable interna NO escapa
+let outer = 100;
+{
+    let inner = 999;
+    outer = 200;   // modifica la variable exterior
+    out inner;     // 999
+}
+out outer;   // 200
+// inner ya no existe aquí — descomentá para ver error:
+// out inner;
+
+// Shadowing en función (let en scope distinto)
+fn void testScope() {
+    let x = 999;
+    out x;   // 999 — x local distinta de la global
+}
+testScope();
+out x;   // 20 — la global no cambió
+
+// Null y coalescencia
+let n = null;
+out n;         // null
+let nn = n ?? "default";
+out nn;        // default
+
+// Variables de distintos tipos
+let i = 5;
+let d = 3.14;
+let s = "hello";
+let b = true;
+out i;
+out d;
+out s;
+out b;

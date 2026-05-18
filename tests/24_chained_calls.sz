@@ -1,0 +1,50 @@
+// Chained array method calls
+let result = [5, 3, 8, 1, 4].sort().map(x => x * 2);
+out result;   // → [2, 6, 8, 10, 16]
+
+// Chained string methods
+let s = "hello world";
+out s.split(" ").map(w => w.substring(0, 1));   // → [h, w]
+
+// Method call result directly used
+out [1, 2, 3].map(x => x + 10).filter(x => x > 11);   // → [12, 13]
+
+// Class method chaining (via assigned result)
+public class Builder {
+    public Builder() {
+        this.parts = [];
+    }
+
+    public void add(string part) {
+        this.parts.push(part);
+    }
+
+    public string build() {
+        return this.parts.reduce("", (acc, p) => acc + p);
+    }
+}
+
+let b = new Builder();
+b.add("Hello");
+b.add(", ");
+b.add("World");
+out b.build();   // → Hello, World
+
+// Function returning class instance (no return type annotation for class types)
+public class Point {
+    public Point(decimal x, decimal y) {
+        this.x = x;
+        this.y = y;
+    }
+    public decimal dist() {
+        return sqrt(this.x * this.x + this.y * this.y);
+    }
+}
+
+fn makePoint(decimal x, decimal y) {
+    return new Point(x, y);
+}
+
+let p = makePoint(3.0, 4.0);
+out p.dist();   // → 5.0
+out p.x;        // → 3.0

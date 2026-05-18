@@ -1,0 +1,138 @@
+// 33 - try / catch / throw / finally
+
+// Básico: catch captura la excepción
+try {
+    throw "algo salió mal";
+} catch (e) {
+    out e;  // → algo salió mal
+}
+
+// throw con entero
+try {
+    throw 42;
+} catch (e) {
+    out e;  // → 42
+
+}
+
+// finally siempre se ejecuta
+let ran = false;
+try {
+    throw "error";
+} catch (e) {
+    ran = true;
+} finally {
+    out ran;    // → true
+    out "finally ran";  // → finally ran
+}
+
+// finally sin throw
+try {
+    let x = 1 + 1;
+} finally {
+    out "no error finally";  // → no error finally
+}
+
+// Excepción desde función
+fn int divSafe(int a, int b) {
+    if (b == 0) {
+        throw "division by zero";
+    }
+    return a / b;
+}
+
+try {
+    let r = divSafe(10, 2);
+    out r;              // → 5
+} catch (e) {
+    out "caught: " + e;
+}
+
+try {
+    let r = divSafe(10, 0);
+    out r;
+} catch (e) {
+    out "caught: " + e;  // → caught: division by zero
+}
+
+// Re-throw no capturado → sube al nivel anterior
+fn void mayThrow(bool fail) {
+    if (fail) {
+        throw "inner error";
+    }
+}
+
+try {
+    mayThrow(false);
+    out "no throw";     // → no throw
+} catch (e) {
+    out "should not reach";
+}
+
+try {
+    mayThrow(true);
+    out "should not reach";
+} catch (e) {
+    out "caught from fn: " + e;  // → caught from fn: inner error
+}
+
+// Anidado: inner catch, outer no ve la excepción
+try {
+    try {
+        throw "inner";
+    } catch (e) {
+        out "inner caught: " + e;  // → inner caught: inner
+    }
+    out "outer continues";         // → outer continues
+} catch (e) {
+    out "outer should not catch";
+}
+
+// finally se ejecuta aunque haya return en catch
+fn string testFinally() {
+    try {
+        throw "oops";
+    } catch (e) {
+        return "caught";
+    } finally {
+        out "finally in fn";  // → finally in fn
+    }
+    return "never";
+}
+out testFinally();  // → caught
+
+// Excepción desde método de clase
+class BankAccount {
+    public BankAccount(decimal balance) {
+        this.balance = balance;
+    }
+
+    public void withdraw(decimal amount) {
+        if (amount > this.balance) {
+            throw "Insufficient funds: requested " + amount + " but balance is " + this.balance;
+        }
+        this.balance -= amount;
+    }
+
+    public decimal getBalance() {
+        return this.balance;
+    }
+}
+
+let acc = new BankAccount(100.0);
+try {
+    acc.withdraw(30.0);
+    out acc.getBalance();    // → 70.0
+} catch (e) {
+    out "caught: " + e;
+}
+
+try {
+    acc.withdraw(200.0);     // should throw
+    out "should not reach";
+} catch (e) {
+    out "caught: " + e;     // → caught: Insufficient funds: ...
+    out acc.getBalance();   // → 70.0 (unchanged)
+}
+
+out "done";  // → done

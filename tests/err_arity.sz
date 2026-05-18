@@ -1,0 +1,4 @@
+fn int add(int a, int b) {
+    return a + b;
+}
+out add(1);

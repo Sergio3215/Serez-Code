@@ -1,0 +1,73 @@
+// Unit tests — nullable types y null coalescing
+
+test("?? operador básico", () => {
+    let a = null;
+    let b = "valor";
+    assert((a ?? "default") == "default", "null ?? default");
+    assert((b ?? "default") == "valor",   "non-null ?? skips");
+    assert((null ?? 42)     == 42,        "null ?? int");
+    assert((0 ?? 99)        == 0,         "0 no es null");
+    assert((false ?? true)  == false,     "false no es null");
+});
+
+test("?? encadenado", () => {
+    let x1 = null;
+    let x2 = null;
+    let x3 = 42;
+    assert((x1 ?? x2 ?? x3) == 42,    "triple ??: primero no-null");
+    assert((null ?? null ?? "ok") == "ok", "triple ??: last wins");
+});
+
+test("función retorna T?", () => {
+    fn int? buscar(int val, [int] arr) {
+        let i = 0;
+        while (i < arr.length()) {
+            if (arr[i] == val) { return i; }
+            i++;
+        }
+        return null;
+    }
+    let arr = [10, 20, 30, 40];
+    assert(buscar(20, arr) == 1,    "nullable valor encontrado");
+    assert(buscar(99, arr) == null, "nullable null no encontrado");
+});
+
+test("?? con retorno nullable", () => {
+    fn int? quizas(bool dame) {
+        if (dame) { return 100; }
+        return null;
+    }
+    assert((quizas(true)  ?? -1) == 100, "nullable some ?? ok");
+    assert((quizas(false) ?? -1) == -1,  "nullable null ?? fallback");
+});
+
+test("?? en dict acceso", () => {
+    let d <string,int> = ({"a",1},{"b",2});
+    assert((d["a"]    ?? 0) == 1, "dict hit ?? ignored");
+    assert((d["nope"] ?? 0) == 0, "dict miss ?? fallback");
+});
+
+test("?? preserva 0 y false", () => {
+    let zero  = 0;
+    let falso = false;
+    let vacio = "";
+    assert((zero  ?? 99)   == 0,     "0 no reemplazado por ??");
+    assert((falso ?? true) == false,  "false no reemplazado por ??");
+    assert((vacio ?? "x")  == "",     "string vacío no reemplazado");
+});
+
+test("null en comparación", () => {
+    let v = null;
+    assert(v == null,  "null == null");
+    assert(v != 0,     "null != 0");
+    assert(v != false, "null != false");
+    assert(v != "",    "null != string vacio");
+});
+
+test("?? en expresión compuesta", () => {
+    fn int? get_val() { return null; }
+    let resultado = (get_val() ?? 5) * 2;
+    assert(resultado == 10, "?? dentro de expresion aritmetica");
+});
+
+summary();

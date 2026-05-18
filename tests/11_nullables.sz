@@ -1,0 +1,64 @@
+// 11 - Null, tipos nullable y null coalescing
+
+// Null basico
+let x = null;
+out x;
+out x == null;
+out x != null;
+
+// Null coalescing ??
+let val = null;
+out val ?? "por defecto";
+out val ?? 42;
+
+let noNull = "tengo valor";
+out noNull ?? "nunca llega aqui";
+
+// Encadenamiento de ??
+let a = null;
+let b = null;
+let c = "encontrado";
+out a ?? b ?? c;
+
+// Nullable en funcion
+fn string? buscar(bool existe) {
+    if (existe) {
+        return "resultado";
+    }
+    return null;
+}
+
+let r1 = buscar(true);
+let r2 = buscar(false);
+out r1;
+out r2;
+out r1 ?? "no encontrado";
+out r2 ?? "no encontrado";
+
+// Comparacion con null
+fn void mostrar(string? valor) {
+    if (valor == null) {
+        out "es null";
+    } else {
+        out "valor: {valor}";
+    }
+}
+mostrar("hola");
+mostrar(null);
+
+// Array con posibles nulls
+let items = ["a", null, "b", null, "c"];
+let limpios = items.filter(x => x != null);
+out limpios;
+
+// Null en condicion
+let resultado = null;
+if (resultado == null) {
+    resultado = "inicializado";
+}
+out resultado;
+
+// Null coalescing con expresion compleja
+let precio = null;
+let precio_final = precio ?? (10 * 1.21);
+out precio_final;

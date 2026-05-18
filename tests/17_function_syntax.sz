@@ -1,0 +1,94 @@
+// 17 - Sintaxis alternativa de funciones (documentada en README, nunca testada)
+
+// ── 1. Arrow function con tipo de retorno explícito ───────────────────────
+// Sintaxis: let nombre = ReturnType (params) => { body }
+let doblar = int (int n) => {
+    return n * 2;
+}
+out doblar(5);    // → 10
+out doblar(21);   // → 42
+
+let saludar = void (string s) => {
+    out s;
+}
+saludar("Hola mundo");  // → Hola mundo
+
+let esPar = bool (int n) => {
+    return n % 2 == 0;
+}
+out esPar(4);   // → true
+out esPar(7);   // → false
+
+// ── 2. Arrow function con decimal ─────────────────────────────────────────
+let area = decimal (decimal r) => {
+    return r * r * 3.14159;
+}
+out area(5.0);   // → 78.53975
+
+// ── 3. Función anónima (fn sin nombre) ───────────────────────────────────
+let ejecutar = fn void () {
+    out "función anónima ejecutada";
+};
+ejecutar();   // → función anónima ejecutada
+
+let sumar_anon = fn int (int a, int b) {
+    return a + b;
+};
+out sumar_anon(3, 7);   // → 10
+
+// ── 4. Función como valor (asignación y llamada) ──────────────────────────
+fn int cuadrado(int n) { return n * n; }
+let op = cuadrado;       // función como valor
+out op(6);               // → 36
+out op(9);               // → 81
+
+// ── 5. Función pasada como argumento (any) ───────────────────────────────
+fn any aplicar(any f, int x) {
+    return f(x);
+}
+out aplicar(cuadrado, 5);   // → 25
+out aplicar(doblar, 10);    // → 20
+
+// ── 6. Función retornada por función (currying manual) ────────────────────
+fn any multiplicar_por(int factor) {
+    return n => n * factor;
+}
+let por3 = multiplicar_por(3);
+let por7 = multiplicar_por(7);
+out por3(5);    // → 15
+out por7(5);    // → 35
+out por3(10);   // → 30
+
+// ── 7. Lambda de un solo parámetro sin paréntesis ────────────────────────
+let triple = x => x * 3;
+out triple(4);    // → 12
+out triple(10);   // → 30
+
+// ── 8. Lambda con bloque multi-línea ─────────────────────────────────────
+let clasificar = n => {
+    if (n < 0) { return "negativo"; }
+    if (n == 0) { return "cero"; }
+    return "positivo";
+};
+out clasificar(-5);   // → negativo
+out clasificar(0);    // → cero
+out clasificar(3);    // → positivo
+
+// ── 9. Array de funciones con tipos mixtos ───────────────────────────────
+let ops = [
+    x => x + 1,
+    x => x * 2,
+    x => x * x,
+    x => x - 10
+];
+let val = 5;
+for (let i = 0; i < ops.length(); i = i + 1) {
+    out ops[i](val);
+}
+// → 6, 10, 25, -5
+
+// ── 10. Función con parámetros sin tipo (untyped) ─────────────────────────
+fn multiplicar(a, b) { return a * b; }
+out multiplicar(6, 7);       // → 42
+out multiplicar(2.5, 4.0);   // → 10.0
+out multiplicar("ha", 3);    // → hahaha  (string * int)

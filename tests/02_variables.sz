@@ -1,0 +1,23 @@
+// ── 02_variables.sz — variables y asignación ─────────────────────────────────
+
+let x = 10;
+out x;
+
+let y = x + 5;
+out y;
+
+x = 20;
+out x;
+
+let name = "sergio";
+out name;
+
+let flag = true;
+out flag;
+flag = false;
+out flag;
+
+let d = 3.14;
+out d;
+d = 2.71;
+out d;

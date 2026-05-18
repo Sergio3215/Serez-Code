@@ -1,0 +1,45 @@
+// TEST: Aritmética básica e edge cases
+
+// Suma, resta, multiplicación
+let a = 10 + 5;
+let b = 10 - 3;
+let c = 4 * 6;
+out a;   // 15
+out b;   // 7
+out c;   // 24
+
+// División entera
+let d = 10 / 3;
+out d;   // 3
+
+// Módulo
+let e = 10 % 3;
+out e;   // 1
+
+// Operaciones con decimales
+let f = 1.5 + 2.5;
+out f;   // 4
+
+let g = 10.0 / 3.0;
+out g;   // 3.3333...
+
+// Int + Decimal = Decimal
+let h = 5 + 2.5;
+out h;   // 7.5
+
+// Negativo
+let neg = -5 + 3;
+out neg;  // -2
+
+// Precedencia
+let prec = 2 + 3 * 4;
+out prec;  // 14  (no 20)
+
+// Operaciones con null coalesce
+let maybeNull = null;
+let fallback = maybeNull ?? 42;
+out fallback;  // 42
+
+let notNull = 10;
+let val = notNull ?? 99;
+out val;  // 10

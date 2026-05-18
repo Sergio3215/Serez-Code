@@ -1,0 +1,92 @@
+// DEMO - Programacion funcional: map, filter, reduce, composicion
+
+// Composicion de funciones
+fn any componer(any f, any g) {
+    return x => f(g(x));
+}
+
+fn any componer3(any f, any g, any h) {
+    return x => f(g(h(x)));
+}
+
+// Currying manual
+fn any sumar(int n) {
+    return x => x + n;
+}
+
+fn any multiplicar(int n) {
+    return x => x * n;
+}
+
+// Pipeline funcional
+let numeros = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+out "=== Pipeline funcional ===";
+let resultado = numeros
+    .filter(x => x % 2 == 0)
+    .map(x => x * x)
+    .filter(x => x > 10)
+    .reduce(0, (acc, x) => acc + x);
+out "Suma de cuadrados de pares > 10: {resultado}";
+
+// Funciones como datos
+out "";
+out "=== Funciones como datos ===";
+let transformaciones = [
+    x => x + 1,
+    x => x * 2,
+    x => x * x
+];
+
+let valor = 3;
+for (let i = 0; i < transformaciones.length(); i = i + 1) {
+    let f = transformaciones[i];
+    out "Transformacion {i}({valor}) = {f(valor)}";
+}
+
+// Composicion
+out "";
+out "=== Composicion ===";
+let sumar1 = sumar(1);
+let mult3 = multiplicar(3);
+let doblar = multiplicar(2);
+
+let pipeline1 = componer(sumar1, mult3);
+let pipeline2 = componer3(sumar1, doblar, mult3);
+
+for (let n = 1; n <= 5; n = n + 1) {
+    out "pipeline1({n}) = {pipeline1(n)}   pipeline2({n}) = {pipeline2(n)}";
+}
+
+// Estadisticas funcionales
+out "";
+out "=== Estadisticas ===";
+let datos = [4, 8, 15, 16, 23, 42, 7, 3, 9, 11];
+
+let suma = datos.reduce(0, (a, b) => a + b);
+let minimo = datos.reduce(9999, (a, b) => {
+    if (a < b) { return a; }
+    return b;
+});
+let maximo = datos.reduce(-9999, (a, b) => {
+    if (a > b) { return a; }
+    return b;
+});
+let promedio = suma / datos.length();
+
+out "Datos: {datos}";
+out "Suma: {suma}";
+out "Min: {minimo}";
+out "Max: {maximo}";
+out "Promedio: {promedio}";
+
+// Aplanar con reduce (no se puede mutar acc capturado en closure anidado,
+// por eso usamos for directo en el cuerpo del callback)
+let matrices = [[1, 2], [3, 4], [5, 6]];
+let plano = matrices.reduce([], (acc, row) => {
+    for (let i = 0; i < row.length(); i = i + 1) {
+        acc.push(row[i]);
+    }
+    return acc;
+});
+out "Aplanado: {plano}";

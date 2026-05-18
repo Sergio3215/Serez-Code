@@ -1,0 +1,161 @@
+// 30 - Regression tests: class/instance bugs (B-28, B-29, B-32, B-34, B-40, B-41)
+
+// ── B-29: Array return type [int] in class methods ───────────────────────────
+class NumList {
+    public NumList() {
+        this.items = [];
+    }
+
+    public void add(int n) {
+        this.items.push(n);
+    }
+
+    public [int] getAll() {
+        return this.items;
+    }
+
+    public int sum() {
+        return this.items.reduce(0, (acc, x) => acc + x);
+    }
+}
+
+let nl = new NumList();
+nl.add(10);
+nl.add(20);
+nl.add(30);
+out nl.getAll();    // → [10, 20, 30]
+out nl.sum();       // → 60
+
+// ── B-28: this.field[idx] = val inside class method ──────────────────────────
+class Grid {
+    public Grid() {
+        this.cells = [0, 0, 0, 0, 0];
+    }
+
+    public void set(int idx, int val) {
+        this.cells[idx] = val;
+    }
+
+    public int get(int idx) {
+        return this.cells[idx];
+    }
+
+    public [int] all() {
+        return this.cells;
+    }
+}
+
+let g = new Grid();
+g.set(2, 99);
+out g.get(2);       // → 99
+out g.get(0);       // → 0
+g.set(0, 7);
+g.set(4, 42);
+out g.all();        // → [7, 0, 99, 0, 42]
+
+// ── B-32: sort/shift/unshift on instance field array write back ───────────────
+class SortTest {
+    public SortTest() {
+        this.data = [5, 3, 1, 4, 2];
+    }
+
+    public void doSort() {
+        this.data.sort();
+    }
+
+    public int doShift() {
+        return this.data.shift();
+    }
+
+    public void doUnshift(int n) {
+        this.data.unshift(n);
+    }
+
+    public [int] getData() {
+        return this.data;
+    }
+}
+
+let st = new SortTest();
+st.doSort();
+out st.getData();   // → [1, 2, 3, 4, 5]
+
+let first = st.doShift();
+out first;          // → 1
+out st.getData();   // → [2, 3, 4, 5]
+
+st.doUnshift(0);
+out st.getData();   // → [0, 2, 3, 4, 5]
+
+// ── B-41: remove() on instance field array ────────────────────────────────────
+class Bag {
+    public Bag() {
+        this.contents = ["apple", "banana", "cherry"];
+    }
+
+    public string take(int idx) {
+        return this.contents.remove(idx);
+    }
+
+    public [string] list() {
+        return this.contents;
+    }
+
+    public int size() {
+        return this.contents.length();
+    }
+}
+
+let bag = new Bag();
+let taken = bag.take(1);
+out taken;          // → banana
+out bag.list();     // → [apple, cherry]
+out bag.size();     // → 2
+
+let taken2 = bag.take(0);
+out taken2;         // → apple
+out bag.list();     // → [cherry]
+
+// ── B-34: calling a function stored in an instance field ─────────────────────
+class Calculator {
+    public Calculator() {
+        this.op = null;
+    }
+
+    public void setOp(any f) {
+        this.op = f;
+    }
+
+    public int apply(int a, int b) {
+        return this.op(a, b);
+    }
+}
+
+let calc = new Calculator();
+calc.setOp((a, b) => a + b);
+out calc.apply(3, 4);   // → 7
+
+calc.setOp((a, b) => a * b);
+out calc.apply(3, 4);   // → 12
+
+calc.setOp((a, b) => a - b);
+out calc.apply(10, 3);  // → 7
+
+// ── B-40: method calls tracked in call stack ─────────────────────────────────
+// Verified: call depth increments/decrements correctly for method calls.
+// Recursion limit test is in tests/err_method_recursion.sz (separate file
+// because the error is fatal and stops the program).
+class Depth {
+    public Depth() { this.level = 0; }
+
+    public int recurse(int n) {
+        if (n == 0) { return 0; }
+        this.level = this.level + 1;
+        let r = this.recurse(n - 1);
+        this.level = this.level - 1;
+        return r + 1;
+    }
+}
+let d = new Depth();
+out d.recurse(5);   // → 5
+out d.level;        // → 0  (back to 0 after all calls unwind)

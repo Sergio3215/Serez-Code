@@ -1,0 +1,104 @@
+// Edge cases: switch statement
+
+test("switch — no fall-through between cases", () => {
+    let result = "";
+    switch (1) {
+        case 1: { result = result + "one"; }
+        case 2: { result = result + "two"; }   // must NOT run
+        case 3: { result = result + "three"; } // must NOT run
+    }
+    assert(result == "one", "only matched case should run — no fall-through");
+});
+
+test("switch with decimal values", () => {
+    let result = "none";
+    switch (1.5) {
+        case 1.0: { result = "one"; }
+        case 1.5: { result = "one-point-five"; }
+        case 2.0: { result = "two"; }
+    }
+    assert(result == "one-point-five", "switch should match decimal 1.5");
+});
+
+test("switch with null value", () => {
+    let result = "none";
+    let val = null;
+    switch (val) {
+        case null:    { result = "is-null"; }
+        default:      { result = "not-null"; }
+    }
+    assert(result == "is-null", "switch should match null case");
+});
+
+test("switch inside for loop — accumulates correctly", () => {
+    let sum = 0;
+    for (let i = 0; i < 5; i = i + 1) {
+        switch (i) {
+            case 0: { sum += 100; }
+            case 2: { sum += 10; }
+            case 4: { sum += 1; }
+            default: { sum += 0; }
+        }
+    }
+    assert(sum == 111, "switch in loop: i=0→+100, i=2→+10, i=4→+1 = 111");
+});
+
+test("nested switch", () => {
+    let result = "none";
+    switch (1) {
+        case 1: {
+            switch (2) {
+                case 1: { result = "inner-1"; }
+                case 2: { result = "inner-2"; }
+            }
+        }
+        case 2: { result = "outer-2"; }
+    }
+    assert(result == "inner-2", "nested switch should match inner case 2");
+});
+
+test("throw inside switch case propagates", () => {
+    let caught = "none";
+    try {
+        switch (42) {
+            case 42: { throw "from-switch"; }
+        }
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "from-switch", "throw inside switch case should propagate to catch");
+});
+
+test("switch inside for loop — break exits the loop", () => {
+    // break inside a switch case breaks the enclosing for loop
+    let last = -1;
+    for (let i = 0; i < 5; i = i + 1) {
+        switch (i) {
+            case 3: { break; }  // breaks the for loop
+        }
+        last = i;  // only runs when switch does not break
+    }
+    assert(last == 2, "break in switch should exit the for loop, last assigned i is 2");
+});
+
+test("switch default runs exactly once when no case matches", () => {
+    let count = 0;
+    switch (99) {
+        case 1: { count += 10; }
+        case 2: { count += 10; }
+        default: { count += 1; }
+    }
+    assert(count == 1, "default runs once, no other case matches 99");
+});
+
+test("switch multiple values per case — middle value matches", () => {
+    let result = "none";
+    switch (7) {
+        case 1, 2, 3: { result = "low"; }
+        case 4, 5, 6: { result = "mid"; }
+        case 7, 8, 9: { result = "high"; }
+    }
+    assert(result == "high", "7 should match case 7,8,9");
+});
+
+summary();

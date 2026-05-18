@@ -1,0 +1,60 @@
+// 31 - Compound assignment operators (+=, -=, *=, /=, %=)
+
+// Variables simples
+let x = 10;
+x += 5;
+out x;      // → 15
+x -= 3;
+out x;      // → 12
+x *= 2;
+out x;      // → 24
+x /= 4;
+out x;      // → 6
+x %= 4;
+out x;      // → 2
+
+// Strings con +=
+let s = "hello";
+s += " world";
+out s;      // → hello world
+
+// Decimals
+let d = 1.5;
+d += 0.5;
+out d;      // → 2.0
+d *= 3.0;
+out d;      // → 6.0
+
+// Dentro de loops
+let sum = 0;
+for (let i = 1; i <= 5; i = i + 1) {
+    sum += i;
+}
+out sum;    // → 15
+
+// Dentro de while
+let n = 100;
+let count = 0;
+while (n > 1) {
+    n /= 2;
+    count += 1;
+}
+out count;  // → 6
+
+// Campo de instancia con +=
+class Counter {
+    public Counter() { this.val = 0; }
+    public void inc(int n) { this.val += n; }
+    public int get() { return this.val; }
+}
+let c = new Counter();
+c.inc(5);
+c.inc(3);
+out c.get();    // → 8
+
+// Array element con +=
+let arr = [10, 20, 30];
+arr[1] += 5;
+out arr;        // → [10, 25, 30]
+arr[0] *= 3;
+out arr[0];     // → 30

@@ -1,0 +1,65 @@
+── 1. TIPOS PRIMITIVOS Y type_of ──
+OK
+── 2. ARITMÉTICA ──
+OK
+── 3. OPERADORES LÓGICOS ──
+OK
+── 4. TERNARIO ──
+OK
+── 5. NULL COALESCING ──
+OK
+── 6. STRINGS ──
+OK
+── 7. CONVERSIONES ──
+OK
+── 8. MATH ──
+OK
+── 9. IF/ELSE ──
+OK
+── 10. WHILE ──
+OK
+── 11. FOR ──
+OK
+── 12. FOR-IN ──
+OK
+── 13. SWITCH ──
+OK
+── 14. FUNCIONES ──
+OK
+── 15. LAMBDAS/CLOSURES ──
+OK
+── 16. ARRAYS ──
+OK
+── 17. DICTS ──
+OK
+── 18. IS TYPE CHECK ──
+OK
+── 19. CLASES ──
+OK
+── 20. HERENCIA ──
+OK
+── 21. HERENCIA MULTINIVEL ──
+OK
+── 22. INTERFACES ──
+OK
+── 23. TRY/CATCH/FINALLY ──
+finally ejecutado
+OK
+── 24. NULLABLE ──
+OK
+── 25. HOF ──
+OK
+── 26. ARRAYS DE OBJETOS ──
+OK
+── 27. CLOSURES EN ARRAYS ──
+OK
+── 28. CLASE CON ARRAY/DICT ──
+OK
+── 29. TYPE_OF HERENCIA ──
+OK
+── 30. DEMO INTEGRADOR ──
+OK
+
+══════════════════════════════════════
+  TODOS LOS TESTS PASARON ✓
+══════════════════════════════════════

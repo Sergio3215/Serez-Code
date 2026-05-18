@@ -1,0 +1,109 @@
+// 18 - Casos que DEBEN producir ❌ ERROR específicos
+// Cada test corre en proceso separado para que un error no detenga los demás.
+// Este archivo prueba solo los errores que podemos aislar sin detener el programa completo.
+
+// ── Errores que NO detienen el programa (los que sí, están en scripts separados) ──
+
+// 1. Llamar a no-función
+let n = 42;
+// n();  ← detendría el programa
+
+// 2. Null coalescing — verificar que null ?? fallback funciona en todos los tipos
+out null ?? "fallback string";    // → fallback string
+out null ?? 0;                    // → 0
+out null ?? false;                // → false
+out null ?? [];                   // → []
+out null ?? null;                 // → null
+
+let x = null;
+out x ?? "ninguno";               // → ninguno
+
+// ?? no activa con valores falsy (sólo con null)
+out 0 ?? 99;        // → 0   (0 no es null)
+out false ?? 99;    // → false (false no es null)
+out "" ?? "vacío";  // → (string vacío, no es null)
+
+// 3. Encadenamiento de ??
+fn any puede_nulo(bool falla) {
+    if (falla) { return null; }
+    return 42;
+}
+out puede_nulo(true) ?? puede_nulo(false) ?? -1;  // → 42
+out puede_nulo(true) ?? puede_nulo(true) ?? -1;   // → -1
+
+// 4. Comparación null == null
+out null == null;   // → true
+out null != null;   // → false
+out null == 0;      // → false
+out null == false;  // → false
+out null == "";     // → false
+
+// 5. Operadores lógicos con cortocircuito y efectos
+fn bool sideA(bool v) { out "A"; return v; }
+fn bool sideB(bool v) { out "B"; return v; }
+
+// false && B → no evalúa B
+out sideA(false) && sideB(true);
+// → A / false
+
+// true || B → no evalúa B
+out sideA(true) || sideB(false);
+// → A / true
+
+// 6. Operador ! (negación booleana)
+out !true;    // → false
+out !false;   // → true
+out !(1 > 2); // → true
+out !(5 == 5); // → false
+
+// 7. Comparación cross-tipo (siempre false, no error)
+out 1 == "1";      // → false
+out true == 1;     // → false
+out 0 == false;    // → false
+
+// 8. Cadena de métodos de string
+let texto = "   Hola Mundo   ";
+out texto.replace("Hola", "Chau");          // → "   Chau Mundo   "
+out texto.replaceAll(" ", "_");             // → "___Hola_Mundo___"
+out "abc".includes("b");                    // → true
+out "abc".includes("x");                    // → false
+out "abc".contains("bc");                   // → true
+out "hello world".substring(6, 11);        // → world
+out "abc".split("").length();              // → 3
+
+// 9. parseInt / parseDecimal edge cases
+out parseInt("42");       // → 42
+out parseInt("  7  ");    // → 7
+out parseInt(3.99);       // → 3
+out parseInt(10);         // → 10
+out parseDecimal("3.14"); // → 3.14
+out parseDecimal(5);      // → 5.0
+out parseDecimal(2.71);   // → 2.71
+
+// 10. Verificar que sort muta el array original
+let original = [3, 1, 4, 1, 5, 9, 2, 6];
+let referencia = original;   // ambas apuntan al mismo array
+original.sort("asc");
+out original;     // → [1, 1, 2, 3, 4, 5, 6, 9]
+// (referencia también debería reflejar el sort si comparten arena)
+
+// 11. Pop retorna el elemento eliminado
+let pila = [10, 20, 30, 40];
+let tope = pila.pop();
+out tope;    // → 40
+out pila;    // → [10, 20, 30]
+let tope2 = pila.pop();
+out tope2;   // → 30
+out pila;    // → [10, 20]
+
+// shift retorna el primer elemento
+let cola = [1, 2, 3, 4];
+let primero = cola.shift();
+out primero; // → 1
+out cola;    // → [2, 3, 4]
+
+// 12. toString() en tipos primitivos
+out 42.toString();       // → 42
+out 3.14.toString();     // → 3.14
+out true.toString();     // → true
+out false.toString();    // → false

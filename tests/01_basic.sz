@@ -1,0 +1,36 @@
+// ── 01_basic.sz — tipos primitivos y aritmética ──────────────────────────────
+
+// Enteros
+out 1 + 2;
+out 10 - 3;
+out 4 * 5;
+out 10 / 2;
+out 10 % 3;
+
+// Decimales
+out 1.5 + 2.5;
+out 3.0 * 2.0;
+out 7.0 / 2.0;
+
+// Booleanos
+out true;
+out false;
+out !true;
+out !false;
+
+// Strings
+out "hola";
+out "hola" + " mundo";
+
+// Comparaciones
+out 1 == 1;
+out 1 != 2;
+out 2 > 1;
+out 1 < 2;
+out 2 >= 2;
+out 1 <= 2;
+out 1 >= 2;
+out 2 <= 1;
+
+// Nulo
+out null;

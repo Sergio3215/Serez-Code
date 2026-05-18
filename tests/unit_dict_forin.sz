@@ -1,0 +1,105 @@
+// Unit tests for dict for-in iteration and dict methods
+
+test("for-in dict iterates keys", () => {
+    let d <string,int> = ({"a",1},{"b",2},{"c",3});
+    let keys [string] = [];
+    for (let k in d) {
+        keys.push(k);
+    }
+    assert(keys.length() == 3, "3 keys");
+    assert(keys.includes("a"), "key a");
+    assert(keys.includes("b"), "key b");
+    assert(keys.includes("c"), "key c");
+});
+
+test("for-in dict access values", () => {
+    let d <string,int> = ({"x",10},{"y",20},{"z",30});
+    let total = 0;
+    for (let k in d) {
+        total += d[k];
+    }
+    assert(total == 60, "sum of values = 60");
+});
+
+test("for-in dict with update", () => {
+    let d <string,int> = ({"a",1},{"b",2});
+    for (let k in d) {
+        d[k] = d[k] * 10;
+    }
+    assert(d["a"] == 10, "a updated to 10");
+    assert(d["b"] == 20, "b updated to 20");
+});
+
+test("for-in empty dict", () => {
+    let empty <string,int> = ();
+    let count = 0;
+    for (let k in empty) {
+        count++;
+    }
+    assert(count == 0, "empty dict 0 iterations");
+});
+
+test("dict keys() and values()", () => {
+    let d <string,int> = ({"uno",1},{"dos",2},{"tres",3});
+    let ks = d.keys();
+    let vs = d.values();
+    assert(ks.length() == 3, "keys length 3");
+    assert(vs.length() == 3, "values length 3");
+    assert(ks.includes("uno"), "keys has uno");
+    assert(ks.includes("tres"), "keys has tres");
+});
+
+test("dict missing key returns null", () => {
+    let d <string,int> = ({"a",1});
+    assert(d["nope"] == null, "missing key = null");
+    assert((d["nope"] ?? -1) == -1, "missing key ?? fallback");
+});
+
+test("dict insert and update", () => {
+    let d <string,int> = ({"a",1});
+    d["b"] = 2;
+    assert(d["b"] == 2, "insert new key");
+    d["a"] = 99;
+    assert(d["a"] == 99, "update existing");
+});
+
+test("for-in dict with break", () => {
+    let d <string,int> = ({"a",1},{"b",2},{"c",3});
+    let found = "";
+    for (let k in d) {
+        if (d[k] == 2) {
+            found = k;
+            break;
+        }
+    }
+    assert(found == "b", "break on value==2 finds b");
+});
+
+test("toList — devuelve array de keys", () => {
+    let d <string,int> = ({"a",1},{"b",2},{"c",3});
+    let ks = d.toList();
+    assert(ks.length() == 3, "toList length 3");
+    assert(ks.includes("a"), "toList has a");
+    assert(ks.includes("c"), "toList has c");
+});
+
+test("toArray — devuelve array de pares [key, value]", () => {
+    let d <string,int> = ({"x",10},{"y",20});
+    let pairs = d.toArray();
+    assert(pairs.length() == 2, "toArray length 2");
+    let found_x = false;
+    for (let p in pairs) {
+        if (p[0] == "x" && p[1] == 10) { found_x = true; }
+    }
+    assert(found_x, "toArray contiene par [x, 10]");
+});
+
+test("dict <string,any>", () => {
+    let m <string,any> = ({"num",42},{"ok",true},{"txt","hola"});
+    assert(m["num"] == 42,     "any int");
+    assert(m["ok"]  == true,   "any bool");
+    assert(m["txt"] == "hola", "any string");
+    assert(m["nope"] == null,  "any missing null");
+});
+
+summary();

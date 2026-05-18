@@ -1,0 +1,89 @@
+// Unit tests — interfaces: definición, instanciación, campos, mutación
+
+test("interface básica — campos int", () => {
+    interface IPunto {
+        x: int;
+        y: int;
+    }
+    let p = new IPunto({ x: 3, y: 4 });
+    assert(p.x == 3, "campo x");
+    assert(p.y == 4, "campo y");
+});
+
+test("mutación de campo de interface", () => {
+    interface IBox {
+        ancho: int;
+        alto: int;
+    }
+    let b = new IBox({ ancho: 10, alto: 5 });
+    b.ancho = 20;
+    assert(b.ancho == 20, "campo mutado");
+    assert(b.alto  == 5,  "campo no mutado");
+});
+
+test("interface con string", () => {
+    interface IPersona {
+        nombre: string;
+        edad: int;
+    }
+    let p = new IPersona({ nombre: "Ana", edad: 25 });
+    assert(p.nombre == "Ana", "nombre");
+    assert(p.edad   == 25,    "edad");
+});
+
+test("interface con bool", () => {
+    interface IConfig {
+        activo: bool;
+        debug: bool;
+    }
+    let c = new IConfig({ activo: true, debug: false });
+    assert(c.activo == true,  "activo");
+    assert(c.debug  == false, "debug");
+});
+
+test("interface con decimal", () => {
+    interface IPrecio {
+        valor: decimal;
+    }
+    let pr = new IPrecio({ valor: 9.99 });
+    assert(pr.valor == 9.99, "valor decimal");
+    pr.valor = 14.99;
+    assert(pr.valor == 14.99, "valor actualizado");
+});
+
+test("array de interfaces", () => {
+    interface IPunto {
+        x: int;
+        y: int;
+    }
+    let puntos = [];
+    puntos.push(new IPunto({ x: 1, y: 1 }));
+    puntos.push(new IPunto({ x: 2, y: 4 }));
+    puntos.push(new IPunto({ x: 3, y: 9 }));
+    assert(puntos.length() == 3, "array length");
+    assert(puntos[1].x == 2, "array[1].x");
+    assert(puntos[2].y == 9, "array[2].y");
+});
+
+test("interface en función", () => {
+    interface IRect {
+        ancho: int;
+        alto: int;
+    }
+    fn int area(IRect r) { return r.ancho * r.alto; }
+    let r = new IRect({ ancho: 4, alto: 5 });
+    assert(area(r) == 20, "area via función");
+});
+
+test("interface con campo array", () => {
+    interface ILista {
+        items: [int];
+    }
+    let l = new ILista({ items: [1, 2, 3] });
+    assert(l.items.length() == 3, "items length");
+    assert(l.items[0] == 1, "items[0]");
+    l.items.push(4);
+    assert(l.items.length() == 4, "items push");
+});
+
+summary();

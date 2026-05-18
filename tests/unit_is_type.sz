@@ -1,0 +1,69 @@
+// Unit tests for is type check and type_of builtin
+
+test("is — primitivos", () => {
+    assert(42    is int     == true,  "42 is int");
+    assert(3.14  is decimal == true,  "3.14 is decimal");
+    assert("hi"  is string  == true,  "str is string");
+    assert(true  is bool    == true,  "bool is bool");
+    assert(null  is null    == true,  "null is null");
+});
+
+test("is — falsos cruzados", () => {
+    assert(42    is string  == false, "int is string false");
+    assert("hi"  is int     == false, "str is int false");
+    assert(true  is int     == false, "bool is int false");
+    assert(null  is int     == false, "null is int false");
+    assert(3.14  is int     == false, "decimal is int false");
+});
+
+test("type_of — primitivos", () => {
+    assert(type_of(42)      == "int",      "type_of int");
+    assert(type_of(3.14)    == "decimal",  "type_of decimal");
+    assert(type_of("hello") == "string",   "type_of string");
+    assert(type_of(true)    == "bool",     "type_of bool");
+    assert(type_of(false)   == "bool",     "type_of bool false");
+    assert(type_of(null)    == "null",     "type_of null");
+});
+
+test("type_of — compuestos", () => {
+    assert(type_of([1,2,3]) == "array",    "type_of array");
+    assert(type_of(x => x)  == "function", "type_of function");
+    let d <string,int> = ({"a",1});
+    assert(type_of(d)       == "dict",     "type_of dict");
+});
+
+test("type_of — clases", () => {
+    public class Punto {
+        public Punto(int x, int y) {
+            this.x = x;
+            this.y = y;
+        }
+    }
+    let p = new Punto(1, 2);
+    assert(type_of(p) == "Punto", "type_of instancia");
+});
+
+test("is — clases", () => {
+    public class Base { public Base() {} }
+    public class Hijo : Base { public Hijo() {} }
+    let b = new Base();
+    let h = new Hijo();
+    assert(b is Base == true,  "base is Base");
+    assert(h is Hijo == true,  "hijo is Hijo");
+    assert(b is Hijo == false, "base is Hijo false");
+});
+
+test("type_of en variable reasignada", () => {
+    let v = 1;
+    assert(type_of(v) == "int", "v=1 is int");
+    v = "ahora string";
+    assert(type_of(v) == "string", "v reemplazado is string");
+});
+
+test("is en expresión ternaria", () => {
+    let x = 42;
+    let label = x is int ? "entero" : "otro";
+    assert(label == "entero", "is en ternario");
+});
+
+summary();

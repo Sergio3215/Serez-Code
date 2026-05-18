@@ -1,0 +1,33 @@
+// ── Serez-Code Test Framework ────────────────────────────────────────────────
+// Include this file (or copy) at the top of any test suite.
+//
+// Usage:
+//   test("description", () => {
+//       assert(expr, "message");
+//       assert(a == b, "a should equal b");
+//   });
+//   summary();
+
+let __passed = 0;
+let __failed = 0;
+let __total  = 0;
+
+fn void test(string name, any body) {
+    __total = __total + 1;
+    try {
+        body();
+        __passed = __passed + 1;
+        out "[PASS] " + name;
+    } catch (e) {
+        __failed = __failed + 1;
+        out "[FAIL] " + name + " — " + e;
+    }
+}
+
+fn void summary() {
+    out "────────────────────────────────";
+    out "Results: " + __passed + " passed, " + __failed + " failed, " + __total + " total";
+    if (__failed == 0) {
+        out "All tests passed.";
+    }
+}

@@ -1,0 +1,73 @@
+// 32 - Switch statement
+
+// Básico con enteros
+let day = 3;
+switch (day) {
+    case 1: { out "lunes"; }
+    case 2: { out "martes"; }
+    case 3: { out "miércoles"; }
+    case 4: { out "jueves"; }
+    case 5: { out "viernes"; }
+    default: { out "fin de semana"; }
+}
+// → miércoles
+
+// Múltiples valores por case
+let score = 85;
+switch (score / 10) {
+    case 10, 9: { out "A"; }
+    case 8: { out "B"; }
+    case 7: { out "C"; }
+    case 6: { out "D"; }
+    default: { out "F"; }
+}
+// → B
+
+// Con strings
+let lang = "rust";
+switch (lang) {
+    case "python": { out "scripting"; }
+    case "rust", "c", "cpp": { out "systems"; }
+    case "js", "ts": { out "web"; }
+    default: { out "unknown"; }
+}
+// → systems
+
+// Sin default — no case coincide, no hace nada
+let x = 99;
+switch (x) {
+    case 1: { out "one"; }
+    case 2: { out "two"; }
+}
+out "after switch";     // → after switch
+
+// Switch dentro de función
+fn string classify(int n) {
+    switch (n % 3) {
+        case 0: { return "divisible by 3"; }
+        case 1: { return "remainder 1"; }
+        case 2: { return "remainder 2"; }
+    }
+    return "impossible";
+}
+out classify(9);    // → divisible by 3
+out classify(10);   // → remainder 1
+out classify(11);   // → remainder 2
+
+// Switch con break en body para salir del switch
+let result = "none";
+switch (2) {
+    case 1: { result = "one"; }
+    case 2: { result = "two"; }
+    case 3: { result = "three"; }
+}
+out result;     // → two
+
+// Switch evaluado con expresión compleja
+let arr = [5, 3, 8];
+switch (arr[0] + arr[1]) {
+    case 8: { out "eight"; }
+    case 11: { out "eleven"; }
+    default: { out "other"; }
+}
+// → eight

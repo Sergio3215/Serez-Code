@@ -1,0 +1,92 @@
+// DEMO - Sistema bancario con clases, herencia e interfaces
+
+interface Transaccion {
+    tipo: string;
+    monto: decimal;
+    descripcion: string;
+}
+
+class Cuenta {
+    public Cuenta(string titular, decimal saldo_inicial) {
+        this.titular = titular;
+        this.saldo = saldo_inicial;
+        this.historial = [];
+    }
+
+    public string getTitular() { return this.titular; }
+    public decimal getSaldo() { return this.saldo; }
+
+    private void registrar(string tipo, decimal monto, string desc) {
+        let t = new Transaccion({ tipo: tipo, monto: monto, descripcion: desc });
+        this.historial.push(t);
+    }
+
+    public bool depositar(decimal monto) {
+        if (monto <= 0.0) {
+            out "Error: monto invalido";
+            return false;
+        }
+        this.saldo = this.saldo + monto;
+        this.registrar("deposito", monto, "Deposito de {monto}");
+        return true;
+    }
+
+    public bool retirar(decimal monto) {
+        if (monto <= 0.0) {
+            out "Error: monto invalido";
+            return false;
+        }
+        if (monto > this.saldo) {
+            out "Error: saldo insuficiente ({this.saldo} disponible)";
+            return false;
+        }
+        this.saldo = this.saldo - monto;
+        this.registrar("retiro", monto, "Retiro de {monto}");
+        return true;
+    }
+
+    public void mostrar_saldo() {
+        out "Cuenta de {this.titular}: saldo = {this.saldo}";
+    }
+
+    public void mostrar_historial() {
+        out "--- Historial de {this.titular} ---";
+        for (let i = 0; i < this.historial.length(); i = i + 1) {
+            let t = this.historial[i];
+            out "  [{t.tipo}] {t.monto} - {t.descripcion}";
+        }
+    }
+}
+
+class CuentaAhorro : Cuenta {
+    public CuentaAhorro(string titular, decimal saldo_inicial, decimal tasa) {
+        super(titular, saldo_inicial);
+        this.tasa = tasa;
+    }
+
+    public void aplicar_interes() {
+        let interes = this.getSaldo() * this.tasa;
+        this.depositar(interes);
+        out "Interes aplicado: {interes}";
+    }
+}
+
+// Uso del sistema
+let cuenta1 = new Cuenta("Ana Garcia", 1000.0);
+let cuenta2 = new CuentaAhorro("Bob Lopez", 500.0, 0.05);
+
+cuenta1.depositar(250.0);
+cuenta1.depositar(100.0);
+cuenta1.retirar(150.0);
+cuenta1.retirar(2000.0);
+
+cuenta2.depositar(300.0);
+cuenta2.aplicar_interes();
+
+cuenta1.mostrar_saldo();
+cuenta2.mostrar_saldo();
+
+out "";
+cuenta1.mostrar_historial();
+out "";
+cuenta2.mostrar_historial();

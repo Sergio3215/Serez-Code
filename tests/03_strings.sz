@@ -1,0 +1,54 @@
+// 03 - Strings y metodos
+
+let saludo = "Hola, mundo!";
+out saludo;
+out saludo.length();
+
+// Concatenacion
+let a = "foo";
+let b = "bar";
+out a + b;
+
+// Interpolacion
+let nombre = "Sergio";
+let edad = 28;
+out "Hola {nombre}, tienes {edad} anos";
+out "Suma: {10 + 20}";
+out "{nombre} tiene {edad * 2} anos en el doble";
+
+// Escape sequences
+out "Linea1\nLinea2";
+out "Tab\taqui";
+out "Comilla: \"citado\"";
+out "Backslash: \\";
+
+// Metodos
+let frase = "el rapido zorro marron";
+out frase.length();
+out frase.includes("rapido");
+out frase.includes("lento");
+out frase.contains("zorro");
+
+out frase.replace("rapido", "lento");
+out frase.replaceAll("r", "R");
+
+// Split
+let csv = "a,b,c,d";
+let partes = csv.split(",");
+out partes;
+out partes.length();
+
+// Substring
+let texto = "Serez-Code";
+out texto.substring(0, 5);
+out texto.substring(6, 10);
+
+// toString en otros tipos
+out (42).toString();
+out (3.14).toString();
+out true.toString();
+
+// Interpolacion anidada compleja
+let items = 5;
+let precio = 9.99;
+out "Total: {items * precio} por {items} items a {precio} c/u";

@@ -1,0 +1,6 @@
+interface Punto {
+    x: decimal,
+    y: decimal,
+}
+
+let p = new Punto({ x: 1.0, y: 2.0, z: 3.0 });

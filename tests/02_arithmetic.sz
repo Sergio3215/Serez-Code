@@ -1,0 +1,59 @@
+// 02 - Aritmetica
+
+// Enteros basicos
+out 10 + 3;
+out 10 - 3;
+out 10 * 3;
+out 10 / 3;
+out 10 % 3;
+
+// Decimales
+out 10.5 + 2.5;
+out 10.5 - 2.5;
+out 10.5 * 2.0;
+out 10.5 / 2.5;
+out 10.5 % 3.0;
+
+// Mixto int + decimal (Bug fix: % debia fallar)
+out 10 + 2.5;
+out 10 - 2.5;
+out 10 * 2.5;
+out 10 / 4.0;
+out 10 % 3.0;
+
+// Mixto decimal + int
+out 10.5 + 2;
+out 10.5 - 2;
+out 10.5 * 2;
+out 10.5 / 2;
+out 10.5 % 3;
+
+// Precedencia de operadores
+out 2 + 3 * 4;
+out (2 + 3) * 4;
+out 10 - 2 - 3;
+out 2 * 3 + 4 * 5;
+
+// Negacion
+let n = 5;
+out -n;
+out -(n + 3);
+
+// Comparaciones
+out 5 > 3;
+out 5 < 3;
+out 5 >= 5;
+out 5 <= 4;
+out 5 == 5;
+out 5 != 4;
+
+// Division entera trunca
+out 7 / 2;
+out -7 / 2;
+
+// Overflow detection: enteros grandes
+let grande = 1000000;
+out grande * grande;
+
+// Repeticion de string
+out "ab" * 3;

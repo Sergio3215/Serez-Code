@@ -1,0 +1,92 @@
+// ══════════════════════════════════════════════════════════════
+// E2E — String methods comprehensive test
+// Covers: B-42 (trim/upper/lower/startsWith/endsWith/indexOf/charAt)
+//         B-52 (substring 1-arg), B-53 (str[i]), B-59 (replace first-only)
+// ══════════════════════════════════════════════════════════════
+
+out "── 1. case methods ──";
+assert("hello".toUpperCase() == "HELLO", "toUpperCase");
+assert("WORLD".toLowerCase() == "world", "toLowerCase");
+assert("MiXeD CaSe".toUpperCase() == "MIXED CASE", "upper mixed");
+out "OK";
+
+out "── 2. trim ──";
+assert("  hello  ".trim()  == "hello",  "trim both ends");
+assert("hello".trim()      == "hello",  "trim none");
+assert("  ".trim()         == "",       "trim all spaces");
+out "OK";
+
+out "── 3. startsWith / endsWith ──";
+assert("hello world".startsWith("hello")  == true,  "startsWith true");
+assert("hello world".startsWith("world")  == false, "startsWith false");
+assert("hello world".endsWith("world")    == true,  "endsWith true");
+assert("hello world".endsWith("hello")    == false, "endsWith false");
+assert("abc".startsWith("")               == true,  "startsWith empty");
+out "OK";
+
+out "── 4. indexOf ──";
+assert("hello world".indexOf("world") == 6,  "indexOf string");
+assert("hello world".indexOf("xyz")   == -1, "indexOf not found");
+assert("abcabc".indexOf("b")          == 1,  "indexOf first of many");
+out "OK";
+
+out "── 5. charAt / str[i] ──";
+assert("hello".charAt(0) == "h", "charAt 0");
+assert("hello".charAt(4) == "o", "charAt 4");
+assert("hello"[0]        == "h", "str[0]");
+assert("hello"[4]        == "o", "str[4]");
+assert("hello"[99]       == null, "str out-of-bounds null");
+out "OK";
+
+out "── 6. replace (first only) vs replaceAll ──";
+let s = "hello world hello";
+assert(s.replace("hello", "hi")    == "hi world hello", "replace first only");
+assert(s.replaceAll("hello", "hi") == "hi world hi",    "replaceAll all");
+assert("aaa".replace("a", "b")     == "baa",            "replace first of 3");
+assert("aaa".replaceAll("a", "b")  == "bbb",            "replaceAll all 3");
+assert("abc".replace("x", "y")     == "abc",            "replace no match");
+out "OK";
+
+out "── 7. substring ──";
+assert("hello".substring(1)     == "ello", "substring 1-arg");
+assert("hello".substring(0)     == "hello","substring from 0");
+assert("abcde".substring(1, 3)  == "bc",   "substring 2-arg");
+assert("hello".substring(0, 5)  == "hello","substring full");
+assert("hello".substring(5)     == "",     "substring empty tail");
+out "OK";
+
+out "── 8. split ──";
+let parts = "a,b,c".split(",");
+assert(parts.length() == 3, "split 3 parts");
+assert(parts[0] == "a" && parts[2] == "c", "split values");
+let chars = "abc".split("");
+assert(chars.length() == 3 && chars[0] == "a", "split empty sep");
+out "OK";
+
+out "── 9. includes / contains ──";
+assert("hello world".includes("world") == true,  "includes true");
+assert("hello world".includes("xyz")   == false, "includes false");
+assert("hello world".contains("hello") == true,  "contains true");
+assert("hello world".contains("nope")  == false, "contains false");
+out "OK";
+
+out "── 10. chaining ──";
+let result = "  Hello World  ".trim().toLowerCase().replace("world", "serez");
+assert(result == "hello serez", "chain trim+lower+replace");
+let upper_split = "a,b,c".split(",").map(w => w.toUpperCase());
+assert(upper_split[0] == "A" && upper_split[2] == "C", "split+map+upper");
+out "OK";
+
+out "── 11. string interpolation con str[i] ──";
+let word = "serez";
+assert(word[0] == "s", "word[0]");
+assert(word[4] == "z", "word[4]");
+let first = word[0];
+let msg = "Comienza con: {first}";
+assert(msg == "Comienza con: s", "interpolacion con str[i]");
+out "OK";
+
+out "";
+out "══════════════════════════════════════";
+out "  STRING METHODS ✓";
+out "══════════════════════════════════════";

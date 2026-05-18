@@ -1,0 +1,60 @@
+// TEST: Strings, interpolación, métodos
+
+// Básico
+let s = "hello";
+out s;            // hello
+out s.length;     // 5
+
+// Interpolación simple
+let name = "Sergio";
+out "Hola, {name}!";   // Hola, Sergio!
+
+// Interpolación con expresión
+let x = 5;
+out "El doble de {x} es {x * 2}";   // El doble de 5 es 10
+
+// Concatenación con +
+let greeting = "Hello" + ", " + "World!";
+out greeting;   // Hello, World!
+
+// includes
+out s.includes("ell");   // true
+out s.includes("xyz");   // false
+
+// replace
+let replaced = s.replace("hello", "goodbye");
+out replaced;   // goodbye
+
+// split
+let csv = "a,b,c,d";
+let parts = csv.split(",");
+out parts.length;   // 4
+out parts[0];       // a
+out parts[3];       // d
+
+// substring
+let sub = "hello world";
+out sub.substring(6, 11);   // world
+out sub.substring(0, 5);    // hello
+
+// toString en número
+let n = 42;
+out n.toString();   // 42 (como string)
+
+// Interpolación con llamada a función
+fn int double(int v) { return v * 2; }
+let val = 7;
+out "double({val}) = {double(val)}";   // double(7) = 14
+
+// String vacío
+let empty = "";
+out empty.length;   // 0
+out empty.includes("x");   // false
+
+// Caracteres especiales en string
+let special = "tab:\there newline:\nend";
+out special;
+
+// Concatenación de int con string via interpolación
+let num = 100;
+out "Number: {num}";   // Number: 100

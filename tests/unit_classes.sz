@@ -1,0 +1,182 @@
+// Unit tests — clases: campos, métodos, herencia, super, type_of
+
+test("constructor e instanciación", () => {
+    public class Punto {
+        public Punto(int x, int y) {
+            this.x = x;
+            this.y = y;
+        }
+    }
+    let p = new Punto(3, 4);
+    assert(p.x == 3, "campo x");
+    assert(p.y == 4, "campo y");
+});
+
+test("métodos de instancia", () => {
+    public class Rect {
+        public Rect(int w, int h) {
+            this.w = w;
+            this.h = h;
+        }
+        public int area() { return this.w * this.h; }
+        public int perimetro() { return 2 * (this.w + this.h); }
+    }
+    let r = new Rect(4, 5);
+    assert(r.area()      == 20, "area");
+    assert(r.perimetro() == 18, "perimetro");
+});
+
+test("mutación de campos", () => {
+    public class Box {
+        public Box(int val) { this.val = val; }
+        public void set(int v) { this.val = v; }
+        public int get() { return this.val; }
+    }
+    let b = new Box(10);
+    assert(b.get() == 10, "getter");
+    b.val = 99;
+    assert(b.get() == 99, "campo mutado directamente");
+    b.set(42);
+    assert(b.get() == 42, "mutado via método");
+});
+
+test("herencia — override de método", () => {
+    public class Animal {
+        public Animal(string n) { this.nombre = n; }
+        public string hablar() { return this.nombre + ": ..."; }
+    }
+    public class Perro : Animal {
+        public Perro(string n) { this.nombre = n; }
+        public string hablar() { return this.nombre + ": guau"; }
+    }
+    let a = new Animal("Gato");
+    let d = new Perro("Rex");
+    assert(a.hablar() == "Gato: ...",  "animal hablar");
+    assert(d.hablar() == "Rex: guau",  "perro override");
+});
+
+test("herencia — método heredado sin override", () => {
+    public class Base {
+        public Base(int v) { this.v = v; }
+        public int doble() { return this.v * 2; }
+    }
+    public class Hijo : Base {
+        public Hijo(int v) { this.v = v; }
+    }
+    let h = new Hijo(7);
+    assert(h.doble() == 14, "método heredado");
+});
+
+test("super.method()", () => {
+    public class Vehiculo {
+        public Vehiculo(string m) { this.marca = m; }
+        public string describe() { return "Vehículo: " + this.marca; }
+    }
+    public class Coche : Vehiculo {
+        public Coche(string m, int p) {
+            this.marca   = m;
+            this.puertas = p;
+        }
+        public string describe() {
+            return super.describe() + " (" + this.puertas + " puertas)";
+        }
+    }
+    let c = new Coche("Toyota", 4);
+    assert(c.describe() == "Vehículo: Toyota (4 puertas)", "super.describe()");
+});
+
+test("herencia multinivel", () => {
+    public class A { public A() {} public string tag() { return "A"; } }
+    public class B : A { public B() {} }
+    public class C : B { public C() {} public string tag() { return "C"; } }
+    let b = new B();
+    let c = new C();
+    assert(b.tag() == "A", "B hereda A.tag()");
+    assert(c.tag() == "C", "C override tag()");
+});
+
+test("type_of en instancias", () => {
+    public class Foo { public Foo() {} }
+    public class Bar : Foo { public Bar() {} }
+    let f = new Foo();
+    let b = new Bar();
+    assert(type_of(f) == "Foo", "type_of Foo");
+    assert(type_of(b) == "Bar", "type_of Bar");
+});
+
+test("campos array en instancia", () => {
+    public class Lista {
+        public Lista() { this.items = []; }
+        public void agregar(int v) { this.items.push(v); }
+        public int total() {
+            let s = 0;
+            for (let x in this.items) { s += x; }
+            return s;
+        }
+    }
+    let l = new Lista();
+    l.agregar(10);
+    l.agregar(20);
+    l.agregar(30);
+    assert(l.total() == 60, "campo array acumulado");
+    assert(l.items.length() == 3, "campo array length");
+});
+
+test("campos dict en instancia", () => {
+    public class Cache {
+        public Cache() {
+            let m <string,int> = ();
+            this.mapa = m;
+        }
+        public void set(string k, int v) { this.mapa[k] = v; }
+        public int get(string k) { return this.mapa[k] ?? -1; }
+    }
+    let c = new Cache();
+    c.set("a", 1);
+    c.set("b", 2);
+    assert(c.get("a") == 1,  "cache get a");
+    assert(c.get("b") == 2,  "cache get b");
+    assert(c.get("z") == -1, "cache miss default");
+});
+
+test("array de instancias", () => {
+    public class Item {
+        public Item(string n, int p) { this.nombre = n; this.precio = p; }
+    }
+    let items = [];
+    items.push(new Item("A", 10));
+    items.push(new Item("B", 20));
+    items.push(new Item("C", 30));
+    let total = items.reduce(0, (acc, it) => acc + it.precio);
+    assert(total == 60, "reduce sobre instancias");
+    assert(items[1].nombre == "B", "acceso campo en array");
+});
+
+test("campo de clase que almacena función (B-34)", () => {
+    public class Calculadora {
+        public Calculadora() {
+            this.doble   = x => x * 2;
+            this.triple  = x => x * 3;
+            this.sumar   = (a, b) => a + b;
+        }
+    }
+    let c = new Calculadora();
+    assert(c.doble(5)    == 10, "campo lambda doble");
+    assert(c.triple(4)   == 12, "campo lambda triple");
+    assert(c.sumar(3, 7) == 10, "campo lambda 2 params");
+});
+
+test("campo función asignado después del constructor (B-34)", () => {
+    public class Handler {
+        public Handler() { this.callback = null; }
+        public void set(any fn) { this.callback = fn; }
+        public any run(int x) { return this.callback(x); }
+    }
+    let h = new Handler();
+    h.set(x => x * x);
+    assert(h.run(5) == 25, "callback asignado post-constructor");
+    h.set(x => x + 100);
+    assert(h.run(5) == 105, "callback reemplazado");
+});
+
+summary();

@@ -1,0 +1,2 @@
+// parseDecimal con string no numérico debe producir error de runtime
+out parseDecimal("xyz");
