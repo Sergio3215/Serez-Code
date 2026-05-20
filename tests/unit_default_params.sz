@@ -1,0 +1,64 @@
+// Unit tests: default parameter values
+
+test("single default param — omitted uses default", () => {
+    fn int greet(int x = 10) { return x; }
+    assert(greet() == 10,    "no arg → default 10");
+    assert(greet(5) == 5,    "explicit 5 overrides default");
+    assert(greet(0) == 0,    "explicit 0 overrides default");
+});
+
+test("multiple default params — all omitted", () => {
+    fn int add(int a = 1, int b = 2) { return a + b; }
+    assert(add() == 3,       "both defaults: 1+2=3");
+    assert(add(5) == 7,      "first override: 5+2=7");
+    assert(add(5, 10) == 15, "both override: 5+10=15");
+});
+
+test("default param string", () => {
+    fn string greet(string name = "World") { return "Hello " + name; }
+    assert(greet() == "Hello World",  "default name");
+    assert(greet("Sergio") == "Hello Sergio", "custom name");
+});
+
+test("default param bool", () => {
+    fn bool flag(bool enabled = false) { return enabled; }
+    assert(flag() == false,  "default false");
+    assert(flag(true) == true, "override true");
+});
+
+test("default param expression (arithmetic)", () => {
+    let base = 100;
+    fn int compute(int n = 2 + 3) { return n * 2; }
+    assert(compute() == 10,  "default 5 * 2 = 10");
+    assert(compute(7) == 14, "override 7 * 2 = 14");
+});
+
+test("default param null", () => {
+    fn any maybe(any val = null) { return val; }
+    assert(maybe() == null,    "default null");
+    assert(maybe(42) == 42,    "override 42");
+    assert(maybe("hi") == "hi","override string");
+});
+
+test("default after required param", () => {
+    fn int f(int a, int b = 5) { return a + b; }
+    assert(f(3) == 8,        "required + default: 3+5=8");
+    assert(f(3, 7) == 10,    "both supplied: 3+7=10");
+});
+
+test("recursive function with defaults", () => {
+    fn int countdown(int n = 3) {
+        if (n <= 0) { return 0; }
+        return n + countdown(n - 1);
+    }
+    assert(countdown() == 6,   "3+2+1=6 using default");
+    assert(countdown(5) == 15, "5+4+3+2+1=15");
+});
+
+test("default param in lambda-passed function", () => {
+    fn int apply(any f, int x) { return f(x); }
+    fn int double(int n = 1) { return n * 2; }
+    assert(apply(double, 4) == 8, "lambda with explicit arg");
+});
+
+summary();

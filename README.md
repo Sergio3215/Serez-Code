@@ -298,6 +298,75 @@ out (1 > 2) || (3 == 3);   // → true
 
 Applying `&&` or `||` to non-boolean operands is a runtime error.
 
+#### Power operator
+
+`**` raises a number to an exponent. Works for both `int` and `decimal`. Applies tighter than `*`:
+
+```serez
+out 2 ** 10;       // → 1024
+out 3 ** 3;        // → 27
+out 2.0 ** 32.0;   // → 4294967296.0
+out 0 ** 0;        // → 1   (mathematical convention)
+out (-2) ** 3;     // → -8
+```
+
+#### Bitwise operators
+
+Integer-only. All operate on 64-bit signed integers (two's complement).
+
+| Operator | Name | Example |
+|---|---|---|
+| `&` | Bitwise AND | `0b1010 & 0b1100 == 8` |
+| `\|` | Bitwise OR | `0b1010 \| 0b0101 == 15` |
+| `^` | Bitwise XOR | `0b1111 ^ 0b1010 == 5` |
+| `~` | Bitwise NOT (prefix) | `~0 == -1` |
+| `<<` | Left shift | `1 << 4 == 16` |
+| `>>` | Right shift (arithmetic) | `16 >> 2 == 4` |
+
+Binary (`0b`) and hexadecimal (`0x`) literals are supported:
+
+```serez
+out 0b1010;    // → 10
+out 0xFF;      // → 255
+out 0b1010 & 0b1100;   // → 8
+out ~9223372036854775807;  // → -9223372036854775808  (i64::MIN)
+```
+
+Shifting by a negative amount or by ≥ 64 is a runtime error.
+
+#### `is` type-check operator
+
+`expr is TypeName` returns `true` if the expression has the given type at runtime:
+
+```serez
+out 42 is int;        // → true
+out "hi" is int;      // → false
+out 3.14 is decimal;  // → true
+out null is null;     // → true
+out [1,2] is array;   // → true
+
+fn string dispatch(any v) {
+    if (v is int)     { return "int:" + v; }
+    if (v is string)  { return "str:" + v; }
+    if (v is decimal) { return "dec:" + v; }
+    return "unknown";
+}
+out dispatch(42);     // → int:42
+out dispatch("hi");   // → str:hi
+```
+
+Type names: `int`, `decimal`, `string`, `bool`, `null`, `array`, `dict`, `function`, or a class name.
+
+#### Numeric separators
+
+Underscores can be inserted anywhere in a numeric literal for readability. They are ignored by the parser:
+
+```serez
+let million = 1_000_000;
+let mask    = 0xFF_FF_FF_FF;
+let bits    = 0b1111_0000;
+```
+
 #### String operations
 
 Strings support concatenation with `+` and repetition with `*`:
@@ -386,12 +455,17 @@ From lowest to highest:
 | `NullCoalesce` | `??` |
 | `LogicalOr` | `\|\|` |
 | `LogicalAnd` | `&&` |
+| `BitOr` | `\|` |
+| `BitXor` | `^` |
+| `BitAnd` | `&` |
 | `Equals` | `==` `!=` |
-| `LessGreater` | `<` `>` `<=` `>=` |
+| `LessGreater` | `<` `>` `<=` `>=` `is` |
+| `Shift` | `<<` `>>` |
 | `Sum` | `+` `-` |
 | `Product` | `*` `/` `%` |
-| `Prefix` | `-x` `!x` |
-| `Call` | `f(x)` `.method(args)` |
+| `Power` | `**` |
+| `Prefix` | `-x` `!x` `~x` |
+| `Call` | `f(x)` `.method(args)` `?.method(args)` |
 | `Index` | `a[i]` |
 
 Parentheses can override precedence:
@@ -482,6 +556,41 @@ out mixta(1, 50, "processing...");   // → 150
 ```
 
 When a parameter has no type annotation, the function accepts any value for it.
+
+#### Default parameters
+
+Parameters can have default values. If the caller omits the argument, the default is used. Default parameters must come after required ones.
+
+```serez
+fn string greet(string name = "World") {
+    return "Hello, " + name + "!";
+}
+
+out greet();          // → Hello, World!
+out greet("Sergio");  // → Hello, Sergio!
+```
+
+Multiple defaults, with required parameters first:
+
+```serez
+fn int add(int a, int b = 10) {
+    return a + b;
+}
+
+out add(5);      // → 15   (b defaults to 10)
+out add(5, 3);   // → 8    (b supplied)
+```
+
+Default values are arbitrary expressions evaluated at call time:
+
+```serez
+fn int compute(int n = 2 + 3) {
+    return n * 2;
+}
+
+out compute();    // → 10  (default: 5 * 2)
+out compute(7);   // → 14
+```
 
 #### Calling functions
 
@@ -596,14 +705,14 @@ The while condition is evaluated freshly each iteration and its temporary memory
 
 #### `for`
 
-C-style for loop. The initializer must be a `let` declaration; the update must be an assignment.
+C-style for loop. The initializer must be a `let` declaration. The update accepts `i = expr`, `i++`, `i--`, `i += n`, `i -= n`, `i *= n`, `i /= n`, or `i %= n`.
 
 ```
 for (<let init>; <condition>; <update>) { <body> }
 ```
 
 ```serez
-for (let i = 0; i < 5; i = i + 1) {
+for (let i = 0; i < 5; i++) {
     out i;
 }
 // → 0, 1, 2, 3, 4
@@ -710,6 +819,73 @@ out total;   // → 180
 ```
 
 `return` inside a `for-in` propagates immediately and exits the enclosing function.
+
+---
+
+#### `do-while`
+
+`do-while` guarantees the body runs **at least once**. The condition is checked after each iteration.
+
+```serez
+let i = 0;
+do {
+    out i;
+    i++;
+} while (i < 3);
+// → 0, 1, 2
+```
+
+Even when the condition starts false, the body executes once:
+
+```serez
+let x = 100;
+do {
+    out "ran once";
+} while (x < 0);
+// → ran once
+```
+
+`break` and `continue` work the same as in `while`/`for`:
+
+```serez
+let n = 0;
+do {
+    n++;
+    if (n == 5) { break; }
+} while (n < 100);
+out n;   // → 5
+```
+
+---
+
+#### Optional chaining (`?.`)
+
+`?.` calls a method or accesses a field only when the receiver is non-null. If the receiver is `null`, the whole expression evaluates to `null` without throwing.
+
+```serez
+let s = null;
+let upper = s?.toUpperCase();   // s is null → upper = null (no error)
+
+class Node {
+    public Node(int v) { this.value = v; this.next = null; }
+    public int getValue() { return this.value; }
+}
+
+let n = new Node(42);
+out n?.getValue();       // → 42
+out null?.getValue();    // → null  (no crash)
+```
+
+`?.` chains: each link stops at `null` and the remainder is never evaluated:
+
+```serez
+let result = a?.getNext()?.getValue() ?? 0;
+// if a is null                → null ?? 0 → 0
+// if a.getNext() returns null → null ?? 0 → 0
+// otherwise                  → the value
+```
+
+Combine with `??` to provide a safe fallback for the whole chain.
 
 ---
 
@@ -864,12 +1040,46 @@ out pair[1];   // → 99
 | Method | Effect |
 |---|---|
 | `.push(val)` | Appends `val` to the end of the array (mutates in-place). |
-| `.pop()` | Removes and returns the last element. |
-| `.shift()` | Removes and returns the first element. |
+| `.pop()` | Removes and returns the last element (returns `null` on empty array). |
+| `.shift()` | Removes and returns the first element (returns `null` on empty array). |
 | `.unshift(val)` | Prepends `val` to the beginning (mutates in-place). |
+| `.remove(idx)` | Removes the element at index `idx` and returns it. |
+| `.reverse()` | Reverses the array in-place (mutates, returns the same array). |
 | `.sort()` | Sorts in ascending order (mutates in-place, returns the same array). |
 | `.sort("desc")` | Sorts in descending order (mutates in-place, returns the same array). |
 | `.sort((a, b) => expr)` | Sorts with a custom comparator lambda. Positive result = swap (like JS). |
+
+#### Array query methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `.length` | `int` | Number of elements (property, no parentheses). |
+| `.indexOf(val)` | `int` | Index of first element equal to `val`, or `-1` if not found. |
+| `.includes(val)` / `.contains(val)` | `bool` | `true` if the array contains `val`. |
+| `.find(cb)` | element or `null` | First element for which `cb(element)` returns `true`, or `null`. |
+| `.findIndex(cb)` | `int` | Index of first element matching the predicate, or `-1`. |
+| `.every(cb)` | `bool` | `true` if `cb` returns `true` for **every** element (vacuously `true` for empty). |
+| `.some(cb)` | `bool` | `true` if `cb` returns `true` for **at least one** element (vacuously `false` for empty). |
+| `.slice(start, end)` | array | New array with elements from `start` (inclusive) to `end` (exclusive). Negative `start` counts from the end. |
+| `.flat()` | array | New flattened array — one level of nesting removed. |
+
+```serez
+let nums = [1, 2, 3, 4, 5];
+
+out nums.find(x => x > 3);        // → 4
+out nums.findIndex(x => x > 3);   // → 3
+out nums.indexOf(3);              // → 2
+out nums.includes(99);            // → false
+out nums.every(x => x > 0);       // → true
+out nums.some(x => x > 4);        // → true
+out nums.slice(1, 4);             // → [2, 3, 4]
+
+let nested = [[1, 2], [3, 4]];
+out nested.flat();                 // → [1, 2, 3, 4]
+
+nums.reverse();
+out nums;                          // → [5, 4, 3, 2, 1]
+```
 
 ```serez
 let stack = [1, 2, 3, 4, 5];
@@ -903,49 +1113,74 @@ out sorted;                    // → [8, 3, 1, -2, -7]
 
 `.sort` mutates the array in-place **and** returns the same array reference, allowing assignment: `let sorted = arr.sort((a, b) => b - a)`.
 
-#### Array properties
-
-`.length` is a property (no parentheses) that returns the number of elements:
-
-```serez
-let a = [10, 20, 30, 40];
-out a.length;   // → 4
-out [].length;  // → 0
-```
-
 ---
 
 ### String Methods
 
 All string methods are called with dot syntax. `.length` is a property; all others are method calls.
 
+#### Core methods
+
 | Method / property | Description |
 |---|---|
 | `.length` | Number of Unicode characters (UTF-8 aware). |
 | `.toString()` | Returns the string itself (identity for strings; works on `int`, `decimal`, `bool` too). |
-| `.substring(start, end)` | Returns characters from index `start` (inclusive) to `end` (exclusive). |
-| `.split(sep)` | Splits the string by `sep` and returns an array of substrings. Empty `sep` splits into individual characters. |
-| `.replace(from, to)` | Returns a new string with the **first** occurrence of `from` replaced by `to`. |
-| `.replaceAll(from, to)` | Returns a new string with **all** occurrences of `from` replaced by `to`. |
-| `.includes(sub)` / `.contains(sub)` | Returns `true` if the string contains `sub`, `false` otherwise. |
+| `.substring(start[, end])` | Characters from `start` (inclusive) to `end` (exclusive). Omitting `end` goes to end of string. |
+| `.slice(start[, end])` | Like `substring`; negative `start` counts from the end. |
+| `.split(sep)` | Splits by `sep`, returns an array. Empty `sep` splits into individual characters. |
+| `.replace(from, to)` | Returns a new string with **all** occurrences of `from` replaced by `to`. |
+| `.replaceAll(from, to)` | Alias for `.replace`. |
+| `.includes(sub)` / `.contains(sub)` | `true` if the string contains `sub`. |
+| `.indexOf(sub)` | Index of first occurrence of `sub`, or `-1`. |
+| `.startsWith(prefix)` | `true` if the string starts with `prefix`. |
+| `.endsWith(suffix)` | `true` if the string ends with `suffix`. |
+| `.charAt(i)` | Single character at position `i`, or `""` if out of bounds. |
+
+#### Case and whitespace
+
+| Method | Description |
+|---|---|
+| `.toUpperCase()` / `.upper()` | Returns an uppercase copy. |
+| `.toLowerCase()` / `.lower()` | Returns a lowercase copy. |
+| `.trim()` | Removes leading and trailing whitespace. |
+| `.trimStart()` / `.trimLeft()` | Removes leading whitespace only. |
+| `.trimEnd()` / `.trimRight()` | Removes trailing whitespace only. |
+
+#### Padding
+
+| Method | Description |
+|---|---|
+| `.padStart(n[, ch])` | Pads the start with `ch` (default: space) until the string is at least `n` characters. |
+| `.padEnd(n[, ch])` | Pads the end with `ch` (default: space) until the string is at least `n` characters. |
 
 ```serez
 let s = "hello world";
 
 out s.length;                     // → 11
 out s.substring(0, 5);            // → hello
+out s.slice(-5, 11);              // → world
 out s.split(" ");                 // → [hello, world]
 out s.includes("world");          // → true
-out s.includes("xyz");            // → false
+out s.indexOf("world");           // → 6
+out s.startsWith("hel");          // → true
+out s.endsWith("ld");             // → true
 out "abc".split("");              // → [a, b, c]
 
-// replace vs replaceAll
+// replace replaces all occurrences
 let r = "one two one two one";
-out r.replace("one", "X");        // → "X two one two one"   (first only)
-out r.replaceAll("one", "X");     // → "X two X two X"       (all)
+out r.replace("one", "X");        // → X two X two X
+
+// case and whitespace
+out "hello".toUpperCase();        // → HELLO
+out "  hello  ".trim();           // → hello
+out "  hello  ".trimStart();      // → hello  (trailing preserved)
+
+// padding
+out "42".padStart(5, "0");        // → 00042
+out "hi".padEnd(5, "-");          // → hi---
 ```
 
-`.toString()` also works on `int`, `decimal`, and `bool` values, returning their string representation:
+`.toString()` works on `int`, `decimal`, and `bool` values too:
 
 ```serez
 out 42.toString();     // → 42
@@ -974,7 +1209,7 @@ out precios["jamon"];  // → 12
 out mixto["Shen"];     // → true
 ```
 
-If the key does not exist, a runtime error is raised: `❌ ERROR: Key 'x' not found in dict`.
+If the key does not exist, `null` is returned. Use `??` to provide a default value: `d["missing"] ?? 0`.
 
 #### Printing the whole dict
 
@@ -1358,6 +1593,37 @@ out c.siguiente();   // → 2
 `private` methods can only be called by other methods of the same class. Calling a private method from outside the instance is a runtime error.
 
 > **Note:** The `public` keyword is required on class and constructor declarations. Omitting it is a parse error.
+
+---
+
+#### Static methods
+
+`static` methods belong to the class itself, not to any instance. Call them with `ClassName.method(args)` — no instance needed.
+
+```serez
+class MathUtils {
+    public static int square(int n) { return n * n; }
+    public static int max(int a, int b) {
+        if (a > b) { return a; }
+        return b;
+    }
+}
+
+out MathUtils.square(5);      // → 25
+out MathUtils.max(7, 3);      // → 7
+```
+
+Static methods do not have access to `this` — they cannot read or write instance fields.
+
+```serez
+class Counter {
+    public static int zero() { return 0; }
+    public static string label() { return "Counter"; }
+}
+
+out Counter.zero();    // → 0
+out Counter.label();   // → Counter
+```
 
 ---
 
@@ -1795,7 +2061,7 @@ sz script.sz > output.txt 2> errors.txt
 | `❌ ERROR: Attempt to call a non-function` | Calling a value that is not a function |
 | `❌ ERROR: Function expected N arguments, got M` | Arity mismatch at call site |
 | `❌ ERROR: Index out of bounds` | Array access outside `[0, len-1]` |
-| `❌ ERROR: Key 'x' not found in dict` | Dict key lookup on a key that does not exist |
+| (dict returns `null` for missing key) | Accessing a dict key that doesn't exist returns `null`; use `??` to provide a default |
 | `❌ ERROR: Unknown dict method 'x'` | Calling an undefined method on a dict |
 | `❌ TYPE ERROR: Dict key/value type mismatch` | Adding an entry whose types violate the dict's annotation |
 | `❌ ERROR: Division by zero` | `/` with zero on the right |
@@ -1998,24 +2264,32 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 
 ### Language features
 - [x] `&&` and `||` — logical AND and OR operators with short-circuit evaluation
-- [x] `for` loop — `for (let i = 0; i < n; i = i + 1) { ... }`, nested loops, 1D/2D array traversal
+- [x] `for` loop — `for (let i = 0; i < n; i++)`, nested loops, 1D/2D array traversal; update accepts `i++`, `i--`, `i += n`
 - [x] Array mutation via index — `arr[i] = expr`, works in loops and from inside functions
 - [x] String interpolation — `"Hello, {name}!"`, supports nested quotes inside `{…}` (e.g. `{dict["key"]}`)
 - [x] Lexical closures — functions that capture variables from their defining scope
 - [x] Native higher-order functions — `map`, `filter`, `reduce` with lambda syntax `x => expr` / `(x, i) => expr`
-- [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.sort("asc"/"desc")`, `.sort((a,b) => ...)`, `.length`
-- [x] String methods — `.length`, `.substring(s,e)`, `.split(sep)`, `.replace(a,b)`, `.replaceAll(a,b)`, `.includes(sub)`, `.toString()`
-- [x] Dict methods — `.toList()` (keys array), `.toArray()` (2D entries array)
+- [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.remove`, `.reverse`, `.sort`, `.find`, `.findIndex`, `.indexOf`, `.includes`, `.every`, `.some`, `.slice`, `.flat`
+- [x] String methods — `.length`, `.substring`, `.slice`, `.split`, `.replace`, `.includes`, `.indexOf`, `.startsWith`, `.endsWith`, `.charAt`, `.trim`, `.trimStart`, `.trimEnd`, `.toUpperCase`, `.toLowerCase`, `.padStart`, `.padEnd`, `.toString()`
+- [x] Dict methods — `.toList()` (keys array), `.toArray()` (2D entries array); missing key returns `null`
 - [x] `decimal` type — f64 literals (`3.14`), mixed arithmetic with `int`
 - [x] Global conversions — `parseInt(val)`, `parseDecimal(val)`
 - [x] Console input — `readLine(prompt?)`
 - [x] Interfaces — typed record schemas: `interface Point { x: decimal, y: decimal }`, `new Point({ x:1.0, y:2.0 })`, field read/write, object patch `p = { x: 5.0 }`
 - [x] Classes — C#-style OOP: `public class Foo`, constructor `public Foo(args)`, `this.field`, `public`/`private` methods, field assignment `obj.field = val`
-- [x] Single inheritance — `public class Bar : Foo`, `super(args)` constructor delegation, method override, inherited method lookup
-- [x] `break` / `continue` — loop control flow inside `while` and `for`
+- [x] Single inheritance — `public class Bar : Foo`, `super(args)` constructor delegation, `super.method()`, method override, inherited method lookup
+- [x] Static methods — `public static T method(...)` on classes, called as `ClassName.method(args)`
+- [x] `break` / `continue` — loop control flow inside `while`, `for`, `for-in`, and `do-while`
+- [x] `do-while` loop — body executes at least once; `break`/`continue` supported
 - [x] Null coalescing — `a ?? b` returns `a` if non-null, else evaluates `b`
+- [x] Optional chaining — `a?.method()` / `a?.field` returns `null` without error when `a` is `null`; chains with `??`
 - [x] Escape sequences — `\n`, `\t`, `\r`, `\\`, `\"`, `\{` inside string literals
 - [x] Math built-ins — `abs`, `sqrt`, `floor`, `ceil`, `round`, `min`, `max`, `pow`, `log`, `log2`, `log10`
+- [x] Power operator — `**` for integer and decimal exponentiation
+- [x] Bitwise operators — `&`, `|`, `^`, `~`, `<<`, `>>` (64-bit signed integers); binary (`0b`) and hex (`0x`) literals; numeric separators (`1_000_000`)
+- [x] `is` type-check operator — `expr is TypeName` returns `bool` at runtime
+- [x] Default parameters — `fn int f(int x = 10)` with fallback when argument is omitted
+- [x] Security test suite — 17 error tests (`sec_*.sz`) + 6 unit test files (`unit_sec_*.sz`) covering arithmetic, null safety, type safety, error isolation, injection, and resource limits
 
 ### Type system
 - [x] Typed arrays — `[int]`, `[string]`, `[decimal]`, `[T?]` with element-level enforcement on `push`, `unshift`, index-assign, and construction
@@ -2023,6 +2297,7 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] Optional / nullable types — `int?`, `string?`, `fn int? search()`, `null` literal, null equality (`== null`, `!= null`)
 
 ### Tooling
+- [x] Security test runner — `-security` flag on `run_tests.ps1` runs all security test files
 - [ ] Span-aware error diagnostics with source line preview
 - [ ] Standard library (string formatting, file I/O)
 - [ ] `.sz` file formatter

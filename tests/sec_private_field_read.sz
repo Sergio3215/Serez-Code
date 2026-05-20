@@ -1,0 +1,9 @@
+// SEC-02: Calling a private method (simulates private data access) must be refused
+class Vault {
+    public Vault(string secret) { this.data = secret; }
+    private string reveal() { return this.data; }
+    public string safe() { return "***"; }
+}
+let v = new Vault("s3cr3t");
+out v.safe();    // ok: public
+out v.reveal();  // must fail: private

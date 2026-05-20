@@ -1,0 +1,5 @@
+// SEC-01: Stack overflow via infinite recursion must be detected and reported
+fn int loop(int n) {
+    return loop(n + 1);
+}
+loop(0);

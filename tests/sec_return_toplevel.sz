@@ -1,0 +1,3 @@
+// SEC-13: return statement at top level (outside any function) must be refused
+let x = 10;
+return x;

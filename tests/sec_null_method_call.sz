@@ -1,0 +1,7 @@
+// SEC-05: Calling a method on a null value (without ?.) must produce an error
+class Obj {
+    public Obj() {}
+    public string info() { return "ok"; }
+}
+let o = null;
+out o.info();

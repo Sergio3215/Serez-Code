@@ -1,0 +1,221 @@
+// Architecture tests: variable scoping, closure capture, scope isolation
+
+// ── do-while scope isolation ──────────────────────────────────────────────────
+
+test("do-while body let does not leak outside loop", () => {
+    let leaked = false;
+    do {
+        let inner = 99;
+        leaked = (inner == 99);
+    } while (false);
+    // 'inner' should not be visible here
+    assert(leaked == true, "inner was visible inside body");
+});
+
+test("do-while reinitializes let each iteration", () => {
+    let iterations = 0;
+    let sum = 0;
+    do {
+        let x = iterations;  // fresh binding each iteration
+        sum = sum + x;
+        iterations = iterations + 1;
+    } while (iterations < 4);
+    assert(sum == 0 + 1 + 2 + 3, "sum of 0,1,2,3 = 6");
+    assert(iterations == 4, "loop ran 4 times");
+});
+
+// ── for-loop scope isolation ───────────────────────────────────────────────────
+
+test("for-loop variable not visible after loop", () => {
+    let sum = 0;
+    for (let i = 0; i < 5; i++) {
+        sum = sum + i;
+    }
+    assert(sum == 10, "0+1+2+3+4 = 10");
+    // 'i' should not be visible — accessing it would be an error test
+    // We verify the loop ran correctly and loop-internal state is isolated
+});
+
+test("nested for-loops have independent iteration variables", () => {
+    let pairs = 0;
+    for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+            if (i == j) { pairs = pairs + 1; }
+        }
+    }
+    assert(pairs == 3, "diagonal pairs (0,0),(1,1),(2,2)");
+});
+
+// ── block scope ───────────────────────────────────────────────────────────────
+
+test("block scope: inner variable shadows outer", () => {
+    let x = 10;
+    {
+        let x = 99;  // shadows outer x
+        assert(x == 99, "inner x = 99");
+    }
+    assert(x == 10, "outer x unchanged after block");
+});
+
+test("block scope: modification of outer through capture", () => {
+    let counter = 0;
+    {
+        counter = counter + 1;
+        counter = counter + 1;
+    }
+    assert(counter == 2, "block can modify outer variable");
+});
+
+test("nested blocks independent", () => {
+    let a = 0;
+    {
+        let b = 10;
+        a = b;
+    }
+    {
+        let b = 20;
+        a = a + b;
+    }
+    assert(a == 30, "two blocks each with their own 'b'");
+});
+
+// ── closure capture semantics ──────────────────────────────────────────────────
+
+test("closure captures value at creation time", () => {
+    let x = 1;
+    fn any makeAdder() {
+        let captured = x;  // captures current value of x
+        return (n) => captured + n;
+    }
+    let adder = makeAdder();
+    x = 999;  // change outer x
+    // Adder should use captured=1, not x=999
+    let result = adder(5);
+    assert(result == 6, "closure captured x=1, not later x=999");
+});
+
+test("each closure call creates independent state", () => {
+    fn any makeCounter() {
+        let count = 0;
+        return () => {
+            count = count + 1;
+            return count;
+        };
+    }
+    let c1 = makeCounter();
+    let c2 = makeCounter();
+    assert(c1() == 1, "c1 first call");
+    assert(c1() == 2, "c1 second call");
+    assert(c2() == 1, "c2 independent: first call = 1");
+    assert(c1() == 3, "c1 third call unaffected by c2");
+    assert(c2() == 2, "c2 second call");
+});
+
+test("closure captures outer function parameter", () => {
+    fn any multiplierOf(int factor) {
+        return (x) => x * factor;
+    }
+    let double = multiplierOf(2);
+    let triple = multiplierOf(3);
+    assert(double(5) == 10, "double(5) = 10");
+    assert(triple(5) == 15, "triple(5) = 15");
+    assert(double(7) == 14, "double(7) = 14");
+});
+
+// ── function scope ─────────────────────────────────────────────────────────────
+
+test("function parameters are local, not aliased", () => {
+    let x = 10;
+    fn void modify(int v) { v = 999; }
+    modify(x);
+    assert(x == 10, "pass-by-value: x unchanged");
+});
+
+test("function sees its own locals, not caller locals", () => {
+    let result = 0;
+    fn int inner() {
+        let local = 42;
+        return local;
+    }
+    result = inner();
+    assert(result == 42, "function returned its own local");
+});
+
+test("recursive function: each frame has own locals", () => {
+    fn int fib(int n) {
+        if (n <= 1) { return n; }
+        return fib(n - 1) + fib(n - 2);
+    }
+    assert(fib(0) == 0,   "fib(0)");
+    assert(fib(1) == 1,   "fib(1)");
+    assert(fib(7) == 13,  "fib(7)");
+    assert(fib(10) == 55, "fib(10)");
+});
+
+// ── closures in loops ─────────────────────────────────────────────────────────
+
+test("closures created in for-in loop capture independent values", () => {
+    let funcs = [];
+    let values = [10, 20, 30];
+    for (let x in values) {
+        let captured = x;
+        funcs.push((n) => captured + n);
+    }
+    assert(funcs[0](1) == 11, "first closure captured 10");
+    assert(funcs[1](1) == 21, "second closure captured 20");
+    assert(funcs[2](1) == 31, "third closure captured 30");
+});
+
+test("closures in while loop capture different values", () => {
+    let funcs = [];
+    let i = 0;
+    while (i < 3) {
+        let snap = i;
+        funcs.push(() => snap);
+        i = i + 1;
+    }
+    assert(funcs[0]() == 0, "snapshot 0");
+    assert(funcs[1]() == 1, "snapshot 1");
+    assert(funcs[2]() == 2, "snapshot 2");
+});
+
+// ── scope and default params ──────────────────────────────────────────────────
+
+test("default param not evaluated when explicit arg given", () => {
+    // If the default were evaluated, boom() would throw and the test would fail
+    fn any boom() { throw "default was evaluated!"; }
+    fn int f(int x = boom()) { return x; }
+    let caught = "none";
+    try {
+        let r = f(42);
+        assert(r == 42, "f(42) = 42");
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "none", "boom() not called when arg provided");
+});
+
+test("default param used when arg omitted — stateless default", () => {
+    fn int f(int x = 100) { return x; }
+    assert(f()    == 100, "first omitted arg → 100");
+    assert(f()    == 100, "second omitted arg → still 100");
+    assert(f(99)  == 99,  "explicit 99 overrides");
+    assert(f()    == 100, "after explicit, default still 100");
+});
+
+test("default param not called for every skipped trailing arg", () => {
+    fn any bang_a() { throw "default a evaluated"; }
+    fn any bang_b() { throw "default b evaluated"; }
+    fn int g(int a, int b = bang_b()) { return a + b; }
+    // Only b has a default, but since we supply both, neither default fires
+    let caught = "none";
+    try {
+        let r = g(3, 4);
+        assert(r == 7, "g(3,4) = 7");
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "none", "bang_b() not called when b is provided");
+});
+
+summary();

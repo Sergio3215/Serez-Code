@@ -1,0 +1,2 @@
+// SEC-11: Reading an undeclared variable must produce an error, not return garbage
+out ghost_variable;

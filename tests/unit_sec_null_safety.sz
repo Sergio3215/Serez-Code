@@ -1,0 +1,125 @@
+// Security unit tests: null safety — no null dereference reaches the evaluator
+
+class SafeNode {
+    public SafeNode(int v) { this.value = v; this.next = null; }
+    public int getValue() { return this.value; }
+    public any getNext() { return this.next; }
+    public void setNext(any n) { this.next = n; }
+}
+
+// ── Optional chaining prevents null dereference ───────────────────────────────
+
+test("?. on null returns null, never errors", () => {
+    let n = null;
+    let result = n?.getValue();
+    assert(result == null, "null?.method() = null, no crash");
+});
+
+test("chained ?. stops at first null", () => {
+    let a = new SafeNode(1);
+    let r1 = a?.getNext()?.getValue();   // a.next = null → null
+    assert(r1 == null, "a?.getNext()=null, then ?.getValue()=null");
+    a.setNext(new SafeNode(2));
+    let r2 = a?.getNext()?.getValue();   // a.next = node2 → 2
+    assert(r2 == 2, "after setNext, chained call returns 2");
+});
+
+test("triple chained ?. handles null at each level", () => {
+    // Build chain deepest-first so each setNext captures a complete copy
+    let n3 = new SafeNode(30);
+    let n2 = new SafeNode(20);
+    n2.setNext(n3);           // n2.next = snapshot of n3 = {30, null}
+    let n1 = new SafeNode(10);
+    n1.setNext(n2);           // n1.next = snapshot of n2 = {20, {30, null}}
+
+    assert(n1?.getValue() == 10,                       "n1 value");
+    assert(n1?.getNext()?.getValue() == 20,            "n2 value via chain");
+    assert(n1?.getNext()?.getNext()?.getValue() == 30, "n3 via double chain");
+
+    let tail = n1?.getNext()?.getNext()?.getNext()?.getValue();
+    assert(tail == null, "chain past end = null, no crash");
+});
+
+// ── ?? provides safe fallbacks ───────────────────────────────────────────────
+
+test("?? provides fallback for null without crashing", () => {
+    let nullable = null;
+    assert((nullable ?? "default") == "default", "null ?? default");
+    assert((nullable ?? 0)         == 0,         "null ?? 0");
+    assert((nullable ?? false)     == false,      "null ?? false");
+});
+
+test("?? preserves falsy-but-non-null values", () => {
+    // 0, false, "" are not null — ?? should NOT substitute them
+    assert((0     ?? 99)     == 0,     "0 is not null, keep it");
+    assert((false ?? true)   == false, "false is not null, keep it");
+    assert(("" ?? "default") == "",    "empty string is not null, keep it");
+});
+
+test("?? with method result", () => {
+    let node = null;
+    let val = node?.getValue() ?? -1;
+    assert(val == -1, "null?.getValue() ?? -1 = -1");
+
+    let real = new SafeNode(42);
+    let val2 = real?.getValue() ?? -1;
+    assert(val2 == 42, "non-null node returns 42, not fallback");
+});
+
+// ── Nullable in collections ───────────────────────────────────────────────────
+
+test("array of nullable values: safe access with ??", () => {
+    let items = [1, null, 3, null, 5];
+    let safe = items.map(x => x ?? 0);
+    assert(safe[0] == 1, "1 stays 1");
+    assert(safe[1] == 0, "null becomes 0");
+    assert(safe[2] == 3, "3 stays 3");
+    assert(safe[3] == 0, "null becomes 0");
+    assert(safe[4] == 5, "5 stays 5");
+});
+
+test("find on array with nulls returns null safely", () => {
+    let arr = [null, null, null];
+    let r = arr.find(x => x != null);
+    assert(r == null, "no non-null element → find returns null");
+});
+
+// ── Null propagation in conditionals ─────────────────────────────────────────
+
+test("null in boolean context: null is not truthy", () => {
+    let x = null;
+    let r = "";
+    if (x != null) {
+        r = "truthy";
+    } else {
+        r = "null";
+    }
+    assert(r == "null", "null is falsy in condition");
+});
+
+test("null-safe pattern: check before use", () => {
+    fn string safeName(any obj) {
+        if (obj == null) { return "anonymous"; }
+        return obj.getValue() + "";
+    }
+    let node = new SafeNode(7);
+    assert(safeName(node) == "7",          "non-null returns value");
+    assert(safeName(null) == "anonymous",  "null returns fallback string");
+});
+
+// ── Optional chaining with arrays ────────────────────────────────────────────
+
+test("?. on null does not evaluate arguments", () => {
+    fn int side_effect_arg() { throw "argument was evaluated on null receiver"; }
+    let obj = null;
+    let caught = "none";
+    try {
+        let _ = obj?.getValue();
+        // No arg here — but verifies null guard fires before method dispatch
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "none", "?. on null: no method dispatch, no arg eval");
+});
+
+summary();

@@ -9,28 +9,40 @@ pub enum Precedence {
     NullCoalesce, // ??
     LogicalOr,    // ||
     LogicalAnd,   // &&
+    BitOr,        // |
+    BitXor,       // ^
+    BitAnd,       // &
     Equals,       // ==
     LessGreater,  // > or <
+    Shift,        // << >>
     Sum,          // +
-    Product,      // *
-    Prefix,       // -X or !X
+    Product,      // * / %
+    Power,        // **
+    Prefix,       // -X or !X ~X
     Call,         // myFunction(X)
     Index,        // array[index]
 }
 
 pub fn token_precedence(token_type: &TokenType) -> Precedence {
     match token_type {
-        TokenType::Question     => Precedence::Ternary,
-        TokenType::NullCoalesce => Precedence::NullCoalesce,
-        TokenType::Or => Precedence::LogicalOr,
-        TokenType::And => Precedence::LogicalAnd,
+        TokenType::Question       => Precedence::Ternary,
+        TokenType::NullCoalesce   => Precedence::NullCoalesce,
+        TokenType::Or             => Precedence::LogicalOr,
+        TokenType::And            => Precedence::LogicalAnd,
+        TokenType::BitOr          => Precedence::BitOr,
+        TokenType::BitXor         => Precedence::BitXor,
+        TokenType::BitAnd         => Precedence::BitAnd,
         TokenType::Eq | TokenType::NotEq => Precedence::Equals,
+        TokenType::KwIs                 => Precedence::LessGreater,
         TokenType::Lt | TokenType::Gt | TokenType::LtEq | TokenType::GtEq => Precedence::LessGreater,
+        TokenType::Shl | TokenType::Shr  => Precedence::Shift,
         TokenType::Plus | TokenType::Minus => Precedence::Sum,
         TokenType::Slash | TokenType::Asterisk | TokenType::Percent => Precedence::Product,
-        TokenType::LParen => Precedence::Call,
-        TokenType::Dot => Precedence::Call,
-        TokenType::LBracket => Precedence::Index,
+        TokenType::Power          => Precedence::Power,
+        TokenType::LParen         => Precedence::Call,
+        TokenType::Dot            => Precedence::Call,
+        TokenType::QuestionDot    => Precedence::Call,
+        TokenType::LBracket       => Precedence::Index,
         _ => Precedence::Lowest,
     }
 }
@@ -131,6 +143,7 @@ impl Parser {
             TokenType::KwSwitch => self.parse_switch_statement(),
             TokenType::KwTry => self.parse_try_statement(),
             TokenType::KwThrow => self.parse_throw_statement(),
+            TokenType::KwDo => self.parse_do_while_statement(),
             TokenType::Ident if self.peek_token.token_type == TokenType::Assign => {
                 self.parse_assign_statement()
             }
@@ -291,6 +304,7 @@ impl Parser {
                                     method: field.clone(),
                                     arguments: vec![],
                                     has_parens: false,
+                                    optional: false,
                                     line, column,
                                 })),
                                 operator: op,
@@ -338,6 +352,7 @@ impl Parser {
                                 method:     field.clone(),
                                 arguments:  vec![],
                                 has_parens: false,
+                                optional:   false,
                                 line: dline, column: dcol,
                             })),
                             operator: op.to_string(),
@@ -903,7 +918,16 @@ impl Parser {
                 return None;
             };
 
-            parameters.push(Parameter { name, type_name });
+            // Default value: param = expr
+            let default = if self.peek_token.token_type == TokenType::Assign {
+                self.next_token(); // '='
+                self.next_token(); // first token of default expr
+                Some(self.parse_expression(Precedence::Lowest)?)
+            } else {
+                None
+            };
+
+            parameters.push(Parameter { name, type_name, default });
 
             if self.peek_token.token_type == TokenType::Comma {
                 self.next_token();
@@ -1013,6 +1037,7 @@ impl Parser {
                     | TokenType::Slash
                     | TokenType::Asterisk
                     | TokenType::Percent
+                    | TokenType::Power
                     | TokenType::Eq
                     | TokenType::NotEq
                     | TokenType::Lt
@@ -1021,11 +1046,18 @@ impl Parser {
                     | TokenType::GtEq
                     | TokenType::And
                     | TokenType::Or
+                    | TokenType::BitAnd
+                    | TokenType::BitOr
+                    | TokenType::BitXor
+                    | TokenType::Shl
+                    | TokenType::Shr
                     | TokenType::NullCoalesce
                     | TokenType::Question
                     | TokenType::LParen
                     | TokenType::Dot
+                    | TokenType::QuestionDot
                     | TokenType::LBracket
+                    | TokenType::KwIs
             );
 
             if !is_infix {
@@ -1088,7 +1120,8 @@ impl Parser {
                         else_expr: Box::new(else_expr),
                     }));
                 }
-            } else if self.current_token.token_type == TokenType::Dot {
+            } else if matches!(self.current_token.token_type, TokenType::Dot | TokenType::QuestionDot) {
+                let optional = self.current_token.token_type == TokenType::QuestionDot;
                 let dot_line = self.current_token.line;
                 let dot_column = self.current_token.column;
 
@@ -1113,9 +1146,27 @@ impl Parser {
                         method,
                         arguments,
                         has_parens,
+                        optional,
                         line: dot_line,
                         column: dot_column,
                     }));
+                }
+            } else if self.current_token.token_type == TokenType::KwIs {
+                // `expr is TypeName` — right side is a type name, not a regular expression
+                let is_line = self.current_token.line;
+                let is_col = self.current_token.column;
+                self.next_token(); // consume type name token
+                let type_name = self.current_token.literal.clone();
+                if let Some(left) = left_exp {
+                    left_exp = Some(Expression::Infix(InfixExpression {
+                        left: Box::new(left),
+                        operator: "is".to_string(),
+                        right: Box::new(Expression::String(type_name)),
+                        line: is_line,
+                        column: is_col,
+                    }));
+                } else {
+                    return None;
                 }
             } else {
                 let op_line = self.current_token.line;
@@ -1189,7 +1240,7 @@ impl Parser {
             TokenType::False => Some(Expression::Boolean(false)),
             TokenType::KwNull => Some(Expression::Null),
 
-            TokenType::Bang | TokenType::Minus => {
+            TokenType::Bang | TokenType::Minus | TokenType::BitNot => {
                 let operator = self.current_token.literal.clone();
                 self.next_token();
                 let right = self.parse_expression(Precedence::Prefix)?;
@@ -1721,6 +1772,14 @@ impl Parser {
             };
             self.next_token(); // after visibility
 
+            // Optional 'static' modifier
+            let is_static = if self.current_token.token_type == TokenType::KwStatic {
+                self.next_token(); // consume 'static'
+                true
+            } else {
+                false
+            };
+
             // Optional return type keyword (void, int, decimal, [type], class name, etc.)
             let return_type = if self.current_token.token_type == TokenType::LBracket {
                 // Array return type: [int], [string], [ClassName], etc.
@@ -1789,6 +1848,7 @@ impl Parser {
                 methods.push(ClassMethod {
                     name: member_name,
                     is_public: is_member_public,
+                    is_static,
                     return_type,
                     parameters,
                     body,
@@ -2009,6 +2069,39 @@ impl Parser {
         let expr = self.parse_expression(Precedence::Lowest)?;
         if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
         Some(Statement::Throw(expr))
+    }
+
+    fn parse_do_while_statement(&mut self) -> Option<Statement> {
+        // current = 'do'
+        if self.peek_token.token_type != TokenType::LBrace {
+            eprintln!("❌ PARSER ERROR: Expected '{{' after 'do'");
+            return None;
+        }
+        self.next_token();
+        let body_stmt = self.parse_block_statement()?;
+        let body = match body_stmt {
+            Statement::Block(b) => b,
+            _ => return None,
+        };
+        if self.peek_token.token_type != TokenType::While {
+            eprintln!("❌ PARSER ERROR: Expected 'while' after do block");
+            return None;
+        }
+        self.next_token(); // 'while'
+        if self.peek_token.token_type != TokenType::LParen {
+            eprintln!("❌ PARSER ERROR: Expected '(' after 'while' in do-while");
+            return None;
+        }
+        self.next_token(); // '('
+        self.next_token(); // first token of condition
+        let condition = self.parse_expression(Precedence::Lowest)?;
+        if self.peek_token.token_type != TokenType::RParen {
+            eprintln!("❌ PARSER ERROR: Expected ')' after do-while condition");
+            return None;
+        }
+        self.next_token(); // ')'
+        if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+        Some(Statement::DoWhile(DoWhileStatement { body, condition }))
     }
 }
 

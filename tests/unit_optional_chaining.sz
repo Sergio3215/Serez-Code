@@ -1,0 +1,77 @@
+// Unit tests: optional chaining (?.)
+
+class Node {
+    public Node(int value) {
+        this.value = value;
+        this.next = null;
+    }
+
+    public int getValue() { return this.value; }
+    public any getNext() { return this.next; }
+}
+
+test("?. on non-null returns method result", () => {
+    let n = new Node(42);
+    let v = n?.getValue();
+    assert(v == 42, "?. on non-null node returns value");
+});
+
+test("?. on null returns null", () => {
+    let n = null;
+    let v = n?.getValue();
+    assert(v == null, "?. on null returns null");
+});
+
+test("?. field access on non-null", () => {
+    let n = new Node(7);
+    let v = n?.value;
+    assert(v == 7, "?. field access on non-null");
+});
+
+test("?. field access on null", () => {
+    let n = null;
+    let v = n?.value;
+    assert(v == null, "?. field access on null = null");
+});
+
+test("?. with null coalescing ??", () => {
+    let n = null;
+    let v = n?.getValue() ?? -1;
+    assert(v == -1, "null?.method() ?? fallback = fallback");
+});
+
+test("?. with non-null + ??", () => {
+    let n = new Node(99);
+    let v = n?.getValue() ?? -1;
+    assert(v == 99, "non-null?.method() ?? fallback = real value");
+});
+
+test("?. chained: second link null", () => {
+    let head = new Node(1);
+    // head.next is null, so head.next?.value should be null
+    let v = head?.getNext()?.value;
+    assert(v == null, "chained optional stops at null link");
+});
+
+test("?. does not execute method body on null", () => {
+    let fired = false;
+    fn any side_effect() {
+        fired = true;
+        return "done";
+    }
+    let obj = null;
+    let _ = obj?.getValue();
+    // Side-effect function is never called because obj is null
+    assert(fired == false, "method body not called when receiver is null");
+});
+
+test("?. in conditional", () => {
+    let a = new Node(5);
+    let b = null;
+    let sum = 0;
+    if (a?.getValue() != null) { sum = sum + a.getValue(); }
+    if (b?.getValue() != null) { sum = sum + 1; }
+    assert(sum == 5, "only non-null branch adds to sum");
+});
+
+summary();

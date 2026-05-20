@@ -1,0 +1,88 @@
+// Unit tests: do-while loop
+
+test("body executes at least once when condition is false", () => {
+    let count = 0;
+    do {
+        count = count + 1;
+    } while (false);
+    assert(count == 1, "body ran exactly once");
+});
+
+test("body executes once when condition becomes false after first iteration", () => {
+    let x = 0;
+    do {
+        x = x + 1;
+    } while (x < 1);
+    assert(x == 1, "exits after x reaches 1");
+});
+
+test("runs multiple iterations", () => {
+    let i = 0;
+    let sum = 0;
+    do {
+        sum = sum + i;
+        i = i + 1;
+    } while (i < 5);
+    assert(i == 5,   "i = 5 after loop");
+    assert(sum == 10, "0+1+2+3+4 = 10");
+});
+
+test("break exits loop early", () => {
+    let i = 0;
+    do {
+        i = i + 1;
+        if (i == 3) { break; }
+    } while (i < 10);
+    assert(i == 3, "break stopped at i=3");
+});
+
+test("continue skips current iteration", () => {
+    let i = 0;
+    let sum = 0;
+    do {
+        i = i + 1;
+        if (i % 2 == 0) { continue; }
+        sum = sum + i;
+    } while (i < 6);
+    assert(sum == 9, "odd numbers 1+3+5 = 9");
+});
+
+test("condition evaluated after body, not before", () => {
+    // if it were while, count would stay 0 since condition is false immediately
+    let count = 0;
+    let done = false;
+    do {
+        count = count + 1;
+        done = true;
+    } while (!done);
+    assert(count == 1, "ran once, condition false on re-check");
+});
+
+test("nested do-while", () => {
+    let i = 0;
+    let total = 0;
+    do {
+        let j = 0;
+        do {
+            total = total + 1;
+            j = j + 1;
+        } while (j < 3);
+        i = i + 1;
+    } while (i < 2);
+    assert(total == 6, "2 outer * 3 inner = 6");
+});
+
+test("do-while in function returns correctly", () => {
+    fn int first_ge(int threshold) {
+        let n = 0;
+        do {
+            n = n + 1;
+        } while (n < threshold);
+        return n;
+    }
+    assert(first_ge(1) == 1,  "first_ge(1) = 1");
+    assert(first_ge(5) == 5,  "first_ge(5) = 5");
+    assert(first_ge(0) == 1,  "first_ge(0) = 1 (runs once even though n>=0)");
+});
+
+summary();

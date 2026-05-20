@@ -1,0 +1,70 @@
+// Unit tests: static methods on classes
+
+class Counter {
+    public static int zero() { return 0; }
+    public static int add(int a, int b) { return a + b; }
+    public static string label() { return "Counter"; }
+    public static bool isPositive(int n) { return n > 0; }
+}
+
+class MathUtils {
+    public static int square(int n) { return n * n; }
+    public static int cube(int n) { return n * n * n; }
+    public static decimal half(int n) { return n / 2.0; }
+    public static int max(int a, int b) {
+        if (a > b) { return a; }
+        return b;
+    }
+}
+
+class Singleton {
+    public static string getInstance() { return "instance"; }
+}
+
+test("static method returns value", () => {
+    assert(Counter.zero() == 0,            "Counter.zero() = 0");
+    assert(Counter.label() == "Counter",   "Counter.label()");
+});
+
+test("static method with arguments", () => {
+    assert(Counter.add(3, 4) == 7,         "Counter.add(3,4) = 7");
+    assert(Counter.add(-1, 1) == 0,        "Counter.add(-1,1) = 0");
+});
+
+test("static method returning bool", () => {
+    assert(Counter.isPositive(5) == true,  "isPositive(5) = true");
+    assert(Counter.isPositive(-1) == false,"isPositive(-1) = false");
+    assert(Counter.isPositive(0) == false, "isPositive(0) = false");
+});
+
+test("multiple static methods on same class", () => {
+    assert(MathUtils.square(4) == 16,      "square(4) = 16");
+    assert(MathUtils.cube(3) == 27,        "cube(3) = 27");
+    assert(MathUtils.max(7, 3) == 7,       "max(7,3) = 7");
+    assert(MathUtils.max(2, 9) == 9,       "max(2,9) = 9");
+});
+
+test("static method result in expression", () => {
+    let a = MathUtils.square(3);
+    let b = MathUtils.square(4);
+    assert(a + b == 25,                    "3^2 + 4^2 = 25");
+});
+
+test("static methods from different classes", () => {
+    let s = Singleton.getInstance();
+    assert(s == "instance",                "Singleton.getInstance()");
+    let label = Counter.label();
+    assert(label == "Counter",             "Counter.label() in variable");
+});
+
+test("static result used in condition", () => {
+    let result = "";
+    if (Counter.isPositive(10)) {
+        result = "yes";
+    } else {
+        result = "no";
+    }
+    assert(result == "yes", "static bool in if condition");
+});
+
+summary();

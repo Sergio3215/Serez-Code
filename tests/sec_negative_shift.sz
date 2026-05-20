@@ -1,0 +1,3 @@
+// SEC-16: Shifting by a negative amount must be caught
+let x = 8;
+out x >> -1;

@@ -1,0 +1,220 @@
+// Integration tests: all new features working together
+
+// ── Bitwise + power + default params ─────────────────────────────────────────
+
+fn int bitMask(int value = 0xFF, int mask = 0x0F) {
+    return value & mask;
+}
+
+fn int nextPow(int base = 2, int exp = 8) {
+    return base ** exp;
+}
+
+test("default params using bitwise/power defaults", () => {
+    assert(bitMask()       == 15,   "0xFF & 0x0F = 15");
+    assert(bitMask(0b1010) == 10,   "0b1010 & 0x0F = 10");
+    assert(nextPow()       == 256,  "2**8 = 256 (both defaults)");
+    assert(nextPow(3)      == 6561, "3**8 = 6561");
+    assert(nextPow(2, 4)   == 16,   "2**4 = 16");
+});
+
+// ── Static methods using bitwise internally ───────────────────────────────────
+
+class Bits {
+    public static bool hasBit(int value, int bit) {
+        return (value & (1 << bit)) != 0;
+    }
+    public static int setBit(int value, int bit) {
+        return value | (1 << bit);
+    }
+    public static int clearBit(int value, int bit) {
+        return value & ~(1 << bit);
+    }
+    public static int countBits(int value) {
+        let count = 0;
+        let n = value;
+        do {
+            count = count + (n & 1);
+            n = n >> 1;
+        } while (n > 0);
+        return count;
+    }
+}
+
+test("static class using bitwise + do-while (countBits)", () => {
+    assert(Bits.hasBit(0b1010, 1) == true,  "bit 1 of 0b1010 is set");
+    assert(Bits.hasBit(0b1010, 0) == false, "bit 0 of 0b1010 is clear");
+    assert(Bits.setBit(0b1000, 0)   == 9,   "set bit 0 of 8 = 9");
+    assert(Bits.clearBit(0b1111, 1) == 13,  "clear bit 1 of 15 = 13");
+    assert(Bits.countBits(0b1011) == 3,     "0b1011 has 3 set bits");
+    assert(Bits.countBits(255) == 8,        "255 = 0b11111111 has 8 bits");
+    assert(Bits.countBits(0) == 0,          "0 has 0 bits");
+});
+
+// ── Optional chaining + null coalescing + default params ─────────────────────
+
+class Config {
+    public Config(any host, any port) {
+        this.host = host;
+        this.port = port;
+    }
+    public string getHost() { return this.host ?? "localhost"; }
+    public int getPort() { return this.port ?? 8080; }
+}
+
+fn string buildUrl(any cfg = null, string proto = "http") {
+    let host = cfg?.getHost() ?? "localhost";
+    let port = cfg?.getPort() ?? 80;
+    return proto + "://" + host + ":" + port;
+}
+
+test("optional chaining + ?? + default params combined", () => {
+    let cfg = new Config("example.com", 443);
+    assert(buildUrl(cfg)           == "http://example.com:443", "explicit cfg");
+    assert(buildUrl(cfg, "https")  == "https://example.com:443", "custom proto");
+    assert(buildUrl()              == "http://localhost:80",     "null cfg uses fallbacks");
+    assert(buildUrl(null)          == "http://localhost:80",     "explicit null cfg");
+});
+
+// ── do-while + bitwise: find highest set bit ──────────────────────────────────
+
+fn int highestBit(int n) {
+    let bit = -1;
+    let val = n;
+    do {
+        bit = bit + 1;
+        val = val >> 1;
+    } while (val > 0);
+    return bit;
+}
+
+test("do-while with bitwise: find highest set bit", () => {
+    assert(highestBit(1)   == 0, "1 = 0b1, highest bit = 0");
+    assert(highestBit(2)   == 1, "2 = 0b10, highest bit = 1");
+    assert(highestBit(8)   == 3, "8 = 0b1000, highest bit = 3");
+    assert(highestBit(255) == 7, "255 = 0b11111111, highest bit = 7");
+    assert(highestBit(256) == 8, "256 = 0b100000000, highest bit = 8");
+});
+
+// ── Array new methods + power + numeric separators ────────────────────────────
+
+test("powers of 2 array operations", () => {
+    let powers = [1, 2, 4, 8, 16, 32, 64, 128];
+    assert(powers.every(x => (x & (x - 1)) == 0) == true, "all are powers of 2");
+    assert(powers.find(x => x > 1_000) == null,            "no power > 1000");
+    assert(powers.findIndex(x => x >= 16) == 4,            "16 is at index 4");
+    let big = powers.filter(x => x > 10);
+    assert(big.length() == 4, "16,32,64,128 are > 10");
+    assert(big.some(x => x == 1 << 7) == true, "128 = 1<<7 exists");
+});
+
+// ── String new methods + interpolation ───────────────────────────────────────
+
+fn string formatHex(int n) {
+    // Simple hex digit helper
+    fn string hexDigit(int d) {
+        if (d < 10) { return "" + d; }
+        if (d == 10) { return "a"; }
+        if (d == 11) { return "b"; }
+        if (d == 12) { return "c"; }
+        if (d == 13) { return "d"; }
+        if (d == 14) { return "e"; }
+        return "f";
+    }
+    let hi = (n >> 4) & 0xF;
+    let lo = n & 0xF;
+    return "0x" + hexDigit(hi) + hexDigit(lo);
+}
+
+test("string padding for aligned output", () => {
+    let labels = ["x", "y", "z"];
+    let values = [1, 12, 123];
+    let formatted = values.map(v => ("" + v).padStart(5, " "));
+    assert(formatted[0] == "    1", "1 padded to 5");
+    assert(formatted[1] == "   12", "12 padded to 5");
+    assert(formatted[2] == "  123", "123 padded to 5");
+});
+
+test("hex formatting using bitwise + string methods", () => {
+    assert(formatHex(0)   == "0x00", "0x00");
+    assert(formatHex(255) == "0xff", "0xff");
+    assert(formatHex(16)  == "0x10", "0x10");
+    assert(formatHex(171) == "0xab", "0xab = 10*16+11");
+});
+
+// ── Static + optional + do-while: event queue ────────────────────────────────
+
+class EventQueue {
+    public static [string] process(any queue = null) {
+        let q = queue ?? [];
+        let results = [];
+        let i = 0;
+        do {
+            if (i >= q.length()) { break; }
+            let event = q[i];
+            results.push("handled:" + event);
+            i = i + 1;
+        } while (i < q.length());
+        return results;
+    }
+}
+
+test("static method with do-while + optional default", () => {
+    let events = ["click", "keydown", "blur"];
+    let r = EventQueue.process(events);
+    assert(r.length() == 3,                  "3 events processed");
+    assert(r[0] == "handled:click",          "first event");
+    assert(r[2] == "handled:blur",           "last event");
+    let empty = EventQueue.process();
+    assert(empty.length() == 0,              "null queue → empty result");
+});
+
+// ── Power + reverse + slice combination ──────────────────────────────────────
+
+test("generate squares, reverse, take top 3", () => {
+    let nums = [1, 2, 3, 4, 5];
+    let squares = nums.map(x => x ** 2);       // [1, 4, 9, 16, 25]
+    squares.reverse();                          // [25, 16, 9, 4, 1]
+    let top3 = squares.slice(0, 3);            // [25, 16, 9]
+    assert(top3[0] == 25, "largest square");
+    assert(top3[1] == 16, "second");
+    assert(top3[2] == 9,  "third");
+    assert(top3.every(x => x > 8) == true, "all top3 > 8");
+});
+
+// ── Block comment preservation ────────────────────────────────────────────────
+
+/* This entire block is a comment.
+   It spans multiple lines.
+   let x = "this is not evaluated";
+   out "this is not printed";
+*/
+
+test("block comment does not affect surrounding code", () => {
+    let x = 10; /* inline block comment */ let y = 20;
+    assert(x + y == 30, "variables on either side of block comment");
+    /* another
+       multiline
+       comment */
+    let z = x * y;
+    assert(z == 200, "computation after multiline block comment");
+});
+
+// ── Numeric separators in various contexts ────────────────────────────────────
+
+test("numeric separators in expressions and arrays", () => {
+    let limit = 1_000;
+    let arr = [1_0, 2_0, 3_0, 4_0];
+    assert(arr.find(x => x >= limit / 25) == 40, "first element >= 1000/25=40 is 40");
+    assert(arr.find(x => x > limit / 100) == 20, "first element > 1000/100=10 is 20");
+    assert(arr.every(x => x < 1_00) == true,     "all < 100");
+    let total = arr.reduce(0, (s, x) => s + x);
+    assert(total == 100, "10+20+30+40 = 100");
+});
+
+test("numeric separator in power expression", () => {
+    let result = 2 ** 1_0;  // 2 ** 10
+    assert(result == 1_024, "2**10 = 1024 with separators");
+});
+
+summary();

@@ -1,0 +1,4 @@
+// SEC-08: Integer overflow (i64::MAX + 1) must be detected, not wrap silently
+let max = 9223372036854775807;
+let overflow = max + 1;
+out overflow;

@@ -1,0 +1,98 @@
+// Security unit tests: string content is never re-evaluated as code
+
+// ── Code-like strings are never executed ─────────────────────────────────────
+
+test("string containing out statement is not executed", () => {
+    let code_str = "out \"INJECTED\";";
+    // Storing or outputting this string should NOT execute the code inside
+    assert(code_str.length() > 0,         "string exists");
+    assert(code_str.includes("INJECTED"), "string contains the text literally");
+    // If injection occurred, we would see extra output — but the test framework
+    // would catch a [FAIL] only if assert fails, which it won't here
+});
+
+test("string containing let declaration is not evaluated", () => {
+    let payload = "let secret = 99;";
+    assert(payload is string,                "payload is just a string");
+    assert(payload.includes("secret"),       "contains 'secret' literally");
+    // 'secret' variable should NOT exist in scope
+});
+
+test("interpolated string: snapshot, not re-evaluated when variable changes", () => {
+    let x = 10;
+    let y = 20;
+    // Interpolation evaluates once when the literal is created — it is a snapshot
+    let snap = "{x + y}";
+    assert(snap == "30", "interpolation evaluates at literal creation");
+    // Changing x does NOT retroactively change snap
+    x = 99;
+    assert(snap == "30", "snap is frozen: changing x has no effect");
+    assert(x == 99, "x itself was updated");
+});
+
+test("function name stored in string does not invoke the function", () => {
+    fn string marker() { return "INVOKED"; }
+    let fn_name = "marker";
+    // Storing a function name as a string does NOT call it
+    assert(fn_name is string,         "fn_name is just a string");
+    assert(fn_name == "marker",       "fn_name holds the literal text, not the return value");
+    // Calling it explicitly works and produces the expected result
+    assert(marker() == "INVOKED",     "explicit call returns the function result");
+    // fn_name is still the string "marker", not "INVOKED"
+    assert(fn_name != "INVOKED",      "fn_name was not replaced by the function result");
+});
+
+// ── String interpolation only reads values, does not execute arbitrary code ───
+
+test("interpolation reads variable but cannot execute arbitrary code", () => {
+    let n = 42;
+    let s = "The answer is {n}";
+    assert(s == "The answer is 42", "interpolation embeds value");
+    assert(s.includes("42"),        "value embedded as string");
+});
+
+test("interpolation with expression evaluates safely", () => {
+    let a = 3;
+    let b = 4;
+    let s = "Hypotenuse: {a * a + b * b}";
+    assert(s == "Hypotenuse: 25", "expression in interpolation = 25");
+});
+
+// ── split/join round-trip: no code execution ─────────────────────────────────
+
+test("split and join do not execute split parts as code", () => {
+    // Use a code-like string without braces to avoid string interpolation
+    let malicious = "fn void hack(); hack(); rm -rf /;";
+    let parts = malicious.split(";");
+    assert(parts.length() > 0, "split works");
+    let rejoined = parts.join("|");
+    assert(rejoined.includes("hack"), "content preserved as literal string");
+    // No throw means no code was executed during split/join
+});
+
+// ── String methods on code-like content are safe ────────────────────────────
+
+test("toUpperCase on code-like string is safe", () => {
+    let s = "out 'DANGEROUS'";
+    let upper = s.toUpperCase();
+    assert(upper == "OUT 'DANGEROUS'", "uppercased safely, not executed");
+});
+
+test("replace on code-like string does not execute result", () => {
+    let s = "let x = 1; x = 2;";
+    let sanitized = s.replaceAll("let", "###");
+    assert(sanitized == "### x = 1; x = 2;", "replacement done textually");
+    assert(sanitized.includes("###"),         "marker present");
+});
+
+// ── Numbers in strings don't become calculations ──────────────────────────────
+
+test("number-like string is not auto-cast to int in comparisons", () => {
+    let n = "42";
+    assert(n == "42",  "string '42' equals string '42'");
+    assert(n != 42,    "string '42' does NOT equal integer 42");
+    assert((n is string) == true, "type is still string");
+    assert((n is int)    == false, "NOT an integer");
+});
+
+summary();

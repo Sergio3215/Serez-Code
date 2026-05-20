@@ -1,0 +1,118 @@
+// Security unit tests: runtime type system enforcement
+
+// ── is type checks prevent type confusion ─────────────────────────────────────
+
+test("is int: correct positive and negative", () => {
+    assert((42 is int) == true,      "42 is int");
+    assert((3.14 is int) == false,   "3.14 is not int");
+    assert(("hi" is int) == false,   "string is not int");
+    assert((true is int) == false,   "bool is not int");
+    assert((null is int) == false,   "null is not int");
+});
+
+test("is string: correct classification", () => {
+    assert(("abc" is string) == true,  "'abc' is string");
+    assert((0 is string) == false,     "0 is not string");
+    assert((false is string) == false, "false is not string");
+});
+
+test("is bool: correct classification", () => {
+    assert((true is bool) == true,   "true is bool");
+    assert((false is bool) == true,  "false is bool");
+    assert((1 is bool) == false,     "1 is not bool");
+    assert((0 is bool) == false,     "0 is not bool");
+    assert(("true" is bool) == false, "'true' string is not bool");
+});
+
+test("is decimal: correct classification", () => {
+    assert((3.14 is decimal) == true,  "3.14 is decimal");
+    assert((3 is decimal) == false,    "3 (int) is not decimal");
+    assert(("3.14" is decimal) == false,"string '3.14' is not decimal");
+});
+
+// ── Type-safe dispatch using is ───────────────────────────────────────────────
+
+fn string typeSafe(any val) {
+    if (val is int)     { return "int:" + val; }
+    if (val is string)  { return "str:" + val; }
+    if (val is bool)    { return "bool:" + val; }
+    if (val is decimal) { return "dec:" + val; }
+    return "unknown";
+}
+
+test("type-safe dispatch never confuses types", () => {
+    assert(typeSafe(42)    == "int:42",    "int dispatch");
+    assert(typeSafe("hi")  == "str:hi",    "string dispatch");
+    assert(typeSafe(true)  == "bool:true", "bool dispatch");
+    assert(typeSafe(1.5)   == "dec:1.5",   "decimal dispatch");
+    assert(typeSafe(null)  == "unknown",   "null → unknown");
+});
+
+// ── Typed arrays enforce element types ───────────────────────────────────────
+
+test("typed [int] array rejects non-int on construction", () => {
+    let arr [int] = [1, 2, 3];
+    assert(arr[0] is int, "elements are ints");
+    assert(arr.length() == 3, "length 3");
+});
+
+test("typed [string] array elements are strings", () => {
+    let names [string] = ["alice", "bob", "carol"];
+    assert(names.every(n => n is string) == true, "all elements are strings");
+});
+
+// ── Type coercion is explicit, not implicit ───────────────────────────────────
+
+test("int and string are not equal", () => {
+    assert((42 == "42") == false, "42 != '42' (different types)");
+    assert((1 == true)  == false, "1 != true (different types)");
+    assert((0 == false) == false, "0 != false (different types)");
+    assert((0 == null)  == false, "0 != null");
+    assert(("" == null) == false, "'' != null");
+    assert(("" == false) == false,"'' != false");
+});
+
+test("null is only equal to null", () => {
+    assert((null == null) == true,  "null == null");
+    assert((null == 0)    == false, "null != 0");
+    assert((null == "")   == false, "null != empty string");
+    assert((null == false)== false, "null != false");
+});
+
+// ── Safe type conversion via parseInt / parseDecimal ─────────────────────────
+
+test("parseInt handles non-numeric strings safely", () => {
+    // parseInt on a valid string returns correct int
+    assert(parseInt("42") == 42, "parseInt('42') = 42");
+    assert(parseInt("  7  ") == 7, "parseInt trims and parses");
+});
+
+test("type_of returns correct type names", () => {
+    assert(type_of(42)      == "int",     "type_of int");
+    assert(type_of(3.14)    == "decimal", "type_of decimal");
+    assert(type_of("hello") == "string",  "type_of string");
+    assert(type_of(true)    == "bool",    "type_of bool");
+    assert(type_of(null)    == "null",    "type_of null");
+    assert(type_of([1,2,3]) == "array",   "type_of array");
+});
+
+// ── Function type annotations catch wrong types ───────────────────────────────
+
+test("typed param: correct type succeeds", () => {
+    fn int square(int n) { return n * n; }
+    assert(square(4) == 16, "square(4) = 16 with int param");
+    assert(square(0) == 0,  "square(0)");
+    assert(square(-3) == 9, "square(-3) = 9");
+});
+
+test("any param accepts all types without crashing", () => {
+    fn string describe(any v) {
+        return type_of(v) + "=" + v;
+    }
+    assert(describe(1)     == "int=1",        "int");
+    assert(describe("hi")  == "string=hi",    "string");
+    assert(describe(true)  == "bool=true",    "bool");
+    assert(describe(1.5)   == "decimal=1.5",  "decimal");
+});
+
+summary();

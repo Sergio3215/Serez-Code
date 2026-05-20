@@ -1,0 +1,3 @@
+// SEC-04: Array out-of-bounds read must be caught, not silently return garbage
+let arr = [10, 20, 30];
+out arr[5];

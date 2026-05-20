@@ -1,0 +1,167 @@
+// Security unit tests: errors are contained, outer state is never corrupted
+
+// ── try/catch contains errors from user throw ─────────────────────────────────
+
+test("throw inside try does not affect outer variables", () => {
+    let counter = 0;
+    let result = "initial";
+    try {
+        counter = 1;
+        throw "deliberate error";
+        counter = 999;  // must NOT execute
+        result = "bad"; // must NOT execute
+    } catch (e) {
+        result = "caught:" + e;
+    }
+    assert(counter == 1,                    "counter stopped at 1");
+    assert(result == "caught:deliberate error", "caught the error");
+});
+
+test("catch body does not see variables declared only in try body", () => {
+    let seen = "no";
+    try {
+        let try_only = "secret";
+        throw "error";
+    } catch (e) {
+        // try_only is out of scope here — accessing it would be an error
+        // Just verify catch ran correctly
+        seen = "yes";
+    }
+    assert(seen == "yes", "catch body executed");
+});
+
+test("code after try/catch continues normally", () => {
+    let x = 10;
+    try {
+        throw "ignored";
+    } catch (e) {}
+    x = x + 5;
+    assert(x == 15, "code after try/catch: x = 15");
+});
+
+test("multiple try/catch blocks are independent", () => {
+    let results = [];
+    try { throw "first"; }  catch (e) { results.push("c1:" + e); }
+    try { throw "second"; } catch (e) { results.push("c2:" + e); }
+    try { results.push("ok"); } catch (e) {}
+    assert(results.length() == 3,      "3 results");
+    assert(results[0] == "c1:first",   "first catch");
+    assert(results[1] == "c2:second",  "second catch");
+    assert(results[2] == "ok",         "no-error block");
+});
+
+// ── Function call errors do not corrupt caller state ─────────────────────────
+
+test("exception in function call does not corrupt caller locals", () => {
+    fn int risky(int n) {
+        if (n < 0) { throw "negative!"; }
+        return n * 2;
+    }
+    let a = 100;
+    let b = 200;
+    try {
+        let bad = risky(-5);  // throws
+        a = 0; // must NOT execute
+        b = 0; // must NOT execute
+    } catch (e) {
+        // caught; a and b should be unchanged
+    }
+    assert(a == 100, "a unchanged after throw in called function");
+    assert(b == 200, "b unchanged after throw in called function");
+});
+
+test("successfully called function result is preserved after later error", () => {
+    fn int safe(int n) { return n + 1; }
+    let result = safe(9);  // succeeds: result = 10
+    try {
+        throw "oops";
+    } catch (e) {}
+    assert(result == 10, "result from safe() preserved after later throw");
+});
+
+// ── Loop errors are contained ─────────────────────────────────────────────────
+
+test("error inside loop caught outside: loop variable not leaked", () => {
+    let sum = 0;
+    try {
+        let i = 0;
+        while (i < 5) {
+            if (i == 3) { throw "bail at 3"; }
+            sum = sum + i;
+            i = i + 1;
+        }
+    } catch (e) {}
+    // sum should be 0+1+2 = 3 (bailed before i=3 could be added)
+    assert(sum == 3, "sum accumulated before throw: 0+1+2=3");
+});
+
+test("throw in for-in loop: elements after throw not processed", () => {
+    let processed = 0;
+    try {
+        for (let x in [1, 2, 3, 4, 5]) {
+            if (x == 3) { throw "stop here"; }
+            processed = processed + 1;
+        }
+    } catch (e) {}
+    assert(processed == 2, "processed 1 and 2 before throw at 3");
+});
+
+// ── Nested try/catch: inner catch doesn't expose info to outer ────────────────
+
+test("inner catch handles its own error, outer state untouched", () => {
+    let outer_val = "outer";
+    try {
+        let inner_val = "inner";
+        try {
+            throw "inner error";
+        } catch (e) {
+            inner_val = "handled";
+            // outer_val is NOT accessible from here (different scope)
+        }
+        // inner catch ran, no rethrow → control continues here
+        outer_val = "after_inner";
+    } catch (e) {
+        outer_val = "BAD: outer caught inner error";
+    }
+    assert(outer_val == "after_inner", "outer not contaminated by inner error");
+});
+
+// ── Finally always runs, preserves invariants ─────────────────────────────────
+
+test("finally executes on both normal and error paths", () => {
+    fn string path(bool err) {
+        let log = "start";
+        try {
+            log = log + ",try";
+            if (err) { throw "x"; }
+            log = log + ",normal";
+        } catch (e) {
+            log = log + ",catch";
+        } finally {
+            log = log + ",finally";
+        }
+        return log;
+    }
+    assert(path(false) == "start,try,normal,finally", "normal path");
+    assert(path(true)  == "start,try,catch,finally",  "error path");
+});
+
+// ── Arithmetic error containment ──────────────────────────────────────────────
+
+test("division by zero caught via throw remains contained", () => {
+    fn int safeDivide(int a, int b) {
+        if (b == 0) { throw "division by zero"; }
+        return a / b;
+    }
+    let result = 0;
+    try {
+        result = safeDivide(10, 0);
+    } catch (e) {
+        result = -1;
+    }
+    assert(result == -1, "division by zero caught, result set to -1");
+    // Interpreter still alive and functional:
+    assert(safeDivide(10, 2) == 5, "safeDivide(10,2) still works after error");
+});
+
+summary();

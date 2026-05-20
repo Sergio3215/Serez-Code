@@ -166,6 +166,11 @@ impl TypeChecker {
                     }
                 }
             }
+            Statement::DoWhile(dw) => {
+                for s in &dw.body.statements {
+                    self.check_statement(s, expected_return);
+                }
+            }
         }
     }
 
@@ -233,7 +238,9 @@ impl TypeChecker {
             None => return,
         };
 
-        if call.arguments.len() != func.parameters.len() {
+        let required = func.parameters.iter().filter(|p| p.default.is_none()).count();
+        let max_args  = func.parameters.len();
+        if call.arguments.len() < required || call.arguments.len() > max_args {
             eprintln!(
                 "❌ TYPE ERROR: '{}' expects {} argument(s) but got {}.",
                 func_name,
@@ -244,6 +251,7 @@ impl TypeChecker {
         }
 
         for (i, param) in func.parameters.iter().enumerate() {
+            if i >= call.arguments.len() { break; }
             let expected = match &param.type_name {
                 Some(t) => t,
                 None => continue,

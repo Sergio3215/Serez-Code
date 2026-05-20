@@ -1,0 +1,7 @@
+// SEC-03: Calling a private method from outside its class must be refused
+class BankAccount {
+    public BankAccount(int bal) { this.balance = bal; }
+    private int computeInterest() { return this.balance / 10; }
+}
+let acc = new BankAccount(1000);
+out acc.computeInterest();

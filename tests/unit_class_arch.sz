@@ -1,0 +1,197 @@
+// Architecture tests: class static/instance interaction, inheritance, registry
+
+// ── Static method basics ──────────────────────────────────────────────────────
+
+class Registry {
+    public static string tag() { return "Registry"; }
+    public static int count(int n) { return n * 10; }
+    public static bool valid(int n) { return n > 0; }
+}
+
+class Factory {
+    public static int make(int x) { return x * x; }
+    public static string label(string s) { return "[" + s + "]"; }
+}
+
+test("static methods do not require instance", () => {
+    assert(Registry.tag()   == "Registry",  "class name from static");
+    assert(Registry.count(5) == 50,         "static arithmetic");
+    assert(Registry.valid(1) == true,        "static bool");
+    assert(Registry.valid(-1) == false,      "static bool false");
+});
+
+test("two different classes, no name collision in static dispatch", () => {
+    assert(Factory.make(4)     == 16,         "Factory.make(4)");
+    assert(Factory.label("x")  == "[x]",      "Factory.label");
+    assert(Registry.count(3)   == 30,         "Registry.count still works");
+});
+
+// ── Instance method vs static method on same class ────────────────────────────
+
+class Calculator {
+    public Calculator(int v) { this.value = v; }
+    public int getValue() { return this.value; }
+    public int double() { return this.value * 2; }
+    public static int add(int a, int b) { return a + b; }
+    public static int multiply(int a, int b) { return a * b; }
+}
+
+test("instance and static methods coexist on same class", () => {
+    let calc = new Calculator(7);
+    assert(calc.getValue() == 7,           "instance method getValue");
+    assert(calc.double() == 14,            "instance method double");
+    assert(Calculator.add(3, 4) == 7,     "static add");
+    assert(Calculator.multiply(3, 4) == 12, "static multiply");
+});
+
+test("static methods independent of instance state", () => {
+    let c1 = new Calculator(10);
+    let c2 = new Calculator(20);
+    assert(Calculator.add(5, 5) == 10,     "static add not affected by instances");
+    assert(c1.getValue() == 10,            "c1 still has its value");
+    assert(c2.getValue() == 20,            "c2 still has its value");
+});
+
+// ── Static method in inheritance ──────────────────────────────────────────────
+
+class Base {
+    public Base(int x) { this.x = x; }
+    public int getX() { return this.x; }
+    public static string kind() { return "Base"; }
+    public static int combine(int a, int b) { return a + b; }
+}
+
+class Child : Base {
+    public Child(int x, int y) {
+        super(x);
+        this.y = y;
+    }
+    public int getY() { return this.y; }
+    public static string kind() { return "Child"; }
+}
+
+test("child class can override static method", () => {
+    assert(Base.kind()  == "Base",  "Base.kind()");
+    assert(Child.kind() == "Child", "Child.kind()");
+});
+
+test("instance methods work normally with parent static present", () => {
+    let c = new Child(3, 7);
+    assert(c.getX() == 3,  "inherited getX");
+    assert(c.getY() == 7,  "own getY");
+});
+
+test("parent static method accessible via parent class", () => {
+    assert(Base.combine(4, 5) == 9, "Base.combine still works");
+});
+
+// ── Class with multiple methods, static and instance ─────────────────────────
+
+class StringUtils {
+    public StringUtils(string s) { this.data = s; }
+    public string get() { return this.data; }
+    public string upper() { return this.data.toUpperCase(); }
+    public static string join(string a, string b) { return a + b; }
+    public static string repeat(string s, int n) {
+        let result = "";
+        let i = 0;
+        while (i < n) {
+            result = result + s;
+            i = i + 1;
+        }
+        return result;
+    }
+}
+
+test("StringUtils static and instance methods", () => {
+    let su = new StringUtils("hello");
+    assert(su.get()   == "hello",    "get()");
+    assert(su.upper() == "HELLO",    "upper()");
+    assert(StringUtils.join("a", "b") == "ab", "static join");
+    assert(StringUtils.repeat("x", 3) == "xxx", "static repeat");
+});
+
+// ── do-while in class method ──────────────────────────────────────────────────
+
+class Counter {
+    public Counter() { this.count = 0; }
+    public void increment() { this.count = this.count + 1; }
+    public int get() { return this.count; }
+    public void incrementUntil(int target) {
+        do {
+            this.count = this.count + 1;
+        } while (this.count < target);
+    }
+}
+
+test("do-while in instance method mutates field correctly", () => {
+    let c = new Counter();
+    c.incrementUntil(5);
+    assert(c.get() == 5, "counter reached 5 via do-while");
+});
+
+test("do-while runs at least once even when condition already false", () => {
+    let c = new Counter();
+    c.incrementUntil(0);  // 0 < 0 is false, but do-while runs once
+    assert(c.get() == 1, "body ran once even though target=0");
+});
+
+// ── Optional chaining in class method ────────────────────────────────────────
+
+class Wrapper {
+    public Wrapper(any val) { this.inner = val; }
+    public any getInner() { return this.inner; }
+    public any safeGet() { return this.inner?.getInner(); }
+}
+
+test("optional chaining on inner field in method", () => {
+    let inner = new Wrapper(42);
+    let outer = new Wrapper(inner);
+    let result = outer.getInner()?.getInner();
+    assert(result == 42, "chained getInner returns 42");
+});
+
+test("optional chaining: null inner returns null", () => {
+    let outer = new Wrapper(null);
+    let result = outer.getInner()?.getInner();
+    assert(result == null, "null.getInner() = null");
+});
+
+// ── Default params in class methods ──────────────────────────────────────────
+
+class Greeter {
+    public Greeter(string prefix) { this.prefix = prefix; }
+    public string greet(string name = "World") {
+        return this.prefix + " " + name + "!";
+    }
+}
+
+test("instance method with default param", () => {
+    let g = new Greeter("Hello");
+    assert(g.greet()         == "Hello World!", "default param in instance method");
+    assert(g.greet("Sergio") == "Hello Sergio!", "explicit arg overrides default");
+});
+
+// ── Array of instances ────────────────────────────────────────────────────────
+
+class Point {
+    public Point(int x, int y) { this.x = x; this.y = y; }
+    public int sum() { return this.x + this.y; }
+    public static Point origin() { return new Point(0, 0); }
+}
+
+test("array of class instances with find/every/some", () => {
+    let pts = [new Point(1, 2), new Point(3, 4), new Point(5, 6)];
+    let found = pts.find(p => p.sum() > 6);
+    assert(found.x == 5,          "find first point with sum > 6");
+    assert(pts.every(p => p.sum() > 0) == true, "all points have positive sum");
+    assert(pts.some(p => p.sum() > 8) == true,  "5+6=11 > 8 exists");
+});
+
+test("static method creating instances", () => {
+    let o = Point.origin();
+    assert(o.x == 0 && o.y == 0, "origin() creates (0,0)");
+    assert(o.sum() == 0,          "origin sum = 0");
+});
+
+summary();

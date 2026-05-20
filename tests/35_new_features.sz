@@ -1,0 +1,108 @@
+/* E2E test: all new features
+   Block comments should be ignored by the lexer. */
+
+// ── Numeric separators ────────────────────────────────────────────────────────
+let million = 1_000_000;
+let bytes = 1_024;
+out million;
+out bytes;
+
+// ── Power operator (**) ───────────────────────────────────────────────────────
+out 2 ** 8;
+out 3 ** 3;
+out 10 ** 0;
+out 4.0 ** 0.5;
+
+// ── Bitwise operators ─────────────────────────────────────────────────────────
+out 12 & 10;
+out 12 | 10;
+out 12 ^ 10;
+out ~0;
+out 1 << 4;
+out 32 >> 2;
+
+// ── Block comments (these should produce no output) ───────────────────────────
+/* this entire block
+   is a comment
+   out "SHOULD NOT APPEAR"; */
+out "after block comment";
+
+// ── Default parameters ────────────────────────────────────────────────────────
+fn string greet(string name = "World") {
+    return "Hello " + name + "!";
+}
+out greet();
+out greet("Sergio");
+
+fn int sum(int a = 0, int b = 0) { return a + b; }
+out sum();
+out sum(5);
+out sum(3, 4);
+
+// ── do-while ──────────────────────────────────────────────────────────────────
+let i = 0;
+do {
+    i = i + 1;
+} while (i < 3);
+out i;
+
+let once = 0;
+do {
+    once = once + 1;
+} while (false);
+out once;
+
+// ── Optional chaining (?.) ────────────────────────────────────────────────────
+class Box {
+    public Box(int v) { this.val = v; }
+    public int get() { return this.val; }
+}
+
+let box = new Box(99);
+let empty = null;
+out box?.get();
+out empty?.get();
+out empty?.get() ?? -1;
+
+// ── Static methods ────────────────────────────────────────────────────────────
+class Calc {
+    public static int double(int n) { return n * 2; }
+    public static string tag() { return "calc"; }
+}
+out Calc.double(7);
+out Calc.tag();
+
+// ── New array methods ─────────────────────────────────────────────────────────
+let nums = [3, 1, 4, 1, 5, 9, 2, 6];
+
+// find
+out nums.find(x => x > 5);
+
+// findIndex
+out nums.findIndex(x => x == 5);
+
+// slice
+let s = nums.slice(2, 5);
+out s;
+
+// reverse
+let rev = [1, 2, 3, 4, 5];
+rev.reverse();
+out rev;
+
+// every / some
+out [2, 4, 6].every(x => x % 2 == 0);
+out [1, 3, 5].every(x => x % 2 == 0);
+out [1, 3, 4].some(x => x % 2 == 0);
+out [1, 3, 5].some(x => x % 2 == 0);
+
+// flat
+let nested = [[1, 2], [3, 4], [5]];
+out nested.flat();
+
+// ── New string methods ────────────────────────────────────────────────────────
+out "42".padStart(5, "0");
+out "hi".padEnd(6, ".");
+out "hello world".slice(6, 11);
+out "   trimmed   ".trimStart();
+out "   trimmed   ".trimEnd();

@@ -1,0 +1,3 @@
+// SEC-17: Instantiating an undeclared class must be refused
+let obj = new PhantomClass(1, 2, 3);
+out obj;

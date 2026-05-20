@@ -93,7 +93,10 @@ impl Lexer {
             }
             '/' => {
                 if self.peek_char() == '/' {
-                    self.skip_comment();
+                    self.skip_line_comment();
+                    return self.next_token();
+                } else if self.peek_char() == '*' {
+                    self.skip_block_comment();
                     return self.next_token();
                 } else if self.peek_char() == '=' {
                     self.read_char();
@@ -103,7 +106,10 @@ impl Lexer {
                 }
             }
             '*' => {
-                if self.peek_char() == '=' {
+                if self.peek_char() == '*' {
+                    self.read_char();
+                    Token::new(TokenType::Power, "**".to_string(), self.line, self.column)
+                } else if self.peek_char() == '=' {
                     self.read_char();
                     Token::new(TokenType::StarEq, "*=".to_string(), self.line, self.column)
                 } else {
@@ -122,6 +128,9 @@ impl Lexer {
                 if self.peek_char() == '=' {
                     self.read_char();
                     Token::new(TokenType::LtEq, "<=".to_string(), self.line, self.column)
+                } else if self.peek_char() == '<' {
+                    self.read_char();
+                    Token::new(TokenType::Shl, "<<".to_string(), self.line, self.column)
                 } else {
                     Token::new(TokenType::Lt, self.ch.to_string(), self.line, self.column)
                 }
@@ -130,6 +139,9 @@ impl Lexer {
                 if self.peek_char() == '=' {
                     self.read_char();
                     Token::new(TokenType::GtEq, ">=".to_string(), self.line, self.column)
+                } else if self.peek_char() == '>' {
+                    self.read_char();
+                    Token::new(TokenType::Shr, ">>".to_string(), self.line, self.column)
                 } else {
                     Token::new(TokenType::Gt, self.ch.to_string(), self.line, self.column)
                 }
@@ -139,7 +151,7 @@ impl Lexer {
                     self.read_char();
                     Token::new(TokenType::And, "&&".to_string(), self.line, self.column)
                 } else {
-                    Token::new(TokenType::Illegal, self.ch.to_string(), self.line, self.column)
+                    Token::new(TokenType::BitAnd, "&".to_string(), self.line, self.column)
                 }
             }
             '|' => {
@@ -147,9 +159,11 @@ impl Lexer {
                     self.read_char();
                     Token::new(TokenType::Or, "||".to_string(), self.line, self.column)
                 } else {
-                    Token::new(TokenType::Illegal, self.ch.to_string(), self.line, self.column)
+                    Token::new(TokenType::BitOr, "|".to_string(), self.line, self.column)
                 }
             }
+            '^' => Token::new(TokenType::BitXor, "^".to_string(), self.line, self.column),
+            '~' => Token::new(TokenType::BitNot, "~".to_string(), self.line, self.column),
             ';' => Token::new(
                 TokenType::Semicolon,
                 self.ch.to_string(),
@@ -203,6 +217,9 @@ impl Lexer {
                 if self.peek_char() == '?' {
                     self.read_char();
                     Token::new(TokenType::NullCoalesce, "??".to_string(), self.line, self.column)
+                } else if self.peek_char() == '.' {
+                    self.read_char();
+                    Token::new(TokenType::QuestionDot, "?.".to_string(), self.line, self.column)
                 } else {
                     Token::new(TokenType::Question, "?".to_string(), self.line, self.column)
                 }
@@ -305,8 +322,30 @@ impl Lexer {
     }
 
     fn read_number(&mut self) -> String {
+        // Binary literal: 0b101010
+        if self.ch == '0' && (self.peek_char() == 'b' || self.peek_char() == 'B') {
+            self.read_char(); // consume 'b'/'B'
+            self.read_char(); // move to first binary digit
+            let start = self.position;
+            while self.ch == '0' || self.ch == '1' || self.ch == '_' {
+                self.read_char();
+            }
+            let bin_str = self.input[start..self.position].replace('_', "");
+            return format!("{}", i64::from_str_radix(&bin_str, 2).unwrap_or(0));
+        }
+        // Hex literal: 0xFF or 0XFF
+        if self.ch == '0' && (self.peek_char() == 'x' || self.peek_char() == 'X') {
+            self.read_char(); // consume 'x'/'X'
+            self.read_char(); // move to first hex digit
+            let start = self.position;
+            while self.ch.is_ascii_hexdigit() || self.ch == '_' {
+                self.read_char();
+            }
+            let hex_str = self.input[start..self.position].replace('_', "");
+            return format!("{}", i64::from_str_radix(&hex_str, 16).unwrap_or(0));
+        }
         let start = self.position;
-        while is_digit(self.ch) {
+        while is_digit(self.ch) || self.ch == '_' {
             self.read_char();
         }
         // Consume decimal part when '.' is followed by a digit
@@ -317,12 +356,13 @@ impl Lexer {
                 .is_some_and(is_digit);
             if next_is_digit {
                 self.read_char(); // consume '.'
-                while is_digit(self.ch) {
+                while is_digit(self.ch) || self.ch == '_' {
                     self.read_char();
                 }
             }
         }
-        self.input[start..self.position].to_string()
+        // Strip underscores (numeric separators: 1_000_000 → "1000000")
+        self.input[start..self.position].replace('_', "")
     }
 
     fn skip_whitespace(&mut self) {
@@ -339,9 +379,24 @@ impl Lexer {
         }
     }
 
-    fn skip_comment(&mut self) {
+    fn skip_line_comment(&mut self) {
         while self.ch != '\n' && self.ch != '\0' {
             self.read_char();
+        }
+        self.skip_whitespace();
+    }
+
+    fn skip_block_comment(&mut self) {
+        // current char is '/', peek is '*' — consume both
+        self.read_char(); // consume '*'
+        loop {
+            self.read_char();
+            if self.ch == '\0' { break; }
+            if self.ch == '*' && self.peek_char() == '/' {
+                self.read_char(); // consume '/'
+                self.read_char(); // advance past '/'
+                break;
+            }
         }
         self.skip_whitespace();
     }

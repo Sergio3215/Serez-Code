@@ -1,0 +1,2 @@
+// SEC-12: Assigning to an undeclared variable (without let) must be refused
+ghost_variable = 99;

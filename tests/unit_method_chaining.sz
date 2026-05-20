@@ -1,0 +1,196 @@
+// Architecture tests: method chaining across all new array/string methods
+
+// ── Array chain: new methods combined with existing ones ──────────────────────
+
+test("slice then map", () => {
+    let arr = [1, 2, 3, 4, 5, 6];
+    let r = arr.slice(1, 5).map(x => x * 2);
+    assert(r.length() == 4,  "slice(1,5) gives 4 elements, map preserves length");
+    assert(r[0] == 4,        "2 * 2 = 4");
+    assert(r[3] == 10,       "5 * 2 = 10");
+});
+
+test("slice then filter", () => {
+    let arr = [10, 20, 30, 40, 50];
+    let r = arr.slice(1, 4).filter(x => x > 25);
+    assert(r.length() == 2,  "20,30,40 → filter > 25 → 30,40");
+    assert(r[0] == 30,       "first = 30");
+    assert(r[1] == 40,       "second = 40");
+});
+
+test("reverse then map", () => {
+    let arr = [1, 2, 3];
+    arr.reverse();
+    let r = arr.map(x => x + 10);
+    assert(r[0] == 13, "reversed: 3 + 10 = 13");
+    assert(r[2] == 11, "reversed: 1 + 10 = 11");
+});
+
+test("filter then every", () => {
+    let arr = [1, 2, 3, 4, 5, 6];
+    let evens = arr.filter(x => x % 2 == 0);
+    assert(evens.every(x => x % 2 == 0) == true, "all filtered evens are even");
+    assert(evens.some(x => x > 4) == true,        "6 > 4 exists in evens");
+});
+
+test("map then find", () => {
+    let arr = [1, 2, 3, 4, 5];
+    let doubled = arr.map(x => x * 2);
+    let found = doubled.find(x => x > 7);
+    assert(found == 8, "first doubled value > 7 is 8");
+});
+
+test("map then findIndex", () => {
+    let arr = [10, 20, 30, 40];
+    let r = arr.map(x => x / 10).findIndex(x => x >= 3);
+    assert(r == 2, "1,2,3,4 → index of first >=3 is 2");
+});
+
+test("flat then map", () => {
+    let nested = [[1, 2], [3, 4], [5, 6]];
+    let r = nested.flat().map(x => x ** 2);
+    assert(r.length() == 6,  "flat gives 6 elements");
+    assert(r[0] == 1,        "1**2 = 1");
+    assert(r[2] == 9,        "3**2 = 9");
+    assert(r[5] == 36,       "6**2 = 36");
+});
+
+test("filter then some then every", () => {
+    let arr = [1, 2, 3, 4, 5, 6, 7, 8];
+    let big = arr.filter(x => x > 4);
+    assert(big.some(x => x > 7) == true,    "8 > 7");
+    assert(big.every(x => x > 4) == true,   "all big > 4");
+    assert(big.every(x => x > 6) == false,  "5 not > 6");
+});
+
+test("slice then reduce", () => {
+    let arr = [1, 2, 3, 4, 5];
+    let sum = arr.slice(1, 4).reduce(0, (acc, x) => acc + x);
+    assert(sum == 9, "2+3+4 = 9");
+});
+
+test("find on empty slice returns null", () => {
+    let arr = [1, 2, 3];
+    let r = arr.slice(1, 1).find(x => true);
+    assert(r == null, "find on empty slice = null");
+});
+
+// ── String chain: new methods with existing ───────────────────────────────────
+
+test("padStart then includes", () => {
+    let s = "42".padStart(5, "0");
+    assert(s.includes("0042") == true, "padded string contains 0042");
+    assert(s.length() == 5,            "length = 5 after pad");
+});
+
+test("trim then slice", () => {
+    let s = "  hello world  ".trim();
+    let first = s.slice(0, 5);
+    assert(first == "hello", "trim then slice(0,5) = 'hello'");
+});
+
+test("trimStart + trimEnd = trim", () => {
+    let s = "  spaces  ";
+    assert(s.trimStart().trimEnd() == s.trim(), "trimStart+trimEnd = trim");
+});
+
+test("slice then toUpperCase", () => {
+    let s = "hello world";
+    let r = s.slice(6, 11).toUpperCase();
+    assert(r == "WORLD", "slice then upper");
+});
+
+test("padEnd then split", () => {
+    let s = "ab".padEnd(5, "-");
+    let parts = s.split("-");
+    assert(parts.length() == 4, "ab--- split by - gives 4 parts");
+    assert(parts[0] == "ab",    "first part is ab");
+});
+
+// ── Chaining new array methods with HOF ───────────────────────────────────────
+
+test("slice preserves element types in typed array", () => {
+    let arr [int] = [10, 20, 30, 40, 50];
+    let s = arr.slice(1, 4);
+    assert(s.length() == 3,   "typed slice length = 3");
+    assert(s[0] == 20,        "s[0] = 20");
+    assert(s[2] == 40,        "s[2] = 40");
+});
+
+test("reverse then sort", () => {
+    let arr = [3, 1, 4, 1, 5];
+    arr.reverse();
+    arr.sort();
+    assert(arr[0] == 1, "after reverse+sort, still sorted ascending");
+    assert(arr[4] == 5, "last element = 5");
+});
+
+test("flat with depth 2 on deeply nested", () => {
+    let arr = [[1, [2, 3]], [4, [5, 6]]];
+    let r = arr.flat(2);
+    assert(r.length() == 6, "depth-2 flat of [[1,[2,3]],[4,[5,6]]] = 6 elements");
+    assert(r[0] == 1,       "r[0] = 1");
+    assert(r[2] == 3,       "r[2] = 3");
+    assert(r[5] == 6,       "r[5] = 6");
+});
+
+test("flat with depth 0 does nothing", () => {
+    let arr = [[1, 2], [3, 4]];
+    let r = arr.flat(0);
+    assert(r.length() == 2,          "depth-0 flat preserves nesting");
+    // The sub-arrays are still arrays
+});
+
+test("every short-circuits: throws not reached after first false", () => {
+    // [1, 2, 0, boom!, boom!]: every(x > 0) should stop at 0 without calling boom!
+    fn bool check_or_throw(int x) {
+        if (x < 0) { throw "short-circuit FAILED: kept going past false"; }
+        return x > 0;
+    }
+    let arr = [1, 2, 0, -1, -2];  // 0 makes every return false; -1,-2 would throw if reached
+    let r = arr.every(check_or_throw);
+    assert(r == false, "every correctly returns false");
+    // If we reach here without a throw, short-circuit worked
+});
+
+test("some short-circuits: throws not reached after first true", () => {
+    // [0, 0, 5, boom!, boom!]: some(x > 3) should stop at 5 without calling boom!
+    fn bool check_or_throw(int x) {
+        if (x < 0) { throw "short-circuit FAILED: kept going past true"; }
+        return x > 3;
+    }
+    let arr = [1, 2, 5, -1, -2];  // 5 makes some return true; -1,-2 would throw if reached
+    let r = arr.some(check_or_throw);
+    assert(r == true, "some correctly returns true");
+    // If we reach here without a throw, short-circuit worked
+});
+
+test("find short-circuits: throws not reached after first match", () => {
+    fn bool check_or_throw(int x) {
+        if (x < 0) { throw "find FAILED: kept going past match"; }
+        return x > 3;
+    }
+    let arr = [1, 2, 5, -1, -2];
+    let r = arr.find(check_or_throw);
+    assert(r == 5, "find returns first match");
+});
+
+// ── Optional chaining with array access ───────────────────────────────────────
+
+test("optional chaining with array field", () => {
+    class Container {
+        public Container(int v) { this.items = [v, v * 2, v * 3]; }
+        public [int] getItems() { return this.items; }
+    }
+    let c = new Container(5);
+    let empty = null;
+    let items = c?.getItems();
+    assert(items != null,              "getItems on non-null returns array");
+    assert(items.length() == 3,        "array has 3 elements");
+    let noItems = empty?.getItems();
+    assert(noItems == null,            "getItems on null returns null");
+    let safe = empty?.getItems() ?? [];
+    assert(safe.length() == 0,         "fallback to empty array");
+});
+
+summary();

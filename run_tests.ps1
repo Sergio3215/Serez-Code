@@ -1,10 +1,11 @@
 # ── Serez-Code Test Runner ────────────────────────────────────────────────────
 # Usage:
-#   .\run_tests.ps1                    # run all tests
+#   .\run_tests.ps1                    # run all tests (including security)
 #   .\run_tests.ps1 -filter "switch"   # run tests whose name contains "switch"
 #   .\run_tests.ps1 -generate          # regenerate .expected golden files
 #   .\run_tests.ps1 -unit              # only run unit_*.sz tests (using framework)
 #   .\run_tests.ps1 -e2e               # only run E2E tests (numbered NN_*.sz)
+#   .\run_tests.ps1 -security          # only run security tests (sec_*.sz + unit_sec_*.sz)
 #
 # ── Test types ────────────────────────────────────────────────────────────────
 #
@@ -168,6 +169,19 @@
 #                          break en catch sale del for (B-54), continue en catch salta iter (B-54),
 #                          throw en for-init se captura (B-55)
 #
+# ── Security tests ────────────────────────────────────────────────────────────
+#
+#   tests/sec_*.sz       → Security error tests (run with -security or all)
+#                          Must emit at least one ❌ on stderr.
+#                          Tests: stack overflow, private access, OOB, null deref,
+#                          type violations, overflow, div-by-zero, undeclared vars,
+#                          bad shifts, undeclared classes, non-function call.
+#
+#   tests/unit_sec_*.sz  → Security unit tests (run with -security or all)
+#                          Framework-based tests verifying safe behavior:
+#                          arithmetic safety, type safety, null safety,
+#                          error isolation, resource limits, injection prevention.
+#
 # ── Error tests (tests/err_*.sz) ──────────────────────────────────────────────
 #
 #   err_arity              Llamar función con número incorrecto de argumentos
@@ -200,7 +214,8 @@ param(
     [string]$filter    = "",
     [switch]$generate  = $false,
     [switch]$unit      = $false,
-    [switch]$e2e       = $false
+    [switch]$e2e       = $false,
+    [switch]$security  = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -319,7 +334,7 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
 }
 
 # ── Discover and run tests ────────────────────────────────────────────────────
-$runAll  = -not $unit -and -not $e2e
+$runAll  = -not $unit -and -not $e2e -and -not $security
 
 Write-Host "═══ E2E Tests ════════════════════════════════" -ForegroundColor Cyan
 if ($runAll -or $e2e) {
@@ -335,10 +350,12 @@ if ($runAll -or $e2e) {
 Write-Host ""
 Write-Host "═══ Unit Tests ═══════════════════════════════" -ForegroundColor Cyan
 if ($runAll -or $unit) {
-    Get-ChildItem $testsDir -Filter "unit_*.sz" | Sort-Object Name | ForEach-Object {
-        $label = $_.BaseName
-        Run-Test $label $_.FullName "" $true $false
-    }
+    Get-ChildItem $testsDir -Filter "unit_*.sz" |
+        Where-Object { $_.Name -notmatch "^unit_sec_" } |
+        Sort-Object Name | ForEach-Object {
+            $label = $_.BaseName
+            Run-Test $label $_.FullName "" $true $false
+        }
 }
 
 Write-Host ""
@@ -347,6 +364,21 @@ if ($runAll -or $e2e) {
     Get-ChildItem $testsDir -Filter "err_*.sz" | Sort-Object Name | ForEach-Object {
         $label = $_.BaseName
         Run-Test $label $_.FullName "" $false $true
+    }
+}
+
+Write-Host ""
+Write-Host "═══ Security Tests ═══════════════════════════" -ForegroundColor Cyan
+if ($runAll -or $security) {
+    # sec_*.sz — must emit ❌ (runtime error tests)
+    Get-ChildItem $testsDir -Filter "sec_*.sz" | Sort-Object Name | ForEach-Object {
+        $label = $_.BaseName
+        Run-Test $label $_.FullName "" $false $true
+    }
+    # unit_sec_*.sz — framework-based safety tests
+    Get-ChildItem $testsDir -Filter "unit_sec_*.sz" | Sort-Object Name | ForEach-Object {
+        $label = $_.BaseName
+        Run-Test $label $_.FullName "" $true $false
     }
 }
 

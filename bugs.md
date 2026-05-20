@@ -70,6 +70,7 @@
 | [B-58](#b-58--instances-in-arrays-dont-use-op_str-in-display) | Instances inside arrays don't use `op_str` when displayed | 🟠 Medium | ✅ |
 | [B-59](#b-59--replace-only-replaced-first-occurrence) | `replace` only replaced the first occurrence instead of all | 🟢 Low | ✅ |
 | [B-60](#b-60--dict-indexassign-inside-nested-scope-loses-new-entries-on-scope-pop) | Dict `IndexAssign` inside nested scope loses new entries on scope pop | 🔴 Critical | ✅ |
+| [B-61](#b-61--is-operator-tokenized-as-identifier--never-worked-as-infix) | `is` operator tokenized as identifier — never worked as infix | 🔴 Critical | ✅ |
 
 ---
 
@@ -1523,7 +1524,7 @@ None => {
 
 ---
 
-*Last updated: 2026-05-18 — 58 bugs documented, 58 fixed, 0 open.*
+*Last updated: 2026-05-20 — 61 bugs documented, 61 fixed, 0 open.*
 
 ---
 
@@ -2786,3 +2787,85 @@ let new_v = match arr_ref.region {
     RegionId::Scoped              => self.plant(owned_val),
 };
 ```
+
+---
+
+## B-61 — `is` operator tokenized as identifier — never worked as infix
+
+**Date:** 2026-05-20
+**Files:** `src/token.rs`, `src/parser.rs`, `src/evaluator.rs`
+**Severity:** 🔴 Critical
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+out 42 is int;     // expected: true
+out "hi" is int;   // expected: false
+```
+
+Both expressions evaluated as `false` regardless of the actual type, and no error was reported. Tests using `is` appeared to pass because the assertion bodies never executed (the operator produced no result).
+
+### Root cause
+
+`"is"` was never registered in `lookup_ident()` in `token.rs` as a keyword, so the lexer tokenized it as a plain `Ident("is")` identifier. The Pratt parser had no entry for `Ident` in `token_precedence()`, so `is` was never recognised as an infix operator — the expression was parsed only up to the left operand, and the `is TypeName` part was silently discarded.
+
+Unit tests that exercised `is` passed vacuously: since the operator was never parsed, the assertion callbacks contained no assertion calls → no `[FAIL]` lines → the test framework reported success. The bug was present from the moment `is` was first documented.
+
+### Fix
+
+Three files changed:
+
+**`src/token.rs`** — Added `KwIs` variant and wired it in `lookup_ident`:
+```rust
+"is" => TokenType::KwIs,
+```
+
+**`src/parser.rs`** — Two changes:
+1. `token_precedence()`: `TokenType::KwIs => Precedence::LessGreater`
+2. `is_infix` list: `| TokenType::KwIs => true`
+3. Special branch in `parse_infix_chain` **before** the generic `else`:
+
+```rust
+} else if self.current_token.token_type == TokenType::KwIs {
+    self.next_token(); // consume type-name token
+    let type_name = self.current_token.literal.clone();
+    if let Some(left) = left_exp {
+        left_exp = Some(Expression::Infix(InfixExpression {
+            left: Box::new(left),
+            operator: "is".to_string(),
+            right: Box::new(Expression::String(type_name)),
+            line: is_line, column: is_col,
+        }));
+    }
+}
+```
+
+The right-hand side is a type name (keyword), not an expression, so it cannot be parsed with `parse_expression()`. The token is consumed directly and wrapped as `Expression::String`.
+
+**`src/evaluator.rs`** — Handler added at the TOP of `eval_infix`, before the null-handling check:
+
+```rust
+if op == "is" {
+    let type_name = match &right {
+        ObjectData::Str(s) => s.clone(),
+        _ => { eprintln!("❌ ERROR: Right side of 'is' must be a type name"); return EvalResult::Error; }
+    };
+    let matched = match type_name.as_str() {
+        "int"      => matches!(left, ObjectData::Integer(_)),
+        "decimal"  => matches!(left, ObjectData::Decimal(_)),
+        "string"   => matches!(left, ObjectData::Str(_)),
+        "bool"     => matches!(left, ObjectData::Boolean(_)),
+        "null"     => matches!(left, ObjectData::Null),
+        "array"    => matches!(left, ObjectData::Array { .. }),
+        "dict"     => matches!(left, ObjectData::Dict { .. }),
+        "function" => matches!(left, ObjectData::Function { .. }),
+        class_name => matches!(&left, ObjectData::Instance { class_name: cn, .. } if cn == class_name),
+    };
+    return EvalResult::Value(self.alloc(ObjectData::Boolean(matched)));
+}
+```
+
+### Lesson
+
+A Pratt infix operator requires registration in **both** `token_precedence()` AND the `is_infix` matches list. Missing either one produces silent failure. For operators whose right-hand side is a keyword/type name (not a general expression), `parse_expression()` must not be called — consume the token directly and wrap it as a string constant.

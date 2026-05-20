@@ -101,6 +101,29 @@ pub enum TokenType {
     // Increment / decrement
     PlusPlus,   // ++
     MinusMinus, // --
+
+    // Power
+    Power,      // **
+
+    // Bitwise
+    BitAnd,     // &
+    BitOr,      // |
+    BitXor,     // ^
+    BitNot,     // ~
+    Shl,        // <<
+    Shr,        // >>
+
+    // Optional chaining
+    QuestionDot, // ?.
+
+    // do-while
+    KwDo,
+
+    // static
+    KwStatic,
+
+    // is type check
+    KwIs,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -155,7 +178,10 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "catch" => TokenType::KwCatch,
         "finally" => TokenType::KwFinally,
         "throw" => TokenType::KwThrow,
-        "in"    => TokenType::KwIn,
+        "in"     => TokenType::KwIn,
+        "do"     => TokenType::KwDo,
+        "static" => TokenType::KwStatic,
+        "is"     => TokenType::KwIs,
         _ => TokenType::Ident,
     }
 }

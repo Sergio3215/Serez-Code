@@ -1,0 +1,3 @@
+// SEC-07: Pushing the wrong type into a typed array must be refused
+let arr [int] = [1, 2, 3];
+arr.push("injected string");

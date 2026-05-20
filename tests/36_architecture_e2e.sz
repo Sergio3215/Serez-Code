@@ -1,0 +1,148 @@
+// E2E: deep architectural test
+// Exercises: scope isolation, arena memory, operator precedence, class registry,
+// optional chaining chains, do-while in recursion, bitwise in real algorithms
+
+// ── 1. Bit manipulation: parity and popcount ──────────────────────────────────
+class BitOps {
+    public static bool isEven(int n) { return (n & 1) == 0; }
+    public static int popcount(int n) {
+        let c = 0;
+        let v = n;
+        do {
+            c = c + (v & 1);
+            v = v >> 1;
+        } while (v > 0);
+        return c;
+    }
+    public static int rotateLeft(int n, int bits, int width = 8) {
+        let mask = (1 << width) - 1;
+        return ((n << bits) | (n >> (width - bits))) & mask;
+    }
+}
+
+out BitOps.isEven(4);
+out BitOps.isEven(7);
+out BitOps.popcount(0b10110111);
+out BitOps.rotateLeft(0b10110001, 1);
+out BitOps.rotateLeft(0b10110001, 2, 8);
+
+// ── 2. Scope isolation: nested functions with same variable names ─────────────
+fn int outer(int n) {
+    fn int inner(int n) {
+        return n * 2;
+    }
+    return inner(n) + n;
+}
+out outer(5);   // inner(5) = 10, + 5 = 15
+out outer(10);  // inner(10) = 20, + 10 = 30
+
+// ── 3. Optional chaining across multiple class instances ──────────────────────
+class Node {
+    public Node(int v, any nxt) {
+        this.val = v;
+        this.next = nxt;
+    }
+    public any getNext() { return this.next; }
+    public int getVal() { return this.val; }
+}
+
+let n3 = new Node(30, null);
+let n2 = new Node(20, n3);
+let n1 = new Node(10, n2);
+
+out n1.getVal();
+out n1?.getNext()?.getVal();
+out n1?.getNext()?.getNext()?.getVal();
+out n1?.getNext()?.getNext()?.getNext()?.getVal();  // null (chain ends)
+
+// ── 4. Do-while with complex exit condition (bitwise) ─────────────────────────
+let flags = 0b00000000;
+let bit = 0;
+do {
+    flags = flags | (1 << bit);
+    bit = bit + 1;
+} while ((flags & 0xFF) != 0xFF);
+out flags;  // 255 (all 8 bits set)
+out bit;    // 8
+
+// ── 5. Default params with complex expressions ────────────────────────────────
+fn int clamp(int val, int lo = 0, int hi = 100) {
+    if (val < lo) { return lo; }
+    if (val > hi) { return hi; }
+    return val;
+}
+out clamp(-5);      // 0 (clamped to lo=0)
+out clamp(50);      // 50
+out clamp(200);     // 100 (clamped to hi=100)
+out clamp(50, 10, 90);  // 50
+out clamp(5, 10, 90);   // 10
+
+// ── 6. Array pipeline: new methods chained ───────────────────────────────────
+let data = [5, 3, 8, 1, 9, 2, 7, 4, 6];
+let processed = data
+    .filter(x => x % 2 != 0)   // odd: [5,3,9,1,7]  wait: 5,3,9,1,7 (5 odds)
+    .map(x => x ** 2)           // squares: [25,9,81,1,49]
+    .slice(1, 4);               // [9,81,1]
+
+out processed;
+out processed.find(x => x > 50);
+out processed.every(x => x > 0);
+out processed.some(x => x > 80);
+
+// ── 7. String formatting pipeline ────────────────────────────────────────────
+let words = ["hello", "world", "serez", "code"];
+let formatted = words
+    .map(w => w.toUpperCase())
+    .map(w => w.padStart(8, "."))
+    .filter(w => w.includes("O"));
+
+out formatted;
+
+// ── 8. Power + numeric separators in real use ────────────────────────────────
+let kb = 1_024;
+let mb = 1_048_576;
+let gb = 2 ** 30;
+out kb;
+out mb;
+out gb;
+out kb * 1_024 == mb;
+out mb * 1_024 == gb;
+
+// ── 9. Class with static factory + optional default ───────────────────────────
+class Vector2 {
+    public Vector2(int x, int y) { this.x = x; this.y = y; }
+    public int magnitude() { return (this.x ** 2 + this.y ** 2); }
+    public string toString() { return "(" + this.x + "," + this.y + ")"; }
+    public static Vector2 zero() { return new Vector2(0, 0); }
+    public static Vector2 unit(string axis = "x") {
+        if (axis == "x") { return new Vector2(1, 0); }
+        return new Vector2(0, 1);
+    }
+}
+
+let v0 = Vector2.zero();
+let vx = Vector2.unit();
+let vy = Vector2.unit("y");
+out v0.toString();
+out vx.toString();
+out vy.toString();
+out v0.magnitude();
+out vx.magnitude();
+
+// ── 10. Flat + reduce: sum all nested ────────────────────────────────────────
+let matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+let flat = matrix.flat();
+let sum = flat.reduce(0, (acc, x) => acc + x);
+out flat;
+out sum;
+
+// ── 11. Block comments in expressions ────────────────────────────────────────
+let result = 10 /* first operand */ + 20 /* second operand */ * 3;
+out result;  // 10 + 60 = 70 (precedence: * before +)
+
+// ── 12. Reverse + findIndex for position tracking ────────────────────────────
+let scores = [88, 42, 95, 73, 61];
+scores.reverse();
+let idx = scores.findIndex(x => x > 90);
+out scores;
+out idx;

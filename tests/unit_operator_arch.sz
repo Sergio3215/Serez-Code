@@ -1,0 +1,157 @@
+// Architecture tests: operator precedence, associativity, mixed operators
+
+// ── Bitwise vs equality precedence ────────────────────────────────────────────
+// In this language (like C/JS): == binds TIGHTER than &, |, ^
+// So: `a & b == c` parses as `a & (b == c)` NOT `(a & b) == c`
+
+test("& and == : equality binds tighter (JS/C semantics)", () => {
+    // (3 == 3) is true, then 5 & true is a type mismatch / treated as 5 & 1 = 1
+    // Use explicit parens to get bitwise comparison
+    assert((5 & 3) == 1,  "(5 & 3) == 1 with explicit parens");
+    assert((7 & 5) == 5,  "(7 & 5) == 5");
+    assert((12 & 10) == 8, "(12 & 10) == 8");
+});
+
+test("| and == : equality binds tighter", () => {
+    assert((5 | 3) == 7,   "(5 | 3) == 7");
+    assert((12 | 3) == 15, "(12 | 3) == 15");
+});
+
+test("^ and == : equality binds tighter", () => {
+    assert((5 ^ 3) == 6,  "(5 ^ 3) == 6");
+    assert((0 ^ 0) == 0,  "(0 ^ 0) == 0");
+});
+
+// ── Shift vs comparison precedence ───────────────────────────────────────────
+// Shift binds TIGHTER than comparison (< >)
+
+test("shift binds tighter than comparison", () => {
+    assert((1 << 3) > 4,  "(1 << 3) > 4 = 8 > 4 = true");
+    assert((16 >> 2) < 10, "(16 >> 2) < 10 = 4 < 10 = true");
+    assert((1 << 2) == 4,  "(1 << 2) == 4");
+    assert((8 >> 1) == 4,  "(8 >> 1) == 4");
+});
+
+test("shift vs arithmetic precedence: sum before shift", () => {
+    // Sum binds tighter than shift
+    assert((1 + 1) << 2 == 8, "(1+1)<<2 = 8");
+    assert(1 << (1 + 2) == 8, "1 << (1+2) = 8");
+});
+
+// ── Power (**) precedence ─────────────────────────────────────────────────────
+
+test("** binds tighter than * and /", () => {
+    assert(2 * 3 ** 2 == 18,    "2 * 3**2 = 2 * 9 = 18");
+    assert(12 / 2 ** 2 == 3,    "12 / 2**2 = 12/4 = 3");
+    assert(2 * 2 ** 3 == 16,    "2 * 2**3 = 2 * 8 = 16");
+});
+
+test("** binds tighter than + and -", () => {
+    assert(1 + 2 ** 3 == 9,     "1 + 2**3 = 1+8 = 9");
+    assert(10 - 3 ** 2 == 1,    "10 - 3**2 = 10-9 = 1");
+    assert(5 + 2 ** 4 == 21,    "5 + 2**4 = 5+16 = 21");
+});
+
+test("unary minus applied before ** (prefix tighter than power)", () => {
+    // In Serez-Code: prefix binds tighter than **, so -2**2 = (-2)**2 = 4
+    // (Different from Python where -2**2 = -(2**2) = -4)
+    assert(-2 ** 2 == 4,    "-2**2 = (-2)**2 = 4 (prefix > power)");
+    assert(-3 ** 2 == 9,    "-3**2 = (-3)**2 = 9");
+});
+
+// ── Mixed bitwise operators ───────────────────────────────────────────────────
+// Precedence: BitOr < BitXor < BitAnd (AND binds tightest of the three)
+
+test("& binds tighter than | (a | b & c = a | (b & c))", () => {
+    // 5 | 3 & 1 = 5 | (3 & 1) = 5 | 1 = 5
+    assert((5 | (3 & 1)) == 5,    "5 | (3&1) = 5|1 = 5");
+    // 12 | 10 & 6 = 12 | (10 & 6) = 12 | 2 = 14
+    assert((12 | (10 & 6)) == 14, "12 | (10&6) = 12|2 = 14");
+});
+
+test("& binds tighter than ^ (a ^ b & c = a ^ (b & c))", () => {
+    // 5 ^ 3 & 1 = 5 ^ (3 & 1) = 5 ^ 1 = 4
+    assert((5 ^ (3 & 1)) == 4,    "5 ^ (3&1) = 5^1 = 4");
+});
+
+test("^ binds tighter than | (a | b ^ c = a | (b ^ c))", () => {
+    // 5 | 3 ^ 6 = 5 | (3 ^ 6) = 5 | 5 = 5
+    assert((5 | (3 ^ 6)) == 5,    "5 | (3^6) = 5|5 = 5");
+});
+
+// ── Bitwise vs logical ────────────────────────────────────────────────────────
+// Bitwise operators bind TIGHTER than logical (&&, ||)
+
+test("bitwise & tighter than logical &&", () => {
+    assert((5 & 3) != 0 && (6 & 2) != 0, "(5&3)!=0 && (6&2)!=0");
+    assert(!((5 & 0) != 0) && true,       "(5&0)==0 → false, short-circuit true");
+});
+
+// ── Compound expressions ──────────────────────────────────────────────────────
+
+test("mixed arithmetic and bitwise", () => {
+    assert((3 + 4) & 7 == 7,    "(3+4) & 7 = 7 & 7 = 7, but with parens");
+    assert((1 << 3) + (1 << 2) == 12, "(8) + (4) = 12");
+    assert((255 >> 4) & 15 == 15, "(255>>4)&15 = 15&15 = 15");
+});
+
+test("power with unary not: ~(2**4) = ~16 = -17", () => {
+    assert(~(2 ** 4) == -17, "~(2**4) = ~16 = -17");
+    assert(-(2 ** 3) == -8,  "-(2**3) = -8");
+});
+
+// ── Ternary precedence ────────────────────────────────────────────────────────
+
+test("ternary binds looser than comparison", () => {
+    let x = 5;
+    let r = x > 3 ? "big" : "small";
+    assert(r == "big",    "5 > 3 → 'big'");
+    let s = x < 3 ? "big" : "small";
+    assert(s == "small",  "5 < 3 → 'small'");
+});
+
+test("ternary can chain", () => {
+    fn string classify(int n) {
+        return n < 0 ? "neg" : n == 0 ? "zero" : "pos";
+    }
+    assert(classify(-1) == "neg",  "negative");
+    assert(classify(0)  == "zero", "zero");
+    assert(classify(1)  == "pos",  "positive");
+});
+
+// ── Null coalescing precedence ────────────────────────────────────────────────
+
+test("?? binds tighter than ternary", () => {
+    let val = null;
+    let r = val ?? "fallback";
+    assert(r == "fallback", "?? gives fallback when null");
+});
+
+test("?? short-circuits: right side not evaluated when left non-null", () => {
+    fn any explode() { throw "right side of ?? was evaluated"; }
+    let result = "value" ?? explode();
+    assert(result == "value", "left is non-null: right side not evaluated");
+});
+
+test("?? with arithmetic: left non-null value used as-is", () => {
+    let x = 5;
+    let r = x ?? 99;
+    assert(r == 5, "5 ?? 99 = 5");
+    let y = 0;
+    let s = y ?? 99;
+    assert(s == 0, "0 ?? 99 = 0 (0 is not null)");
+});
+
+// ── Comparison precedence ─────────────────────────────────────────────────────
+
+test("comparison operators are left-to-right at same precedence", () => {
+    assert(!(1 < 2 && 2 < 3) || (1 < 2 && 2 < 3), "1<2<3 via logical operators");
+    assert(2 > 1,  "2 > 1");
+    assert(1 < 2,  "1 < 2");
+    assert(2 >= 2, "2 >= 2");
+    assert(1 <= 2, "1 <= 2");
+    assert(2 != 3, "2 != 3");
+    assert(2 == 2, "2 == 2");
+});
+
+summary();

@@ -1,0 +1,202 @@
+// Unit tests: new array methods — find, findIndex, slice, reverse, flat, every, some
+
+// ── find ─────────────────────────────────────────────────────────────────────
+
+test("find: returns first match", () => {
+    let arr = [1, 2, 3, 4, 5];
+    let r = arr.find(x => x > 3);
+    assert(r == 4, "first element > 3 is 4");
+});
+
+test("find: no match returns null", () => {
+    let arr = [1, 2, 3];
+    let r = arr.find(x => x > 100);
+    assert(r == null, "no match returns null");
+});
+
+test("find: empty array returns null", () => {
+    let arr = [];
+    let r = arr.find(x => x == 1);
+    assert(r == null, "empty array returns null");
+});
+
+test("find: string array", () => {
+    let arr = ["apple", "banana", "cherry"];
+    let r = arr.find(s => s.length() > 5);
+    assert(r == "banana", "first string longer than 5");
+});
+
+// ── findIndex ─────────────────────────────────────────────────────────────────
+
+test("findIndex: returns first matching index", () => {
+    let arr = [10, 20, 30, 40];
+    let i = arr.findIndex(x => x >= 30);
+    assert(i == 2, "first index where x >= 30 is 2");
+});
+
+test("findIndex: no match returns -1", () => {
+    let arr = [1, 2, 3];
+    let i = arr.findIndex(x => x > 100);
+    assert(i == -1, "no match returns -1");
+});
+
+test("findIndex: empty array returns -1", () => {
+    let arr = [];
+    let i = arr.findIndex(x => true);
+    assert(i == -1, "empty array returns -1");
+});
+
+test("findIndex: first element matches", () => {
+    let arr = [5, 6, 7];
+    let i = arr.findIndex(x => x == 5);
+    assert(i == 0, "first element matches at index 0");
+});
+
+// ── slice ─────────────────────────────────────────────────────────────────────
+
+test("slice: basic start-end", () => {
+    let arr = [1, 2, 3, 4, 5];
+    let s = arr.slice(1, 3);
+    assert(s.length() == 2, "slice(1,3) has 2 elements");
+    assert(s[0] == 2, "s[0] = 2");
+    assert(s[1] == 3, "s[1] = 3");
+});
+
+test("slice: from start to end", () => {
+    let arr = [10, 20, 30];
+    let s = arr.slice(0, 3);
+    assert(s.length() == 3, "slice(0,3) = full array");
+    assert(s[0] == 10 && s[2] == 30, "values match");
+});
+
+test("slice: single element", () => {
+    let arr = [1, 2, 3, 4];
+    let s = arr.slice(2, 3);
+    assert(s.length() == 1, "single-element slice");
+    assert(s[0] == 3, "correct element");
+});
+
+test("slice: empty result", () => {
+    let arr = [1, 2, 3];
+    let s = arr.slice(1, 1);
+    assert(s.length() == 0, "slice(1,1) is empty");
+});
+
+test("slice: negative start index", () => {
+    let arr = [1, 2, 3, 4, 5];
+    let s = arr.slice(-2, 5);
+    assert(s.length() == 2, "slice(-2,5) last 2 elements");
+    assert(s[0] == 4, "s[0] = 4");
+    assert(s[1] == 5, "s[1] = 5");
+});
+
+// ── reverse ───────────────────────────────────────────────────────────────────
+
+test("reverse: basic", () => {
+    let arr = [1, 2, 3, 4, 5];
+    arr.reverse();
+    assert(arr[0] == 5, "first element is now 5");
+    assert(arr[4] == 1, "last element is now 1");
+});
+
+test("reverse: two elements", () => {
+    let arr = [10, 20];
+    arr.reverse();
+    assert(arr[0] == 20 && arr[1] == 10, "two-element swap");
+});
+
+test("reverse: single element unchanged", () => {
+    let arr = [42];
+    arr.reverse();
+    assert(arr[0] == 42, "single element unchanged");
+});
+
+test("reverse: double reverse = original", () => {
+    let arr = [1, 2, 3, 4];
+    arr.reverse();
+    arr.reverse();
+    assert(arr[0] == 1 && arr[3] == 4, "double reverse restores order");
+});
+
+test("reverse: string array", () => {
+    let arr = ["a", "b", "c"];
+    arr.reverse();
+    assert(arr[0] == "c" && arr[2] == "a", "string array reversed");
+});
+
+// ── flat ──────────────────────────────────────────────────────────────────────
+
+test("flat: one level nested", () => {
+    let arr = [[1, 2], [3, 4], [5]];
+    let f = arr.flat();
+    assert(f.length() == 5,  "flat length = 5");
+    assert(f[0] == 1,        "f[0] = 1");
+    assert(f[4] == 5,        "f[4] = 5");
+});
+
+test("flat: already flat array unchanged", () => {
+    let arr = [1, 2, 3];
+    let f = arr.flat();
+    assert(f.length() == 3, "flat on flat = same length");
+    assert(f[0] == 1,       "values preserved");
+});
+
+test("flat: mixed flat and nested", () => {
+    let arr = [1, [2, 3], 4];
+    let f = arr.flat();
+    assert(f.length() == 4, "mixed flat: length 4");
+    assert(f[0] == 1,       "f[0] = 1");
+    assert(f[1] == 2,       "f[1] = 2");
+    assert(f[3] == 4,       "f[3] = 4");
+});
+
+// ── every ─────────────────────────────────────────────────────────────────────
+
+test("every: all match returns true", () => {
+    let arr = [2, 4, 6, 8];
+    assert(arr.every(x => x % 2 == 0) == true, "all even");
+});
+
+test("every: one fails returns false", () => {
+    let arr = [2, 4, 5, 8];
+    assert(arr.every(x => x % 2 == 0) == false, "5 breaks even-check");
+});
+
+test("every: empty array returns true", () => {
+    let arr = [];
+    assert(arr.every(x => false) == true, "vacuous truth on empty");
+});
+
+test("every: single element true", () => {
+    let arr = [3];
+    assert(arr.every(x => x > 0) == true, "single positive");
+});
+
+test("every: single element false", () => {
+    let arr = [-1];
+    assert(arr.every(x => x > 0) == false, "single negative");
+});
+
+// ── some ──────────────────────────────────────────────────────────────────────
+
+test("some: at least one matches returns true", () => {
+    let arr = [1, 3, 5, 4];
+    assert(arr.some(x => x % 2 == 0) == true, "4 is even");
+});
+
+test("some: none match returns false", () => {
+    let arr = [1, 3, 5, 7];
+    assert(arr.some(x => x % 2 == 0) == false, "no evens");
+});
+
+test("some: empty array returns false", () => {
+    let arr = [];
+    assert(arr.some(x => true) == false, "empty → false");
+});
+
+test("some: first element matches", () => {
+    let arr = [10, 1, 2, 3];
+    assert(arr.some(x => x > 5) == true, "first matches");
+});
+
+summary();

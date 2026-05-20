@@ -1,0 +1,112 @@
+// Unit tests: new string methods — padStart, padEnd, slice, trimStart, trimEnd
+
+// ── padStart ──────────────────────────────────────────────────────────────────
+
+test("padStart: pads with spaces to target length", () => {
+    let s = "42";
+    assert(s.padStart(5) == "   42",    "padStart(5) adds 3 spaces");
+    assert(s.padStart(2) == "42",       "padStart(2) no change, already at length");
+    assert(s.padStart(1) == "42",       "padStart shorter than string = unchanged");
+});
+
+test("padStart: pads with custom character", () => {
+    let s = "42";
+    assert(s.padStart(5, "0") == "00042", "padStart(5,'0') = '00042'");
+    assert(s.padStart(4, "-") == "--42",  "padStart(4,'-') = '--42'");
+});
+
+test("padStart: already at or beyond target length", () => {
+    let s = "hello";
+    assert(s.padStart(3, "0") == "hello",  "padStart shorter = unchanged");
+    assert(s.padStart(5, "0") == "hello",  "padStart exact = unchanged");
+});
+
+test("padStart: empty string", () => {
+    let s = "";
+    assert(s.padStart(3, "x") == "xxx", "empty padStart(3,'x') = 'xxx'");
+});
+
+// ── padEnd ────────────────────────────────────────────────────────────────────
+
+test("padEnd: pads with spaces to target length", () => {
+    let s = "hi";
+    assert(s.padEnd(5) == "hi   ",     "padEnd(5) adds 3 spaces");
+    assert(s.padEnd(2) == "hi",        "padEnd(2) exact = unchanged");
+    assert(s.padEnd(1) == "hi",        "padEnd shorter = unchanged");
+});
+
+test("padEnd: pads with custom character", () => {
+    let s = "hi";
+    assert(s.padEnd(5, "-") == "hi---", "padEnd(5,'-') = 'hi---'");
+    assert(s.padEnd(4, ".") == "hi..",  "padEnd(4,'.') = 'hi..'");
+});
+
+test("padEnd: empty string", () => {
+    let s = "";
+    assert(s.padEnd(4, "a") == "aaaa", "empty padEnd(4,'a') = 'aaaa'");
+});
+
+// ── slice (string) ────────────────────────────────────────────────────────────
+
+test("string slice: basic start-end", () => {
+    let s = "hello world";
+    assert(s.slice(0, 5) == "hello",  "slice(0,5) = 'hello'");
+    assert(s.slice(6, 11) == "world", "slice(6,11) = 'world'");
+});
+
+test("string slice: single char", () => {
+    let s = "abcde";
+    assert(s.slice(2, 3) == "c", "slice(2,3) = 'c'");
+});
+
+test("string slice: full string", () => {
+    let s = "test";
+    assert(s.slice(0, 4) == "test", "slice(0,4) = full string");
+});
+
+test("string slice: empty range", () => {
+    let s = "hello";
+    assert(s.slice(2, 2) == "", "slice(2,2) = empty string");
+});
+
+test("string slice: negative start", () => {
+    let s = "hello";
+    assert(s.slice(-3, 5) == "llo", "slice(-3,5) last 3 chars");
+});
+
+// ── trimStart / trimLeft ──────────────────────────────────────────────────────
+
+test("trimStart removes leading whitespace", () => {
+    assert("   hello".trimStart() == "hello",     "3 leading spaces removed");
+    assert("  hi  ".trimStart() == "hi  ",         "trailing spaces preserved");
+    assert("hello".trimStart() == "hello",         "no leading space = unchanged");
+    assert("".trimStart() == "",                   "empty string unchanged");
+});
+
+test("trimLeft is alias for trimStart", () => {
+    assert("  world".trimLeft() == "world",        "trimLeft alias works");
+    assert("  x  ".trimLeft() == "x  ",            "trimLeft keeps trailing");
+});
+
+// ── trimEnd / trimRight ───────────────────────────────────────────────────────
+
+test("trimEnd removes trailing whitespace", () => {
+    assert("hello   ".trimEnd() == "hello",        "3 trailing spaces removed");
+    assert("  hi  ".trimEnd() == "  hi",           "leading spaces preserved");
+    assert("hello".trimEnd() == "hello",           "no trailing = unchanged");
+    assert("".trimEnd() == "",                     "empty string unchanged");
+});
+
+test("trimRight is alias for trimEnd", () => {
+    assert("world  ".trimRight() == "world",       "trimRight alias works");
+    assert("  x  ".trimRight() == "  x",           "trimRight keeps leading");
+});
+
+test("trim vs trimStart vs trimEnd", () => {
+    let s = "  hello  ";
+    assert(s.trim()      == "hello",   "trim removes both");
+    assert(s.trimStart() == "hello  ", "trimStart removes leading only");
+    assert(s.trimEnd()   == "  hello", "trimEnd removes trailing only");
+});
+
+summary();

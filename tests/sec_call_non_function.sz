@@ -1,0 +1,3 @@
+// SEC-14: Calling a non-function value (integer) as a function must be refused
+let not_a_function = 42;
+not_a_function(1, 2, 3);

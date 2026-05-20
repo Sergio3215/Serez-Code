@@ -1,0 +1,3 @@
+// SEC-15: Shifting by >= 64 bits must be caught, not silently produce wrong results
+let x = 1;
+out x << 64;

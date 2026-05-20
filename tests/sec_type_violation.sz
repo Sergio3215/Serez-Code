@@ -1,0 +1,3 @@
+// SEC-06: Passing a value of the wrong type to a typed parameter must be refused
+fn int double(int n) { return n * 2; }
+double("not a number");

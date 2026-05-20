@@ -1,0 +1,4 @@
+// SEC-09: Integer division by zero must produce an error, not a panic
+let a = 42;
+let b = 0;
+out a / b;
