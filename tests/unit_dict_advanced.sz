@@ -1,0 +1,109 @@
+// Unit tests — dicts avanzados: claves int, anidados, como parámetros, patrones
+
+test("dict con clave int", () => {
+    let d <int,string> = ({0,"cero"},{1,"uno"},{2,"dos"});
+    assert(d[0] == "cero", "clave 0");
+    assert(d[1] == "uno",  "clave 1");
+    assert(d[2] == "dos",  "clave 2");
+    assert(d[9] == null,   "clave inexistente = null");
+});
+
+test("dict <int,int>: operaciones numéricas", () => {
+    let cuadrados <int,int> = ({1,1},{2,4},{3,9},{4,16});
+    assert(cuadrados[1] == 1,  "1^2 = 1");
+    assert(cuadrados[3] == 9,  "3^2 = 9");
+    assert(cuadrados[4] == 16, "4^2 = 16");
+    let suma = cuadrados[1] + cuadrados[2] + cuadrados[3];
+    assert(suma == 14, "1+4+9 = 14");
+});
+
+test("for-in sobre dict <int,string>", () => {
+    let d <int,string> = ({10,"diez"},{20,"veinte"},{30,"treinta"});
+    let keys [int] = [];
+    for (let k in d) { keys.push(k); }
+    assert(keys.length() == 3,      "3 claves");
+    assert(keys.includes(10),       "incluye 10");
+    assert(keys.includes(20),       "incluye 20");
+    assert(keys.includes(30),       "incluye 30");
+});
+
+test("dict como parámetro: semántica por valor (copia)", () => {
+    fn void intentar_agregar(any d, string k, int v) {
+        d[k] = v;
+    }
+    let m <string,int> = ({"a",1});
+    intentar_agregar(m, "b", 99);
+    // La función recibe una copia — la mutación NO persiste en el caller
+    assert(m["a"]    == 1,    "a no cambia");
+    assert(m["b"]    == null, "b no se agregó al caller");
+});
+
+test("dict construido dinámicamente con for loop", () => {
+    let cuadrados <int,int> = ();
+    let i = 1;
+    while (i <= 5) {
+        cuadrados[i] = i * i;
+        i++;
+    }
+    assert(cuadrados[1] == 1,  "1^2");
+    assert(cuadrados[3] == 9,  "3^2");
+    assert(cuadrados[5] == 25, "5^2");
+    let keys = cuadrados.keys();
+    assert(keys.length() == 5, "5 entradas");
+});
+
+test("dict como tabla de frecuencias", () => {
+    let freq <string,int> = ();
+    let palabras [string] = ["a","b","a","c","b","a"];
+    for (let w in palabras) {
+        let prev = freq[w] ?? 0;
+        freq[w] = prev + 1;
+    }
+    assert(freq["a"] == 3, "a aparece 3 veces");
+    assert(freq["b"] == 2, "b aparece 2 veces");
+    assert(freq["c"] == 1, "c aparece 1 vez");
+});
+
+test("dict devuelto desde función", () => {
+    fn any make_config() {
+        let cfg <string,any> = ();
+        cfg["debug"]   = true;
+        cfg["version"] = "1.0";
+        cfg["port"]    = 8080;
+        return cfg;
+    }
+    let c = make_config();
+    assert(c["debug"]   == true,  "debug = true");
+    assert(c["version"] == "1.0", "version = 1.0");
+    assert(c["port"]    == 8080,  "port = 8080");
+});
+
+test("dict de arrays: agrupar por categoría", () => {
+    let grupos <string,any> = ();
+    grupos["pares"] = [];
+    grupos["impares"] = [];
+    let nums [int] = [1, 2, 3, 4, 5, 6];
+    for (let n in nums) {
+        if (n % 2 == 0) {
+            grupos["pares"].push(n);
+        } else {
+            grupos["impares"].push(n);
+        }
+    }
+    assert(grupos["pares"].length()   == 3, "3 pares");
+    assert(grupos["impares"].length() == 3, "3 impares");
+    assert(grupos["pares"][0]         == 2, "primer par = 2");
+    assert(grupos["impares"][0]       == 1, "primer impar = 1");
+});
+
+test("dict: claves() y valores() en sintonía", () => {
+    let precios <string,decimal> = ({"pan",1.5},{"leche",2.0},{"queso",5.0});
+    let ks = precios.keys();
+    let vs = precios.values();
+    assert(ks.length() == 3, "3 claves");
+    assert(vs.length() == 3, "3 valores");
+    let total = vs.reduce(0.0, (acc, v) => acc + v);
+    assert(total == 8.5, "1.5+2.0+5.0 = 8.5");
+});
+
+summary();

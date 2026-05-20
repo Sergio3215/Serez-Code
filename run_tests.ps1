@@ -81,9 +81,16 @@
 #   unit_classes           Clases: constructor, métodos de instancia, mutación de campos,
 #                          herencia+override, método heredado sin override, super.method(),
 #                          herencia multinivel, type_of, campos array, campos dict, array de instancias
+#   unit_class_patterns    Patrones de clase: factory method (método retorna nueva instancia),
+#                          Counter con reset, campo array con HOF, herencia+método nuevo,
+#                          método private usado internamente, builder fluido encadenado,
+#                          filter/reduce sobre array de instancias, Registry por nombre
 #   unit_closures_edge     Closures avanzados: captura de valor, make_adder/multiplier,
 #                          composición (compose), apply_twice, lambda como argumento,
 #                          block body, map con closures independientes, currying
+#   unit_closures_mutable  Closures con estado mutable: make_counter (1→2→3), dos contadores
+#                          independientes, acumulador numérico, make_adder_from(n),
+#                          captura de loop variable, toggle bool, acumulador de strings
 #   unit_compound_assign   Operadores compuestos básicos: +=, -=, *=, /=, %= en int,
 #                          += en strings, += en decimals, acumulación en loop,
 #                          compound assign en arr[i], compound assign en instancia.campo
@@ -92,9 +99,17 @@
 #   unit_control_flow      If/else if/else: simple, false, if-else, cadena, anidado, compuesto;
 #                          While: básico, break, continue, anidado, false inicial;
 #                          For clásico: i=i+1, i++, i--, i+=2, i*=2, break, continue, anidado, sin iter
+#   unit_dict_advanced     Dict avanzado: claves int (<int,string>, <int,int>), for-in int keys,
+#                          pass-by-value semántica, construcción dinámica en while (B-60 fix),
+#                          tabla de frecuencias, dict desde función, dict de arrays agrupado,
+#                          keys()/values() con reduce
 #   unit_dict_forin        Dict for-in: iteración de keys, acceso a values, update en loop,
 #                          dict vacío, keys()/values(), missing key=null, insert/update, break;
 #                          toList() (array de keys), toArray() (array de pares [k,v]), dict <string,any>
+#   unit_forin_string      for-in sobre string: recolecta chars en orden, cuenta caracteres,
+#                          string vacío, cuenta vocales, reconstruye en mayúsculas,
+#                          break al hallar char, continue salta espacios, return anticipado,
+#                          itera split result, string de un solo carácter
 #   unit_foreach_edge      For-in edge: return desde función, throw en loop, split result,
 #                          no muta source, closures por iteración, en método de clase,
 #                          ternario en body, contador ++; ternario edge: en while, interpolación,
@@ -102,6 +117,11 @@
 #   unit_foreach_ternary_incr For-in básico, en orden, vacío, strings, break, continue, anidado,
 #                          métodos en elementos; ternario true/false/expresión/lazy/chained/en expr/null;
 #                          ++/-- postfix y prefix en while y countdown
+#   unit_functions_adv     Funciones avanzadas: múltiples defaults (2 parámetros con default),
+#                          recursión mutua (isEven/isOdd), recursión de cola (sumTo con acc),
+#                          función que retorna función según condición, función como variable,
+#                          pipeline de funciones en array, pow recursiva con exp negativo,
+#                          parámetro any con dispatch por is type check
 #   unit_functions         Funciones: sin tipo de retorno, string, bool, múltiples params tipados,
 #                          recursión (factorial, fibonacci), early return, retorna array,
 #                          retorna nullable, como argumentos, devuelve función, default params, void

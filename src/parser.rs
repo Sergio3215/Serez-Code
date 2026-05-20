@@ -1006,27 +1006,27 @@ impl Parser {
         while self.peek_token.token_type != TokenType::Semicolon
             && precedence < self.peek_precedence()
         {
-            let is_infix = match self.peek_token.token_type {
+            let is_infix = matches!(
+                self.peek_token.token_type,
                 TokenType::Plus
-                | TokenType::Minus
-                | TokenType::Slash
-                | TokenType::Asterisk
-                | TokenType::Percent
-                | TokenType::Eq
-                | TokenType::NotEq
-                | TokenType::Lt
-                | TokenType::Gt
-                | TokenType::LtEq
-                | TokenType::GtEq
-                | TokenType::And
-                | TokenType::Or
-                | TokenType::NullCoalesce
-                | TokenType::Question
-                | TokenType::LParen
-                | TokenType::Dot
-                | TokenType::LBracket => true,
-                _ => false,
-            };
+                    | TokenType::Minus
+                    | TokenType::Slash
+                    | TokenType::Asterisk
+                    | TokenType::Percent
+                    | TokenType::Eq
+                    | TokenType::NotEq
+                    | TokenType::Lt
+                    | TokenType::Gt
+                    | TokenType::LtEq
+                    | TokenType::GtEq
+                    | TokenType::And
+                    | TokenType::Or
+                    | TokenType::NullCoalesce
+                    | TokenType::Question
+                    | TokenType::LParen
+                    | TokenType::Dot
+                    | TokenType::LBracket
+            );
 
             if !is_infix {
                 return left_exp;
@@ -1074,20 +1074,14 @@ impl Parser {
                 // Ternary: condition ? then_expr : else_expr
                 if let Some(condition) = left_exp {
                     self.next_token(); // first token of then_expr
-                    let then_expr = match self.parse_expression(Precedence::Lowest) {
-                        Some(e) => e,
-                        None => return None,
-                    };
+                    let then_expr = self.parse_expression(Precedence::Lowest)?;
                     if self.peek_token.token_type != TokenType::Colon {
                         eprintln!("❌ PARSER ERROR: Expected ':' in ternary expression after '?'");
                         return None;
                     }
                     self.next_token(); // ':'
                     self.next_token(); // first token of else_expr
-                    let else_expr = match self.parse_expression(Precedence::Lowest) {
-                        Some(e) => e,
-                        None => return None,
-                    };
+                    let else_expr = self.parse_expression(Precedence::Lowest)?;
                     left_exp = Some(Expression::Ternary(TernaryExpression {
                         condition: Box::new(condition),
                         then_expr: Box::new(then_expr),

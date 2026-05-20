@@ -1,0 +1,110 @@
+// Unit tests — closures con estado mutable: contador, acumulador, shared state
+
+test("make_counter: cada llamada incrementa el estado", () => {
+    fn any make_counter() {
+        let count = 0;
+        return () => {
+            count = count + 1;
+            return count;
+        };
+    }
+    let c = make_counter();
+    assert(c() == 1, "primera llamada = 1");
+    assert(c() == 2, "segunda llamada = 2");
+    assert(c() == 3, "tercera llamada = 3");
+});
+
+test("dos contadores independientes no comparten estado", () => {
+    fn any make_counter() {
+        let count = 0;
+        return () => {
+            count = count + 1;
+            return count;
+        };
+    }
+    let a = make_counter();
+    let b = make_counter();
+    a(); a(); a();
+    b();
+    assert(a() == 4, "a está en 4");
+    assert(b() == 2, "b está en 2");
+});
+
+test("acumulador: suma valores entre llamadas", () => {
+    fn any make_sum() {
+        let total = 0;
+        return n => {
+            total = total + n;
+            return total;
+        };
+    }
+    let s = make_sum();
+    assert(s(10) == 10,  "suma 10 = 10");
+    assert(s(5)  == 15,  "suma 5 más = 15");
+    assert(s(25) == 40,  "suma 25 más = 40");
+    assert(s(-10) == 30, "suma -10 = 30");
+});
+
+test("make_adder con estado inicial parametrizado", () => {
+    fn any make_adder_from(int start) {
+        let acc = start;
+        return n => {
+            acc = acc + n;
+            return acc;
+        };
+    }
+    let from10 = make_adder_from(10);
+    let from0  = make_adder_from(0);
+    from10(5);
+    from10(5);
+    assert(from10(0) == 20, "from10: 10+5+5+0 = 20");
+    assert(from0(7)  == 7,  "from0: 0+7 = 7");
+});
+
+test("closure captura variable de loop for y la mantiene", () => {
+    fn [any] make_adders() {
+        let fns = [];
+        let i = 0;
+        while (i < 4) {
+            let captured = i;
+            fns.push(() => captured * captured);
+            i++;
+        }
+        return fns;
+    }
+    let fns = make_adders();
+    assert(fns[0]() == 0, "0^2 = 0");
+    assert(fns[1]() == 1, "1^2 = 1");
+    assert(fns[2]() == 4, "2^2 = 4");
+    assert(fns[3]() == 9, "3^2 = 9");
+});
+
+test("toggle: alterna estado bool entre llamadas", () => {
+    fn any make_toggle(bool initial) {
+        let state = initial;
+        return () => {
+            state = !state;
+            return state;
+        };
+    }
+    let t = make_toggle(false);
+    assert(t() == true,  "primer toggle: true");
+    assert(t() == false, "segundo toggle: false");
+    assert(t() == true,  "tercer toggle: true");
+});
+
+test("closure acumula strings", () => {
+    fn any make_builder() {
+        let result = "";
+        return (s) => {
+            result = result + s;
+            return result;
+        };
+    }
+    let build = make_builder();
+    assert(build("Hola") == "Hola",            "primer append");
+    assert(build(", ")   == "Hola, ",          "segundo append");
+    assert(build("mundo") == "Hola, mundo",    "tercer append");
+});
+
+summary();

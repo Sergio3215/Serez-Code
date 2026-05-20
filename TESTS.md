@@ -10,7 +10,7 @@
 .\run_tests.ps1 -generate          # regenera .expected (tras cambios en el lenguaje)
 ```
 
-**Resultado:** 73 archivos · 196 casos individuales · 0 fallos
+**Resultado:** 78 archivos · 247 casos individuales · 0 fallos
 
 ---
 
@@ -793,6 +793,22 @@ Un fallo produce `[FAIL]` en stdout; el runner lo detecta.
 
 ---
 
+### `unit_closures_mutable.sz` — Closures con estado mutable (7 tests)
+
+Cubre el patrón de closure que modifica su estado capturado entre llamadas: contadores, acumuladores, estado compartido.
+
+| Test | Qué verifica |
+|------|--------------|
+| make_counter: cada llamada incrementa el estado | `make_counter()` retorna closure; llamadas sucesivas devuelven 1, 2, 3 |
+| dos contadores independientes no comparten estado | Dos closures de `make_counter` tienen conteos separados |
+| acumulador: suma valores entre llamadas | Closure que acumula suma entre llamadas: 10 → 15 → 40 → 30 |
+| make_adder_from con estado inicial parametrizado | `make_adder_from(10)` inicia en 10 y acumula; independiente de `make_adder_from(0)` |
+| closure captura variable de loop for y la mantiene | `captured = i` dentro del loop captura el valor correcto; fns[2]() == 4 |
+| toggle: alterna estado bool entre llamadas | `make_toggle(false)` → true → false → true |
+| closure acumula strings | Builder closure que concatena strings entre llamadas |
+
+---
+
 ### `unit_closures_edge.sz` — Closures y HOF (9 tests)
 
 | Test | Qué verifica |
@@ -806,6 +822,25 @@ Un fallo produce `[FAIL]` en stdout; el runner lo detecta.
 | lambda with block body and multiple returns | Lambda multi-línea con varios `return` en ramas |
 | closures used in map — each closure independent | Array de closures `[adder(1), adder(2), adder(3)]` independientes |
 | lambda captures outer fn parameter — currying | `curry_add(3)` devuelve `inner` que suma 3 |
+
+---
+
+### `unit_forin_string.sz` — for-in sobre strings (10 tests)
+
+Cubre la iteración carácter a carácter de strings con `for-in`.
+
+| Test | Qué verifica |
+|------|--------------|
+| for-in string recolecta caracteres en orden | Itera `"hello"` y verifica orden y longitud |
+| for-in string cuenta caracteres | `n++` por cada char de `"serez"` → 5 |
+| for-in string vacío no itera | `""` → cero iteraciones |
+| for-in string cuenta vocales | `"Hello World"` → 3 vocales (e, o, o) |
+| for-in string reconstruye en mayúsculas | `"abc"` → `"ABC"` usando `toUpperCase()` por char |
+| for-in string: break al encontrar carácter | Rompe al hallar `"-"` en `"serez-code"`, verifica posición |
+| for-in string: continue salta espacios | Omite espacios en `"a b c"` → `"abc"` |
+| for-in string en función: retorno anticipado | `primerDigito("abc3def") == 3` con `return` dentro del for-in |
+| for-in string: resultado de split | Itera sobre `"uno,dos,tres".split(",")` |
+| for-in string de un solo carácter | `"x"` produce exactamente un carácter |
 
 ---
 
@@ -880,6 +915,57 @@ Un fallo produce `[FAIL]` en stdout; el runner lo detecta.
 | 3-level: chained super through NamedCounter::parentLabel to Counter::label | `grandparentLabel()` encadena `super` → `NamedCounter::parentLabel` → `super.label()` → "Counter" |
 | 3-level: this.value accessible via inherited super method | `parentDoubled()` a través de herencia usa `this.value` correcto |
 
+### `unit_functions_adv.sz` — Funciones avanzadas (9 tests)
+
+Cubre patrones funcionales no cubiertos en `unit_functions.sz`: múltiples defaults, recursión mutua, HOF avanzado.
+
+| Test | Qué verifica |
+|------|--------------|
+| múltiples parámetros con valor por defecto | `formato(val, pre="[", suf="]")` con 0, 1 y 2 overrides |
+| default override solo del primero | `suma(1)`, `suma(1,2)`, `suma(1,2,3)` con 2 defaults |
+| recursión mutua: isEven / isOdd | `isEven`/`isOdd` se llaman mutuamente; correcto para n=0..7 |
+| recursión de cola: suma 1..n con acumulador | `sumTo(n, acc=0)` tail-recursive; `sumTo(10) == 55` |
+| función que retorna función basada en condición | `selector(true)` → doble, `selector(false)` → +100 |
+| función almacenada en variable y reasignada | Variable `op` apunta a `doble` luego a `triple` |
+| pipeline de funciones en array | Array de lambdas aplicadas en secuencia: `5 → 6 → 12 → 9` |
+| función recursiva: pow con exponent negativo | `pow(2.0, 3) == 8.0`, `pow(2.0, -1) == 0.5` |
+| función con parámetro any: dispatch por is | `describir(42)` → `"entero: 42"`, `describir(null)` → `"otro"` |
+
+---
+
+### `unit_class_patterns.sz` — Patrones de clase (8 tests)
+
+Cubre patrones de diseño OOP: factory method, builder fluido, clase contador, campos array con HOF, método privado.
+
+| Test | Qué verifica |
+|------|--------------|
+| factory method: método que retorna nueva instancia | `punto.trasladar(3,4)` retorna nuevo `Punto`; original no muta |
+| class Counter con reset | `inc()`, `dec()`, `reset()` gestionan estado interno |
+| clase con campo array y métodos sobre él | `Bolsa.agregar/quitar/tiene()` operan sobre `this.items` |
+| herencia: clase hija extiende con método nuevo | `Circulo` hereda `id()` y agrega `area()` |
+| método privado usado solo internamente | `Validator.clasificar()` usa método `private esPar()` internamente |
+| builder pattern fluido | `QueryBuilder.from().where().limit().build()` encadenado |
+| array de instancias con map y filter | `filter(p => p.precio > 20)` y `reduce` sobre array de `Producto` |
+| clase Registry: almacena y recupera por nombre | `register("pi", 3.14)` luego `get("pi") == 3.14`; `get("nope") == null` |
+
+---
+
+### `unit_dict_advanced.sz` — Dicts avanzados (9 tests)
+
+Cubre tipos de clave no-string, construcción dinámica, semántica de paso por valor, y patrones de agrupamiento.
+
+| Test | Qué verifica |
+|------|--------------|
+| dict con clave int | `<int,string>` con claves 0, 1, 2; clave inexistente = null |
+| dict `<int,int>`: operaciones numéricas | `cuadrados[3] == 9`, suma de valores |
+| for-in sobre dict `<int,string>` | Itera claves enteras; `keys.includes(10)` |
+| dict como parámetro: semántica por valor | Mutación en función NO persiste en el caller (pass-by-value) |
+| dict construido dinámicamente con while loop | `d[i] = i*i` dentro de while; `d[3] == 9` tras el loop (B-60 fix) |
+| dict como tabla de frecuencias | Cuenta ocurrencias con `freq[w] = (freq[w] ?? 0) + 1` |
+| dict devuelto desde función | Función retorna `<string,any>` con distintos tipos de valor |
+| dict de arrays: agrupar por categoría | `grupos["pares"]` y `grupos["impares"]` acumulan con `push` |
+| dict: claves() y valores() en sintonía | `keys()` y `values()` tienen misma longitud; `reduce` sobre values |
+
 ---
 
 ## Resumen de cobertura
@@ -889,13 +975,13 @@ Un fallo produce `[FAIL]` en stdout; el runner lo detecta.
 | Tipos primitivos y aritmética | 01_basic, 01_arithmetic, 02_arithmetic, 22_math_edge | unit_operators (parcial) | err_overflow, err_bool_plus_int | ~40 casos |
 | Variables y scoping | 01_variables, 02_variables, 02_variables_scope | — | err_undeclared, err_undeclared_assign, err_for_scope_leak | ~15 casos |
 | Control de flujo | 03_control_flow, 04_control_flow | — | — | ~12 casos |
-| Funciones y recursión | 04_functions, 05_functions, 17_function_syntax | — | err_arity, err_return_toplevel, err_return_type_mismatch, err_type_param | ~20 casos |
+| Funciones y recursión | 04_functions, 05_functions, 17_function_syntax | unit_functions_adv (9) | err_arity, err_return_toplevel, err_return_type_mismatch, err_type_param | ~30 casos |
 | Strings | 03_strings, 06_strings, 21_string_interp_complex, 27_escape_sequences | — | — | ~25 casos |
 | Arrays | 05_arrays, 06_arrays, 23_boundary_cases | unit_compound_assign (parcial) | err_bounds, err_typed_push, err_sort_mixed | ~30 casos |
-| Diccionarios | 07_dicts | unit_compound_assign_edge (parcial) | — | ~12 casos |
-| Clases e herencia | 08_classes, 30_class_regression | unit_super_method (10) | err_private, err_undeclared_class | ~30 casos |
+| Diccionarios | 07_dicts | unit_dict_advanced (9) + unit_compound_assign_edge (parcial) | — | ~22 casos |
+| Clases e herencia | 08_classes, 30_class_regression | unit_class_patterns (8) + unit_super_method (10) | err_private, err_undeclared_class | ~40 casos |
 | Interfaces | 09_interfaces | — | err_extra_iface_field | ~8 casos |
-| Lambdas y closures | 10_lambdas, 26_complex_scenarios | unit_closures_edge (9) | — | ~25 casos |
+| Lambdas y closures | 10_lambdas, 26_complex_scenarios | unit_closures_edge (9) + unit_closures_mutable (7) | — | ~35 casos |
 | Nullables | 11_nullables | — | — | ~8 casos |
 | Matemáticas | 12_math, 22_math_edge | — | err_div_zero, err_modulo_zero | ~12 casos |
 | Try/Catch/Throw/Finally | 33_try_catch | unit_try_catch (12) + unit_try_catch_edge (10) | — | 32 casos |
@@ -904,4 +990,4 @@ Un fallo produce `[FAIL]` en stdout; el runner lo detecta.
 | Operadores | 14_arch_features, 18_error_cases | unit_operators (15) | err_bang_nonbool | 20 casos |
 | Regresiones | 29_bug_regression | — | — | ~25 casos |
 | Casos extremos | 13_edge_cases, 15_arch_stress, 20_more_edge_cases, 23_boundary_cases, 28_final_checks | — | — | ~40 casos |
-| ForEach / Ternario / ++-- | — | unit_foreach_ternary_incr (22) + unit_foreach_edge (18) | err_foreach_nonarray, err_foreach_dict | 40 casos |
+| ForEach / Ternario / ++-- | — | unit_foreach_ternary_incr (22) + unit_foreach_edge (18) + unit_forin_string (10) | err_foreach_nonarray, err_foreach_dict | 50 casos |

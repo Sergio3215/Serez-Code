@@ -272,8 +272,7 @@ fn types_compatible(expected: &str, actual: &str) -> bool {
     if expected == actual { return true; }
     if expected == "any" { return true; }
     // Nullable: "int?" accepts "int" or "null"
-    if expected.ends_with('?') {
-        let base = &expected[..expected.len() - 1];
+    if let Some(base) = expected.strip_suffix('?') {
         return actual == base || actual == "null";
     }
     false

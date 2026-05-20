@@ -1,0 +1,93 @@
+// Unit tests — for-in over strings: iteración carácter a carácter
+
+test("for-in string recolecta caracteres en orden", () => {
+    let s = "hello";
+    let chars [string] = [];
+    for (let c in s) { chars.push(c); }
+    assert(chars.length() == 5,   "5 caracteres");
+    assert(chars[0] == "h",       "primero = h");
+    assert(chars[4] == "o",       "último  = o");
+    assert(chars[2] == "l",       "medio   = l");
+});
+
+test("for-in string cuenta caracteres (longitud manual)", () => {
+    let n = 0;
+    for (let c in "serez") { n++; }
+    assert(n == 5, "serez tiene 5 caracteres");
+});
+
+test("for-in string vacío no itera", () => {
+    let count = 0;
+    for (let c in "") { count++; }
+    assert(count == 0, "cero iteraciones en string vacío");
+});
+
+test("for-in string cuenta vocales", () => {
+    let vocales = "aeiouAEIOU";
+    let count = 0;
+    for (let c in "Hello World") {
+        if (vocales.includes(c)) { count++; }
+    }
+    assert(count == 3, "Hello World tiene 3 vocales: e, o, o");
+});
+
+test("for-in string reconstruye en mayúsculas", () => {
+    let resultado = "";
+    for (let c in "abc") {
+        resultado = resultado + c.toUpperCase();
+    }
+    assert(resultado == "ABC", "reconstruido en mayúsculas");
+});
+
+test("for-in string: break al encontrar carácter", () => {
+    let pos = 0;
+    let found = false;
+    for (let c in "serez-code") {
+        if (c == "-") { found = true; break; }
+        pos++;
+    }
+    assert(found,     "encontró guion");
+    assert(pos == 5,  "guion está en posición 5");
+});
+
+test("for-in string: continue salta espacios", () => {
+    let letras = "";
+    for (let c in "a b c") {
+        if (c == " ") { continue; }
+        letras = letras + c;
+    }
+    assert(letras == "abc", "espacios omitidos");
+});
+
+test("for-in string en función: retorno anticipado", () => {
+    fn int primerDigito(string s) {
+        let digits = "0123456789";
+        let i = 0;
+        for (let c in s) {
+            if (digits.includes(c)) { return i; }
+            i++;
+        }
+        return -1;
+    }
+    assert(primerDigito("abc3def") == 3,   "dígito en posición 3");
+    assert(primerDigito("9hello")  == 0,   "dígito al inicio");
+    assert(primerDigito("nonum")   == -1,  "sin dígito = -1");
+});
+
+test("for-in string: resultado de split", () => {
+    let partes = "uno,dos,tres".split(",");
+    let cat = "";
+    for (let p in partes) {
+        cat = cat + p + "|";
+    }
+    assert(cat == "uno|dos|tres|", "iterar split result");
+});
+
+test("for-in string de un solo carácter", () => {
+    let chars [string] = [];
+    for (let c in "x") { chars.push(c); }
+    assert(chars.length() == 1, "un carácter");
+    assert(chars[0] == "x",     "carácter correcto");
+});
+
+summary();

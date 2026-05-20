@@ -1,0 +1,110 @@
+// Unit tests — funciones avanzadas: múltiples defaults, recursión mutua,
+// patterns HOF, funciones como valores en estructuras
+
+test("múltiples parámetros con valor por defecto", () => {
+    fn string formato(string val, string pre = "[", string suf = "]") {
+        return pre + val + suf;
+    }
+    assert(formato("hi")          == "[hi]",  "dos defaults");
+    assert(formato("hi", "<")     == "<hi]",  "un default");
+    assert(formato("hi", "<", ">") == "<hi>", "sin defaults");
+});
+
+test("default override solo del primero", () => {
+    fn int suma(int a, int b = 10, int c = 100) {
+        return a + b + c;
+    }
+    assert(suma(1)        == 111, "ambos defaults: 1+10+100");
+    assert(suma(1, 2)     == 103, "segundo usa default c: 1+2+100");
+    assert(suma(1, 2, 3)  == 6,   "sin defaults: 1+2+3");
+});
+
+test("recursión mutua: isEven / isOdd", () => {
+    fn bool isEven(int n) {
+        if (n == 0) { return true; }
+        return isOdd(n - 1);
+    }
+    fn bool isOdd(int n) {
+        if (n == 0) { return false; }
+        return isEven(n - 1);
+    }
+    assert(isEven(0) == true,  "0 es par");
+    assert(isEven(2) == true,  "2 es par");
+    assert(isEven(4) == true,  "4 es par");
+    assert(isOdd(1)  == true,  "1 es impar");
+    assert(isOdd(3)  == true,  "3 es impar");
+    assert(isOdd(7)  == true,  "7 es impar");
+    assert(isEven(5) == false, "5 no es par");
+    assert(isOdd(8)  == false, "8 no es impar");
+});
+
+test("recursión de cola: suma 1..n", () => {
+    fn int sumTo(int n, int acc = 0) {
+        if (n <= 0) { return acc; }
+        return sumTo(n - 1, acc + n);
+    }
+    assert(sumTo(5)  == 15,  "1+2+3+4+5 = 15");
+    assert(sumTo(10) == 55,  "sum 1..10 = 55");
+    assert(sumTo(0)  == 0,   "sum hasta 0 = 0");
+});
+
+test("función que retorna función basada en condición", () => {
+    fn any selector(bool doDouble) {
+        if (doDouble) { return x => x * 2; }
+        return x => x + 100;
+    }
+    let f1 = selector(true);
+    let f2 = selector(false);
+    assert(f1(5)  == 10,  "doble: 5*2 = 10");
+    assert(f2(5)  == 105, "suma: 5+100 = 105");
+});
+
+test("función almacenada en variable y reasignada", () => {
+    fn int doble(int x)  { return x * 2; }
+    fn int triple(int x) { return x * 3; }
+
+    let op = doble;
+    assert(op(4) == 8,  "doble(4) = 8");
+    op = triple;
+    assert(op(4) == 12, "triple(4) = 12");
+});
+
+test("pipeline de funciones en array", () => {
+    fn any pipeline([any] fns) {
+        return x => {
+            let val = x;
+            for (let f in fns) { val = f(val); }
+            return val;
+        };
+    }
+    let process = pipeline([x => x + 1, x => x * 2, x => x - 3]);
+    assert(process(5)  == 9,  "5 → 6 → 12 → 9");
+    assert(process(10) == 19, "10 → 11 → 22 → 19");
+});
+
+test("función recursiva con acumulador explícito: pow", () => {
+    fn decimal pow(decimal base, int exp) {
+        if (exp == 0) { return 1.0; }
+        if (exp < 0)  { return 1.0 / pow(base, -exp); }
+        return base * pow(base, exp - 1);
+    }
+    assert(pow(2.0, 0)  == 1.0,  "2^0 = 1");
+    assert(pow(2.0, 3)  == 8.0,  "2^3 = 8");
+    assert(pow(3.0, 4)  == 81.0, "3^4 = 81");
+    assert(pow(2.0, -1) == 0.5,  "2^-1 = 0.5");
+});
+
+test("función con parámetro any acepta distintos tipos", () => {
+    fn string describir(any v) {
+        if (v is int)     { return "entero: " + v; }
+        if (v is string)  { return "texto: " + v; }
+        if (v is bool)    { return "booleano: " + v; }
+        return "otro";
+    }
+    assert(describir(42)      == "entero: 42",   "int");
+    assert(describir("hola")  == "texto: hola",  "string");
+    assert(describir(true)    == "booleano: true","bool");
+    assert(describir(null)    == "otro",          "null → otro");
+});
+
+summary();

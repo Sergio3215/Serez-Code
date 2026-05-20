@@ -1,0 +1,160 @@
+// Unit tests — patrones de clase: factory, builder, contador, encadenado, private
+
+test("factory method: método que retorna nueva instancia", () => {
+    public class Punto {
+        public Punto(int x, int y) { this.x = x; this.y = y; }
+        public Punto trasladar(int dx, int dy) {
+            return new Punto(this.x + dx, this.y + dy);
+        }
+        public string str() { return "(" + this.x + "," + this.y + ")"; }
+    }
+    let p = new Punto(1, 2);
+    let q = p.trasladar(3, 4);
+    assert(q.x == 4,              "x trasladado = 4");
+    assert(q.y == 6,              "y trasladado = 6");
+    assert(p.x == 1,              "original no mutado");
+    assert(q.str() == "(4,6)",    "str del nuevo punto");
+});
+
+test("class Counter con reset", () => {
+    public class Counter {
+        public Counter(int start) { this.val = start; }
+        public void inc()        { this.val = this.val + 1; }
+        public void dec()        { this.val = this.val - 1; }
+        public void reset()      { this.val = 0; }
+        public int  get()        { return this.val; }
+    }
+    let c = new Counter(5);
+    c.inc(); c.inc(); c.inc();
+    assert(c.get() == 8, "5+3 = 8");
+    c.dec();
+    assert(c.get() == 7, "8-1 = 7");
+    c.reset();
+    assert(c.get() == 0, "reset = 0");
+});
+
+test("clase con campo array y métodos sobre él", () => {
+    public class Bolsa {
+        public Bolsa() { this.items = []; }
+        public void agregar(string s)  { this.items.push(s); }
+        public void quitar()           { this.items.pop(); }
+        public int  size()             { return this.items.length(); }
+        public bool tiene(string s)    { return this.items.includes(s); }
+    }
+    let b = new Bolsa();
+    b.agregar("manzana");
+    b.agregar("pera");
+    b.agregar("uva");
+    assert(b.size()           == 3,    "3 items");
+    assert(b.tiene("pera")    == true,  "tiene pera");
+    assert(b.tiene("kiwi")    == false, "no tiene kiwi");
+    b.quitar();
+    assert(b.size()           == 2,    "2 tras quitar");
+    assert(b.tiene("uva")     == false, "uva quitada");
+});
+
+test("herencia: clase hija extiende con método nuevo", () => {
+    public class Forma {
+        public Forma(string nombre) { this.nombre = nombre; }
+        public string id() { return this.nombre; }
+    }
+    public class Circulo : Forma {
+        public Circulo(decimal r) {
+            this.nombre = "Circulo";
+            this.r = r;
+        }
+        public decimal area() { return 3.14159 * this.r * this.r; }
+    }
+    let c = new Circulo(1.0);
+    assert(c.id()   == "Circulo", "id heredado");
+    assert(c.area() > 3.14,       "area > pi");
+    assert(c.area() < 3.15,       "area < 3.15");
+});
+
+test("método privado usado solo internamente", () => {
+    public class Validator {
+        public Validator() {}
+        private bool esPar(int n) { return n % 2 == 0; }
+        public string clasificar(int n) {
+            if (this.esPar(n)) { return "par"; }
+            return "impar";
+        }
+    }
+    let v = new Validator();
+    assert(v.clasificar(4) == "par",   "4 es par");
+    assert(v.clasificar(7) == "impar", "7 es impar");
+    assert(v.clasificar(0) == "par",   "0 es par");
+});
+
+test("builder pattern fluido", () => {
+    public class QueryBuilder {
+        public QueryBuilder() {
+            this.tabla  = "";
+            this.limite = 0;
+            this.filtro = "";
+        }
+        public QueryBuilder from(string t) {
+            this.tabla = t;
+            return this;
+        }
+        public QueryBuilder limit(int n) {
+            this.limite = n;
+            return this;
+        }
+        public QueryBuilder where(string f) {
+            this.filtro = f;
+            return this;
+        }
+        public string build() {
+            return "SELECT FROM " + this.tabla + " WHERE " + this.filtro + " LIMIT " + this.limite;
+        }
+    }
+    let q = new QueryBuilder()
+        .from("users")
+        .where("active=true")
+        .limit(10)
+        .build();
+    assert(q == "SELECT FROM users WHERE active=true LIMIT 10", "query construida");
+});
+
+test("array de instancias con map y filter", () => {
+    public class Producto {
+        public Producto(string n, decimal p) { this.nombre = n; this.precio = p; }
+    }
+    let productos = [];
+    productos.push(new Producto("A", 10.0));
+    productos.push(new Producto("B", 25.0));
+    productos.push(new Producto("C", 5.0));
+    productos.push(new Producto("D", 50.0));
+
+    let caros = productos.filter(p => p.precio > 20.0);
+    assert(caros.length() == 2, "2 productos caros");
+
+    let total = productos.reduce(0.0, (acc, p) => acc + p.precio);
+    assert(total == 90.0, "total = 90.0");
+});
+
+test("clase Registry: almacena y recupera por nombre", () => {
+    public class Registry {
+        public Registry() { this.store = []; }
+        public void register(string key, any value) {
+            this.store.push([key, value]);
+        }
+        public any get(string key) {
+            for (let entry in this.store) {
+                if (entry[0] == key) { return entry[1]; }
+            }
+            return null;
+        }
+    }
+    let r = new Registry();
+    r.register("pi",   3.14159);
+    r.register("msg",  "hola");
+    r.register("flag", true);
+    assert(r.get("pi")   == 3.14159, "pi recuperado");
+    assert(r.get("msg")  == "hola",  "msg recuperado");
+    assert(r.get("flag") == true,    "flag recuperado");
+    assert(r.get("nope") == null,    "clave inexistente = null");
+});
+
+summary();

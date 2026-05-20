@@ -314,7 +314,7 @@ impl Lexer {
             let next_is_digit = self.input[self.read_position..]
                 .chars()
                 .next()
-                .map_or(false, is_digit);
+                .is_some_and(is_digit);
             if next_is_digit {
                 self.read_char(); // consume '.'
                 while is_digit(self.ch) {

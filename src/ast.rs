@@ -112,6 +112,7 @@ pub struct OutStatement {
 #[derive(Debug, Clone)]
 pub struct InterfaceDeclaration {
     pub name: String,
+    #[allow(dead_code)]
     pub is_public: bool,
     pub fields: Vec<InterfaceField>,
 }
@@ -127,6 +128,7 @@ pub struct InterfaceField {
 #[derive(Debug, Clone)]
 pub struct ClassDeclaration {
     pub name: String,
+    #[allow(dead_code)]
     pub is_public: bool,
     pub parent: Option<String>,
     pub constructor: Option<ClassConstructor>,

@@ -69,6 +69,7 @@
 | [B-57](#b-57--op_str-throw-silently-swallowed-in-out--interpolation) | `op_str()` exception silently swallowed — `out` falls back to default display | 🟡 High | ✅ |
 | [B-58](#b-58--instances-in-arrays-dont-use-op_str-in-display) | Instances inside arrays don't use `op_str` when displayed | 🟠 Medium | ✅ |
 | [B-59](#b-59--replace-only-replaced-first-occurrence) | `replace` only replaced the first occurrence instead of all | 🟢 Low | ✅ |
+| [B-60](#b-60--dict-indexassign-inside-nested-scope-loses-new-entries-on-scope-pop) | Dict `IndexAssign` inside nested scope loses new entries on scope pop | 🔴 Critical | ✅ |
 
 ---
 
@@ -2729,4 +2730,59 @@ Changed to `s.replace(&from[..], &to)` (Rust's `replace` replaces all occurrence
 EvalResult::Value(self.alloc(ObjectData::Str(s.replacen(&from[..], &to, 1))))
 // After
 EvalResult::Value(self.alloc(ObjectData::Str(s.replace(&from[..], &to))))
+```
+
+---
+
+## B-60 — Dict `IndexAssign` inside nested scope loses new entries on scope pop
+
+**Date:** 2026-05-20
+**Files:** `src/evaluator.rs`
+**Severity:** 🔴 Critical
+
+### Symptom
+
+Inserting new keys into a dict inside a `while` loop (or any nested scope) did not persist after the loop. Only entries that existed before the loop survived:
+
+```serez
+let d <string,int> = ();
+let i = 0;
+while (i < 3) {
+    d["key"] = i;   // silently lost after loop body scope pops
+    i++;
+}
+out d["key"];  // null  ← expected 2
+```
+
+Updating existing keys in a `for-in` loop worked correctly; only inserts of new keys in `while`/`for` bodies failed.
+
+### Root cause
+
+`IndexAssign` for `Dict` allocated new key/value refs via `self.plant(owned)` when `arr_ref.region == Scoped`. These refs land at positions in the scoped arena ABOVE the watermark saved when the while-body scope was pushed. On scope pop, `reset_to(mark)` truncates those positions, invalidating the refs stored in the dict's entries vector.
+
+Arrays already had this fix (B-22): when `arr_ref.region == Scoped && self.scopes.depth() > 1`, new element refs are promoted to the global arena via `plant_global`. The same guard was missing for dicts.
+
+### Fix
+
+Added depth check before planting dict entry refs, mirroring the array fix:
+
+```rust
+let nested = self.scopes.depth() > 1;
+// Value update (existing key):
+let new_ref = match arr_ref.region {
+    RegionId::Global              => self.plant_global(owned_val.clone()),
+    RegionId::Scoped if nested    => self.plant_global(owned_val.clone()),  // ← added
+    RegionId::Scoped              => self.plant(owned_val.clone()),
+};
+// New key insert:
+let new_k = match arr_ref.region {
+    RegionId::Global              => self.plant_global(owned_k),
+    RegionId::Scoped if nested    => self.plant_global(owned_k),            // ← added
+    RegionId::Scoped              => self.plant(owned_k),
+};
+let new_v = match arr_ref.region {
+    RegionId::Global              => self.plant_global(owned_val),
+    RegionId::Scoped if nested    => self.plant_global(owned_val),          // ← added
+    RegionId::Scoped              => self.plant(owned_val),
+};
 ```

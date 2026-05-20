@@ -128,7 +128,7 @@ impl Evaluator {
                 }
             }
             Some(ObjectData::Boolean(b)) => format!("{}", b),
-            Some(ObjectData::Str(s)) => format!("{}", s),
+            Some(ObjectData::Str(s)) => s.to_string(),
             Some(ObjectData::Array { elements: refs, .. }) => {
                 let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
                 format!("[{}]", elems.join(", "))
@@ -680,17 +680,13 @@ impl Evaluator {
                         let search_key = obj_data_to_key_str(&idx_data);
                         let owned_val = self.extract(val_ref);
 
-                        // Index-based loop so we can call &mut self methods (plant/plant_global)
+                        // Index-based loop so we can call &mut self methods (plant_for_target)
                         let mut replaced = false;
                         let mut i = 0;
                         while i < entries.len() {
                             let k_data = self.resolve(entries[i].0).unwrap().clone();
                             if obj_data_to_key_str(&k_data) == search_key {
-                                let new_ref = match arr_ref.region {
-                                    RegionId::Global => self.plant_global(owned_val.clone()),
-                                    RegionId::Scoped => self.plant(owned_val.clone()),
-                                };
-                                entries[i].1 = new_ref;
+                                entries[i].1 = self.plant_for_target(owned_val.clone(), arr_ref);
                                 replaced = true;
                                 break;
                             }
@@ -698,14 +694,8 @@ impl Evaluator {
                         }
                         if !replaced {
                             let owned_k = OwnedValue::Str(search_key);
-                            let new_k = match arr_ref.region {
-                                RegionId::Global => self.plant_global(owned_k),
-                                RegionId::Scoped => self.plant(owned_k),
-                            };
-                            let new_v = match arr_ref.region {
-                                RegionId::Global => self.plant_global(owned_val),
-                                RegionId::Scoped => self.plant(owned_val),
-                            };
+                            let new_k = self.plant_for_target(owned_k, arr_ref);
+                            let new_v = self.plant_for_target(owned_val, arr_ref);
                             entries.push((new_k, new_v));
                         }
                         self.update_dict(arr_ref, key_type, value_type, entries);
@@ -722,7 +712,7 @@ impl Evaluator {
                     let updated_owned = self.extract(arr_ref);
                     if let Some(obj_ref) = self.lookup_var(&obj_name) {
                         if let Some(ObjectData::Instance { class_name, mut fields }) =
-                            self.resolve(obj_ref).map(|d| d.clone())
+                            self.resolve(obj_ref).cloned()
                         {
                             if let Some(entry) = fields.iter_mut().find(|(k, _)| k == &field_name) {
                                 entry.1 = updated_owned;
@@ -1039,9 +1029,7 @@ impl Evaluator {
                     }) => (return_type, parameters, body, captured),
                     _ => {
                         eprintln!("❌ ERROR: Attempt to call a non-function");
-                        self.scopes.pop();
-                        self.call_depth -= 1;
-                        self.call_stack.pop();
+                        self.leave_call();
                         return EvalResult::Error;
                     }
                 };
@@ -1051,9 +1039,7 @@ impl Evaluator {
                     match self.eval_expression(arg) {
                         EvalResult::Value(r) => arg_refs.push(r),
                         _ => {
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
+                            self.leave_call();
                             return EvalResult::Error;
                         }
                     }
@@ -1066,16 +1052,8 @@ impl Evaluator {
                         arg_refs.len()
                     );
 
-                    for frame in self.call_stack.iter().rev() {
-                        eprintln!(
-                            "    called from '{}' [line {}:{}]",
-                            frame.name, frame.line, frame.column
-                        );
-                    }
-                    eprintln!();
-                    self.scopes.pop();
-                    self.call_depth -= 1;
-                    self.call_stack.pop();
+                    self.print_call_stack();
+                    self.leave_call();
                     return EvalResult::Error;
                 }
 
@@ -1091,16 +1069,8 @@ impl Evaluator {
                                 param.name, expected_type, actual_data.type_name()
                             );
 
-                            for frame in self.call_stack.iter().rev() {
-                                eprintln!(
-                                    "    called from '{}' [line {}:{}]",
-                                    frame.name, frame.line, frame.column
-                                );
-                            }
-                            eprintln!();
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
+                            self.print_call_stack();
+                            self.leave_call();
                             return EvalResult::Error;
                         }
                     }
@@ -1124,22 +1094,16 @@ impl Evaluator {
                         EvalResult::Return(v) => { result_ref = v; break; }
                         EvalResult::Throw(v) => {
                             let owned = self.extract(v);
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
+                            self.leave_call();
                             return EvalResult::Throw(self.plant(owned));
                         }
                         EvalResult::Error => {
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
+                            self.leave_call();
                             return EvalResult::Error;
                         }
                         _ => { // Break/Continue inside a function body is an error
                             eprintln!("❌ ERROR: 'break'/'continue' cannot be used outside of a loop");
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
+                            self.leave_call();
                             return EvalResult::Error;
                         }
                     }
@@ -1148,9 +1112,7 @@ impl Evaluator {
                 // Deep-extract ANTES del pop — preserva elementos de arrays anidados
                 let owned = self.extract(result_ref);
 
-                self.scopes.pop(); // Flash Scope: destrucción instantánea de temporales
-                self.call_depth -= 1;
-                self.call_stack.pop();
+                self.leave_call(); // Flash Scope: destrucción instantánea de temporales
                 let result_ref = self.plant(owned);
 
                 if let Some(expected_ret) = &return_type {
@@ -1161,13 +1123,7 @@ impl Evaluator {
                             "❌ TYPE ERROR: Function expected to return '{}' but returned another type.",
                             expected_ret
                         );
-                        for frame in self.call_stack.iter().rev() {
-                            eprintln!(
-                                "    called from '{}' [line {}:{}]",
-                                frame.name, frame.line, frame.column
-                            );
-                        }
-                        eprintln!();
+                        self.print_call_stack();
                         return EvalResult::Error;
                     }
                 }
@@ -1247,10 +1203,7 @@ impl Evaluator {
                     (ObjectData::Array { elements, .. }, ObjectData::Integer(i)) => {
                         if *i < 0 || *i as usize >= elements.len() {
                             eprintln!("❌ ERROR: Index out of bounds");
-                            for frame in self.call_stack.iter().rev() {
-                                eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
-                            }
-                            eprintln!();
+                            self.print_call_stack();
                             EvalResult::Error
                         } else {
                             EvalResult::Value(elements[*i as usize])
@@ -1269,10 +1222,7 @@ impl Evaluator {
                     }
                     _ => {
                         eprintln!("❌ ERROR: Index operator not supported for these types");
-                        for frame in self.call_stack.iter().rev() {
-                            eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
-                        }
-                        eprintln!();
+                        self.print_call_stack();
                         EvalResult::Error
                     }
                 }
@@ -2065,13 +2015,7 @@ impl Evaluator {
                     "❌ ERROR: Type mismatch — operator '{}' cannot be applied between '{}' and '{}' - [{}:{}]",
                     op, left_type, right_type, line, column
                 );
-                for frame in self.call_stack.iter().rev() {
-                    eprintln!(
-                        "    called from '{}' [line {}:{}]",
-                        frame.name, frame.line, frame.column
-                    );
-                }
-                eprintln!();
+                self.print_call_stack();
                 EvalResult::Error
             }
         }
@@ -2102,14 +2046,14 @@ impl Evaluator {
                     if let ast::Expression::FunctionLiteral(func) = &l.value {
                         self.analyze_function(&l.name, func, &mut total_memory);
                     } else {
-                        total_memory += self.estimate_expression(&l.value);
+                        total_memory += estimate_expression(&l.value);
                     }
                 }
                 ast::Statement::Assign(a) => {
-                    total_memory += self.estimate_expression(&a.value);
+                    total_memory += estimate_expression(&a.value);
                 }
                 ast::Statement::Expression(e) => {
-                    total_memory += self.estimate_expression(e);
+                    total_memory += estimate_expression(e);
                 }
                 _ => {}
             }
@@ -2129,44 +2073,44 @@ impl Evaluator {
             match stmt {
                 ast::Statement::Let(l) => {
                     local_mem += 8; // variable pointer
-                    local_mem += self.estimate_expression(&l.value);
+                    local_mem += estimate_expression(&l.value);
                 }
                 ast::Statement::Assign(a) => {
-                    local_mem += self.estimate_expression(&a.value);
+                    local_mem += estimate_expression(&a.value);
                 }
                 ast::Statement::Expression(e) => {
-                    local_mem += self.estimate_expression(e);
+                    local_mem += estimate_expression(e);
                 }
                 ast::Statement::Return(r) => {
-                    local_mem += self.estimate_expression(&r.return_value);
+                    local_mem += estimate_expression(&r.return_value);
                 }
                 ast::Statement::While(w) => {
-                    local_mem += self.estimate_expression(&w.condition);
+                    local_mem += estimate_expression(&w.condition);
                     // For static analysis we approximate one iteration cost
                     for body_stmt in &w.body.statements {
                         if let ast::Statement::Expression(e) = body_stmt {
-                            local_mem += self.estimate_expression(e);
+                            local_mem += estimate_expression(e);
                         } else if let ast::Statement::Let(l) = body_stmt {
-                            local_mem += 8 + self.estimate_expression(&l.value);
+                            local_mem += 8 + estimate_expression(&l.value);
                         }
                     }
                 }
                 ast::Statement::For(f) => {
                     local_mem += 8; // init variable
-                    local_mem += self.estimate_expression(&f.condition);
-                    local_mem += self.estimate_expression(&f.update.value);
+                    local_mem += estimate_expression(&f.condition);
+                    local_mem += estimate_expression(&f.update.value);
                     // Approximate one iteration cost
                     for body_stmt in &f.body.statements {
                         if let ast::Statement::Expression(e) = body_stmt {
-                            local_mem += self.estimate_expression(e);
+                            local_mem += estimate_expression(e);
                         } else if let ast::Statement::Let(l) = body_stmt {
-                            local_mem += 8 + self.estimate_expression(&l.value);
+                            local_mem += 8 + estimate_expression(&l.value);
                         }
                     }
                 }
                 ast::Statement::ForEach(fe) => {
                     local_mem += 8; // iteration variable
-                    local_mem += self.estimate_expression(&fe.iterable);
+                    local_mem += estimate_expression(&fe.iterable);
                 }
                 _ => {}
             }
@@ -2188,108 +2132,6 @@ impl Evaluator {
         println!("  Criticality: {}{}{} {}\n", color, bar, reset, level);
     }
 
-    fn estimate_expression(&self, expr: &ast::Expression) -> usize {
-        match expr {
-            ast::Expression::Integer(_) => 8,
-            ast::Expression::Decimal(_) => 8,
-            ast::Expression::Boolean(_) => 1,
-            ast::Expression::String(s) => 24 + s.len(),
-            ast::Expression::Identifier(_) => 8,
-            ast::Expression::Lambda(_) => 32,
-            ast::Expression::Prefix(_, right) => 8 + self.estimate_expression(right),
-            ast::Expression::Infix(infix) => {
-                8 + self.estimate_expression(&infix.left) + self.estimate_expression(&infix.right)
-            }
-            ast::Expression::FunctionLiteral(f) => 32 + f.parameters.len() * 8,
-            ast::Expression::Call(c) => {
-                let mut cost = 8;
-                for arg in &c.arguments {
-                    cost += self.estimate_expression(arg);
-                }
-                cost
-            }
-            ast::Expression::ArrayLiteral(arr) => {
-                let mut cost = 24;
-                for item in &arr.elements {
-                    cost += self.estimate_expression(item);
-                }
-                cost
-            }
-            ast::Expression::Null => 0,
-            ast::Expression::DictLiteral(d) => {
-                let mut cost = 24; // Vec overhead
-                for (k, v) in &d.entries {
-                    cost += self.estimate_expression(k) + self.estimate_expression(v);
-                }
-                cost
-            }
-            ast::Expression::EntryLiteral(k, v) => {
-                self.estimate_expression(k) + self.estimate_expression(v)
-            }
-            ast::Expression::DotCall(dc) => {
-                let mut cost = 8;
-                for arg in &dc.arguments {
-                    cost += self.estimate_expression(arg);
-                }
-                cost
-            }
-            ast::Expression::If(if_expr) => {
-                let mut cost = self.estimate_expression(&if_expr.condition);
-                let mut cons_cost = 0;
-                for stmt in &if_expr.consequence.statements {
-                    if let ast::Statement::Expression(e) = stmt {
-                        cons_cost += self.estimate_expression(e);
-                    } else if let ast::Statement::Let(l) = stmt {
-                        cons_cost += 8 + self.estimate_expression(&l.value);
-                    }
-                }
-                let mut alt_cost = 0;
-                if let Some(alt) = &if_expr.alternative {
-                    for stmt in &alt.statements {
-                        if let ast::Statement::Expression(e) = stmt {
-                            alt_cost += self.estimate_expression(e);
-                        } else if let ast::Statement::Let(l) = stmt {
-                            alt_cost += 8 + self.estimate_expression(&l.value);
-                        }
-                    }
-                }
-                cost += std::cmp::max(cons_cost, alt_cost);
-                cost
-            }
-            ast::Expression::Index(idx_expr) => {
-                8 + self.estimate_expression(&idx_expr.left)
-                    + self.estimate_expression(&idx_expr.index)
-            }
-            ast::Expression::InterpolatedString(parts) => {
-                let mut cost = 24usize;
-                for part in parts {
-                    match part {
-                        ast::StringPart::Literal(s) => cost += 24 + s.len(),
-                        ast::StringPart::Expr(e) => cost += self.estimate_expression(e),
-                    }
-                }
-                cost
-            }
-            ast::Expression::New(n) => {
-                let arg_cost: usize = match &n.args {
-                    ast::NewArgs::Positional(args) => args.iter().map(|e| self.estimate_expression(e)).sum(),
-                    ast::NewArgs::Fields(fields) => fields.iter().map(|(_, e)| self.estimate_expression(e)).sum(),
-                };
-                32 + arg_cost
-            }
-            ast::Expression::ObjectPatch(fields) => {
-                32 + fields.iter().map(|(_, e)| self.estimate_expression(e)).sum::<usize>()
-            }
-            ast::Expression::Ternary(t) => {
-                self.estimate_expression(&t.condition)
-                    + std::cmp::max(
-                        self.estimate_expression(&t.then_expr),
-                        self.estimate_expression(&t.else_expr),
-                    )
-            }
-        }
-    }
-
     fn update_dict(
         &mut self,
         obj_ref: ObjectRef,
@@ -2309,6 +2151,27 @@ impl Evaluator {
         match arr_ref.region {
             RegionId::Global => self.global_arena.update(arr_ref.index, data),
             RegionId::Scoped => self.scopes.arena.update(arr_ref.index, data),
+        }
+    }
+
+    fn leave_call(&mut self) {
+        self.scopes.pop();
+        self.call_depth -= 1;
+        self.call_stack.pop();
+    }
+
+    fn print_call_stack(&self) {
+        for frame in self.call_stack.iter().rev() {
+            eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
+        }
+        eprintln!();
+    }
+
+    fn plant_for_target(&mut self, value: OwnedValue, target_ref: ObjectRef) -> ObjectRef {
+        match target_ref.region {
+            RegionId::Global => self.plant_global(value),
+            RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(value),
+            RegionId::Scoped => self.plant(value),
         }
     }
 
@@ -2413,9 +2276,7 @@ impl Evaluator {
 
         let owned = self.extract(result_ref);
         let throw_owned = method_throw.map(|r| self.extract(r));
-        self.call_depth -= 1;
-        self.scopes.pop();
-        self.call_stack.pop();
+        self.leave_call();
         self.executing_class = old_executing_class;
 
         if error { return EvalResult::Error; }
@@ -3026,9 +2887,7 @@ impl Evaluator {
 
         let owned = self.extract(result_ref);
         let throw_owned = method_throw.map(|r| self.extract(r));
-        self.call_depth -= 1;
-        self.scopes.pop();
-        self.call_stack.pop();
+        self.leave_call();
         self.executing_class = old_executing_class;
 
         if error { return EvalResult::Error; }
@@ -3166,9 +3025,7 @@ impl Evaluator {
 
                 let owned = self.extract(result_ref);
                 let throw_owned = method_throw.map(|r| self.extract(r));
-                self.call_depth -= 1;
-                self.scopes.pop();
-                self.call_stack.pop();
+                self.leave_call();
                 self.executing_class = old_executing_class;
 
                 if error { return EvalResult::Error; }
@@ -3363,7 +3220,7 @@ impl Evaluator {
                 };
 
                 // If the argument is a function, use it as a comparator
-                let is_comparator = arg_ref.map_or(false, |r| {
+                let is_comparator = arg_ref.is_some_and(|r| {
                     matches!(self.resolve(r), Some(ObjectData::Function { .. }))
                 });
 
@@ -3963,5 +3820,106 @@ fn type_matches(expected: &str, data: &ObjectData) -> bool {
         }
         (t, ObjectData::Instance { class_name, .. }) => t == class_name.as_str(),
         _ => false,
+    }
+}
+
+fn estimate_expression(expr: &ast::Expression) -> usize {
+    match expr {
+        ast::Expression::Integer(_) => 8,
+        ast::Expression::Decimal(_) => 8,
+        ast::Expression::Boolean(_) => 1,
+        ast::Expression::String(s) => 24 + s.len(),
+        ast::Expression::Identifier(_) => 8,
+        ast::Expression::Lambda(_) => 32,
+        ast::Expression::Prefix(_, right) => 8 + estimate_expression(right),
+        ast::Expression::Infix(infix) => {
+            8 + estimate_expression(&infix.left) + estimate_expression(&infix.right)
+        }
+        ast::Expression::FunctionLiteral(f) => 32 + f.parameters.len() * 8,
+        ast::Expression::Call(c) => {
+            let mut cost = 8;
+            for arg in &c.arguments {
+                cost += estimate_expression(arg);
+            }
+            cost
+        }
+        ast::Expression::ArrayLiteral(arr) => {
+            let mut cost = 24;
+            for item in &arr.elements {
+                cost += estimate_expression(item);
+            }
+            cost
+        }
+        ast::Expression::Null => 0,
+        ast::Expression::DictLiteral(d) => {
+            let mut cost = 24;
+            for (k, v) in &d.entries {
+                cost += estimate_expression(k) + estimate_expression(v);
+            }
+            cost
+        }
+        ast::Expression::EntryLiteral(k, v) => estimate_expression(k) + estimate_expression(v),
+        ast::Expression::DotCall(dc) => {
+            let mut cost = 8;
+            for arg in &dc.arguments {
+                cost += estimate_expression(arg);
+            }
+            cost
+        }
+        ast::Expression::If(if_expr) => {
+            let mut cost = estimate_expression(&if_expr.condition);
+            let mut cons_cost = 0;
+            for stmt in &if_expr.consequence.statements {
+                if let ast::Statement::Expression(e) = stmt {
+                    cons_cost += estimate_expression(e);
+                } else if let ast::Statement::Let(l) = stmt {
+                    cons_cost += 8 + estimate_expression(&l.value);
+                }
+            }
+            let mut alt_cost = 0;
+            if let Some(alt) = &if_expr.alternative {
+                for stmt in &alt.statements {
+                    if let ast::Statement::Expression(e) = stmt {
+                        alt_cost += estimate_expression(e);
+                    } else if let ast::Statement::Let(l) = stmt {
+                        alt_cost += 8 + estimate_expression(&l.value);
+                    }
+                }
+            }
+            cost += std::cmp::max(cons_cost, alt_cost);
+            cost
+        }
+        ast::Expression::Index(idx_expr) => {
+            8 + estimate_expression(&idx_expr.left) + estimate_expression(&idx_expr.index)
+        }
+        ast::Expression::InterpolatedString(parts) => {
+            let mut cost = 24usize;
+            for part in parts {
+                match part {
+                    ast::StringPart::Literal(s) => cost += 24 + s.len(),
+                    ast::StringPart::Expr(e) => cost += estimate_expression(e),
+                }
+            }
+            cost
+        }
+        ast::Expression::New(n) => {
+            let arg_cost: usize = match &n.args {
+                ast::NewArgs::Positional(args) => args.iter().map(estimate_expression).sum(),
+                ast::NewArgs::Fields(fields) => {
+                    fields.iter().map(|(_, e)| estimate_expression(e)).sum()
+                }
+            };
+            32 + arg_cost
+        }
+        ast::Expression::ObjectPatch(fields) => {
+            32 + fields.iter().map(|(_, e)| estimate_expression(e)).sum::<usize>()
+        }
+        ast::Expression::Ternary(t) => {
+            estimate_expression(&t.condition)
+                + std::cmp::max(
+                    estimate_expression(&t.then_expr),
+                    estimate_expression(&t.else_expr),
+                )
+        }
     }
 }
