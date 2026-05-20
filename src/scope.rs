@@ -44,7 +44,7 @@ impl ScopeStack {
     pub fn push(&mut self) {
         let mark = self.arena.watermark();
         self.frames.push(ScopeFrame {
-            bindings: HashMap::new(),
+            bindings: HashMap::with_capacity(4),
             watermark: mark,
         });
     }
@@ -104,14 +104,18 @@ impl ScopeStack {
         self.frames.len()
     }
 
-    /// Returns all (name, ref) pairs visible in the current scope chain,
-    /// ordered outer-to-inner so that inner-frame values override outer ones
-    /// when iterated in order (used to build closure captures).
+    /// Returns all (name, ref) pairs visible in the current scope chain.
+    /// Inner frames shadow outer ones — each name appears at most once.
     pub fn all_bindings(&self) -> Vec<(String, ObjectRef)> {
-        let mut result = Vec::new();
-        for frame in &self.frames {
+        let total: usize = self.frames.iter().map(|f| f.bindings.len()).sum();
+        let mut seen = HashMap::with_capacity(total);
+        let mut result = Vec::with_capacity(total);
+        // Inner-to-outer: first insertion wins (inner shadows outer)
+        for frame in self.frames.iter().rev() {
             for (name, &r) in &frame.bindings {
-                result.push((name.clone(), r));
+                if seen.insert(name.as_str(), ()).is_none() {
+                    result.push((name.clone(), r));
+                }
             }
         }
         result

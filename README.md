@@ -1831,9 +1831,9 @@ src/
 ├── ast.rs           — AST node definitions (Statement, Expression, BlockStatement, …)
 ├── parser.rs        — Pratt (TDOP) parser with 8-level precedence + error recovery
 ├── type_checker.rs  — Static pre-run type checker with literal and variable inference
-├── region.rs        — Arena allocator, ObjectRef, ObjectData, OwnedValue definitions
-├── scope.rs         — ScopeStack — manages push/pop/lookup over the scoped arena
-├── evaluator.rs     — Tree-walking interpreter, Flash Scope protocol, static profiler
+├── region.rs        — Arena allocator (with_capacity), ObjectRef, ObjectData/OwnedValue with Rc<BlockStatement>
+├── scope.rs         — ScopeStack — push/pop/lookup with watermark cleanup and all_bindings dedup
+├── evaluator.rs     — Tree-walking interpreter, Flash Scope protocol, StoredMethod cache, static profiler
 └── repl.rs          — Read-eval-print loop
 ```
 
@@ -1901,6 +1901,44 @@ let promoted = plant(owned);       // re-allocate in parent scope
 ```
 
 `extract` materializes the full object tree (including nested arrays) into an arena-independent `OwnedValue`. `plant` re-allocates it wherever `alloc()` currently points — the parent scope or global arena.
+
+### Performance internals
+
+Several optimizations reduce redundant allocations and clones during hot paths.
+
+#### `Rc<BlockStatement>` — O(1) function cloning
+
+Every function value stores its AST body as `Rc<BlockStatement>` rather than an owned `BlockStatement`. Looking up a function from the arena, passing it as a callback, or returning it from `find_method` increments a reference count instead of deep-cloning the body. This applies to both `OwnedValue::Function` and `ObjectData::Function` in `region.rs`.
+
+#### `StoredMethod` — O(1) method dispatch
+
+Class methods are stored as `Vec<StoredMethod>` inside `StoredClass`. `StoredMethod` holds a `body: Rc<BlockStatement>`, so each `find_method()` clone is O(1) regardless of how large the method body is. Previously, every method call cloned the entire `ast::ClassMethod` including its body.
+
+#### Arena and HashMap pre-sizing
+
+Pre-sized collections avoid repeated growth reallocations during typical program execution:
+
+| Allocation | Initial capacity |
+|---|---|
+| Global arena | 256 objects |
+| Scoped arena (`Arena::new()`) | 64 objects |
+| Scope frame bindings | 4 entries |
+| `global_bindings` | 32 entries |
+| Interface / class registries | 8 entries each |
+
+#### `all_bindings()` deduplication
+
+`ScopeStack::all_bindings()` traverses frames inner-to-outer and skips names already seen. When a closure captures its environment, shadowed outer variables are not extracted and re-allocated — each name appears at most once in the captured environment.
+
+#### Structural helpers
+
+Three helpers in `evaluator.rs` centralize patterns that previously appeared 6–11 times each:
+
+| Helper | Replaces |
+|---|---|
+| `leave_call()` | `scopes.pop(); call_depth -= 1; call_stack.pop()` — 11 call-exit sites |
+| `print_call_stack()` | 3-line call-chain printer loop — 6 error sites |
+| `plant_for_target(value, ref)` | Region-aware arena selection for dict `IndexAssign` — 3 sites |
 
 ---
 

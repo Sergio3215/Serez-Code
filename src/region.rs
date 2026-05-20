@@ -15,6 +15,7 @@ pub struct ObjectRef {
 }
 
 use crate::ast::{BlockStatement, Parameter};
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub enum OwnedValue {
@@ -34,7 +35,7 @@ pub enum OwnedValue {
     Function {
         return_type: Option<String>,
         parameters: Vec<Parameter>,
-        body: BlockStatement,
+        body: Rc<BlockStatement>, // Rc: cloning a function is O(1), not O(body_size)
         captured: Vec<(String, ObjectRef)>,
     },
     Instance {
@@ -97,7 +98,7 @@ pub enum ObjectData {
     Function {
         return_type: Option<String>,
         parameters: Vec<Parameter>,
-        body: BlockStatement,
+        body: Rc<BlockStatement>, // Rc: cloning a function is O(1), not O(body_size)
         captured: Vec<(String, ObjectRef)>,
     },
     // Fields stored as OwnedValues (embedded, arena-independent) to avoid cross-scope refs.
@@ -133,9 +134,11 @@ pub struct Arena {
 
 impl Arena {
     pub fn new() -> Self {
-        Arena {
-            storage: Vec::new(),
-        }
+        Arena { storage: Vec::with_capacity(64) }
+    }
+
+    pub fn with_capacity(n: usize) -> Self {
+        Arena { storage: Vec::with_capacity(n) }
     }
 
     pub fn alloc(&mut self, data: ObjectData) -> usize {

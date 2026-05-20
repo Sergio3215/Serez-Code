@@ -3,12 +3,22 @@ use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::HashMap;
 use std::io::{self, Write};
+use std::rc::Rc;
+
+#[derive(Clone)]
+struct StoredMethod {
+    name: String,
+    is_public: bool,
+    return_type: Option<String>,
+    parameters: Vec<ast::Parameter>,
+    body: Rc<ast::BlockStatement>, // Rc: find_method clones this on every dispatch → O(1)
+}
 
 #[derive(Clone)]
 struct StoredClass {
     parent: Option<String>,
     constructor: Option<ast::ClassConstructor>,
-    methods: Vec<ast::ClassMethod>,
+    methods: Vec<StoredMethod>,
 }
 
 // ── EvalResult ────────────────────────────────────────────────────────────────
@@ -44,7 +54,7 @@ pub struct Evaluator {
 
 impl Evaluator {
     pub fn new() -> Self {
-        let mut global_arena = Arena::new();
+        let mut global_arena = Arena::with_capacity(256);
         let null_idx = global_arena.alloc(ObjectData::Null);
         let null_ref = ObjectRef {
             region: RegionId::Global,
@@ -53,12 +63,12 @@ impl Evaluator {
 
         Evaluator {
             global_arena,
-            global_bindings: HashMap::new(),
+            global_bindings: HashMap::with_capacity(32),
             scopes: ScopeStack::new(),
             null_ref,
             call_stack: Vec::new(),
-            interface_registry: HashMap::new(),
-            class_registry: HashMap::new(),
+            interface_registry: HashMap::with_capacity(8),
+            class_registry: HashMap::with_capacity(8),
             constructing_class: None,
             executing_class: None,
             call_depth: 0,
@@ -101,7 +111,7 @@ impl Evaluator {
     /// Returns an empty vec at global scope (nothing to capture).
     fn capture_env(&mut self) -> Vec<(String, ObjectRef)> {
         let bindings = self.scopes.all_bindings();
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(bindings.len());
         for (name, r) in bindings {
             let global_ref = match r.region {
                 RegionId::Global => r,
@@ -403,7 +413,7 @@ impl Evaluator {
                 let func_data = ObjectData::Function {
                     return_type: func_decl.function.return_type.clone(),
                     parameters: func_decl.function.parameters.clone(),
-                    body: func_decl.function.body.clone(),
+                    body: Rc::new(func_decl.function.body.clone()),
                     captured,
                 };
                 let func_ref = self.alloc(func_data);
@@ -778,7 +788,13 @@ impl Evaluator {
                 self.class_registry.insert(decl.name.clone(), StoredClass {
                     parent: decl.parent.clone(),
                     constructor: decl.constructor.clone(),
-                    methods: decl.methods.clone(),
+                    methods: decl.methods.iter().map(|m| StoredMethod {
+                        name: m.name.clone(),
+                        is_public: m.is_public,
+                        return_type: m.return_type.clone(),
+                        parameters: m.parameters.clone(),
+                        body: Rc::new(m.body.clone()),
+                    }).collect(),
                 });
                 EvalResult::Value(self.null_ref)
             }
@@ -927,7 +943,7 @@ impl Evaluator {
                 let func_data = ObjectData::Function {
                     return_type: func_lit.return_type.clone(),
                     parameters: func_lit.parameters.clone(),
-                    body: func_lit.body.clone(),
+                    body: Rc::new(func_lit.body.clone()),
                     captured,
                 };
                 EvalResult::Value(self.alloc(func_data))
@@ -950,7 +966,7 @@ impl Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Function {
                     return_type: None,
                     parameters: params,
-                    body,
+                    body: Rc::new(body),
                     captured,
                 }))
             }
@@ -3071,7 +3087,7 @@ impl Evaluator {
     }
 
     // Walk the inheritance chain to find a method
-    fn find_method(&self, class_name: &str, method_name: &str) -> Option<ast::ClassMethod> {
+    fn find_method(&self, class_name: &str, method_name: &str) -> Option<StoredMethod> {
         let mut current = class_name.to_string();
         loop {
             let class = self.class_registry.get(&current)?;
