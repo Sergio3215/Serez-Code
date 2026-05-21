@@ -45,12 +45,12 @@ out count;  // → 6
 class Counter {
     public Counter() { this.val = 0; }
     public void inc(int n) { this.val += n; }
-    public int get() { return this.val; }
+    public int getValue() { return this.val; }
 }
 let c = new Counter();
 c.inc(5);
 c.inc(3);
-out c.get();    // → 8
+out c.getValue();    // → 8
 
 // Array element con +=
 let arr = [10, 20, 30];

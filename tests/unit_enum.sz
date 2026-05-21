@@ -1,0 +1,41 @@
+// unit_enum.sz — tests for enum declarations
+
+enum Direction {
+    North,
+    South,
+    East,
+    West
+}
+
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+let d = Direction.North;
+out d;
+
+let c = Color.Blue;
+out c;
+
+// enum in variable comparison
+let dir = Direction.East;
+if (dir == Direction.East) {
+    out "going east";
+}
+
+// enum in function param
+fn describe(col) {
+    if (col == Color.Red) {
+        return "red";
+    }
+    if (col == Color.Green) {
+        return "green";
+    }
+    return "blue";
+}
+
+out describe(Color.Red);
+out describe(Color.Green);
+out describe(Color.Blue);

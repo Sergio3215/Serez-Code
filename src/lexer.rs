@@ -198,7 +198,21 @@ impl Lexer {
                 self.line,
                 self.column,
             ),
-            '.' => Token::new(TokenType::Dot, ".".to_string(), self.line, self.column),
+            '.' => {
+                // Check for `...` (spread/rest operator)
+                if self.peek_char() == '.' {
+                    self.read_char(); // consume second '.'
+                    if self.peek_char() == '.' {
+                        self.read_char(); // consume third '.'
+                        Token::new(TokenType::DotDotDot, "...".to_string(), self.line, self.column)
+                    } else {
+                        // Just two dots — illegal, but emit Dot and leave second dot for next token
+                        Token::new(TokenType::Dot, ".".to_string(), self.line, self.column)
+                    }
+                } else {
+                    Token::new(TokenType::Dot, ".".to_string(), self.line, self.column)
+                }
+            }
             '?' => {
                 if self.peek_char() == '?' {
                     self.read_char();
@@ -212,6 +226,12 @@ impl Lexer {
                 let start_line = self.line;
                 let start_column = self.column;
                 let literal = self.read_string();
+                Token::new(TokenType::String, literal, start_line, start_column)
+            }
+            '\'' => {
+                let start_line = self.line;
+                let start_column = self.column;
+                let literal = self.read_single_quote_string();
                 Token::new(TokenType::String, literal, start_line, start_column)
             }
             '\0' => Token::new(TokenType::Eof, "".to_string(), self.line, self.column),
@@ -288,6 +308,19 @@ impl Lexer {
                     }
                 }
                 '"' => break, // closing quote at depth 0
+                c => result.push(c),
+            }
+        }
+        result
+    }
+
+    fn read_single_quote_string(&mut self) -> String {
+        let mut result = String::new();
+        loop {
+            self.read_char();
+            match self.ch {
+                '\0' => break,
+                '\'' => break,
                 c => result.push(c),
             }
         }

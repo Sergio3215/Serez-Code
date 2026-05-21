@@ -1,0 +1,14 @@
+// sec_sealed_inherit.sz — inheriting from a sealed class must produce an error
+
+sealed class Final {
+    public Final() {
+    }
+}
+
+class Child : Final {
+    public Child() {
+    }
+}
+
+let c = new Child();
+out c;

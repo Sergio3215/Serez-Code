@@ -132,6 +132,9 @@ impl TypeChecker {
             Statement::FieldAssign(_) => {}
             Statement::Break => {}
             Statement::Continue => {}
+            Statement::BreakLabel(_) => {}
+            Statement::ContinueLabel(_) => {}
+            Statement::EnumDeclaration(_) => {}
             Statement::Throw(e) => {
                 self.check_expression(e, expected_return);
             }
@@ -233,7 +236,18 @@ impl TypeChecker {
             None => return,
         };
 
-        if call.arguments.len() != func.parameters.len() {
+        // Skip arity check if any argument is a spread expression
+        let has_spread_arg = call.arguments.iter().any(|a| matches!(a, Expression::Spread(_)));
+        if has_spread_arg { return; }
+
+        let has_rest = func.parameters.last().map(|p| p.is_rest).unwrap_or(false);
+        let min_params = if has_rest { func.parameters.len().saturating_sub(1) } else { func.parameters.len() };
+        let arity_ok = if has_rest {
+            call.arguments.len() >= min_params
+        } else {
+            call.arguments.len() == func.parameters.len()
+        };
+        if !arity_ok {
             eprintln!(
                 "❌ TYPE ERROR: '{}' expects {} argument(s) but got {}.",
                 func_name,

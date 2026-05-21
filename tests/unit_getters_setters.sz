@@ -1,0 +1,44 @@
+// unit_getters_setters.sz — tests for getter/setter methods
+// Syntax: public get ReturnType propName() { ... }
+//         public set propName(Type val) { ... }
+
+class Temperature {
+    public Temperature(decimal celsius) {
+        this._celsius = celsius;
+    }
+    public get decimal fahrenheit() {
+        return this._celsius * 1.8 + 32.0;
+    }
+    public get decimal celsius() {
+        return this._celsius;
+    }
+    public set celsius(decimal val) {
+        this._celsius = val;
+    }
+}
+
+let t = new Temperature(100.0);
+out t.celsius;
+out t.fahrenheit;
+
+t.celsius = 0.0;
+out t.celsius;
+out t.fahrenheit;
+
+t.celsius = 37.0;
+out t.celsius;
+
+class Circle {
+    public Circle(decimal r) {
+        this.r = r;
+    }
+    public get decimal area() {
+        return 3.14159 * this.r * this.r;
+    }
+    public get decimal diameter() {
+        return this.r * 2.0;
+    }
+}
+
+let c = new Circle(5.0);
+out c.diameter;

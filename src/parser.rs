@@ -98,7 +98,11 @@ impl Parser {
                 | TokenType::KwContinue
                 | TokenType::KwSwitch
                 | TokenType::KwTry
-                | TokenType::KwThrow => return,
+                | TokenType::KwThrow
+                | TokenType::KwConst
+                | TokenType::KwEnum
+                | TokenType::KwAbstract
+                | TokenType::KwSealed => return,
                 _ => self.next_token(),
             }
         }
@@ -106,7 +110,7 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Option<Statement> {
         match self.current_token.token_type {
-            TokenType::Let => self.parse_let_statement(),
+            TokenType::Let | TokenType::KwConst => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
             TokenType::Out => self.parse_out_statement(),
             TokenType::LBrace => self.parse_block_statement(),
@@ -114,23 +118,44 @@ impl Parser {
             TokenType::While => self.parse_while_statement(),
             TokenType::For => self.parse_for_statement(),
             TokenType::KwBreak => {
-                if self.peek_token.token_type == TokenType::Semicolon {
-                    self.next_token(); // current_token = ';'
+                if self.peek_token.token_type == TokenType::Ident {
+                    self.next_token(); // current = label name
+                    let label = self.current_token.literal.clone();
+                    if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                    Some(Statement::BreakLabel(label))
+                } else {
+                    if self.peek_token.token_type == TokenType::Semicolon {
+                        self.next_token();
+                    }
+                    Some(Statement::Break)
                 }
-                Some(Statement::Break)
             }
             TokenType::KwContinue => {
-                if self.peek_token.token_type == TokenType::Semicolon {
-                    self.next_token(); // current_token = ';'
+                if self.peek_token.token_type == TokenType::Ident {
+                    self.next_token(); // current = label name
+                    let label = self.current_token.literal.clone();
+                    if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                    Some(Statement::ContinueLabel(label))
+                } else {
+                    if self.peek_token.token_type == TokenType::Semicolon {
+                        self.next_token();
+                    }
+                    Some(Statement::Continue)
                 }
-                Some(Statement::Continue)
             }
-            TokenType::KwClass => self.parse_class_declaration(true),
+            TokenType::KwEnum => self.parse_enum_declaration(),
+            TokenType::KwClass => self.parse_class_declaration(true, false, false),
             TokenType::KwInterface => self.parse_interface_declaration(true),
             TokenType::KwPublic | TokenType::KwPrivate => self.parse_visibility_statement(),
+            TokenType::KwAbstract => self.parse_abstract_or_sealed_class(true, false),
+            TokenType::KwSealed => self.parse_abstract_or_sealed_class(false, true),
             TokenType::KwSwitch => self.parse_switch_statement(),
             TokenType::KwTry => self.parse_try_statement(),
             TokenType::KwThrow => self.parse_throw_statement(),
+            // Labeled loop: label: while/for { ... }
+            TokenType::Ident if self.peek_token.token_type == TokenType::Colon => {
+                self.parse_labeled_statement()
+            }
             TokenType::Ident if self.peek_token.token_type == TokenType::Assign => {
                 self.parse_assign_statement()
             }
@@ -409,7 +434,7 @@ impl Parser {
         Some(Statement::Out(OutStatement { value }))
     }
 
-    fn parse_while_statement(&mut self) -> Option<Statement> {
+    fn parse_while_statement_with_label(&mut self, label: Option<String>) -> Option<Statement> {
         if self.peek_token.token_type != TokenType::LParen {
             eprintln!("❌ PARSER ERROR: Expected '(' after 'while'");
             return None;
@@ -436,7 +461,11 @@ impl Parser {
             _ => return None,
         };
 
-        Some(Statement::While(WhileStatement { condition, body }))
+        Some(Statement::While(WhileStatement { condition, body, label }))
+    }
+
+    fn parse_while_statement(&mut self) -> Option<Statement> {
+        self.parse_while_statement_with_label(None)
     }
 
     fn parse_index_assign_or_expr_statement(&mut self) -> Option<Statement> {
@@ -506,7 +535,15 @@ impl Parser {
         Some(Statement::Expression(expr))
     }
 
+    fn parse_for_statement_with_label(&mut self, label: Option<String>) -> Option<Statement> {
+        self.parse_for_inner(label)
+    }
+
     fn parse_for_statement(&mut self) -> Option<Statement> {
+        self.parse_for_inner(None)
+    }
+
+    fn parse_for_inner(&mut self, label: Option<String>) -> Option<Statement> {
         if self.peek_token.token_type != TokenType::LParen {
             eprintln!("❌ PARSER ERROR: Expected '(' after 'for'");
             return None;
@@ -548,7 +585,7 @@ impl Parser {
                 _ => return None,
             };
 
-            return Some(Statement::ForEach(ForEachStatement { var_name, iterable, body }));
+            return Some(Statement::ForEach(ForEachStatement { var_name, iterable, body, label: label.clone() }));
         }
 
         // ── Classic for: for (let i = 0; i < n; i = i + 1) { body } ─────────
@@ -568,7 +605,7 @@ impl Parser {
         }
         self.next_token(); // current = first token of condition
 
-        let init = LetStatement { name: var_name, value: init_value };
+        let init = LetStatement { name: var_name, value: init_value, is_const: false };
 
         let condition = self.parse_expression(Precedence::Lowest)?;
 
@@ -633,7 +670,7 @@ impl Parser {
             _ => return None,
         };
 
-        Some(Statement::For(ForStatement { init, condition, update, body }))
+        Some(Statement::For(ForStatement { init, condition, update, body, label }))
     }
 
     fn parse_if_expression(&mut self) -> Option<Expression> {
@@ -697,6 +734,7 @@ impl Parser {
     }
 
     fn parse_let_statement(&mut self) -> Option<Statement> {
+        let is_const = self.current_token.token_type == TokenType::KwConst;
         if self.peek_token.token_type != TokenType::Ident {
             return None;
         }
@@ -734,7 +772,7 @@ impl Parser {
             if self.peek_token.token_type == TokenType::Semicolon {
                 self.next_token();
             }
-            return Some(Statement::Let(LetStatement { name, value }));
+            return Some(Statement::Let(LetStatement { name, value, is_const }));
         }
 
         if self.peek_token.token_type == TokenType::Lt {
@@ -758,7 +796,7 @@ impl Parser {
                 self.next_token();
             }
 
-            return Some(Statement::Let(LetStatement { name, value }));
+            return Some(Statement::Let(LetStatement { name, value, is_const }));
         }
 
         if self.peek_token.token_type != TokenType::Assign {
@@ -773,7 +811,7 @@ impl Parser {
             self.next_token();
         }
 
-        Some(Statement::Let(LetStatement { name, value }))
+        Some(Statement::Let(LetStatement { name, value, is_const }))
     }
 
     fn parse_function_statement(&mut self) -> Option<Statement> {
@@ -897,13 +935,26 @@ impl Parser {
                 self.next_token();
             }
 
+            // Check for rest parameter `...name`
+            let is_rest = if self.current_token.token_type == TokenType::DotDotDot {
+                self.next_token(); // advance to param name
+                true
+            } else {
+                false
+            };
+
             let name = if self.current_token.token_type == TokenType::Ident {
                 self.current_token.literal.clone()
             } else {
                 return None;
             };
 
-            parameters.push(Parameter { name, type_name });
+            parameters.push(Parameter { name, type_name, is_rest });
+
+            if is_rest {
+                // Rest param must be last — break after
+                break;
+            }
 
             if self.peek_token.token_type == TokenType::Comma {
                 self.next_token();
@@ -960,12 +1011,25 @@ impl Parser {
 
         self.next_token();
 
-        args.push(self.parse_expression(Precedence::Lowest)?);
+        // Handle spread in first argument position
+        if self.current_token.token_type == TokenType::DotDotDot {
+            self.next_token();
+            let inner = self.parse_expression(Precedence::Lowest)?;
+            args.push(Expression::Spread(Box::new(inner)));
+        } else {
+            args.push(self.parse_expression(Precedence::Lowest)?);
+        }
 
         while self.peek_token.token_type == TokenType::Comma {
             self.next_token();
             self.next_token();
-            args.push(self.parse_expression(Precedence::Lowest)?);
+            if self.current_token.token_type == TokenType::DotDotDot {
+                self.next_token();
+                let inner = self.parse_expression(Precedence::Lowest)?;
+                args.push(Expression::Spread(Box::new(inner)));
+            } else {
+                args.push(self.parse_expression(Precedence::Lowest)?);
+            }
         }
 
         if self.peek_token.token_type != TokenType::RParen {
@@ -1678,7 +1742,7 @@ impl Parser {
     }
 
     // ── Class declaration ─────────────────────────────────────────────────────
-    fn parse_class_declaration(&mut self, is_public: bool) -> Option<Statement> {
+    fn parse_class_declaration(&mut self, is_public: bool, is_abstract: bool, is_sealed: bool) -> Option<Statement> {
         // current = 'class'
         if self.peek_token.token_type != TokenType::Ident {
             eprintln!("❌ PARSER ERROR: Expected class name after 'class'");
@@ -1709,15 +1773,69 @@ impl Parser {
 
         let mut constructor: Option<ClassConstructor> = None;
         let mut methods: Vec<ClassMethod> = Vec::new();
+        let mut fields: Vec<ClassField> = Vec::new();
 
         while self.current_token.token_type != TokenType::RBrace
             && self.current_token.token_type != TokenType::Eof
         {
+            // Check for abstract method prefix
+            let is_member_abstract = if self.current_token.token_type == TokenType::KwAbstract {
+                self.next_token(); // after 'abstract'
+                true
+            } else {
+                false
+            };
+
             // visibility modifier
             let is_member_public = match self.current_token.token_type {
                 TokenType::KwPublic => true,
                 TokenType::KwPrivate => false,
                 _ => {
+                    // If we hit abstract directly after visibility etc.
+                    // Or if it's a class field (Ident: type = value;)
+                    // Try to parse as a class field
+                    if self.current_token.token_type == TokenType::Ident {
+                        let field_name = self.current_token.literal.clone();
+                        let field_line = self.current_token.line;
+                        let field_col = self.current_token.column;
+
+                        if self.peek_token.token_type == TokenType::Colon {
+                            // field: type [= expr];
+                            self.next_token(); // ':'
+                            self.next_token(); // type
+                            let type_annotation = if is_type_keyword(&self.current_token.token_type) {
+                                self.parse_type_string()
+                            } else if self.current_token.token_type == TokenType::Ident {
+                                Some(self.current_token.literal.clone())
+                            } else {
+                                None
+                            };
+                            let default_value = if self.peek_token.token_type == TokenType::Assign {
+                                self.next_token(); // '='
+                                self.next_token(); // expr
+                                Some(self.parse_expression(Precedence::Lowest)?)
+                            } else {
+                                None
+                            };
+                            if self.peek_token.token_type == TokenType::Semicolon {
+                                self.next_token();
+                            }
+                            fields.push(ClassField { name: field_name, type_annotation, default_value, line: field_line, column: field_col });
+                            self.next_token();
+                            continue;
+                        } else if self.peek_token.token_type == TokenType::Assign {
+                            // field = expr;
+                            self.next_token(); // '='
+                            self.next_token(); // expr
+                            let default_value = Some(self.parse_expression(Precedence::Lowest)?);
+                            if self.peek_token.token_type == TokenType::Semicolon {
+                                self.next_token();
+                            }
+                            fields.push(ClassField { name: field_name, type_annotation: None, default_value, line: field_line, column: field_col });
+                            self.next_token();
+                            continue;
+                        }
+                    }
                     eprintln!(
                         "❌ PARSER ERROR: Expected 'public' or 'private' for class member, got '{}'",
                         self.current_token.literal
@@ -1726,6 +1844,20 @@ impl Parser {
                 }
             };
             self.next_token(); // after visibility
+
+            // Check for getter/setter
+            let is_getter = if self.current_token.token_type == TokenType::KwGet {
+                self.next_token();
+                true
+            } else {
+                false
+            };
+            let is_setter = if !is_getter && self.current_token.token_type == TokenType::KwSet {
+                self.next_token();
+                true
+            } else {
+                false
+            };
 
             // Optional return type keyword (void, int, decimal, [type], class name, etc.)
             let return_type = if self.current_token.token_type == TokenType::LBracket {
@@ -1773,18 +1905,24 @@ impl Parser {
             self.next_token(); // '('
             let parameters = self.parse_function_parameters()?;
 
-            if self.peek_token.token_type != TokenType::LBrace {
-                eprintln!("❌ PARSER ERROR: Expected '{{' to start body of '{}'", member_name);
-                return None;
-            }
-            self.next_token();
-            let body_stmt = self.parse_block_statement()?;
-            let body = match body_stmt {
-                Statement::Block(b) => b,
-                _ => return None,
+            // Abstract methods may have no body (semicolon) or empty body
+            let body = if is_member_abstract && self.peek_token.token_type == TokenType::Semicolon {
+                self.next_token(); // ';'
+                BlockStatement { statements: vec![] }
+            } else {
+                if self.peek_token.token_type != TokenType::LBrace {
+                    eprintln!("❌ PARSER ERROR: Expected '{{' to start body of '{}'", member_name);
+                    return None;
+                }
+                self.next_token();
+                let body_stmt = self.parse_block_statement()?;
+                match body_stmt {
+                    Statement::Block(b) => b,
+                    _ => return None,
+                }
             };
 
-            if member_name == name {
+            if member_name == name && !is_getter && !is_setter {
                 // Constructor
                 if constructor.is_some() {
                     eprintln!("❌ PARSER ERROR: Duplicate constructor in class '{}'", name);
@@ -1795,6 +1933,9 @@ impl Parser {
                 methods.push(ClassMethod {
                     name: member_name,
                     is_public: is_member_public,
+                    is_abstract: is_member_abstract,
+                    is_getter,
+                    is_setter,
                     return_type,
                     parameters,
                     body,
@@ -1807,10 +1948,35 @@ impl Parser {
         Some(Statement::ClassDeclaration(ClassDeclaration {
             name,
             is_public,
+            is_abstract,
+            is_sealed,
             parent,
             constructor,
             methods,
+            fields,
         }))
+    }
+
+    // ── abstract class / sealed class ────────────────────────────────────────
+    fn parse_abstract_or_sealed_class(&mut self, is_abstract: bool, is_sealed: bool) -> Option<Statement> {
+        // current = 'abstract' or 'sealed'
+        if self.peek_token.token_type == TokenType::KwClass {
+            self.next_token(); // 'class'
+            self.parse_class_declaration(true, is_abstract, is_sealed)
+        } else if self.peek_token.token_type == TokenType::KwPublic || self.peek_token.token_type == TokenType::KwPrivate {
+            // public abstract class / private abstract class
+            self.next_token(); // pub/priv
+            if self.peek_token.token_type == TokenType::KwClass {
+                self.next_token(); // 'class'
+                self.parse_class_declaration(true, is_abstract, is_sealed)
+            } else {
+                eprintln!("❌ PARSER ERROR: Expected 'class' after abstract/sealed");
+                None
+            }
+        } else {
+            eprintln!("❌ PARSER ERROR: Expected 'class' after abstract/sealed");
+            None
+        }
     }
 
     // ── Visibility prefix (public/private class|interface) ────────────────────
@@ -1819,11 +1985,31 @@ impl Parser {
         match self.peek_token.token_type {
             TokenType::KwClass => {
                 self.next_token();
-                self.parse_class_declaration(is_public)
+                self.parse_class_declaration(is_public, false, false)
             }
             TokenType::KwInterface => {
                 self.next_token();
                 self.parse_interface_declaration(is_public)
+            }
+            TokenType::KwAbstract => {
+                self.next_token(); // 'abstract'
+                if self.peek_token.token_type == TokenType::KwClass {
+                    self.next_token(); // 'class'
+                    self.parse_class_declaration(is_public, true, false)
+                } else {
+                    eprintln!("❌ PARSER ERROR: Expected 'class' after 'abstract'");
+                    None
+                }
+            }
+            TokenType::KwSealed => {
+                self.next_token(); // 'sealed'
+                if self.peek_token.token_type == TokenType::KwClass {
+                    self.next_token(); // 'class'
+                    self.parse_class_declaration(is_public, false, true)
+                } else {
+                    eprintln!("❌ PARSER ERROR: Expected 'class' after 'sealed'");
+                    None
+                }
             }
             _ => {
                 eprintln!(
@@ -1845,7 +2031,13 @@ impl Parser {
         self.next_token();
 
         loop {
-            let expr = self.parse_expression(Precedence::Lowest);
+            let expr = if self.current_token.token_type == TokenType::DotDotDot {
+                self.next_token();
+                let inner = self.parse_expression(Precedence::Lowest)?;
+                Some(Expression::Spread(Box::new(inner)))
+            } else {
+                self.parse_expression(Precedence::Lowest)
+            };
 
             if let Some(e) = expr {
                 elements.push(e);
@@ -2015,6 +2207,71 @@ impl Parser {
         let expr = self.parse_expression(Precedence::Lowest)?;
         if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
         Some(Statement::Throw(expr))
+    }
+
+    // ── enum declaration ──────────────────────────────────────────────────────
+    fn parse_enum_declaration(&mut self) -> Option<Statement> {
+        // current = 'enum'
+        let line = self.current_token.line;
+        let column = self.current_token.column;
+        if self.peek_token.token_type != TokenType::Ident {
+            eprintln!("❌ PARSER ERROR: Expected enum name after 'enum'");
+            return None;
+        }
+        self.next_token();
+        let name = self.current_token.literal.clone();
+
+        if self.peek_token.token_type != TokenType::LBrace {
+            eprintln!("❌ PARSER ERROR: Expected '{{' after enum name");
+            return None;
+        }
+        self.next_token(); // '{'
+        self.next_token(); // first variant or '}'
+
+        let mut variants = Vec::new();
+        while self.current_token.token_type != TokenType::RBrace
+            && self.current_token.token_type != TokenType::Eof
+        {
+            if self.current_token.token_type != TokenType::Ident {
+                eprintln!("❌ PARSER ERROR: Expected variant name in enum body, got '{}'", self.current_token.literal);
+                return None;
+            }
+            variants.push(self.current_token.literal.clone());
+            if self.peek_token.token_type == TokenType::Comma {
+                self.next_token(); // ','
+                if self.peek_token.token_type == TokenType::RBrace {
+                    self.next_token();
+                    break;
+                }
+                self.next_token(); // next variant
+            } else if self.peek_token.token_type == TokenType::RBrace {
+                self.next_token();
+                break;
+            } else {
+                eprintln!("❌ PARSER ERROR: Expected ',' or '}}' in enum body");
+                return None;
+            }
+        }
+
+        Some(Statement::EnumDeclaration(EnumDeclaration { name, variants, line, column }))
+    }
+
+    // ── labeled loop: label: while(...) { } ──────────────────────────────────
+    fn parse_labeled_statement(&mut self) -> Option<Statement> {
+        // current = Ident (label), peek = ':'
+        let label = self.current_token.literal.clone();
+        self.next_token(); // ':'
+        self.next_token(); // while / for / ...
+
+        match self.current_token.token_type {
+            TokenType::While => self.parse_while_statement_with_label(Some(label)),
+            TokenType::For   => self.parse_for_statement_with_label(Some(label)),
+            _ => {
+                // Fall back: not a labeled loop, re-interpret as assign
+                eprintln!("❌ PARSER ERROR: Expected 'while' or 'for' after label '{}'", label);
+                None
+            }
+        }
     }
 }
 

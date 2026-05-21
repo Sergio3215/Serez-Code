@@ -1,7 +1,7 @@
 use crate::ast::{self, Expression, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 #[derive(Clone)]
@@ -9,18 +9,23 @@ struct StoredClass {
     parent: Option<String>,
     constructor: Option<ast::ClassConstructor>,
     methods: Vec<ast::ClassMethod>,
+    is_abstract: bool,
+    is_sealed: bool,
+    fields: Vec<ast::ClassField>,
 }
 
 // ── EvalResult ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub enum EvalResult {
-    Value(ObjectRef),  // Ejecución normal (retorno implícito)
-    Return(ObjectRef), // Ejecución interrumpida por `return`
-    Break,             // Señal de break — capturada por while/for
-    Continue,          // Señal de continue — capturada por while/for
-    Error,             // Ocurrió un error
-    Throw(ObjectRef),  // Excepción de usuario — propagada hasta try/catch
+    Value(ObjectRef),       // Ejecución normal (retorno implícito)
+    Return(ObjectRef),      // Ejecución interrumpida por `return`
+    Break,                  // Señal de break — capturada por while/for
+    Continue,               // Señal de continue — capturada por while/for
+    BreakLabel(String),     // Señal de break con label
+    ContinueLabel(String),  // Señal de continue con label
+    Error,                  // Ocurrió un error
+    Throw(ObjectRef),       // Excepción de usuario — propagada hasta try/catch
 }
 
 // ── Evaluator ─────────────────────────────────────────────────────────────────
@@ -40,6 +45,11 @@ pub struct Evaluator {
     constructing_class: Option<String>,
     executing_class: Option<String>,
     call_depth: usize,
+    const_names: HashSet<String>,
+    enum_registry: HashMap<String, Vec<String>>,
+    sealed_classes: HashSet<String>,
+    // LCG state for Math.random()
+    lcg_state: u64,
 }
 
 impl Evaluator {
@@ -50,6 +60,12 @@ impl Evaluator {
             region: RegionId::Global,
             index: null_idx,
         };
+
+        // Seed LCG with current time
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(12345);
 
         Evaluator {
             global_arena,
@@ -62,6 +78,10 @@ impl Evaluator {
             constructing_class: None,
             executing_class: None,
             call_depth: 0,
+            const_names: HashSet::new(),
+            enum_registry: HashMap::new(),
+            sealed_classes: HashSet::new(),
+            lcg_state: seed,
         }
     }
 
@@ -148,6 +168,13 @@ impl Evaluator {
                     .collect();
                 format!("{}{{ {} }}", class_name, pairs.join(", "))
             }
+            Some(ObjectData::EnumVariant { enum_name, variant }) => {
+                format!("{}.{}", enum_name, variant)
+            }
+            Some(ObjectData::Set { elements: refs }) => {
+                let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
+                format!("[{}]", elems.join(", "))
+            }
             Some(ObjectData::Null) => "null".to_string(),
             None => "❌ Referencia inválida".to_string(),
         }
@@ -187,6 +214,13 @@ impl Evaluator {
                 class_name: class_name.clone(),
                 fields: fields.clone(),
             },
+            Some(ObjectData::EnumVariant { enum_name, variant }) => OwnedValue::EnumVariant {
+                enum_name: enum_name.clone(),
+                variant: variant.clone(),
+            },
+            Some(ObjectData::Set { elements: refs }) => OwnedValue::Set {
+                elements: refs.iter().map(|&r| self.extract(r)).collect(),
+            },
             Some(ObjectData::Null) | None => OwnedValue::Null,
         }
     }
@@ -223,6 +257,13 @@ impl Evaluator {
             }),
             OwnedValue::Instance { class_name, fields } => {
                 self.alloc(ObjectData::Instance { class_name, fields })
+            }
+            OwnedValue::EnumVariant { enum_name, variant } => {
+                self.alloc(ObjectData::EnumVariant { enum_name, variant })
+            }
+            OwnedValue::Set { elements: items } => {
+                let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant(v)).collect();
+                self.alloc(ObjectData::Set { elements: refs })
             }
             OwnedValue::Null => self.null_ref,
         }
@@ -280,6 +321,15 @@ impl Evaluator {
                 let idx = self.global_arena.alloc(ObjectData::Instance { class_name, fields });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
+            OwnedValue::EnumVariant { enum_name, variant } => {
+                let idx = self.global_arena.alloc(ObjectData::EnumVariant { enum_name, variant });
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Set { elements: items } => {
+                let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant_global(v)).collect();
+                let idx = self.global_arena.alloc(ObjectData::Set { elements: refs });
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
             OwnedValue::Null => self.null_ref,
         }
     }
@@ -317,12 +367,12 @@ impl Evaluator {
                     eprintln!("❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a function or conditional or loops.");
                     return None;
                 }
-                EvalResult::Break => {
+                EvalResult::Break | EvalResult::BreakLabel(_) => {
                     if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
                     eprintln!("❌ FLASH SCOPE ERROR: 'break' cannot be used outside of a loop.");
                     return None;
                 }
-                EvalResult::Continue => {
+                EvalResult::Continue | EvalResult::ContinueLabel(_) => {
                     if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
                     eprintln!("❌ FLASH SCOPE ERROR: 'continue' cannot be used outside of a loop.");
                     return None;
@@ -362,12 +412,19 @@ impl Evaluator {
                 } else {
                     self.scopes.declare(let_stmt.name.clone(), val_ref);
                 }
+                if let_stmt.is_const {
+                    self.const_names.insert(let_stmt.name.clone());
+                }
                 EvalResult::Value(self.null_ref)
             }
 
             Statement::Assign(assign_stmt) => {
                 if self.lookup_var(&assign_stmt.name).is_none() {
                     eprintln!("❌ ERROR: Undeclared variable: {}", assign_stmt.name);
+                    return EvalResult::Error;
+                }
+                if self.const_names.contains(&assign_stmt.name) {
+                    eprintln!("❌ ERROR: Cannot reassign const '{}'", assign_stmt.name);
                     return EvalResult::Error;
                 }
 
@@ -457,6 +514,9 @@ impl Evaluator {
                         EvalResult::Return(v) => return EvalResult::Return(v),
                         EvalResult::Error => return EvalResult::Error,
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
+                        EvalResult::BreakLabel(ref l) if while_stmt.label.as_deref() == Some(l.as_str()) => break,
+                        EvalResult::ContinueLabel(ref l) if while_stmt.label.as_deref() == Some(l.as_str()) => continue,
+                        other => return other,
                     }
                 }
                 EvalResult::Value(self.null_ref)
@@ -527,6 +587,17 @@ impl Evaluator {
                         EvalResult::Error => {
                             loop_error = true;
                             break;
+                        }
+                        EvalResult::BreakLabel(ref l) if for_stmt.label.as_deref() == Some(l.as_str()) => break,
+                        EvalResult::ContinueLabel(ref l) if for_stmt.label.as_deref() == Some(l.as_str()) => {} // fall to update
+                        other => {
+                            // Propagate label signals upward
+                            let owned_throw = if let EvalResult::Throw(v) = &other { Some(self.extract(*v)) } else { None };
+                            let owned_ret = if let EvalResult::Return(v) = &other { Some(self.extract(*v)) } else { None };
+                            self.scopes.pop();
+                            if let Some(owned) = owned_throw { return EvalResult::Throw(self.plant(owned)); }
+                            if let Some(owned) = owned_ret { return EvalResult::Return(self.plant(owned)); }
+                            return other;
                         }
                     }
 
@@ -747,8 +818,10 @@ impl Evaluator {
                 }
             }
 
-            Statement::Break    => EvalResult::Break,
-            Statement::Continue => EvalResult::Continue,
+            Statement::Break               => EvalResult::Break,
+            Statement::Continue            => EvalResult::Continue,
+            Statement::BreakLabel(l)       => EvalResult::BreakLabel(l.clone()),
+            Statement::ContinueLabel(l)    => EvalResult::ContinueLabel(l.clone()),
 
             Statement::Out(out_stmt) => match self.eval_expression(&out_stmt.value) {
                 EvalResult::Value(v) => {
@@ -785,11 +858,29 @@ impl Evaluator {
             }
 
             Statement::ClassDeclaration(decl) => {
+                // Check sealed inheritance
+                if let Some(ref parent_name) = decl.parent {
+                    if self.sealed_classes.contains(parent_name) {
+                        eprintln!("❌ ERROR: Cannot inherit from sealed class '{}'", parent_name);
+                        return EvalResult::Error;
+                    }
+                }
+                if decl.is_sealed {
+                    self.sealed_classes.insert(decl.name.clone());
+                }
                 self.class_registry.insert(decl.name.clone(), StoredClass {
                     parent: decl.parent.clone(),
                     constructor: decl.constructor.clone(),
                     methods: decl.methods.clone(),
+                    is_abstract: decl.is_abstract,
+                    is_sealed: decl.is_sealed,
+                    fields: decl.fields.clone(),
                 });
+                EvalResult::Value(self.null_ref)
+            }
+
+            Statement::EnumDeclaration(decl) => {
+                self.enum_registry.insert(decl.name.clone(), decl.variants.clone());
                 EvalResult::Value(self.null_ref)
             }
 
@@ -809,6 +900,10 @@ impl Evaluator {
                 };
 
                 if let Some(ObjectData::Instance { class_name, mut fields }) = self.resolve(obj_ref).cloned() {
+                    // Check for setter first
+                    if let Some(setter) = self.find_setter(&class_name, &stmt.field) {
+                        return self.invoke_method(obj_ref, &class_name.clone(), &setter, vec![new_val], 0, 0);
+                    }
                     if let Some(f) = fields.iter_mut().find(|(n, _)| n == &stmt.field) {
                         f.1 = new_val;
                     } else {
@@ -868,6 +963,9 @@ impl Evaluator {
                 EvalResult::Return(v) => { loop_return = Some(self.extract(v)); break; }
                 EvalResult::Throw(v)  => { loop_throw  = Some(self.extract(v)); break; }
                 EvalResult::Error     => { loop_error = true; break; }
+                EvalResult::BreakLabel(ref l) if stmt.label.as_deref() == Some(l.as_str()) => break,
+                EvalResult::ContinueLabel(ref l) if stmt.label.as_deref() == Some(l.as_str()) => continue,
+                other => { loop_error = true; let _ = other; break; }
             }
         }
 
@@ -886,18 +984,21 @@ impl Evaluator {
         for s in &block.statements {
             match self.eval_statement(s) {
                 EvalResult::Value(v) => result = EvalResult::Value(v),
-                EvalResult::Return(v)  => { result = EvalResult::Return(v);  break; }
-                EvalResult::Break      => { result = EvalResult::Break;       break; }
-                EvalResult::Continue   => { result = EvalResult::Continue;    break; }
-                EvalResult::Error      => { result = EvalResult::Error;       break; }
-                EvalResult::Throw(v)   => { result = EvalResult::Throw(v);   break; }
+                EvalResult::Return(v)           => { result = EvalResult::Return(v);           break; }
+                EvalResult::Break               => { result = EvalResult::Break;               break; }
+                EvalResult::Continue            => { result = EvalResult::Continue;             break; }
+                EvalResult::BreakLabel(l)       => { result = EvalResult::BreakLabel(l);       break; }
+                EvalResult::ContinueLabel(l)    => { result = EvalResult::ContinueLabel(l);    break; }
+                EvalResult::Error               => { result = EvalResult::Error;               break; }
+                EvalResult::Throw(v)            => { result = EvalResult::Throw(v);            break; }
             }
         }
 
         // Deep-extract ANTES del pop: preserva elementos de arrays y valores anidados.
         let owned = match &result {
             EvalResult::Value(v) | EvalResult::Return(v) | EvalResult::Throw(v) => Some(self.extract(*v)),
-            EvalResult::Break | EvalResult::Continue | EvalResult::Error => None,
+            EvalResult::Break | EvalResult::Continue | EvalResult::Error
+            | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => None,
         };
 
         self.scopes.pop();
@@ -912,7 +1013,7 @@ impl Evaluator {
                     _ => unreachable!(),
                 }
             }
-            None => result, // Break, Continue, or Error — pass through as-is
+            None => result, // Break, Continue, BreakLabel, ContinueLabel, or Error — pass through as-is
         }
     }
 
@@ -946,7 +1047,7 @@ impl Evaluator {
             Expression::Lambda(lambda) => {
                 use crate::ast::{LambdaBody, Parameter, BlockStatement, Statement, ReturnStatement};
                 let params: Vec<Parameter> = lambda.params.iter()
-                    .map(|n| Parameter { name: n.clone(), type_name: None })
+                    .map(|n| Parameter { name: n.clone(), type_name: None, is_rest: false })
                     .collect();
                 let body = match &lambda.body {
                     LambdaBody::Block(b) => b.clone(),
@@ -1048,6 +1149,26 @@ impl Evaluator {
 
                 let mut arg_refs = Vec::new();
                 for arg in &call_expr.arguments {
+                    // Spread: ...expr expands an array into the argument list
+                    if let Expression::Spread(inner) = arg {
+                        let spread_ref = match self.eval_expression(inner) {
+                            EvalResult::Value(r) => r,
+                            _ => { self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop(); return EvalResult::Error; }
+                        };
+                        match self.resolve(spread_ref).cloned() {
+                            Some(ObjectData::Array { elements: spread_elems, .. }) => {
+                                for elem_ref in spread_elems {
+                                    arg_refs.push(elem_ref);
+                                }
+                            }
+                            _ => {
+                                eprintln!("❌ ERROR: Spread in function call requires an array");
+                                self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
+                                return EvalResult::Error;
+                            }
+                        }
+                        continue;
+                    }
                     match self.eval_expression(arg) {
                         EvalResult::Value(r) => arg_refs.push(r),
                         _ => {
@@ -1059,7 +1180,17 @@ impl Evaluator {
                     }
                 }
 
-                if arg_refs.len() != parameters.len() {
+                // Check for rest parameter (last param with is_rest=true)
+                let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
+                let min_params = if has_rest { parameters.len().saturating_sub(1) } else { parameters.len() };
+
+                if has_rest {
+                    if arg_refs.len() < min_params {
+                        eprintln!("❌ ERROR: Function expected at least {} arguments, got {}", min_params, arg_refs.len());
+                        self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
+                        return EvalResult::Error;
+                    }
+                } else if arg_refs.len() != parameters.len() {
                     eprintln!(
                         "❌ ERROR: Function expected {} arguments, got {}",
                         parameters.len(),
@@ -1080,6 +1211,13 @@ impl Evaluator {
                 }
 
                 for (i, param) in parameters.iter().enumerate() {
+                    // Rest param: collect remaining args into an array
+                    if param.is_rest {
+                        let rest_elems: Vec<ObjectRef> = arg_refs[i..].to_vec();
+                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_elems });
+                        self.scopes.declare(param.name.clone(), rest_ref);
+                        break;
+                    }
                     let arg_ref = arg_refs[i];
                     if let Some(expected_type) = &param.type_name {
                         let actual_data = self.resolve(arg_ref).unwrap();
@@ -1112,6 +1250,13 @@ impl Evaluator {
                 }
 
                 for (i, param) in parameters.iter().enumerate() {
+                    if param.is_rest {
+                        // Collect remaining args into an array
+                        let rest_elems: Vec<ObjectRef> = arg_refs[i..].to_vec();
+                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_elems });
+                        self.scopes.declare(param.name.clone(), rest_ref);
+                        break;
+                    }
                     let arg_data = self.resolve(arg_refs[i]).unwrap().clone();
                     let local_ref = self.alloc(arg_data);
                     self.scopes.declare(param.name.clone(), local_ref);
@@ -1135,7 +1280,8 @@ impl Evaluator {
                             self.call_stack.pop();
                             return EvalResult::Error;
                         }
-                        _ => { // Break/Continue inside a function body is an error
+                        EvalResult::Break | EvalResult::Continue
+                        | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
                             eprintln!("❌ ERROR: 'break'/'continue' cannot be used outside of a loop");
                             self.scopes.pop();
                             self.call_depth -= 1;
@@ -1178,6 +1324,29 @@ impl Evaluator {
             Expression::ArrayLiteral(arr) => {
                 let mut refs = Vec::new();
                 for el in &arr.elements {
+                    // Spread: ...expr expands an array into this array
+                    if let Expression::Spread(inner) = el {
+                        let spread_ref = match self.eval_expression(inner) {
+                            EvalResult::Value(r) => r,
+                            EvalResult::Throw(v) => return EvalResult::Throw(v),
+                            _ => return EvalResult::Error,
+                        };
+                        match self.resolve(spread_ref).cloned() {
+                            Some(ObjectData::Array { elements: spread_elems, .. }) => {
+                                let owned_elems: Vec<OwnedValue> = spread_elems.iter()
+                                    .map(|&r| self.extract(r))
+                                    .collect();
+                                for owned in owned_elems {
+                                    refs.push(self.plant(owned));
+                                }
+                            }
+                            _ => {
+                                eprintln!("❌ ERROR: Spread operator requires an array");
+                                return EvalResult::Error;
+                            }
+                        }
+                        continue;
+                    }
                     match self.eval_expression(el) {
                         EvalResult::Value(r) => {
                             if let Some(ref et) = arr.element_type {
@@ -1328,6 +1497,28 @@ impl Evaluator {
                 if let Expression::Identifier(ref name) = *dot_call.object {
                     if name == "super" {
                         return self.eval_super_method_call(dot_call);
+                    }
+                    // ── Namespace dispatch (Math / File / JSON) ───────────────
+                    if name == "Math" {
+                        return self.eval_math_namespace(dot_call);
+                    }
+                    if name == "File" {
+                        return self.eval_file_namespace(dot_call);
+                    }
+                    if name == "JSON" {
+                        return self.eval_json_namespace(dot_call);
+                    }
+                    // ── Enum variant access: Color.Red ────────────────────────
+                    if let Some(variants) = self.enum_registry.get(name).cloned() {
+                        let variant = dot_call.method.clone();
+                        if variants.contains(&variant) {
+                            return EvalResult::Value(self.alloc(ObjectData::EnumVariant {
+                                enum_name: name.clone(),
+                                variant,
+                            }));
+                        }
+                        eprintln!("❌ ERROR: '{}' is not a variant of enum '{}'", dot_call.method, name);
+                        return EvalResult::Error;
                     }
                 }
 
@@ -1531,6 +1722,22 @@ impl Evaluator {
                         self.eval_instance_dot(obj_ref, class_name, fields, dot_call)
                     }
 
+                    // ── Set methods ───────────────────────────────────────────
+                    ObjectData::Set { elements } => {
+                        self.eval_set_method(obj_ref, elements, dot_call)
+                    }
+
+                    // ── EnumVariant: no field access, just toString ────────────
+                    ObjectData::EnumVariant { enum_name, variant } => {
+                        if dot_call.method == "toString" {
+                            let s = format!("{}.{}", enum_name, variant);
+                            EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                        } else {
+                            eprintln!("❌ ERROR: Enum variant has no method '{}'", dot_call.method);
+                            EvalResult::Error
+                        }
+                    }
+
                     // .toString() available on all types
                     _ if dot_call.method == "toString" => {
                         let s = self.display(obj_ref);
@@ -1563,6 +1770,10 @@ impl Evaluator {
             }
 
             Expression::New(new_expr) => {
+                // ── Built-in Set type ─────────────────────────────────────────
+                if new_expr.class_name == "Set" {
+                    return self.eval_new_set(new_expr);
+                }
                 if let Some(iface) = self.interface_registry.get(&new_expr.class_name).cloned() {
                     return self.eval_new_interface(new_expr, iface);
                 }
@@ -1677,6 +1888,10 @@ impl Evaluator {
                     infix_expr.column,
                 )
             }
+
+            // Spread used as a standalone expression — evaluate the inner value.
+            // Actual spreading (into arrays/calls) is handled at the call/array site.
+            Expression::Spread(inner) => self.eval_expression(inner),
         }
     }
 
@@ -2036,6 +2251,21 @@ impl Evaluator {
                 };
                 EvalResult::Value(self.alloc(result))
             }
+            // ── EnumVariant equality ─────────────────────────────────────────
+            (ObjectData::EnumVariant { enum_name: en1, variant: v1 },
+             ObjectData::EnumVariant { enum_name: en2, variant: v2 }) => {
+                let eq = en1 == en2 && v1 == v2;
+                let result = match op {
+                    "==" => ObjectData::Boolean(eq),
+                    "!=" => ObjectData::Boolean(!eq),
+                    _ => {
+                        eprintln!("❌ ERROR: Operator '{}' not supported between enum variants", op);
+                        return EvalResult::Error;
+                    }
+                };
+                EvalResult::Value(self.alloc(result))
+            }
+
             (left, right) => {
                 // ── Operator overloading ─────────────────────────────────────
                 // Check BEFORE the equality short-circuit so op_eq/op_ne get a chance.
@@ -2287,6 +2517,7 @@ impl Evaluator {
                         self.estimate_expression(&t.else_expr),
                     )
             }
+            ast::Expression::Spread(inner) => self.estimate_expression(inner),
         }
     }
 
@@ -2403,7 +2634,8 @@ impl Evaluator {
                 EvalResult::Return(v) => { result_ref = v; break; }
                 EvalResult::Throw(v)  => { method_throw = Some(v); break; }
                 EvalResult::Error     => { error = true; break; }
-                EvalResult::Break | EvalResult::Continue => {
+                EvalResult::Break | EvalResult::Continue
+                | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
                     eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop in operator method '{}'.", method_name);
                     error = true;
                     break;
@@ -2461,7 +2693,8 @@ impl Evaluator {
                             self.scopes.pop();
                             return EvalResult::Error;
                         }
-                        EvalResult::Break | EvalResult::Continue => {
+                        EvalResult::Break | EvalResult::Continue
+                        | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
                             eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
                             self.call_depth -= 1;
                             self.scopes.pop();
@@ -2548,6 +2781,12 @@ impl Evaluator {
                 return EvalResult::Value(s);
             }
             Some(ObjectData::Null) | None => "null",
+            Some(ObjectData::EnumVariant { enum_name, .. }) => {
+                let name = enum_name.clone();
+                let s = self.alloc(ObjectData::Str(name));
+                return EvalResult::Value(s);
+            }
+            Some(ObjectData::Set { .. }) => "Set",
         };
         EvalResult::Value(self.alloc(ObjectData::Str(type_name.to_string())))
     }
@@ -2671,33 +2910,43 @@ impl Evaluator {
             }
             // --- Two-argument ---
             "min" => {
-                if args.len() != 2 { eprintln!("❌ ERROR: min() expects 2 arguments"); return EvalResult::Error; }
-                let ra = match self.eval_expression(&args[0]) { EvalResult::Value(r) => self.resolve(r).cloned(), _ => return EvalResult::Error };
-                let rb = match self.eval_expression(&args[1]) { EvalResult::Value(r) => self.resolve(r).cloned(), _ => return EvalResult::Error };
-                match (ra, rb) {
-                    (Some(ObjectData::Integer(ia)), Some(ObjectData::Integer(ib))) =>
-                        EvalResult::Value(self.alloc(ObjectData::Integer(ia.min(ib)))),
-                    (Some(a), Some(b)) => {
-                        let fa = match &a { ObjectData::Decimal(d) => *d, ObjectData::Integer(i) => *i as f64, _ => { eprintln!("❌ ERROR: min() expects numeric arguments"); return EvalResult::Error; } };
-                        let fb = match &b { ObjectData::Decimal(d) => *d, ObjectData::Integer(i) => *i as f64, _ => { eprintln!("❌ ERROR: min() expects numeric arguments"); return EvalResult::Error; } };
-                        EvalResult::Value(self.alloc(ObjectData::Decimal(fa.min(fb))))
+                if args.is_empty() { eprintln!("❌ ERROR: min() expects at least 1 argument"); return EvalResult::Error; }
+                let mut all_int = true;
+                let mut vals: Vec<f64> = Vec::new();
+                let mut int_vals: Vec<i64> = Vec::new();
+                for arg in args {
+                    let r = match self.eval_expression(arg) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                    match self.resolve(r).cloned() {
+                        Some(ObjectData::Integer(i)) => { vals.push(i as f64); int_vals.push(i); }
+                        Some(ObjectData::Decimal(d)) => { vals.push(d); all_int = false; }
+                        _ => { eprintln!("❌ ERROR: min() expects numeric arguments"); return EvalResult::Error; }
                     }
-                    _ => { eprintln!("❌ ERROR: min() expects numeric arguments"); EvalResult::Error }
+                }
+                if all_int && int_vals.len() == args.len() {
+                    EvalResult::Value(self.alloc(ObjectData::Integer(*int_vals.iter().min().unwrap())))
+                } else {
+                    let m = vals.iter().cloned().fold(f64::INFINITY, f64::min);
+                    EvalResult::Value(self.alloc(ObjectData::Decimal(m)))
                 }
             }
             "max" => {
-                if args.len() != 2 { eprintln!("❌ ERROR: max() expects 2 arguments"); return EvalResult::Error; }
-                let ra = match self.eval_expression(&args[0]) { EvalResult::Value(r) => self.resolve(r).cloned(), _ => return EvalResult::Error };
-                let rb = match self.eval_expression(&args[1]) { EvalResult::Value(r) => self.resolve(r).cloned(), _ => return EvalResult::Error };
-                match (ra, rb) {
-                    (Some(ObjectData::Integer(ia)), Some(ObjectData::Integer(ib))) =>
-                        EvalResult::Value(self.alloc(ObjectData::Integer(ia.max(ib)))),
-                    (Some(a), Some(b)) => {
-                        let fa = match &a { ObjectData::Decimal(d) => *d, ObjectData::Integer(i) => *i as f64, _ => { eprintln!("❌ ERROR: max() expects numeric arguments"); return EvalResult::Error; } };
-                        let fb = match &b { ObjectData::Decimal(d) => *d, ObjectData::Integer(i) => *i as f64, _ => { eprintln!("❌ ERROR: max() expects numeric arguments"); return EvalResult::Error; } };
-                        EvalResult::Value(self.alloc(ObjectData::Decimal(fa.max(fb))))
+                if args.is_empty() { eprintln!("❌ ERROR: max() expects at least 1 argument"); return EvalResult::Error; }
+                let mut all_int = true;
+                let mut vals: Vec<f64> = Vec::new();
+                let mut int_vals: Vec<i64> = Vec::new();
+                for arg in args {
+                    let r = match self.eval_expression(arg) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                    match self.resolve(r).cloned() {
+                        Some(ObjectData::Integer(i)) => { vals.push(i as f64); int_vals.push(i); }
+                        Some(ObjectData::Decimal(d)) => { vals.push(d); all_int = false; }
+                        _ => { eprintln!("❌ ERROR: max() expects numeric arguments"); return EvalResult::Error; }
                     }
-                    _ => { eprintln!("❌ ERROR: max() expects numeric arguments"); EvalResult::Error }
+                }
+                if all_int && int_vals.len() == args.len() {
+                    EvalResult::Value(self.alloc(ObjectData::Integer(*int_vals.iter().max().unwrap())))
+                } else {
+                    let m = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    EvalResult::Value(self.alloc(ObjectData::Decimal(m)))
                 }
             }
             "pow" => {
@@ -2705,6 +2954,62 @@ impl Evaluator {
                 let base = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
                 let exp  = match resolve_num(self, &args[1]) { Some(v) => v, None => return EvalResult::Error };
                 EvalResult::Value(self.alloc(ObjectData::Decimal(base.powf(exp))))
+            }
+            "sin" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: sin() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.sin())))
+            }
+            "cos" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: cos() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.cos())))
+            }
+            "tan" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: tan() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.tan())))
+            }
+            "asin" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: asin() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.asin())))
+            }
+            "acos" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: acos() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.acos())))
+            }
+            "atan" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: atan() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.atan())))
+            }
+            "atan2" => {
+                if args.len() != 2 { eprintln!("❌ ERROR: atan2() expects 2 arguments"); return EvalResult::Error; }
+                let y = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                let x = match resolve_num(self, &args[1]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(y.atan2(x))))
+            }
+            "log2" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: log2() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.log2())))
+            }
+            "log10" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: log10() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.log10())))
+            }
+            "trunc" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: trunc() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Integer(v.trunc() as i64)))
+            }
+            "exp" => {
+                if args.len() != 1 { eprintln!("❌ ERROR: exp() expects 1 argument"); return EvalResult::Error; }
+                let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(v.exp())))
             }
             _ => { eprintln!("❌ ERROR: Unknown math function '{}'", name); EvalResult::Error }
         }
@@ -2791,6 +3096,12 @@ impl Evaluator {
     }
 
     fn eval_new_class(&mut self, new_expr: &ast::NewExpression, class: StoredClass) -> EvalResult {
+        // ── Abstract class check ──────────────────────────────────────────────
+        if class.is_abstract {
+            eprintln!("❌ ERROR: Cannot instantiate abstract class '{}'", new_expr.class_name);
+            return EvalResult::Error;
+        }
+
         let arg_exprs = match &new_expr.args {
             ast::NewArgs::Positional(a) => a.clone(),
             ast::NewArgs::Fields(_) => {
@@ -2808,10 +3119,25 @@ impl Evaluator {
             }
         }
 
-        // Allocate empty instance in current context
+        // ── Class field defaults ──────────────────────────────────────────────
+        // Evaluate default values for class fields and add to initial instance
+        let mut initial_fields: Vec<(String, OwnedValue)> = Vec::new();
+        for field in &class.fields.clone() {
+            if let Some(ref default_expr) = field.default_value {
+                match self.eval_expression(default_expr) {
+                    EvalResult::Value(r) => {
+                        let owned = self.extract(r);
+                        initial_fields.push((field.name.clone(), owned));
+                    }
+                    other => return other,
+                }
+            }
+        }
+
+        // Allocate instance with default field values
         let instance_ref = self.alloc(ObjectData::Instance {
             class_name: new_expr.class_name.clone(),
-            fields: Vec::new(),
+            fields: initial_fields,
         });
 
         if let Some(ctor) = class.constructor {
@@ -2839,7 +3165,8 @@ impl Evaluator {
                     EvalResult::Return(_) => break,
                     EvalResult::Value(_) => {}
                     EvalResult::Throw(v) => { ctor_throw = Some(v); break; }
-                    EvalResult::Break | EvalResult::Continue => {
+                    EvalResult::Break | EvalResult::Continue
+                    | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
                         eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
                         body_error = true;
                         break;
@@ -2921,7 +3248,8 @@ impl Evaluator {
                 EvalResult::Return(_) => break,
                 EvalResult::Value(_) => {}
                 EvalResult::Throw(v) => { super_throw = Some(v); break; }
-                EvalResult::Break | EvalResult::Continue => {
+                EvalResult::Break | EvalResult::Continue
+                | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
                     eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
                     error = true;
                     break;
@@ -3016,7 +3344,8 @@ impl Evaluator {
                 EvalResult::Return(v) => { result_ref = v; break; }
                 EvalResult::Throw(v)  => { method_throw = Some(v); break; }
                 EvalResult::Error => { error = true; break; }
-                EvalResult::Break | EvalResult::Continue => {
+                EvalResult::Break | EvalResult::Continue
+                | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
                     eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
                     error = true;
                     break;
@@ -3099,6 +3428,10 @@ impl Evaluator {
                 let owned = owned.clone();
                 return EvalResult::Value(self.plant(owned));
             }
+            // Getter: no parens, no field → look for `get prop()`
+            if let Some(getter) = self.find_getter(&class_name, method_name) {
+                return self.invoke_method(obj_ref, &class_name, &getter, vec![], dot_call.line, dot_call.column);
+            }
         }
 
         // Method dispatch: walk inheritance chain
@@ -3113,80 +3446,7 @@ impl Evaluator {
                         other => return other,
                     }
                 }
-
-                if arg_vals.len() != m.parameters.len() {
-                    eprintln!("❌ ERROR: Method '{}' expects {} arguments, got {}",
-                        method_name, m.parameters.len(), arg_vals.len());
-                    return EvalResult::Error;
-                }
-
-                if !m.is_public && self.executing_class.as_deref() != Some(class_name.as_str()) {
-                    eprintln!("❌ ERROR: Method '{}' is private and cannot be called externally", method_name);
-                    return EvalResult::Error;
-                }
-
-                if self.call_depth >= 1000 {
-                    eprintln!("❌ ERROR: Stack overflow — maximum call depth (1000) exceeded");
-                    return EvalResult::Error;
-                }
-
-                let old_executing_class = self.executing_class.take();
-                self.executing_class = Some(class_name.clone());
-
-                self.call_stack.push(CallFrame {
-                    name: format!("{}::{}", class_name, method_name),
-                    line: dot_call.line,
-                    column: dot_call.column,
-                });
-                self.scopes.push();
-                self.call_depth += 1;
-                self.scopes.declare("this".to_string(), obj_ref);
-
-                for (i, param) in m.parameters.iter().enumerate() {
-                    let arg_ref = self.plant(arg_vals[i].clone());
-                    self.scopes.declare(param.name.clone(), arg_ref);
-                }
-
-                let mut result_ref = self.null_ref;
-                let mut error = false;
-                let mut method_throw: Option<ObjectRef> = None;
-                for stmt in &m.body.statements {
-                    match self.eval_statement(stmt) {
-                        EvalResult::Value(_) => {} // implicit — method result is null unless explicit return
-                        EvalResult::Return(v) => { result_ref = v; break; }
-                        EvalResult::Throw(v)  => { method_throw = Some(v); break; }
-                        EvalResult::Error => { error = true; break; }
-                        EvalResult::Break | EvalResult::Continue => {
-                            eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
-                            error = true;
-                            break;
-                        }
-                    }
-                }
-
-                let owned = self.extract(result_ref);
-                let throw_owned = method_throw.map(|r| self.extract(r));
-                self.call_depth -= 1;
-                self.scopes.pop();
-                self.call_stack.pop();
-                self.executing_class = old_executing_class;
-
-                if error { return EvalResult::Error; }
-                if let Some(t) = throw_owned { return EvalResult::Throw(self.plant(t)); }
-
-                let result = self.plant(owned);
-
-                // Validate return type if declared
-                if let Some(ref rt) = m.return_type {
-                    let actual = self.resolve(result).unwrap();
-                    if !type_matches(rt, actual) {
-                        eprintln!("❌ TYPE ERROR: Method '{}' declared return '{}' but returned '{}'",
-                            method_name, rt, actual.type_name());
-                        return EvalResult::Error;
-                    }
-                }
-
-                EvalResult::Value(result)
+                self.invoke_method(obj_ref, &class_name, &m, arg_vals, dot_call.line, dot_call.column)
             }
             None => {
                 // Fallback: toString() is available on all instance types
@@ -3218,7 +3478,7 @@ impl Evaluator {
         let mut current = class_name.to_string();
         loop {
             let class = self.class_registry.get(&current)?;
-            if let Some(m) = class.methods.iter().find(|m| m.name == method_name) {
+            if let Some(m) = class.methods.iter().find(|m| m.name == method_name && !m.is_getter && !m.is_setter) {
                 return Some(m.clone());
             }
             match &class.parent {
@@ -3226,6 +3486,123 @@ impl Evaluator {
                 None => return None,
             }
         }
+    }
+
+    fn find_getter(&self, class_name: &str, prop_name: &str) -> Option<ast::ClassMethod> {
+        let mut current = class_name.to_string();
+        loop {
+            let class = self.class_registry.get(&current)?;
+            if let Some(m) = class.methods.iter().find(|m| m.name == prop_name && m.is_getter) {
+                return Some(m.clone());
+            }
+            match &class.parent {
+                Some(parent) => current = parent.clone(),
+                None => return None,
+            }
+        }
+    }
+
+    fn find_setter(&self, class_name: &str, prop_name: &str) -> Option<ast::ClassMethod> {
+        let mut current = class_name.to_string();
+        loop {
+            let class = self.class_registry.get(&current)?;
+            if let Some(m) = class.methods.iter().find(|m| m.name == prop_name && m.is_setter) {
+                return Some(m.clone());
+            }
+            match &class.parent {
+                Some(parent) => current = parent.clone(),
+                None => return None,
+            }
+        }
+    }
+
+    // Shared helper: invoke a ClassMethod on an instance with pre-evaluated arg values.
+    fn invoke_method(
+        &mut self,
+        obj_ref: ObjectRef,
+        class_name: &str,
+        m: &ast::ClassMethod,
+        arg_vals: Vec<OwnedValue>,
+        call_line: usize,
+        call_column: usize,
+    ) -> EvalResult {
+        let method_name = &m.name;
+
+        // arity check — getters/setters have fixed params handled at call site
+        let expected_params = m.parameters.len();
+        if arg_vals.len() != expected_params {
+            eprintln!("❌ ERROR: Method '{}' expects {} arguments, got {}",
+                method_name, expected_params, arg_vals.len());
+            return EvalResult::Error;
+        }
+
+        if !m.is_public && self.executing_class.as_deref() != Some(class_name) {
+            eprintln!("❌ ERROR: Method '{}' is private and cannot be called externally", method_name);
+            return EvalResult::Error;
+        }
+
+        if self.call_depth >= 1000 {
+            eprintln!("❌ ERROR: Stack overflow — maximum call depth (1000) exceeded");
+            return EvalResult::Error;
+        }
+
+        let old_executing_class = self.executing_class.take();
+        self.executing_class = Some(class_name.to_string());
+
+        self.call_stack.push(CallFrame {
+            name: format!("{}::{}", class_name, method_name),
+            line: call_line,
+            column: call_column,
+        });
+        self.scopes.push();
+        self.call_depth += 1;
+        self.scopes.declare("this".to_string(), obj_ref);
+
+        for (i, param) in m.parameters.iter().enumerate() {
+            let arg_ref = self.plant(arg_vals[i].clone());
+            self.scopes.declare(param.name.clone(), arg_ref);
+        }
+
+        let mut result_ref = self.null_ref;
+        let mut error = false;
+        let mut method_throw: Option<ObjectRef> = None;
+        for stmt in &m.body.statements {
+            match self.eval_statement(stmt) {
+                EvalResult::Value(_) => {}
+                EvalResult::Return(v) => { result_ref = v; break; }
+                EvalResult::Throw(v)  => { method_throw = Some(v); break; }
+                EvalResult::Error => { error = true; break; }
+                EvalResult::Break | EvalResult::Continue
+                | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
+                    eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                    error = true;
+                    break;
+                }
+            }
+        }
+
+        let owned = self.extract(result_ref);
+        let throw_owned = method_throw.map(|r| self.extract(r));
+        self.call_depth -= 1;
+        self.scopes.pop();
+        self.call_stack.pop();
+        self.executing_class = old_executing_class;
+
+        if error { return EvalResult::Error; }
+        if let Some(t) = throw_owned { return EvalResult::Throw(self.plant(t)); }
+
+        let result = self.plant(owned);
+
+        if let Some(ref rt) = m.return_type {
+            let actual = self.resolve(result).unwrap();
+            if !type_matches(rt, actual) {
+                eprintln!("❌ TYPE ERROR: Method '{}' declared return '{}' but returned '{}'",
+                    method_name, rt, actual.type_name());
+                return EvalResult::Error;
+            }
+        }
+
+        EvalResult::Value(result)
     }
 
     // ── Array methods ─────────────────────────────────────────────────────────
@@ -3827,6 +4204,8 @@ impl Evaluator {
             (ObjectData::Str(x),      ObjectData::Str(y))      => x == y,
             (ObjectData::Boolean(x),  ObjectData::Boolean(y))  => x == y,
             (ObjectData::Null,        ObjectData::Null)         => true,
+            (ObjectData::EnumVariant { enum_name: en1, variant: v1 },
+             ObjectData::EnumVariant { enum_name: en2, variant: v2 }) => en1 == en2 && v1 == v2,
             _ => false,
         }
     }
@@ -3851,6 +4230,8 @@ impl Evaluator {
                     let mut catch_error    = false;
                     let mut catch_break    = false;
                     let mut catch_continue = false;
+                    let mut catch_break_label: Option<String> = None;
+                    let mut catch_continue_label: Option<String> = None;
                     for s in &catch_block.statements {
                         match self.eval_statement(s) {
                             EvalResult::Value(v)   => catch_val = v,
@@ -3859,6 +4240,8 @@ impl Evaluator {
                             EvalResult::Error      => { catch_error    = true;    break; }
                             EvalResult::Break      => { catch_break    = true;    break; }
                             EvalResult::Continue   => { catch_continue = true;    break; }
+                            EvalResult::BreakLabel(l)    => { catch_break_label    = Some(l); break; }
+                            EvalResult::ContinueLabel(l) => { catch_continue_label = Some(l); break; }
                         }
                     }
                     // Extract BEFORE pop so refs remain valid
@@ -3868,6 +4251,8 @@ impl Evaluator {
                     if catch_error             { EvalResult::Error }
                     else if catch_break        { EvalResult::Break }
                     else if catch_continue     { EvalResult::Continue }
+                    else if let Some(l) = catch_break_label    { EvalResult::BreakLabel(l) }
+                    else if let Some(l) = catch_continue_label { EvalResult::ContinueLabel(l) }
                     else if catch_return.is_some() { EvalResult::Return(self.plant(owned)) }
                     else if catch_throw.is_some()  { EvalResult::Throw(self.plant(owned)) }
                     else                           { EvalResult::Value(self.plant(owned)) }
@@ -3910,6 +4295,358 @@ fn operator_to_method_name(op: &str) -> &'static str {
         ">"  => "op_gt",
         ">=" => "op_ge",
         _    => "",
+    }
+}
+
+// ── Math namespace ─────────────────────────────────────────────────────────────
+
+impl Evaluator {
+    fn eval_math_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
+        match dot_call.method.as_str() {
+            "PI" => EvalResult::Value(self.alloc(ObjectData::Decimal(std::f64::consts::PI))),
+            "E"  => EvalResult::Value(self.alloc(ObjectData::Decimal(std::f64::consts::E))),
+            "random" => {
+                // LCG random: state = (a*state + c) mod m
+                self.lcg_state = self.lcg_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let val = (self.lcg_state >> 33) as f64 / (u32::MAX as f64);
+                EvalResult::Value(self.alloc(ObjectData::Decimal(val)))
+            }
+            "clamp" => {
+                if dot_call.arguments.len() != 3 {
+                    eprintln!("❌ ERROR: Math.clamp(x, min, max) requires 3 arguments");
+                    return EvalResult::Error;
+                }
+                let x   = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let mn  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let mx  = match self.eval_expression(&dot_call.arguments[2]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                match (self.resolve(x).cloned(), self.resolve(mn).cloned(), self.resolve(mx).cloned()) {
+                    (Some(ObjectData::Integer(xv)), Some(ObjectData::Integer(mnv)), Some(ObjectData::Integer(mxv))) =>
+                        EvalResult::Value(self.alloc(ObjectData::Integer(xv.max(mnv).min(mxv)))),
+                    (Some(ObjectData::Decimal(xv)), Some(ObjectData::Decimal(mnv)), Some(ObjectData::Decimal(mxv))) =>
+                        EvalResult::Value(self.alloc(ObjectData::Decimal(xv.max(mnv).min(mxv)))),
+                    (Some(ObjectData::Integer(xv)), Some(ObjectData::Integer(mnv)), Some(ObjectData::Decimal(mxv))) =>
+                        EvalResult::Value(self.alloc(ObjectData::Decimal((xv as f64).max(mnv as f64).min(mxv)))),
+                    _ => { eprintln!("❌ ERROR: Math.clamp requires numeric arguments"); EvalResult::Error }
+                }
+            }
+            "sign" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Math.sign(x) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let xr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                match self.resolve(xr).cloned() {
+                    Some(ObjectData::Integer(v)) => {
+                        let s = if v > 0 { 1i64 } else if v < 0 { -1 } else { 0 };
+                        EvalResult::Value(self.alloc(ObjectData::Integer(s)))
+                    }
+                    Some(ObjectData::Decimal(v)) => {
+                        let s = if v > 0.0 { 1i64 } else if v < 0.0 { -1 } else { 0 };
+                        EvalResult::Value(self.alloc(ObjectData::Integer(s)))
+                    }
+                    _ => { eprintln!("❌ ERROR: Math.sign requires a numeric argument"); EvalResult::Error }
+                }
+            }
+            // Delegate single-arg math functions to eval_math_builtin
+            "abs" | "sqrt" | "floor" | "ceil" | "round" | "log" | "log2" | "log10"
+            | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "trunc" | "exp" => {
+                self.eval_math_builtin(dot_call.method.as_str(), &dot_call.arguments)
+            }
+            // Multi-arg: min, max, pow, atan2
+            "min" | "max" | "pow" | "atan2" => {
+                self.eval_math_builtin(dot_call.method.as_str(), &dot_call.arguments)
+            }
+            _ => {
+                eprintln!("❌ ERROR: Unknown Math method '{}'", dot_call.method);
+                EvalResult::Error
+            }
+        }
+    }
+
+    // ── File namespace ─────────────────────────────────────────────────────────
+
+    fn eval_file_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
+        match dot_call.method.as_str() {
+            "exists" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: File.exists(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.exists requires a string path"); return EvalResult::Error; }
+                };
+                let exists = std::path::Path::new(&path).exists();
+                EvalResult::Value(self.alloc(ObjectData::Boolean(exists)))
+            }
+            "read" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: File.read(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.read requires a string path"); return EvalResult::Error; }
+                };
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => EvalResult::Value(self.alloc(ObjectData::Str(content))),
+                    Err(e) => { eprintln!("❌ ERROR: File error reading '{}': {}", path, e); EvalResult::Error }
+                }
+            }
+            "write" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: File.write(path, content) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let cr = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.write path must be a string"); return EvalResult::Error; }
+                };
+                let content = self.display(cr);
+                match std::fs::write(&path, &content) {
+                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Err(e) => { eprintln!("❌ ERROR: File error writing '{}': {}", path, e); EvalResult::Error }
+                }
+            }
+            "create" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: File.create(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.create requires a string path"); return EvalResult::Error; }
+                };
+                // touch: create if not exists, leave untouched if exists
+                if !std::path::Path::new(&path).exists() {
+                    if let Err(e) = std::fs::File::create(&path) {
+                        eprintln!("❌ ERROR: File error creating '{}': {}", path, e);
+                        return EvalResult::Error;
+                    }
+                }
+                EvalResult::Value(self.null_ref)
+            }
+            "read_asBinary" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: File.read_asBinary(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.read_asBinary requires a string path"); return EvalResult::Error; }
+                };
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        let refs: Vec<ObjectRef> = bytes.iter()
+                            .map(|&b| self.alloc(ObjectData::Integer(b as i64)))
+                            .collect();
+                        EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements: refs }))
+                    }
+                    Err(e) => { eprintln!("❌ ERROR: File error reading binary '{}': {}", path, e); EvalResult::Error }
+                }
+            }
+            "write_asBinary" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: File.write_asBinary(path, bytes) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let br = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.write_asBinary path must be a string"); return EvalResult::Error; }
+                };
+                let bytes_data = match self.resolve(br).cloned() {
+                    Some(ObjectData::Array { elements, .. }) => elements,
+                    _ => { eprintln!("❌ ERROR: File.write_asBinary bytes must be an array"); return EvalResult::Error; }
+                };
+                let mut buf: Vec<u8> = Vec::with_capacity(bytes_data.len());
+                for r in bytes_data {
+                    match self.resolve(r).cloned() {
+                        Some(ObjectData::Integer(b)) if b >= 0 && b <= 255 => buf.push(b as u8),
+                        _ => { eprintln!("❌ ERROR: File.write_asBinary: each byte must be int 0-255"); return EvalResult::Error; }
+                    }
+                }
+                match std::fs::write(&path, &buf) {
+                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Err(e) => { eprintln!("❌ ERROR: File error writing binary '{}': {}", path, e); EvalResult::Error }
+                }
+            }
+            _ => {
+                eprintln!("❌ ERROR: Unknown File method '{}'", dot_call.method);
+                EvalResult::Error
+            }
+        }
+    }
+
+    // ── JSON namespace ─────────────────────────────────────────────────────────
+
+    fn eval_json_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
+        match dot_call.method.as_str() {
+            "stringify" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: JSON.stringify(value) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let vr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let owned = self.extract(vr);
+                let json = json_stringify_owned(&owned);
+                EvalResult::Value(self.alloc(ObjectData::Str(json)))
+            }
+            "parse" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: JSON.parse(string) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let sr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let s = match self.resolve(sr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: JSON.parse requires a string"); return EvalResult::Error; }
+                };
+                match json_parse(&s) {
+                    Ok(owned) => EvalResult::Value(self.plant_global(owned)),
+                    Err(e) => { eprintln!("❌ ERROR: JSON.parse error: {}", e); EvalResult::Error }
+                }
+            }
+            _ => {
+                eprintln!("❌ ERROR: Unknown JSON method '{}'", dot_call.method);
+                EvalResult::Error
+            }
+        }
+    }
+
+    // ── Set methods ────────────────────────────────────────────────────────────
+
+    fn eval_new_set(&mut self, new_expr: &ast::NewExpression) -> EvalResult {
+        let mut elements: Vec<ObjectRef> = Vec::new();
+        let init_arg = match &new_expr.args {
+            ast::NewArgs::Positional(pos_args) => pos_args.first().cloned(),
+            ast::NewArgs::Fields(_) => None,
+        };
+        if let Some(init_expr) = init_arg {
+            let arr_ref = match self.eval_expression(&init_expr) {
+                EvalResult::Value(r) => r,
+                _ => return EvalResult::Error,
+            };
+            if let Some(ObjectData::Array { elements: arr_elems, .. }) = self.resolve(arr_ref).cloned() {
+                for elem_ref in arr_elems {
+                    let elem_data = self.resolve(elem_ref).cloned();
+                    let already = elements.iter().any(|&er| obj_data_eq(&self.resolve(er).cloned(), &elem_data));
+                    if !already {
+                        elements.push(elem_ref);
+                    }
+                }
+            }
+        }
+        EvalResult::Value(self.alloc(ObjectData::Set { elements }))
+    }
+
+    fn eval_set_method(&mut self, set_ref: ObjectRef, elements: Vec<ObjectRef>, dot_call: &ast::DotCallExpression) -> EvalResult {
+        match dot_call.method.as_str() {
+            "size" => EvalResult::Value(self.alloc(ObjectData::Integer(elements.len() as i64))),
+            "toArray" => {
+                let owned: Vec<OwnedValue> = elements.iter().map(|&r| self.extract(r)).collect();
+                let refs: Vec<ObjectRef> = owned.into_iter().map(|v| self.plant(v)).collect();
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: refs }))
+            }
+            "has" | "contains" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Set.has(val) requires 1 argument"); return EvalResult::Error;
+                }
+                let vr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let vd = self.resolve(vr).cloned();
+                let found = elements.iter().any(|&er| obj_data_eq(&self.resolve(er).cloned(), &vd));
+                EvalResult::Value(self.alloc(ObjectData::Boolean(found)))
+            }
+            "add" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Set.add(val) requires 1 argument"); return EvalResult::Error;
+                }
+                let vr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let vd = self.resolve(vr).cloned();
+                let already = elements.iter().any(|&er| obj_data_eq(&self.resolve(er).cloned(), &vd));
+                if !already {
+                    let owned = self.extract(vr);
+                    let new_ref = self.plant_global(owned);
+                    let mut new_elems = elements;
+                    new_elems.push(new_ref);
+                    self.update_set(set_ref, new_elems);
+                }
+                EvalResult::Value(set_ref)
+            }
+            "delete" | "remove" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Set.delete(val) requires 1 argument"); return EvalResult::Error;
+                }
+                let vr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let vd = self.resolve(vr).cloned();
+                let before = elements.len();
+                let new_elems: Vec<ObjectRef> = elements.into_iter().filter(|&er| !obj_data_eq(&self.resolve(er).cloned(), &vd)).collect();
+                let removed = new_elems.len() < before;
+                self.update_set(set_ref, new_elems);
+                EvalResult::Value(self.alloc(ObjectData::Boolean(removed)))
+            }
+            "clear" => {
+                self.update_set(set_ref, vec![]);
+                EvalResult::Value(self.null_ref)
+            }
+            "union" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Set.union(other) requires 1 argument"); return EvalResult::Error;
+                }
+                let or = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let other_elems = match self.resolve(or).cloned() {
+                    Some(ObjectData::Set { elements: oe }) => oe,
+                    _ => { eprintln!("❌ ERROR: Set.union requires a Set argument"); return EvalResult::Error; }
+                };
+                let mut result: Vec<ObjectRef> = elements.clone();
+                for er in other_elems {
+                    let ed = self.resolve(er).cloned();
+                    if !result.iter().any(|&rr| obj_data_eq(&self.resolve(rr).cloned(), &ed)) {
+                        let owned = self.extract(er);
+                        result.push(self.plant_global(owned));
+                    }
+                }
+                EvalResult::Value(self.alloc(ObjectData::Set { elements: result }))
+            }
+            "intersection" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Set.intersection(other) requires 1 argument"); return EvalResult::Error;
+                }
+                let or = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let other_elems = match self.resolve(or).cloned() {
+                    Some(ObjectData::Set { elements: oe }) => oe,
+                    _ => { eprintln!("❌ ERROR: Set.intersection requires a Set argument"); return EvalResult::Error; }
+                };
+                let result: Vec<ObjectRef> = elements.into_iter().filter(|&er| {
+                    let ed = self.resolve(er).cloned();
+                    other_elems.iter().any(|&oer| obj_data_eq(&self.resolve(oer).cloned(), &ed))
+                }).collect();
+                EvalResult::Value(self.alloc(ObjectData::Set { elements: result }))
+            }
+            "toString" => {
+                let s = self.display(set_ref);
+                EvalResult::Value(self.alloc(ObjectData::Str(s)))
+            }
+            _ => {
+                eprintln!("❌ ERROR: Unknown Set method '{}'", dot_call.method);
+                EvalResult::Error
+            }
+        }
+    }
+
+    fn update_set(&mut self, set_ref: ObjectRef, new_elements: Vec<ObjectRef>) {
+        let new_data = ObjectData::Set { elements: new_elements };
+        match set_ref.region {
+            RegionId::Global => self.global_arena.update(set_ref.index, new_data),
+            RegionId::Scoped => self.scopes.arena.update(set_ref.index, new_data),
+        }
     }
 }
 
@@ -3963,5 +4700,219 @@ fn type_matches(expected: &str, data: &ObjectData) -> bool {
         }
         (t, ObjectData::Instance { class_name, .. }) => t == class_name.as_str(),
         _ => false,
+    }
+}
+
+// ── JSON helpers ────────────────────────────────────────────────────────────
+
+fn json_stringify_owned(val: &OwnedValue) -> String {
+    match val {
+        OwnedValue::Null => "null".to_string(),
+        OwnedValue::Boolean(b) => b.to_string(),
+        OwnedValue::Integer(i) => i.to_string(),
+        OwnedValue::Decimal(d) => {
+            if d.fract() == 0.0 { format!("{:.1}", d) }
+            else {
+                let s = format!("{:.10}", d);
+                s.trim_end_matches('0').trim_end_matches('.').to_string()
+            }
+        }
+        OwnedValue::Str(s) => {
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t");
+            format!("\"{}\"", escaped)
+        }
+        OwnedValue::Array { elements, .. } => {
+            let parts: Vec<String> = elements.iter().map(json_stringify_owned).collect();
+            format!("[{}]", parts.join(","))
+        }
+        OwnedValue::Dict { entries, .. } => {
+            let parts: Vec<String> = entries.iter().map(|(k, v)| {
+                let key = match k {
+                    OwnedValue::Str(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+                    OwnedValue::Integer(i) => format!("\"{}\"", i),
+                    other => format!("\"{}\"", other.display_str()),
+                };
+                format!("{}:{}", key, json_stringify_owned(v))
+            }).collect();
+            format!("{{{}}}", parts.join(","))
+        }
+        OwnedValue::Instance { class_name: _, fields } => {
+            let parts: Vec<String> = fields.iter().map(|(k, v)| {
+                format!("\"{}\":{}", k.replace('"', "\\\""), json_stringify_owned(v))
+            }).collect();
+            format!("{{{}}}", parts.join(","))
+        }
+        OwnedValue::Set { elements } => {
+            let parts: Vec<String> = elements.iter().map(json_stringify_owned).collect();
+            format!("[{}]", parts.join(","))
+        }
+        OwnedValue::EnumVariant { enum_name, variant } => {
+            format!("\"{}\"", format!("{}.{}", enum_name, variant).replace('"', "\\\""))
+        }
+        OwnedValue::Function { .. } => "null".to_string(),
+    }
+}
+
+// A minimal recursive-descent JSON parser — no external crates.
+fn json_parse(input: &str) -> Result<OwnedValue, String> {
+    let chars: Vec<char> = input.chars().collect();
+    let (val, pos) = json_parse_value(&chars, 0)?;
+    let pos = json_skip_ws(&chars, pos);
+    if pos != chars.len() {
+        return Err(format!("unexpected trailing characters at position {}", pos));
+    }
+    Ok(val)
+}
+
+fn json_skip_ws(chars: &[char], mut pos: usize) -> usize {
+    while pos < chars.len() && (chars[pos] == ' ' || chars[pos] == '\t' || chars[pos] == '\n' || chars[pos] == '\r') {
+        pos += 1;
+    }
+    pos
+}
+
+fn json_parse_value(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), String> {
+    let pos = json_skip_ws(chars, pos);
+    if pos >= chars.len() {
+        return Err("unexpected end of input".to_string());
+    }
+    match chars[pos] {
+        '"'       => json_parse_string(chars, pos),
+        '['       => json_parse_array(chars, pos),
+        '{'       => json_parse_object(chars, pos),
+        't'       => {
+            if chars.get(pos..pos+4) == Some(&['t','r','u','e']) {
+                Ok((OwnedValue::Boolean(true), pos + 4))
+            } else { Err(format!("invalid token at {}", pos)) }
+        }
+        'f'       => {
+            if chars.get(pos..pos+5) == Some(&['f','a','l','s','e']) {
+                Ok((OwnedValue::Boolean(false), pos + 5))
+            } else { Err(format!("invalid token at {}", pos)) }
+        }
+        'n'       => {
+            if chars.get(pos..pos+4) == Some(&['n','u','l','l']) {
+                Ok((OwnedValue::Null, pos + 4))
+            } else { Err(format!("invalid token at {}", pos)) }
+        }
+        '-' | '0'..='9' => json_parse_number(chars, pos),
+        c => Err(format!("unexpected character '{}' at position {}", c, pos)),
+    }
+}
+
+fn json_parse_string(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), String> {
+    // pos points to opening '"'
+    let mut i = pos + 1;
+    let mut s = String::new();
+    while i < chars.len() {
+        match chars[i] {
+            '"' => { return Ok((OwnedValue::Str(s), i + 1)); }
+            '\\' => {
+                i += 1;
+                if i >= chars.len() { return Err("unterminated string escape".to_string()); }
+                match chars[i] {
+                    '"'  => s.push('"'),
+                    '\\' => s.push('\\'),
+                    '/'  => s.push('/'),
+                    'n'  => s.push('\n'),
+                    'r'  => s.push('\r'),
+                    't'  => s.push('\t'),
+                    'b'  => s.push('\u{0008}'),
+                    'f'  => s.push('\u{000C}'),
+                    'u'  => {
+                        if i + 4 >= chars.len() { return Err("invalid \\u escape".to_string()); }
+                        let hex: String = chars[i+1..i+5].iter().collect();
+                        let code = u32::from_str_radix(&hex, 16)
+                            .map_err(|_| format!("invalid \\u{}", hex))?;
+                        let ch = char::from_u32(code)
+                            .ok_or_else(|| format!("invalid unicode codepoint {}", code))?;
+                        s.push(ch);
+                        i += 4;
+                    }
+                    c => { s.push('\\'); s.push(c); }
+                }
+                i += 1;
+            }
+            c => { s.push(c); i += 1; }
+        }
+    }
+    Err("unterminated string".to_string())
+}
+
+fn json_parse_array(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), String> {
+    let mut i = json_skip_ws(chars, pos + 1); // skip '['
+    let mut elements = Vec::new();
+    if i < chars.len() && chars[i] == ']' {
+        return Ok((OwnedValue::Array { element_type: None, elements }, i + 1));
+    }
+    loop {
+        let (val, next) = json_parse_value(chars, i)?;
+        elements.push(val);
+        i = json_skip_ws(chars, next);
+        if i >= chars.len() { return Err("unterminated array".to_string()); }
+        match chars[i] {
+            ']' => { return Ok((OwnedValue::Array { element_type: None, elements }, i + 1)); }
+            ',' => { i = json_skip_ws(chars, i + 1); }
+            c   => { return Err(format!("expected ',' or ']', got '{}'", c)); }
+        }
+    }
+}
+
+fn json_parse_object(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), String> {
+    let mut i = json_skip_ws(chars, pos + 1); // skip '{'
+    let mut entries: Vec<(OwnedValue, OwnedValue)> = Vec::new();
+    if i < chars.len() && chars[i] == '}' {
+        return Ok((OwnedValue::Dict { key_type: "string".to_string(), value_type: "any".to_string(), entries }, i + 1));
+    }
+    loop {
+        i = json_skip_ws(chars, i);
+        if i >= chars.len() || chars[i] != '"' {
+            return Err(format!("expected string key at position {}", i));
+        }
+        let (key, next_k) = json_parse_string(chars, i)?;
+        i = json_skip_ws(chars, next_k);
+        if i >= chars.len() || chars[i] != ':' {
+            return Err(format!("expected ':' at position {}", i));
+        }
+        i = json_skip_ws(chars, i + 1);
+        let (val, next_v) = json_parse_value(chars, i)?;
+        entries.push((key, val));
+        i = json_skip_ws(chars, next_v);
+        if i >= chars.len() { return Err("unterminated object".to_string()); }
+        match chars[i] {
+            '}' => { return Ok((OwnedValue::Dict { key_type: "string".to_string(), value_type: "any".to_string(), entries }, i + 1)); }
+            ',' => { i = json_skip_ws(chars, i + 1); }
+            c   => { return Err(format!("expected ',' or '}}', got '{}'", c)); }
+        }
+    }
+}
+
+fn json_parse_number(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), String> {
+    let mut i = pos;
+    let mut s = String::new();
+    if i < chars.len() && chars[i] == '-' { s.push('-'); i += 1; }
+    while i < chars.len() && chars[i].is_ascii_digit() { s.push(chars[i]); i += 1; }
+    let is_float = i < chars.len() && (chars[i] == '.' || chars[i] == 'e' || chars[i] == 'E');
+    if i < chars.len() && chars[i] == '.' {
+        s.push('.');
+        i += 1;
+        while i < chars.len() && chars[i].is_ascii_digit() { s.push(chars[i]); i += 1; }
+    }
+    if i < chars.len() && (chars[i] == 'e' || chars[i] == 'E') {
+        s.push(chars[i]); i += 1;
+        if i < chars.len() && (chars[i] == '+' || chars[i] == '-') { s.push(chars[i]); i += 1; }
+        while i < chars.len() && chars[i].is_ascii_digit() { s.push(chars[i]); i += 1; }
+    }
+    if is_float || s.contains('.') || s.contains('e') || s.contains('E') {
+        let f: f64 = s.parse().map_err(|_| format!("invalid number '{}'", s))?;
+        Ok((OwnedValue::Decimal(f), i))
+    } else {
+        let n: i64 = s.parse().map_err(|_| format!("invalid integer '{}'", s))?;
+        Ok((OwnedValue::Integer(n), i))
     }
 }

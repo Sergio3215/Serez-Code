@@ -1,0 +1,48 @@
+// unit_json.sz — tests for JSON namespace stdlib
+
+// Stringify primitives
+out JSON.stringify(42);
+out JSON.stringify(3.14);
+out JSON.stringify(true);
+out JSON.stringify(false);
+out JSON.stringify(null);
+out JSON.stringify("hello");
+
+// Stringify array
+let arr = [1, 2, 3];
+out JSON.stringify(arr);
+
+// Parse number
+let n = JSON.parse("42");
+out n;
+
+// Parse string
+let str = JSON.parse("\"hello\"");
+out str;
+
+// Parse bool
+let b1 = JSON.parse("true");
+let b2 = JSON.parse("false");
+out b1;
+out b2;
+
+// Parse null
+let nu = JSON.parse("null");
+out nu;
+
+// Parse array
+let pa = JSON.parse("[1,2,3]");
+out pa[0];
+out pa[2];
+out pa.length();
+
+// Parse object — use \{ to avoid interpolation conflict
+let jsonStr = "\{\"name\":\"Sergio\",\"age\":30}";
+let po = JSON.parse(jsonStr);
+out po["name"];
+out po["age"];
+
+// Round-trip of array
+let data = [1, 2, 3];
+let rt = JSON.parse(JSON.stringify(data));
+out rt[2];

@@ -1,0 +1,23 @@
+// unit_const.sz — tests for const declarations
+
+const MAX = 100;
+const PI = 3.14159;
+const GREETING = "hello";
+const FLAG = true;
+
+out MAX;
+out PI;
+out GREETING;
+out FLAG;
+
+// const in function scope
+fn get_limit() {
+    const LIMIT = 42;
+    return LIMIT;
+}
+out get_limit();
+
+// const array (reference constant)
+const PRIMES = [2, 3, 5, 7];
+out PRIMES[0];
+out PRIMES[3];

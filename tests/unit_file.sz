@@ -1,0 +1,29 @@
+// unit_file.sz — tests for File namespace stdlib
+
+// Write then read a text file
+let path = "test_temp_file.txt";
+File.write(path, "hello file system");
+let content = File.read(path);
+out content;
+
+// exists
+out File.exists(path);
+out File.exists("nonexistent_xyz_abc.txt");
+
+// create (touch)
+let path2 = "test_temp_file2.txt";
+File.create(path2);
+out File.exists(path2);
+
+// Binary write and read
+let binPath = "test_temp_bin.bin";
+File.write_asBinary(binPath, [72, 101, 108, 108, 111]);
+let bytes = File.read_asBinary(binPath);
+out bytes[0];
+out bytes[4];
+out bytes.length();
+
+// Overwrite
+File.write(path, "overwritten");
+let c2 = File.read(path);
+out c2;

@@ -36,7 +36,7 @@ class Lista {
         this.count = this.count + 1;
     }
     public int getCount() { return this.count; }
-    public any get(int i) { return this.items[i]; }
+    public any getAt(int i) { return this.items[i]; }
     public void mostrar() {
         for (let i = 0; i < this.count; i = i + 1) {
             out this.items[i];
@@ -49,8 +49,8 @@ lista.agregar("alpha");
 lista.agregar("beta");
 lista.agregar("gamma");
 out lista.getCount();  // → 3
-out lista.get(0);      // → alpha
-out lista.get(2);      // → gamma
+out lista.getAt(0);      // → alpha
+out lista.getAt(2);      // → gamma
 lista.mostrar();       // → alpha / beta / gamma
 
 // ── 4. Filter en array de pares del dict (pipeline complejo) ──────────────

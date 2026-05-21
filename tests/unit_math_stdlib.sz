@@ -1,0 +1,39 @@
+// unit_math_stdlib.sz — tests for Math namespace stdlib
+
+// Math.PI and Math.E constants
+out Math.PI;
+out Math.E;
+
+// Math.abs
+out Math.abs(-5);
+out Math.abs(5);
+out Math.abs(-3.14);
+
+// Math.floor, Math.ceil, Math.round
+out Math.floor(3.7);
+out Math.ceil(3.2);
+out Math.round(3.5);
+out Math.round(3.4);
+
+// Math.sqrt
+out Math.sqrt(9.0);
+out Math.sqrt(2.0);
+
+// Math.pow
+out Math.pow(2.0, 10.0);
+out Math.pow(3.0, 3.0);
+
+// Math.max, Math.min
+out Math.max(5, 3, 8, 1);
+out Math.min(5, 3, 8, 1);
+
+// Math.log (natural log)
+out Math.log(1.0);
+
+// Math.sin, Math.cos (basic sanity: sin(0)=0, cos(0)=1)
+out Math.sin(0.0);
+out Math.cos(0.0);
+
+// Math.random returns a decimal in [0,1)
+let r = Math.random();
+out r >= 0.0 && r < 1.0;

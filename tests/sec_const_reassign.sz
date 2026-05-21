@@ -1,0 +1,5 @@
+// sec_const_reassign.sz — const reassignment must produce an error
+
+const X = 10;
+X = 20;
+out X;

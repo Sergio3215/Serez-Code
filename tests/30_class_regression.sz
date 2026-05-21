@@ -32,11 +32,11 @@ class Grid {
         this.cells = [0, 0, 0, 0, 0];
     }
 
-    public void set(int idx, int val) {
+    public void setAt(int idx, int val) {
         this.cells[idx] = val;
     }
 
-    public int get(int idx) {
+    public int getAt(int idx) {
         return this.cells[idx];
     }
 
@@ -46,11 +46,11 @@ class Grid {
 }
 
 let g = new Grid();
-g.set(2, 99);
-out g.get(2);       // → 99
-out g.get(0);       // → 0
-g.set(0, 7);
-g.set(4, 42);
+g.setAt(2, 99);
+out g.getAt(2);       // → 99
+out g.getAt(0);       // → 0
+g.setAt(0, 7);
+g.setAt(4, 42);
 out g.all();        // → [7, 0, 99, 0, 42]
 
 // ── B-32: sort/shift/unshift on instance field array write back ───────────────

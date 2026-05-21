@@ -101,6 +101,15 @@ pub enum TokenType {
     // Increment / decrement
     PlusPlus,   // ++
     MinusMinus, // --
+
+    // New feature tokens
+    KwConst,    // const
+    KwEnum,     // enum
+    KwAbstract, // abstract
+    KwSealed,   // sealed
+    KwGet,      // get
+    KwSet,      // set
+    DotDotDot,  // ...
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -155,7 +164,13 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "catch" => TokenType::KwCatch,
         "finally" => TokenType::KwFinally,
         "throw" => TokenType::KwThrow,
-        "in"    => TokenType::KwIn,
+        "in"       => TokenType::KwIn,
+        "const"    => TokenType::KwConst,
+        "enum"     => TokenType::KwEnum,
+        "abstract" => TokenType::KwAbstract,
+        "sealed"   => TokenType::KwSealed,
+        "get"      => TokenType::KwGet,
+        "set"      => TokenType::KwSet,
         _ => TokenType::Ident,
     }
 }

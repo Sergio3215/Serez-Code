@@ -1,0 +1,62 @@
+// unit_class_fields.sz — tests for class fields with default values
+
+class Config {
+    timeout: int = 30;
+    retries: int = 3;
+    verbose: bool = false;
+    name: string = "default";
+
+    public Config() {
+    }
+
+    public int getTimeout() {
+        return this.timeout;
+    }
+}
+
+let cfg = new Config();
+out cfg.timeout;
+out cfg.retries;
+out cfg.verbose;
+out cfg.name;
+out cfg.getTimeout();
+
+class Point {
+    x: decimal = 0.0;
+    y: decimal = 0.0;
+
+    public Point(decimal px, decimal py) {
+        this.x = px;
+        this.y = py;
+    }
+
+    public decimal magnitude() {
+        return this.x * this.x + this.y * this.y;
+    }
+}
+
+let p = new Point(3.0, 4.0);
+out p.x;
+out p.y;
+out p.magnitude();
+
+class Counter {
+    count: int = 0;
+
+    public Counter() {
+    }
+
+    public void increment() {
+        this.count = this.count + 1;
+    }
+    public int getValue() {
+        return this.count;
+    }
+}
+
+let ctr = new Counter();
+out ctr.getValue();
+ctr.increment();
+ctr.increment();
+ctr.increment();
+out ctr.getValue();
