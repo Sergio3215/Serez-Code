@@ -1,0 +1,30 @@
+── 1. Basic throw/catch ──
+OK
+── 2. Finally always runs ──
+OK
+── 3. Finally after throw ──
+OK
+── 4. Throw exception object ──
+OK
+── 5. is-type on caught exception ──
+OK
+── 6. Propagation through functions ──
+OK
+── 7. Rethrow pattern ──
+OK
+── 8. Catch with return ──
+OK
+OK
+── 9. Exception in loop ──
+OK
+── 10. Try/catch in class method ──
+OK
+OK
+── 11. Multiple catch levels ──
+OK
+── 12. Finally modifies outer variable ──
+OK
+
+══════════════════════════════════
+  37. EXCEPTIONS E2E PASSED ✓
+══════════════════════════════════

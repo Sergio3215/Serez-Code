@@ -1,0 +1,182 @@
+// ── 37. Exceptions E2E ────────────────────────────────────────────────────────
+// Full end-to-end test for exception handling: throw, catch, finally, propagation
+
+fn void check(string label) {
+    out "── " + label + " ──";
+}
+
+// ── 1. Basic throw/catch ──────────────────────────────────────────────────────
+check("1. Basic throw/catch");
+let caught = "";
+try {
+    throw "hello-error";
+} catch (e) {
+    caught = e;
+}
+out caught == "hello-error" ? "OK" : "FAIL";
+
+// ── 2. Finally always runs ────────────────────────────────────────────────────
+check("2. Finally always runs");
+let finally_ran = false;
+try {
+    let x = 1;
+} finally {
+    finally_ran = true;
+}
+out finally_ran == true ? "OK" : "FAIL";
+
+// ── 3. Finally runs even when throw ──────────────────────────────────────────
+check("3. Finally after throw");
+let log = "";
+try {
+    try {
+        throw "boom";
+    } finally {
+        log = log + "finally";
+    }
+} catch (e) {
+    log = log + "+caught";
+}
+out log == "finally+caught" ? "OK" : "FAIL";
+
+// ── 4. Throw exception object ─────────────────────────────────────────────────
+check("4. Throw exception object");
+class HttpError {
+    public HttpError(int code, string msg) {
+        this.code = code;
+        this.msg = msg;
+    }
+    public string toString() { return "Error " + this.code + ": " + this.msg; }
+}
+let err_msg = "";
+try {
+    throw new HttpError(404, "Not Found");
+} catch (e) {
+    err_msg = e.toString();
+}
+out err_msg == "Error 404: Not Found" ? "OK" : "FAIL";
+
+// ── 5. is-type check on caught exception ─────────────────────────────────────
+check("5. is-type on caught exception");
+let is_http = false;
+try {
+    throw new HttpError(500, "Server Error");
+} catch (e) {
+    if (e is HttpError) { is_http = true; }
+}
+out is_http ? "OK" : "FAIL";
+
+// ── 6. Propagation through function calls ─────────────────────────────────────
+check("6. Propagation through functions");
+fn void level3() { throw "from-level3"; }
+fn void level2() { level3(); }
+fn void level1() { level2(); }
+let deep_caught = "";
+try {
+    level1();
+} catch (e) {
+    deep_caught = e;
+}
+out deep_caught == "from-level3" ? "OK" : "FAIL";
+
+// ── 7. Rethrow pattern ────────────────────────────────────────────────────────
+check("7. Rethrow pattern");
+fn string safe_op(int x) {
+    try {
+        if (x < 0) { throw "negative: " + x; }
+        return "ok";
+    } catch (e) {
+        throw "wrapped: " + e;
+    }
+    return "unreachable";
+}
+let rethrow_result = "";
+try {
+    safe_op(-5);
+} catch (e) {
+    rethrow_result = e;
+}
+out rethrow_result == "wrapped: negative: -5" ? "OK" : "FAIL";
+
+// ── 8. Catch with return ───────────────────────────────────────────────────────
+check("8. Catch with return");
+fn string with_fallback(bool fail) {
+    try {
+        if (fail) { throw "oops"; }
+        return "success";
+    } catch (e) {
+        return "fallback";
+    }
+}
+out with_fallback(false) == "success" ? "OK" : "FAIL";
+out with_fallback(true)  == "fallback" ? "OK" : "FAIL";
+
+// ── 9. Exception in loop ──────────────────────────────────────────────────────
+check("9. Exception in loop");
+let sum = 0;
+for (let i = 0; i < 10; i++) {
+    try {
+        if (i == 5) { throw "stop"; }
+        sum = sum + i;
+    } catch (e) {
+        break;
+    }
+}
+out sum == 10 ? "OK" : "FAIL";  // 0+1+2+3+4 = 10
+
+// ── 10. Try/catch in class method ─────────────────────────────────────────────
+check("10. Try/catch in class method");
+class SafeDiv {
+    public int divide(int a, int b) {
+        try {
+            if (b == 0) { throw "division by zero"; }
+            return a / b;
+        } catch (e) {
+            return -1;
+        }
+    }
+}
+let sd = new SafeDiv();
+out sd.divide(10, 2) == 5 ? "OK" : "FAIL";
+out sd.divide(10, 0) == -1 ? "OK" : "FAIL";
+
+// ── 11. Multiple catch levels ─────────────────────────────────────────────────
+check("11. Multiple catch levels");
+let chain = "";
+try {
+    try {
+        try {
+            throw "deep";
+        } catch (e) {
+            chain = chain + "L3";
+            throw e + "+L2";
+        }
+    } catch (e) {
+        chain = chain + "L2";
+        throw e + "+L1";
+    }
+} catch (e) {
+    chain = chain + "L1";
+}
+out chain == "L3L2L1" ? "OK" : "FAIL";
+
+// ── 12. Finally modifies outer variable ───────────────────────────────────────
+check("12. Finally modifies outer variable");
+let counter = 0;
+fn void inc_finally() {
+    try {
+        counter = counter + 1;
+        throw "err";
+    } catch (e) {
+        counter = counter + 1;
+    } finally {
+        counter = counter + 1;
+    }
+}
+inc_finally();
+out counter == 3 ? "OK" : "FAIL";
+
+out "";
+out "══════════════════════════════════";
+out "  37. EXCEPTIONS E2E PASSED ✓";
+out "══════════════════════════════════";

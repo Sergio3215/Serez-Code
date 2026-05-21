@@ -246,11 +246,16 @@ impl TypeChecker {
         let max_params = if has_rest { usize::MAX } else { func.parameters.len() };
         let arity_ok = call.arguments.len() >= min_params && call.arguments.len() <= max_params;
         if !arity_ok {
+            let expected_str = if has_rest {
+                format!("at least {}", min_params)
+            } else if min_params == max_params {
+                format!("{}", min_params)
+            } else {
+                format!("{}-{}", min_params, max_params)
+            };
             eprintln!(
                 "❌ TYPE ERROR: '{}' expects {} argument(s) but got {}.",
-                func_name,
-                func.parameters.len(),
-                call.arguments.len()
+                func_name, expected_str, call.arguments.len()
             );
             return;
         }

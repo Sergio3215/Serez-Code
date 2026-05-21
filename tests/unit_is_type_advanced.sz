@@ -1,0 +1,126 @@
+// Unit tests: advanced is-type and type_of usage
+
+class Animal {
+    public Animal(string name) { this.name = name; }
+    public string getName() { return this.name; }
+}
+class Dog : Animal {
+    public Dog(string name) { this.name = name; }
+    public string bark() { return "woof"; }
+}
+
+// ── is with parens ────────────────────────────────────────────────────────────
+
+test("is with explicit parens (x is int)", () => {
+    let x = 42;
+    assert((x is int) == true,    "(x is int) true");
+    assert((x is string) == false, "(x is string) false");
+    assert((x is bool) == false,   "(x is bool) false");
+});
+
+test("is null check with parens", () => {
+    let n = null;
+    assert((n is null) == true,  "(null is null)");
+    assert((n is int) == false,  "(null is int) false");
+});
+
+// ── is in if condition with parens ────────────────────────────────────────────
+
+test("if (v is string) with parens works", () => {
+    fn string describe(any v) {
+        if (v is int)     { return "int"; }
+        if (v is string)  { return "str"; }
+        if (v is bool)    { return "bool"; }
+        if (v is decimal) { return "dec"; }
+        if (v is null)    { return "null"; }
+        return "other";
+    }
+    assert(describe(1)     == "int",  "int branch");
+    assert(describe("hi")  == "str",  "string branch");
+    assert(describe(true)  == "bool", "bool branch");
+    assert(describe(3.14)  == "dec",  "decimal branch");
+    assert(describe(null)  == "null", "null branch");
+});
+
+// ── is with class instances ───────────────────────────────────────────────────
+
+test("instance is ClassName", () => {
+    let a = new Animal("cat");
+    let d = new Dog("rex");
+    assert(a is Animal, "animal is Animal");
+    assert(d is Dog,    "dog is Dog");
+    assert((a is Dog) == false, "animal is not Dog");
+});
+
+// ── is in ternary ─────────────────────────────────────────────────────────────
+
+test("is in ternary without parens", () => {
+    let x = 42;
+    let label = x is int ? "integer" : "other";
+    assert(label == "integer", "is in ternary");
+});
+
+test("is in ternary with parens", () => {
+    let x = "hello";
+    let label = (x is string) ? "string" : "other";
+    assert(label == "string", "is in parens ternary");
+});
+
+// ── is combined with logical operators ───────────────────────────────────────
+
+test("is combined with && (short-circuit)", () => {
+    let x = 5;
+    let result = x is int && x > 3;
+    assert(result == true, "int and gt check");
+});
+
+test("is combined with || ", () => {
+    let x = "hi";
+    let result = x is int || x is string;
+    assert(result == true, "int or string");
+});
+
+// ── is after function call ────────────────────────────────────────────────────
+
+test("is check on function return value", () => {
+    fn any getValue(bool asInt) {
+        if (asInt) { return 42; }
+        return "str";
+    }
+    assert(getValue(true)  is int,    "returned int");
+    assert(getValue(false) is string, "returned string");
+});
+
+// ── is in assert condition directly ──────────────────────────────────────────
+
+test("is directly in assert without extra parens", () => {
+    assert(42 is int,     "42 is int");
+    assert("x" is string, "x is string");
+    assert(true is bool,  "true is bool");
+    assert(1.5 is decimal,"1.5 is decimal");
+    assert(null is null,  "null is null");
+});
+
+// ── is with array and dict ────────────────────────────────────────────────────
+
+test("is check for array", () => {
+    let arr = [1, 2, 3];
+    assert(arr is array, "array is array");
+    assert((arr is int) == false, "array is not int");
+});
+
+test("is check for dict", () => {
+    let d <string,int> = ({"a",1});
+    assert(d is dict, "dict is dict");
+});
+
+// ── Nullable type check ───────────────────────────────────────────────────────
+
+test("null is any (any accepts anything)", () => {
+    fn bool isAny(any v) { return v is any; }
+    assert(isAny(1)    == true, "int is any");
+    assert(isAny(null) == true, "null is any");
+    assert(isAny("x")  == true, "str is any");
+});
+
+summary();

@@ -33,6 +33,7 @@ pub fn token_precedence(token_type: &TokenType) -> Precedence {
         TokenType::BitXor => Precedence::BitXor,
         TokenType::BitAnd => Precedence::BitAnd,
         TokenType::Eq | TokenType::NotEq => Precedence::Equals,
+        TokenType::KwIs => Precedence::LessGreater,
         TokenType::Lt | TokenType::Gt | TokenType::LtEq | TokenType::GtEq => Precedence::LessGreater,
         TokenType::Shl | TokenType::Shr => Precedence::Shift,
         TokenType::Plus | TokenType::Minus => Precedence::Sum,
@@ -1153,7 +1154,8 @@ impl Parser {
                 | TokenType::BitOr
                 | TokenType::BitXor
                 | TokenType::Shl
-                | TokenType::Shr => true,
+                | TokenType::Shr
+                | TokenType::KwIs => true,
                 _ => false,
             };
 
@@ -1221,6 +1223,21 @@ impl Parser {
                         condition: Box::new(condition),
                         then_expr: Box::new(then_expr),
                         else_expr: Box::new(else_expr),
+                    }));
+                }
+            } else if self.current_token.token_type == TokenType::KwIs {
+                // `expr is TypeName` → Infix("is", expr, Identifier("type_name"))
+                let op_line   = self.current_token.line;
+                let op_column = self.current_token.column;
+                self.next_token(); // consume type name token (KwInt, KwString, Ident, etc.)
+                let type_name = self.current_token.literal.clone();
+                if let Some(left) = left_exp {
+                    left_exp = Some(Expression::Infix(InfixExpression {
+                        left: Box::new(left),
+                        operator: "is".to_string(),
+                        right: Box::new(Expression::Identifier(type_name)),
+                        line: op_line,
+                        column: op_column,
                     }));
                 }
             } else if self.current_token.token_type == TokenType::Dot

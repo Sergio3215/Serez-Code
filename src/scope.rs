@@ -89,6 +89,18 @@ impl ScopeStack {
         None
     }
 
+    /// Updates the stored ObjectRef for an existing variable (inner → outer).
+    /// Used by capture_env to keep the outer scope in sync after promoting a
+    /// scoped ref to the global arena.
+    pub fn rebind(&mut self, name: &str, new_ref: ObjectRef) {
+        for frame in self.frames.iter_mut().rev() {
+            if frame.bindings.contains_key(name) {
+                frame.bindings.insert(name.to_string(), new_ref);
+                return;
+            }
+        }
+    }
+
     /// Busca el ObjectRef de una variable (inner → outer).
     pub fn lookup(&self, name: &str) -> Option<ObjectRef> {
         for frame in self.frames.iter().rev() {

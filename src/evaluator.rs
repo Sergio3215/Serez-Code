@@ -119,8 +119,15 @@ impl Evaluator {
     /// Captures the current lexical environment as global-arena ObjectRefs.
     /// Each captured variable is promoted to the global arena so that mutations
     /// inside the closure persist across calls (B-27 fix).
+    ///
+    /// `rebind_outer`: when true (named `fn` declarations), the outer scope's
+    /// binding is updated to point to the same global-arena slot so that mutations
+    /// inside the function are visible to the caller (reference semantics).
+    /// When false (lambda / arrow expressions), each capture is an independent copy
+    /// — the outer variable is not aliased (value-snapshot semantics).
+    ///
     /// Returns an empty vec at global scope (nothing to capture).
-    fn capture_env(&mut self) -> Vec<(String, ObjectRef)> {
+    fn capture_env(&mut self, rebind_outer: bool) -> Vec<(String, ObjectRef)> {
         let bindings = self.scopes.all_bindings();
         let mut result = Vec::new();
         for (name, r) in bindings {
@@ -128,7 +135,11 @@ impl Evaluator {
                 RegionId::Global => r,
                 RegionId::Scoped => {
                     let owned = self.extract(r);
-                    self.plant_global(owned)
+                    let gref = self.plant_global(owned);
+                    if rebind_outer {
+                        self.scopes.rebind(&name, gref);
+                    }
+                    gref
                 }
             };
             result.push((name, global_ref));
@@ -457,7 +468,7 @@ impl Evaluator {
             }
 
             Statement::FunctionDeclaration(func_decl) => {
-                let captured = self.capture_env();
+                let captured = self.capture_env(true); // named fn: reference semantics
                 let func_data = ObjectData::Function {
                     return_type: func_decl.function.return_type.clone(),
                     parameters: func_decl.function.parameters.clone(),
@@ -782,15 +793,21 @@ impl Evaluator {
                         let search_key = obj_data_to_key_str(&idx_data);
                         let owned_val = self.extract(val_ref);
 
+                        // Use global arena when mutating a scoped dict from a nested block —
+                        // values allocated in the inner scope are freed when that block exits.
+                        let use_global = arr_ref.region == RegionId::Global
+                            || self.scopes.depth() > 1;
+
                         // Index-based loop so we can call &mut self methods (plant/plant_global)
                         let mut replaced = false;
                         let mut i = 0;
                         while i < entries.len() {
                             let k_data = self.resolve(entries[i].0).unwrap().clone();
                             if obj_data_to_key_str(&k_data) == search_key {
-                                let new_ref = match arr_ref.region {
-                                    RegionId::Global => self.plant_global(owned_val.clone()),
-                                    RegionId::Scoped => self.plant(owned_val.clone()),
+                                let new_ref = if use_global {
+                                    self.plant_global(owned_val.clone())
+                                } else {
+                                    self.plant(owned_val.clone())
                                 };
                                 entries[i].1 = new_ref;
                                 replaced = true;
@@ -800,13 +817,10 @@ impl Evaluator {
                         }
                         if !replaced {
                             let owned_k = OwnedValue::Str(search_key);
-                            let new_k = match arr_ref.region {
-                                RegionId::Global => self.plant_global(owned_k),
-                                RegionId::Scoped => self.plant(owned_k),
-                            };
-                            let new_v = match arr_ref.region {
-                                RegionId::Global => self.plant_global(owned_val),
-                                RegionId::Scoped => self.plant(owned_val),
+                            let (new_k, new_v) = if use_global {
+                                (self.plant_global(owned_k), self.plant_global(owned_val))
+                            } else {
+                                (self.plant(owned_k), self.plant(owned_val))
                             };
                             entries.push((new_k, new_v));
                         }
@@ -934,6 +948,14 @@ impl Evaluator {
                     // Check for setter first
                     if let Some(setter) = self.find_setter(&class_name, &stmt.field) {
                         return self.invoke_method(obj_ref, &class_name.clone(), &setter, vec![new_val], 0, 0);
+                    }
+                    // Getter exists but no setter → read-only property, cannot assign
+                    if self.find_getter(&class_name, &stmt.field).is_some() {
+                        eprintln!(
+                            "❌ ERROR: '{}' is a getter-only property of '{}' (no setter defined)",
+                            stmt.field, class_name
+                        );
+                        return EvalResult::Error;
                     }
                     if let Some(f) = fields.iter_mut().find(|(n, _)| n == &stmt.field) {
                         f.1 = new_val;
@@ -1065,7 +1087,7 @@ impl Evaluator {
             },
 
             Expression::FunctionLiteral(func_lit) => {
-                let captured = self.capture_env();
+                let captured = self.capture_env(false); // lambda: snapshot semantics
                 let func_data = ObjectData::Function {
                     return_type: func_lit.return_type.clone(),
                     parameters: func_lit.parameters.clone(),
@@ -1088,7 +1110,7 @@ impl Evaluator {
                         })],
                     },
                 };
-                let captured = self.capture_env();
+                let captured = self.capture_env(false); // arrow lambda: snapshot semantics
                 EvalResult::Value(self.alloc(ObjectData::Function {
                     return_type: None,
                     parameters: params,
@@ -1218,10 +1240,16 @@ impl Evaluator {
                 let max_params = if has_rest { usize::MAX } else { parameters.len() };
 
                 if arg_refs.len() < min_params || arg_refs.len() > max_params {
+                    let expected_str = if has_rest {
+                        format!("at least {}", min_params)
+                    } else if min_params == max_params {
+                        format!("{}", min_params)
+                    } else {
+                        format!("{}-{}", min_params, max_params)
+                    };
                     eprintln!(
-                        "❌ ERROR: Function expected {} arguments, got {}",
-                        if min_params == max_params { format!("{}", min_params) } else { format!("{}-{}", min_params, max_params) },
-                        arg_refs.len()
+                        "❌ ERROR: Function expected {} argument(s), got {}",
+                        expected_str, arg_refs.len()
                     );
                     for frame in self.call_stack.iter().rev() {
                         eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
@@ -1864,6 +1892,22 @@ impl Evaluator {
                 self.eval_prefix(op, right_ref, right_data)
             }
 
+            // `expr is TypeName` — type check returning bool
+            Expression::Infix(infix_expr) if infix_expr.operator == "is" => {
+                let left_ref = match self.eval_expression(&infix_expr.left) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let left_data = self.resolve(left_ref).unwrap().clone();
+                let type_name = match infix_expr.right.as_ref() {
+                    Expression::Identifier(n) => n.as_str(),
+                    _ => return EvalResult::Error,
+                };
+                let result = type_matches(type_name, &left_data);
+                EvalResult::Value(self.alloc(ObjectData::Boolean(result)))
+            }
+
             // Null coalescing: left ?? right — returns left if not null, else right
             Expression::Infix(infix_expr) if infix_expr.operator == "??" => {
                 let left_ref = match self.eval_expression(&infix_expr.left) {
@@ -2099,12 +2143,39 @@ impl Evaluator {
                     ">=" => ObjectData::Boolean(l >= r),
                     "==" => ObjectData::Boolean(l == r),
                     "!=" => ObjectData::Boolean(l != r),
-                    "**" => ObjectData::Integer((l as f64).powi(r as i32) as i64),
+                    "**" => {
+                        if r < 0 {
+                            // negative exponent → fractional result → decimal
+                            ObjectData::Decimal((l as f64).powi(r as i32))
+                        } else {
+                            ObjectData::Integer((l as f64).powi(r as i32) as i64)
+                        }
+                    }
                     "&"  => ObjectData::Integer(l & r),
                     "|"  => ObjectData::Integer(l | r),
                     "^"  => ObjectData::Integer(l ^ r),
-                    "<<" => ObjectData::Integer(l << (r & 63)),
-                    ">>" => ObjectData::Integer(l >> (r & 63)),
+                    "<<" => {
+                        if r < 0 {
+                            eprintln!("❌ ERROR: Left shift by negative amount ({})", r);
+                            return EvalResult::Error;
+                        }
+                        if r >= 64 {
+                            eprintln!("❌ ERROR: Left shift by {} is >= 64 bits", r);
+                            return EvalResult::Error;
+                        }
+                        ObjectData::Integer(l << r)
+                    }
+                    ">>" => {
+                        if r < 0 {
+                            eprintln!("❌ ERROR: Right shift by negative amount ({})", r);
+                            return EvalResult::Error;
+                        }
+                        if r >= 64 {
+                            eprintln!("❌ ERROR: Right shift by {} is >= 64 bits", r);
+                            return EvalResult::Error;
+                        }
+                        ObjectData::Integer(l >> r)
+                    }
                     _ => {
                         eprintln!("❌ ERROR: Unknown operator: {}", op);
                         return EvalResult::Error;
@@ -3595,12 +3666,20 @@ impl Evaluator {
     ) -> EvalResult {
         let method_name = &m.name;
 
-        // arity check — account for default parameter values
+        // arity check — account for default parameter values and rest params
+        let has_rest_m = m.parameters.last().map(|p| p.is_rest).unwrap_or(false);
         let required_count = m.parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
-        let max_count = m.parameters.len();
+        let max_count = if has_rest_m { usize::MAX } else { m.parameters.len() };
         if arg_vals.len() < required_count || arg_vals.len() > max_count {
-            eprintln!("❌ ERROR: Method '{}' expects {} arguments, got {}",
-                method_name, if required_count == max_count { format!("{}", required_count) } else { format!("{}-{}", required_count, max_count) }, arg_vals.len());
+            let expected_str = if has_rest_m {
+                format!("at least {}", required_count)
+            } else if required_count == max_count {
+                format!("{}", required_count)
+            } else {
+                format!("{}-{}", required_count, max_count)
+            };
+            eprintln!("❌ ERROR: Method '{}' expects {} argument(s), got {}",
+                method_name, expected_str, arg_vals.len());
             return EvalResult::Error;
         }
 
@@ -4106,19 +4185,24 @@ impl Evaluator {
             }
 
             "slice" => {
-                let start = if !dot_call.arguments.is_empty() {
+                let len = elems.len() as i64;
+                let start_i = if !dot_call.arguments.is_empty() {
                     match self.eval_expression(&dot_call.arguments[0]) {
-                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i as usize, _ => 0 },
+                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i, _ => 0 },
                         _ => return EvalResult::Error,
                     }
                 } else { 0 };
-                let end = if dot_call.arguments.len() >= 2 {
+                let end_i = if dot_call.arguments.len() >= 2 {
                     match self.eval_expression(&dot_call.arguments[1]) {
-                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i as usize, _ => elems.len() },
+                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i, _ => len },
                         _ => return EvalResult::Error,
                     }
-                } else { elems.len() };
-                let sliced: Vec<ObjectRef> = elems[start.min(elems.len())..end.min(elems.len())].iter().map(|r| {
+                } else { len };
+                // Normalize negative indices (count from end) then clamp
+                let start = (if start_i < 0 { (len + start_i).max(0) } else { start_i.min(len) }) as usize;
+                let end   = (if end_i   < 0 { (len + end_i  ).max(0) } else { end_i.min(len)   }) as usize;
+                let end = end.max(start); // prevent inverted range
+                let sliced: Vec<ObjectRef> = elems[start..end].iter().map(|r| {
                     let owned = self.extract(*r);
                     self.plant(owned)
                 }).collect();
@@ -4181,23 +4265,38 @@ impl Evaluator {
             }
 
             "flat" => {
-                let mut flat_elems: Vec<ObjectRef> = Vec::new();
-                for elem in &elems {
-                    let owned = self.extract(*elem);
-                    match owned {
-                        OwnedValue::Array { elements, .. } => {
-                            for inner in elements {
-                                let r = self.plant(inner);
-                                flat_elems.push(r);
+                let depth = if dot_call.arguments.is_empty() {
+                    1usize
+                } else {
+                    match self.eval_expression(&dot_call.arguments[0]) {
+                        EvalResult::Value(v) => match self.resolve(v) {
+                            Some(ObjectData::Integer(d)) => (*d).max(0) as usize,
+                            _ => 1,
+                        },
+                        _ => return EvalResult::Error,
+                    }
+                };
+
+                fn flat_owned(items: Vec<OwnedValue>, depth: usize) -> Vec<OwnedValue> {
+                    if depth == 0 {
+                        return items;
+                    }
+                    let mut result = Vec::new();
+                    for item in items {
+                        match item {
+                            OwnedValue::Array { elements, .. } => {
+                                result.extend(flat_owned(elements, depth - 1));
                             }
-                        }
-                        other => {
-                            let r = self.plant(other);
-                            flat_elems.push(r);
+                            other => result.push(other),
                         }
                     }
+                    result
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: flat_elems }))
+
+                let owned_elems: Vec<OwnedValue> = elems.iter().map(|r| self.extract(*r)).collect();
+                let flat = flat_owned(owned_elems, depth);
+                let refs: Vec<ObjectRef> = flat.into_iter().map(|v| self.plant(v)).collect();
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: refs }))
             }
 
             _ => {
@@ -4364,13 +4463,16 @@ impl Evaluator {
                 let pad_str = if dot_call.arguments.len() >= 2 {
                     self.eval_str_arg(&dot_call.arguments[1]).unwrap_or_else(|| " ".to_string())
                 } else { " ".to_string() };
+                let s_chars: Vec<char> = s.chars().collect();
+                if s_chars.len() >= target_len {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(s.clone())));
+                }
                 let mut result = s.clone();
-                while result.len() < target_len {
+                while result.chars().count() < target_len {
                     result = pad_str.clone() + &result;
                 }
-                if result.len() > target_len {
-                    result = result[result.len() - target_len..].to_string();
-                }
+                // Trim to exact length if pad_str is multi-char and overshot
+                let result: String = result.chars().rev().take(target_len).collect::<Vec<_>>().into_iter().rev().collect();
                 EvalResult::Value(self.alloc(ObjectData::Str(result)))
             }
 
@@ -4386,30 +4488,36 @@ impl Evaluator {
                 let pad_str = if dot_call.arguments.len() >= 2 {
                     self.eval_str_arg(&dot_call.arguments[1]).unwrap_or_else(|| " ".to_string())
                 } else { " ".to_string() };
+                if s.chars().count() >= target_len {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(s.clone())));
+                }
                 let mut result = s.clone();
-                while result.len() < target_len {
+                while result.chars().count() < target_len {
                     result.push_str(&pad_str);
                 }
-                result.truncate(target_len);
+                let result: String = result.chars().take(target_len).collect();
                 EvalResult::Value(self.alloc(ObjectData::Str(result)))
             }
 
             "slice" => {
                 let chars: Vec<char> = s.chars().collect();
-                let len = chars.len();
-                let start = if !dot_call.arguments.is_empty() {
+                let slen = chars.len() as i64;
+                let start_i = if !dot_call.arguments.is_empty() {
                     match self.eval_expression(&dot_call.arguments[0]) {
-                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i as usize, _ => 0 },
+                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i, _ => 0 },
                         _ => return EvalResult::Error,
                     }
                 } else { 0 };
-                let end = if dot_call.arguments.len() >= 2 {
+                let end_i = if dot_call.arguments.len() >= 2 {
                     match self.eval_expression(&dot_call.arguments[1]) {
-                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i as usize, _ => len },
+                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i, _ => slen },
                         _ => return EvalResult::Error,
                     }
-                } else { len };
-                let sliced: String = chars[start.min(len)..end.min(len)].iter().collect();
+                } else { slen };
+                let start = (if start_i < 0 { (slen + start_i).max(0) } else { start_i.min(slen) }) as usize;
+                let end   = (if end_i   < 0 { (slen + end_i  ).max(0) } else { end_i.min(slen)   }) as usize;
+                let end = end.max(start);
+                let sliced: String = chars[start..end].iter().collect();
                 EvalResult::Value(self.alloc(ObjectData::Str(sliced)))
             }
 
@@ -4977,6 +5085,7 @@ fn type_matches(expected: &str, data: &ObjectData) -> bool {
         ("decimal", ObjectData::Decimal(_)) => true,
         ("string", ObjectData::Str(_)) => true,
         ("bool", ObjectData::Boolean(_)) => true,
+        ("null", ObjectData::Null) => true,
         ("void", ObjectData::Null) => true,
         ("dict", ObjectData::Dict { .. }) => true,
         ("array", ObjectData::Array { .. }) => true,

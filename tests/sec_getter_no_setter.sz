@@ -1,4 +1,4 @@
-// sec_getter_no_setter.sz — getter-only property read works correctly
+// sec_getter_no_setter.sz — writing to a getter-only property must error
 
 class ReadOnly {
     public ReadOnly(int v) {
@@ -10,4 +10,4 @@ class ReadOnly {
 }
 
 let r = new ReadOnly(99);
-out r.value;
+r.value = 42;  // No setter defined — must produce ❌

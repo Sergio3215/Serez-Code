@@ -1,0 +1,103 @@
+// Unit tests: bitwise and shift edge cases
+
+// ── Shift boundary values ─────────────────────────────────────────────────────
+
+test("shift by 0 is identity", () => {
+    assert((7 << 0) == 7,  "7 << 0 = 7");
+    assert((7 >> 0) == 7,  "7 >> 0 = 7");
+    assert((0 << 0) == 0,  "0 << 0 = 0");
+});
+
+test("shift by 1 halves/doubles", () => {
+    assert((16 >> 1) == 8,  "16 >> 1 = 8");
+    assert((16 << 1) == 32, "16 << 1 = 32");
+});
+
+test("shift by 62 extreme left", () => {
+    assert((1 << 62) > 0, "1 << 62 is positive (fits in i64)");
+    let v = 1 << 62;
+    assert((v >> 62) == 1, "round-trip via << 62 >> 62");
+});
+
+test("right shift of negative (arithmetic/signed)", () => {
+    // In Rust (and most languages), >> on signed int is arithmetic shift
+    assert((-8 >> 1) == -4,  "-8 >> 1 = -4");
+    assert((-1 >> 1) == -1,  "-1 >> 1 = -1 (sign extension)");
+});
+
+// ── Power edge cases ──────────────────────────────────────────────────────────
+
+test("power: 0 ** 0 = 1 (mathematical convention)", () => {
+    assert((0 ** 0) == 1, "0**0 = 1");
+});
+
+test("power: negative base", () => {
+    assert((-2 ** 2) == 4,  "(-2)**2 = 4");
+    assert((-2 ** 3) == -8, "(-2)**3 = -8");
+});
+
+test("power: negative exponent → decimal", () => {
+    let r = 2 ** -1;
+    assert(r is decimal, "2**-1 is decimal");
+    assert(r == 0.5, "2**-1 = 0.5");
+});
+
+test("power: large exponent", () => {
+    assert((2 ** 20) == 1048576, "2**20 = 1048576");
+    assert((10 ** 6) == 1000000, "10**6 = 1000000");
+});
+
+// ── Bitwise on i64 boundaries ─────────────────────────────────────────────────
+
+test("bitwise OR of complementary bits", () => {
+    let a = 0b10101010;
+    let b = 0b01010101;
+    assert((a | b) == 0b11111111, "OR of complementary = 0xFF");
+    assert((a & b) == 0,          "AND of complementary = 0");
+    assert((a ^ b) == 0b11111111, "XOR of complementary = 0xFF");
+});
+
+test("double NOT is identity", () => {
+    assert(~~0 == 0,    "~~0 = 0");
+    assert(~~42 == 42,  "~~42 = 42");
+    assert(~~(-1) == -1,"~~(-1) = -1");
+});
+
+test("NOT of 0 = -1", () => {
+    assert(~0 == -1, "~0 = -1");
+    assert(~(-1) == 0, "~(-1) = 0");
+});
+
+// ── Bitwise in expressions ────────────────────────────────────────────────────
+
+test("bitwise operator precedence: & before |", () => {
+    // 5 | 3 & 6 = 5 | (3 & 6) = 5 | 2 = 7
+    assert((5 | 3 & 6) == 7, "5 | (3&6) = 7");
+});
+
+test("bitwise used as flags", () => {
+    let READ    = 1;
+    let WRITE   = 2;
+    let EXECUTE = 4;
+    let perms = READ | WRITE;
+    assert((perms & READ)    != 0, "has READ");
+    assert((perms & WRITE)   != 0, "has WRITE");
+    assert((perms & EXECUTE) == 0, "no EXECUTE");
+});
+
+test("clear bit with AND NOT", () => {
+    let flags = 7;  // 0b111
+    let mask  = ~2; // ~0b010 = ...11111101
+    let result = flags & mask;
+    assert(result == 5, "cleared bit 1: 7 & ~2 = 5");
+});
+
+test("toggle bit with XOR", () => {
+    let v = 0b1010;
+    v = v ^ 0b0110; // toggle bits 1 and 2
+    assert(v == 0b1100, "XOR toggle bits");
+    v = v ^ 0b0110;
+    assert(v == 0b1010, "XOR toggle back");
+});
+
+summary();

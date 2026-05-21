@@ -1,0 +1,6 @@
+// sec_runtime_not_catchable.sz — runtime errors must NOT be suppressible via try/catch
+// Division by zero, OOB access, and null method calls are EvalResult::Error (not Throw),
+// so they terminate execution even inside try/catch blocks.
+
+let arr = [1, 2, 3];
+let x = arr[99];  // OOB: should produce ❌ even inside try/catch context

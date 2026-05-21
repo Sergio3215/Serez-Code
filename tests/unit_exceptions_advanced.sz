@@ -1,0 +1,212 @@
+// Unit tests: advanced exception handling — throw with objects, rethrow, nested catch
+
+class AppError {
+    public AppError(string msg, int code) {
+        this.msg = msg;
+        this.code = code;
+    }
+    public string getMessage() { return this.msg; }
+    public int getCode() { return this.code; }
+}
+
+// ── Throw with class instances ────────────────────────────────────────────────
+
+test("throw and catch an exception object", () => {
+    let caught = null;
+    try {
+        throw new AppError("not found", 404);
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught != null, "caught exception");
+    assert(caught.getCode() == 404, "code == 404");
+    assert(caught.getMessage() == "not found", "message ok");
+});
+
+test("is-type check on caught exception object", () => {
+    let caught_app = false;
+    try {
+        throw new AppError("bad request", 400);
+    } catch (e) {
+        if (e is AppError) { caught_app = true; }
+    }
+    assert(caught_app, "caught AppError instance");
+});
+
+// ── Throw null ────────────────────────────────────────────────────────────────
+
+test("throw null is catchable", () => {
+    let caught = "not set";
+    try {
+        throw null;
+    } catch (e) {
+        caught = "null caught";
+    }
+    assert(caught == "null caught", "null throw caught");
+});
+
+// ── Throw integer ─────────────────────────────────────────────────────────────
+
+test("throw integer and catch", () => {
+    let val = 0;
+    try {
+        throw 42;
+    } catch (e) {
+        val = e;
+    }
+    assert(val == 42, "int throw caught");
+});
+
+test("throw bool and catch", () => {
+    let val = false;
+    try {
+        throw true;
+    } catch (e) {
+        val = e;
+    }
+    assert(val == true, "bool throw caught");
+});
+
+// ── Throw from inside do-while ────────────────────────────────────────────────
+
+test("throw inside do-while propagates to catch", () => {
+    let result = "none";
+    let i = 0;
+    try {
+        do {
+            i++;
+            if (i == 2) { throw "do-while-error"; }
+        } while (i < 5);
+    } catch (e) {
+        result = e;
+    }
+    assert(result == "do-while-error", "throw in do-while caught");
+    assert(i == 2, "loop stopped at i=2");
+});
+
+// ── Throw from inside switch ──────────────────────────────────────────────────
+
+test("throw inside switch case propagates to catch", () => {
+    let caught = "none";
+    try {
+        let x = 2;
+        switch (x) {
+            case 1: {}
+            case 2: { throw "switch-error"; }
+            default: {}
+        }
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "switch-error", "throw in switch case caught");
+});
+
+// ── Exception from static method ─────────────────────────────────────────────
+
+class Validator {
+    public static bool check(int n) {
+        if (n < 0) { throw "negative not allowed"; }
+        return true;
+    }
+}
+
+test("throw from static method propagates to catch", () => {
+    let caught = "none";
+    try {
+        Validator.check(-1);
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "negative not allowed", "static method throw caught");
+});
+
+test("static method succeeds without throw", () => {
+    let ok = false;
+    try {
+        ok = Validator.check(5);
+    } catch (e) {
+        ok = false;
+    }
+    assert(ok == true, "static check(5) returns true");
+});
+
+// ── Rethrowing with modified message ─────────────────────────────────────────
+
+test("rethrow with modified message in chain", () => {
+    fn string process(int x) {
+        try {
+            if (x == 0) { throw "zero error"; }
+            return "ok:" + x;
+        } catch (e) {
+            throw "wrapped: " + e;
+        }
+        return "unreachable";
+    }
+    let result = "none";
+    try {
+        process(0);
+    } catch (e) {
+        result = e;
+    }
+    assert(result == "wrapped: zero error", "modified rethrow");
+    // Also test that non-zero path works fine
+    let ok = process(5);
+    assert(ok == "ok:5", "non-throw path works");
+});
+
+// ── Exception in forEach ──────────────────────────────────────────────────────
+
+test("throw inside for-in propagates to catch", () => {
+    let found = -1;
+    let arr = [10, 20, 30, 40];
+    try {
+        for (let v in arr) {
+            if (v == 30) { throw v; }
+        }
+    } catch (e) {
+        found = e;
+    }
+    assert(found == 30, "throw in for-in caught");
+});
+
+// ── Finally interacts with catch result ───────────────────────────────────────
+
+test("finally runs after catch, does not override catch result", () => {
+    let log = "";
+    fn string run() {
+        try {
+            throw "from-try";
+        } catch (e) {
+            log = log + "caught ";
+            return "from-catch";
+        } finally {
+            log = log + "finally ";
+        }
+        return "unreachable";
+    }
+    let r = run();
+    assert(r == "from-catch", "catch return preserved");
+    assert(log == "caught finally ", "both blocks ran");
+});
+
+// ── Nested try with different exception types ─────────────────────────────────
+
+test("inner catch handles its own, outer handles remaining", () => {
+    let inner_caught = "";
+    let outer_caught = "";
+    try {
+        try {
+            throw "inner-error";
+        } catch (e) {
+            inner_caught = e;
+            // Don't rethrow — outer won't see it
+        }
+        throw "outer-error";
+    } catch (e) {
+        outer_caught = e;
+    }
+    assert(inner_caught == "inner-error", "inner caught");
+    assert(outer_caught == "outer-error", "outer caught different throw");
+});
+
+summary();

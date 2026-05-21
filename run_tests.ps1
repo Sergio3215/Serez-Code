@@ -9,17 +9,17 @@
 #
 # ── Test types ────────────────────────────────────────────────────────────────
 #
-#   tests/NN_*.sz        → E2E tests
+#   tests/NN_*.sz        -> E2E tests
 #                          Run the file and compare stdout vs tests/NN_*.expected
 #                          Use -generate to create/update the .expected file.
 #
-#   tests/unit_*.sz      → Unit tests
+#   tests/unit_*.sz      -> Unit tests
 #                          The framework (tests/framework.sz) is prepended.
 #                          Each file calls test("name", () => { assert(...) })
 #                          and summary() at the end.
 #                          PASS = no [FAIL] line in stdout.
 #
-#   tests/err_*.sz       → Error tests
+#   tests/err_*.sz       -> Error tests
 #                          The program must emit at least one ❌ line on stderr.
 #                          PASS = at least one ❌ found.
 #
@@ -89,7 +89,7 @@
 #   unit_closures_edge     Closures avanzados: captura de valor, make_adder/multiplier,
 #                          composición (compose), apply_twice, lambda como argumento,
 #                          block body, map con closures independientes, currying
-#   unit_closures_mutable  Closures con estado mutable: make_counter (1→2→3), dos contadores
+#   unit_closures_mutable  Closures con estado mutable: make_counter (1->2->3), dos contadores
 #                          independientes, acumulador numérico, make_adder_from(n),
 #                          captura de loop variable, toggle bool, acumulador de strings
 #   unit_compound_assign   Operadores compuestos básicos: +=, -=, *=, /=, %= en int,
@@ -171,13 +171,13 @@
 #
 # ── Security tests ────────────────────────────────────────────────────────────
 #
-#   tests/sec_*.sz       → Security error tests (run with -security or all)
+#   tests/sec_*.sz       -> Security error tests (run with -security or all)
 #                          Must emit at least one ❌ on stderr.
 #                          Tests: stack overflow, private access, OOB, null deref,
 #                          type violations, overflow, div-by-zero, undeclared vars,
 #                          bad shifts, undeclared classes, non-function call.
 #
-#   tests/unit_sec_*.sz  → Security unit tests (run with -security or all)
+#   tests/unit_sec_*.sz  -> Security unit tests (run with -security or all)
 #                          Framework-based tests verifying safe behavior:
 #                          arithmetic safety, type safety, null safety,
 #                          error isolation, resource limits, injection prevention.
@@ -303,7 +303,7 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
     # E2E golden file test
     if ($generate) {
         $stdout | Set-Content $expectedFile
-        Write-Host "[GEN]  $label → $expectedFile" -ForegroundColor Cyan
+        Write-Host "[GEN]  $label -> $expectedFile" -ForegroundColor Cyan
         return
     }
 

@@ -1,0 +1,164 @@
+// Unit tests: array method edge cases — slice bounds, flat depth, find/every/some
+
+// ── slice bounds ──────────────────────────────────────────────────────────────
+
+test("slice: start > end returns empty (inverted range clamped)", () => {
+    let arr = [1, 2, 3, 4, 5];
+    let s = arr.slice(4, 2);
+    assert(s.length() == 0, "start>end returns empty, not panic");
+});
+
+test("slice: start >= length returns empty", () => {
+    let arr = [1, 2, 3];
+    let s = arr.slice(5, 10);
+    assert(s.length() == 0, "start beyond length = empty");
+});
+
+test("slice: end > length clamps to length", () => {
+    let arr = [1, 2, 3];
+    let s = arr.slice(1, 100);
+    assert(s.length() == 2, "end > length clamps");
+    assert(s[0] == 2 && s[1] == 3, "values correct");
+});
+
+test("slice: negative end index", () => {
+    let arr = [1, 2, 3, 4, 5];
+    let s = arr.slice(0, -1);   // 0 to len-1 = [1,2,3,4]
+    assert(s.length() == 4, "slice(0,-1) = all but last");
+    assert(s[3] == 4, "last is 4");
+});
+
+test("slice: both negative indices", () => {
+    let arr = [1, 2, 3, 4, 5];
+    let s = arr.slice(-3, -1);  // [3, 4]
+    assert(s.length() == 2, "slice(-3,-1) = [3,4]");
+    assert(s[0] == 3 && s[1] == 4, "values correct");
+});
+
+test("slice: empty array returns empty", () => {
+    let arr = [];
+    let s = arr.slice(0, 5);
+    assert(s.length() == 0, "empty array slice = empty");
+});
+
+// ── flat depth ────────────────────────────────────────────────────────────────
+
+test("flat(0) does not flatten", () => {
+    let arr = [[1, 2], [3, 4]];
+    let f = arr.flat(0);
+    assert(f.length() == 2, "flat(0) preserves outer array");
+});
+
+test("flat(1) flattens one level", () => {
+    let arr = [[1, [2, 3]], [4]];
+    let f = arr.flat(1);
+    assert(f.length() == 3, "flat(1) expands outer arrays only");
+    assert(f[0] == 1, "f[0] = 1");
+    // f[1] is still an inner array [2,3]
+    assert(f[2] == 4, "f[2] = 4");
+});
+
+test("flat(2) flattens two levels", () => {
+    let arr = [[1, [2, 3]], [4, [5, 6]]];
+    let f = arr.flat(2);
+    assert(f.length() == 6, "depth-2 flat = 6 elements");
+    assert(f[0] == 1, "f[0] = 1");
+    assert(f[2] == 3, "f[2] = 3");
+    assert(f[5] == 6, "f[5] = 6");
+});
+
+test("flat no-arg is flat(1)", () => {
+    let arr = [[1, 2], [3, 4]];
+    let f1 = arr.flat();
+    let f2 = arr.flat(1);
+    assert(f1.length() == f2.length(), "no-arg = flat(1) length");
+    assert(f1[0] == f2[0] && f1[3] == f2[3], "same values");
+});
+
+// ── find edge cases ───────────────────────────────────────────────────────────
+
+test("find returns first match only", () => {
+    let arr = [1, 5, 2, 5, 3];
+    let r = arr.find(x => x == 5);
+    assert(r == 5, "found value");
+    // Check early exit: only ONE 5 is returned (no issue with duplicate)
+    let idx = arr.findIndex(x => x == 5);
+    assert(idx == 1, "findIndex returns first index");
+});
+
+test("findIndex after reverse", () => {
+    let arr = [1, 2, 3, 4, 5];
+    arr.reverse();
+    let i = arr.findIndex(x => x == 3);
+    assert(i == 2, "findIndex after reverse: 3 is now at index 2");
+});
+
+// ── every / some edge cases ───────────────────────────────────────────────────
+
+test("every short-circuits on first false", () => {
+    let count = 0;
+    fn bool check(int x) {
+        count++;
+        return x > 0;
+    }
+    let arr = [1, 2, -1, 4, 5];
+    let r = arr.every(check);
+    assert(r == false, "every returns false");
+    assert(count == 3, "only evaluated 3 elements before false");
+});
+
+test("some short-circuits on first true", () => {
+    let count = 0;
+    fn bool check(int x) {
+        count++;
+        return x > 3;
+    }
+    let arr = [1, 2, 5, 6, 7];
+    let r = arr.some(check);
+    assert(r == true, "some returns true");
+    assert(count == 3, "only evaluated 3 elements before true");
+});
+
+test("every on single-element array", () => {
+    assert([42].every(x => x > 0) == true,  "single positive: every=true");
+    assert([0].every(x => x > 0)  == false, "single zero: every=false");
+});
+
+test("some on single-element array", () => {
+    assert([42].some(x => x > 0) == true,  "single positive: some=true");
+    assert([0].some(x => x > 0)  == false, "single zero: some=false");
+});
+
+// ── reverse edge cases ────────────────────────────────────────────────────────
+
+test("reverse empty array is no-op", () => {
+    let arr = [];
+    arr.reverse();
+    assert(arr.length() == 0, "empty reverse stays empty");
+});
+
+test("reverse odd-length array: middle element unchanged", () => {
+    let arr = [1, 2, 3, 4, 5];
+    arr.reverse();
+    assert(arr[2] == 3, "middle stays at index 2");
+    assert(arr[0] == 5 && arr[4] == 1, "ends swapped");
+});
+
+// ── method chaining with new methods ─────────────────────────────────────────
+
+test("find after filter", () => {
+    let arr = [1, 2, 3, 4, 5, 6];
+    let evens = arr.filter(x => x % 2 == 0);
+    let first_gt4 = evens.find(x => x > 4);
+    assert(first_gt4 == 6, "first even > 4 is 6");
+});
+
+test("flat then map", () => {
+    let nested = [[1, 2], [3, 4]];
+    let doubled = nested.flat().map(x => x * 2);
+    assert(doubled.length() == 4, "4 doubled elements");
+    assert(doubled[0] == 2, "first doubled");
+    assert(doubled[3] == 8, "last doubled");
+});
+
+summary();

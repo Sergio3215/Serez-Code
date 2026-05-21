@@ -6,4 +6,6 @@ implementacion_clases.md
 *.sz
 !tests/*.sz
 tests/_*.sz
+*.txt
+*.bin
 /.claude/
