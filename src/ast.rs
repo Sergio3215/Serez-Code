@@ -22,9 +22,11 @@ pub enum Statement {
     ClassDeclaration(ClassDeclaration),           // class / public class ...
     InterfaceDeclaration(InterfaceDeclaration),   // interface ...
     FieldAssign(FieldAssignStatement),            // obj.field = expr  /  this.field = expr
-    Break,                                        // break;
-    Continue,                                     // continue;
-    DoWhile(DoWhileStatement),                    // do { } while (cond);
+    Break,                                        // break; (or break label;)
+    Continue,                                     // continue; (or continue label;)
+    BreakLabel(String),                           // break outer;
+    ContinueLabel(String),                        // continue outer;
+    EnumDeclaration(EnumDeclaration),             // enum Color { Red, Green, Blue }
     Switch(SwitchStatement),                      // switch (expr) { case ...: {} }
     Try(TryStatement),                            // try {} catch (e) {} finally {}
     Throw(Expression),                            // throw expr;
@@ -35,6 +37,7 @@ pub enum Statement {
 pub struct LetStatement {
     pub name: String,      // El nombre de la variable (ej. "ii")
     pub value: Expression, // La expresión que se le asigna (ej. 1)
+    pub is_const: bool,    // true if declared with 'const'
 }
 
 // Estructura específica para reasignación "nombre = valor;"
@@ -60,7 +63,15 @@ pub struct ReturnStatement {
 pub struct Parameter {
     pub name: String,
     pub type_name: Option<String>,
-    pub default: Option<Expression>,
+    pub is_rest: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumDeclaration {
+    pub name: String,
+    pub variants: Vec<String>,
+    pub line: usize,
+    pub column: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +91,7 @@ pub struct FunctionDeclaration {
 pub struct WhileStatement {
     pub condition: Expression,
     pub body: BlockStatement,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +107,7 @@ pub struct ForStatement {
     pub condition: Expression,
     pub update: AssignStatement,
     pub body: BlockStatement,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +115,7 @@ pub struct ForEachStatement {
     pub var_name: String,
     pub iterable: Expression,
     pub body: BlockStatement,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,7 +128,6 @@ pub struct OutStatement {
 #[derive(Debug, Clone)]
 pub struct InterfaceDeclaration {
     pub name: String,
-    #[allow(dead_code)]
     pub is_public: bool,
     pub fields: Vec<InterfaceField>,
 }
@@ -128,13 +141,24 @@ pub struct InterfaceField {
 // ── Classes ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
+pub struct ClassField {
+    pub name: String,
+    pub type_annotation: Option<String>,
+    pub default_value: Option<Expression>,
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct ClassDeclaration {
     pub name: String,
-    #[allow(dead_code)]
     pub is_public: bool,
+    pub is_abstract: bool,
+    pub is_sealed: bool,
     pub parent: Option<String>,
     pub constructor: Option<ClassConstructor>,
     pub methods: Vec<ClassMethod>,
+    pub fields: Vec<ClassField>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,7 +171,9 @@ pub struct ClassConstructor {
 pub struct ClassMethod {
     pub name: String,
     pub is_public: bool,
-    pub is_static: bool,
+    pub is_abstract: bool,
+    pub is_getter: bool,
+    pub is_setter: bool,
     pub return_type: Option<String>,
     pub parameters: Vec<Parameter>,
     pub body: BlockStatement,
@@ -173,12 +199,6 @@ pub struct SwitchStatement {
 pub struct SwitchCase {
     pub values: Vec<Expression>,       // one case can match multiple values: case 1, 2:
     pub body: BlockStatement,
-}
-
-#[derive(Debug, Clone)]
-pub struct DoWhileStatement {
-    pub body: BlockStatement,
-    pub condition: Expression,
 }
 
 // ── Try / Catch / Finally ─────────────────────────────────────────────────────
@@ -217,6 +237,7 @@ pub enum Expression {
     New(NewExpression),                              // new ClassName(args)
     ObjectPatch(Vec<(String, Expression)>),          // { field: val, ... } for interface update
     Ternary(TernaryExpression),                      // cond ? then : else
+    Spread(Box<Expression>),                         // ...expr (spread operator)
 }
 
 #[derive(Debug, Clone)]
@@ -264,7 +285,6 @@ pub struct DotCallExpression {
     pub method: String,
     pub arguments: Vec<Expression>,
     pub has_parens: bool,  // true if written as obj.method(...), false if obj.field
-    pub optional: bool,    // true if written as obj?.method(...)
     #[allow(dead_code)]
     pub line: usize,
     #[allow(dead_code)]

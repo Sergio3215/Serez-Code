@@ -1,0 +1,13 @@
+// sec_getter_no_setter.sz — getter-only property read works correctly
+
+class ReadOnly {
+    public ReadOnly(int v) {
+        this._v = v;
+    }
+    public get int value() {
+        return this._v;
+    }
+}
+
+let r = new ReadOnly(99);
+out r.value;

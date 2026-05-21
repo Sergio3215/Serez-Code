@@ -1,0 +1,46 @@
+// unit_set.sz — tests for Set data structure
+
+let s = new Set();
+out s.size();
+
+s.add(1);
+s.add(2);
+s.add(3);
+out s.size();
+
+// No duplicates
+s.add(2);
+s.add(3);
+out s.size();
+
+// has / contains
+out s.has(1);
+out s.has(99);
+
+// delete / remove
+s.delete(2);
+out s.size();
+out s.has(2);
+
+// toArray
+let arr = s.toArray();
+out arr.length();
+
+// Initialise with array
+let s2 = new Set([10, 20, 30, 20, 10]);
+out s2.size();
+out s2.has(10);
+out s2.has(20);
+out s2.has(30);
+
+// clear
+s2.clear();
+out s2.size();
+
+// String elements
+let words = new Set();
+words.add("apple");
+words.add("banana");
+words.add("apple");
+out words.size();
+out words.has("banana");

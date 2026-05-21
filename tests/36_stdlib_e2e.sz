@@ -1,0 +1,59 @@
+// 36_stdlib_e2e.sz — E2E test for stdlib: Math, File, JSON, Set
+
+// ── Math ──────────────────────────────────────────────────────────────────────
+out Math.abs(-10);
+out Math.floor(4.9);
+out Math.ceil(4.1);
+out Math.round(4.5);
+out Math.sqrt(16.0);
+out Math.pow(2.0, 8.0);
+out Math.max(1, 2, 3);
+out Math.min(1, 2, 3);
+out Math.sin(0.0);
+out Math.cos(0.0);
+out Math.log(1.0);
+out Math.PI > 3.14;
+out Math.E > 2.71;
+
+// ── File ─────────────────────────────────────────────────────────────────────
+let fp = "e2e_test_file.txt";
+File.write(fp, "serez-code test");
+out File.exists(fp);
+out File.read(fp);
+
+let binFp = "e2e_test_bin.bin";
+File.write_asBinary(binFp, [65, 66, 67]);
+let bytes = File.read_asBinary(binFp);
+out bytes[0];
+out bytes.length();
+
+// ── JSON ──────────────────────────────────────────────────────────────────────
+out JSON.stringify(true);
+out JSON.stringify(42);
+out JSON.stringify("test");
+
+let parsed = JSON.parse("\{\"x\":10,\"y\":20}");
+out parsed["x"];
+out parsed["y"];
+
+let arr2 = JSON.parse("[\"a\",\"b\",\"c\"]");
+out arr2[0];
+out arr2.length();
+
+// round-trip
+let data = [1, 2, 3];
+let rt = JSON.parse(JSON.stringify(data));
+out rt[2];
+
+// ── Set ───────────────────────────────────────────────────────────────────────
+let s = new Set([1, 2, 3, 2, 1]);
+out s.size();
+s.add(4);
+out s.size();
+out s.has(3);
+out s.has(99);
+s.delete(1);
+out s.size();
+out s.has(1);
+s.clear();
+out s.size();

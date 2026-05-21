@@ -1,0 +1,19 @@
+// unit_sealed.sz — tests for sealed classes
+
+sealed class Base {
+    public Base(int v) {
+        this.v = v;
+    }
+    public int getValue() {
+        return this.v;
+    }
+}
+
+let b = new Base(42);
+out b.getValue();
+out b.v;
+
+fn doubleValue(obj) {
+    return obj.getValue() * 2;
+}
+out doubleValue(b);

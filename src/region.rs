@@ -42,6 +42,13 @@ pub enum OwnedValue {
         class_name: String,
         fields: Vec<(String, OwnedValue)>,
     },
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+    },
+    Set {
+        elements: Vec<OwnedValue>,
+    },
     Null,
 }
 
@@ -75,6 +82,11 @@ impl OwnedValue {
                     .collect();
                 format!("{}{{ {} }}", class_name, pairs.join(", "))
             }
+            OwnedValue::EnumVariant { enum_name, variant } => format!("{}.{}", enum_name, variant),
+            OwnedValue::Set { elements } => {
+                let inner: Vec<String> = elements.iter().map(|v| v.display_str()).collect();
+                format!("Set[{}]", inner.join(", "))
+            }
             OwnedValue::Null => "null".to_string(),
         }
     }
@@ -106,6 +118,13 @@ pub enum ObjectData {
         class_name: String,
         fields: Vec<(String, OwnedValue)>,
     },
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+    },
+    Set {
+        elements: Vec<ObjectRef>,
+    },
     Null,
 }
 
@@ -123,6 +142,8 @@ impl std::fmt::Display for ObjectData {
             }
             ObjectData::Function { .. } => write!(f, "Function"),
             ObjectData::Instance { class_name, .. } => write!(f, "{}{{...}}", class_name),
+            ObjectData::EnumVariant { enum_name, variant } => write!(f, "{}.{}", enum_name, variant),
+            ObjectData::Set { .. } => write!(f, "Set{{...}}"),
             ObjectData::Null => write!(f, "Null"),
         }
     }
@@ -177,6 +198,8 @@ impl ObjectData {
             ObjectData::Dict { .. } => "dict",
             ObjectData::Function { .. } => "function",
             ObjectData::Instance { class_name, .. } => class_name.as_str(),
+            ObjectData::EnumVariant { enum_name, .. } => enum_name.as_str(),
+            ObjectData::Set { .. } => "Set",
             ObjectData::Null => "null",
         }
     }

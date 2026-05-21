@@ -1,0 +1,117 @@
+// 35_new_syntax_e2e.sz — E2E test for new syntax features
+// const, enum, labeled loops, abstract, sealed, getters/setters, class fields, spread/rest
+
+// ── const ────────────────────────────────────────────────────────────────────
+const VERSION = "1.0";
+const MAX_SIZE = 256;
+out VERSION;
+out MAX_SIZE;
+
+// ── enum ─────────────────────────────────────────────────────────────────────
+enum Status {
+    Active,
+    Inactive,
+    Pending
+}
+
+let s = Status.Active;
+out s;
+if (s == Status.Active) {
+    out "active!";
+}
+
+// ── abstract + inheritance ────────────────────────────────────────────────────
+abstract class Animal {
+    public string speak() {
+        return "...";
+    }
+}
+
+class Dog : Animal {
+    public Dog(string name) {
+        this.name = name;
+    }
+    public string speak() {
+        return this.name + " says woof";
+    }
+}
+
+let d = new Dog("Rex");
+out d.speak();
+
+// ── sealed class ──────────────────────────────────────────────────────────────
+sealed class FinalThing {
+    public FinalThing(int v) {
+        this.v = v;
+    }
+    public int getValue() {
+        return this.v;
+    }
+}
+let ft = new FinalThing(7);
+out ft.getValue();
+
+// ── class fields with defaults ────────────────────────────────────────────────
+class Config {
+    timeout: int = 30;
+    host: string = "localhost";
+
+    public Config() {
+    }
+}
+
+let cfg = new Config();
+out cfg.timeout;
+out cfg.host;
+
+// ── getters/setters ───────────────────────────────────────────────────────────
+class BoundedInt {
+    public BoundedInt(int val) {
+        this._val = val;
+    }
+    public get int value() {
+        return this._val;
+    }
+    public set value(int v) {
+        if (v < 0) {
+            this._val = 0;
+        } else {
+            this._val = v;
+        }
+    }
+}
+
+let bi = new BoundedInt(10);
+out bi.value;
+bi.value = -5;
+out bi.value;
+bi.value = 42;
+out bi.value;
+
+// ── spread ────────────────────────────────────────────────────────────────────
+let nums = [1, 2, 3];
+let more = [...nums, 4, 5];
+out more.length();
+out more[4];
+
+// ── rest params ───────────────────────────────────────────────────────────────
+fn product(...args) {
+    let result = 1;
+    for (let i = 0; i < args.length(); i++) {
+        result = result * args[i];
+    }
+    return result;
+}
+out product(2, 3, 4);
+
+// ── labeled loops ─────────────────────────────────────────────────────────────
+let found = false;
+search: for (let i = 0; i < 5; i++) {
+    for (let j = 0; j < 5; j++) {
+        if (i * j == 6) {
+            found = true;
+            break search;
+        }
+    }
+}
+out found;

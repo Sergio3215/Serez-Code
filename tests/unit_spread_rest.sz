@@ -1,0 +1,38 @@
+// unit_spread_rest.sz — tests for spread operator
+
+let a = [1, 2, 3];
+let b = [4, 5, 6];
+
+// Spread to merge arrays
+let merged = [...a, ...b];
+out merged.length();
+
+// Spread with extra elements
+let extended = [0, ...a, 4];
+out extended.length();
+out extended[0];
+out extended[4];
+
+// Spread in function call context
+fn sum3(x, y, z) {
+    return x + y + z;
+}
+let vals = [10, 20, 30];
+out sum3(...vals);
+
+// Spread copy
+let copy = [...a];
+copy.push(99);
+out a.length();
+out copy.length();
+
+// Rest parameter in function
+fn sumAll(...nums) {
+    let total = 0;
+    for (let i = 0; i < nums.length(); i++) {
+        total = total + nums[i];
+    }
+    return total;
+}
+out sumAll(1, 2, 3, 4, 5);
+out sumAll(10, 20);

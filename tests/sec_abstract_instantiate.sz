@@ -1,0 +1,10 @@
+// sec_abstract_instantiate.sz — instantiating an abstract class must produce an error
+
+abstract class Vehicle {
+    public void move() {
+        out "moving";
+    }
+}
+
+let v = new Vehicle();
+out v;

@@ -1,0 +1,43 @@
+// unit_abstract.sz — tests for abstract classes
+
+abstract class Shape {
+    public decimal area() {
+        return 0.0;
+    }
+    public string describe() {
+        return "shape with area " + this.area();
+    }
+}
+
+class Circle : Shape {
+    public Circle(decimal radius) {
+        this.radius = radius;
+    }
+    public decimal area() {
+        return 3.14159 * this.radius * this.radius;
+    }
+}
+
+class Rectangle : Shape {
+    public Rectangle(decimal w, decimal h) {
+        this.w = w;
+        this.h = h;
+    }
+    public decimal area() {
+        return this.w * this.h;
+    }
+}
+
+let c = new Circle(5.0);
+out c.area();
+
+let r = new Rectangle(4.0, 3.0);
+out r.area();
+
+out r.describe();
+
+fn print_area(s) {
+    out s.area();
+}
+print_area(c);
+print_area(r);

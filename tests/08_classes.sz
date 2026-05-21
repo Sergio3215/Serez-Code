@@ -65,7 +65,7 @@ class Contador {
         this.valor = this.valor + n;
     }
 
-    public int get() {
+    public int getValue() {
         return this.valor;
     }
 
@@ -75,16 +75,16 @@ class Contador {
 }
 
 let c = new Contador(10);
-out c.get();
+out c.getValue();
 c.incrementar();
 c.incrementar();
-out c.get();
+out c.getValue();
 c.decrementar();
-out c.get();
+out c.getValue();
 c.sumar(5);
-out c.get();
+out c.getValue();
 c.reset();
-out c.get();
+out c.getValue();
 
 // Clase con calculos matematicos
 class Punto {

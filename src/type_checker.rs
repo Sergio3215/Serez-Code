@@ -132,6 +132,9 @@ impl TypeChecker {
             Statement::FieldAssign(_) => {}
             Statement::Break => {}
             Statement::Continue => {}
+            Statement::BreakLabel(_) => {}
+            Statement::ContinueLabel(_) => {}
+            Statement::EnumDeclaration(_) => {}
             Statement::Throw(e) => {
                 self.check_expression(e, expected_return);
             }
@@ -164,11 +167,6 @@ impl TypeChecker {
                     for s in &fb.statements {
                         self.check_statement(s, expected_return);
                     }
-                }
-            }
-            Statement::DoWhile(dw) => {
-                for s in &dw.body.statements {
-                    self.check_statement(s, expected_return);
                 }
             }
         }
@@ -238,9 +236,18 @@ impl TypeChecker {
             None => return,
         };
 
-        let required = func.parameters.iter().filter(|p| p.default.is_none()).count();
-        let max_args  = func.parameters.len();
-        if call.arguments.len() < required || call.arguments.len() > max_args {
+        // Skip arity check if any argument is a spread expression
+        let has_spread_arg = call.arguments.iter().any(|a| matches!(a, Expression::Spread(_)));
+        if has_spread_arg { return; }
+
+        let has_rest = func.parameters.last().map(|p| p.is_rest).unwrap_or(false);
+        let min_params = if has_rest { func.parameters.len().saturating_sub(1) } else { func.parameters.len() };
+        let arity_ok = if has_rest {
+            call.arguments.len() >= min_params
+        } else {
+            call.arguments.len() == func.parameters.len()
+        };
+        if !arity_ok {
             eprintln!(
                 "❌ TYPE ERROR: '{}' expects {} argument(s) but got {}.",
                 func_name,
@@ -251,7 +258,6 @@ impl TypeChecker {
         }
 
         for (i, param) in func.parameters.iter().enumerate() {
-            if i >= call.arguments.len() { break; }
             let expected = match &param.type_name {
                 Some(t) => t,
                 None => continue,
@@ -280,7 +286,8 @@ fn types_compatible(expected: &str, actual: &str) -> bool {
     if expected == actual { return true; }
     if expected == "any" { return true; }
     // Nullable: "int?" accepts "int" or "null"
-    if let Some(base) = expected.strip_suffix('?') {
+    if expected.ends_with('?') {
+        let base = &expected[..expected.len() - 1];
         return actual == base || actual == "null";
     }
     false
