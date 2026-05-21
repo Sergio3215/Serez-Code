@@ -9,10 +9,15 @@ pub enum Precedence {
     NullCoalesce, // ??
     LogicalOr,    // ||
     LogicalAnd,   // &&
+    BitOr,        // |
+    BitXor,       // ^
+    BitAnd,       // &
     Equals,       // ==
     LessGreater,  // > or <
+    Shift,        // << >>
     Sum,          // +
     Product,      // *
+    Power,        // **
     Prefix,       // -X or !X
     Call,         // myFunction(X)
     Index,        // array[index]
@@ -24,12 +29,17 @@ pub fn token_precedence(token_type: &TokenType) -> Precedence {
         TokenType::NullCoalesce => Precedence::NullCoalesce,
         TokenType::Or => Precedence::LogicalOr,
         TokenType::And => Precedence::LogicalAnd,
+        TokenType::BitOr => Precedence::BitOr,
+        TokenType::BitXor => Precedence::BitXor,
+        TokenType::BitAnd => Precedence::BitAnd,
         TokenType::Eq | TokenType::NotEq => Precedence::Equals,
         TokenType::Lt | TokenType::Gt | TokenType::LtEq | TokenType::GtEq => Precedence::LessGreater,
+        TokenType::Shl | TokenType::Shr => Precedence::Shift,
         TokenType::Plus | TokenType::Minus => Precedence::Sum,
         TokenType::Slash | TokenType::Asterisk | TokenType::Percent => Precedence::Product,
+        TokenType::Power => Precedence::Power,
         TokenType::LParen => Precedence::Call,
-        TokenType::Dot => Precedence::Call,
+        TokenType::Dot | TokenType::QuestionDot => Precedence::Call,
         TokenType::LBracket => Precedence::Index,
         _ => Precedence::Lowest,
     }
@@ -102,7 +112,8 @@ impl Parser {
                 | TokenType::KwConst
                 | TokenType::KwEnum
                 | TokenType::KwAbstract
-                | TokenType::KwSealed => return,
+                | TokenType::KwSealed
+                | TokenType::KwDo => return,
                 _ => self.next_token(),
             }
         }
@@ -116,6 +127,7 @@ impl Parser {
             TokenType::LBrace => self.parse_block_statement(),
             TokenType::Function => self.parse_function_statement(),
             TokenType::While => self.parse_while_statement(),
+            TokenType::KwDo => self.parse_do_while_statement(),
             TokenType::For => self.parse_for_statement(),
             TokenType::KwBreak => {
                 if self.peek_token.token_type == TokenType::Ident {
@@ -316,6 +328,7 @@ impl Parser {
                                     method: field.clone(),
                                     arguments: vec![],
                                     has_parens: false,
+                                    is_optional: false,
                                     line, column,
                                 })),
                                 operator: op,
@@ -359,10 +372,11 @@ impl Parser {
                         if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
                         let value = Expression::Infix(InfixExpression {
                             left: Box::new(Expression::DotCall(DotCallExpression {
-                                object:     Box::new(Expression::Identifier(object.clone())),
-                                method:     field.clone(),
-                                arguments:  vec![],
-                                has_parens: false,
+                                object:      Box::new(Expression::Identifier(object.clone())),
+                                method:      field.clone(),
+                                arguments:   vec![],
+                                has_parens:  false,
+                                is_optional: false,
                                 line: dline, column: dcol,
                             })),
                             operator: op.to_string(),
@@ -466,6 +480,41 @@ impl Parser {
 
     fn parse_while_statement(&mut self) -> Option<Statement> {
         self.parse_while_statement_with_label(None)
+    }
+
+    fn parse_do_while_statement(&mut self) -> Option<Statement> {
+        // current = 'do'
+        if self.peek_token.token_type != TokenType::LBrace {
+            eprintln!("❌ PARSER ERROR: Expected '{{' after 'do'");
+            return None;
+        }
+        self.next_token(); // current = '{'
+        let body = match self.parse_block_statement()? {
+            Statement::Block(b) => b,
+            _ => return None,
+        };
+        // current = '}', peek = 'while'
+        if self.peek_token.token_type != TokenType::While {
+            eprintln!("❌ PARSER ERROR: Expected 'while' after 'do' body");
+            return None;
+        }
+        self.next_token(); // current = 'while'
+        if self.peek_token.token_type != TokenType::LParen {
+            eprintln!("❌ PARSER ERROR: Expected '(' after 'while' in do-while");
+            return None;
+        }
+        self.next_token(); // current = '('
+        self.next_token(); // current = first token of condition
+        let condition = self.parse_expression(Precedence::Lowest)?;
+        if self.peek_token.token_type != TokenType::RParen {
+            eprintln!("❌ PARSER ERROR: Expected ')' after condition in do-while");
+            return None;
+        }
+        self.next_token(); // current = ')'
+        if self.peek_token.token_type == TokenType::Semicolon {
+            self.next_token(); // consume ';'
+        }
+        Some(Statement::DoWhile(WhileStatement { condition, body, label: None }))
     }
 
     fn parse_index_assign_or_expr_statement(&mut self) -> Option<Statement> {
@@ -949,7 +998,16 @@ impl Parser {
                 return None;
             };
 
-            parameters.push(Parameter { name, type_name, is_rest });
+            // Optional default value: param = expr
+            let default_value = if !is_rest && self.peek_token.token_type == TokenType::Assign {
+                self.next_token(); // '='
+                self.next_token(); // first token of default expr
+                Some(self.parse_expression(Precedence::Lowest)?)
+            } else {
+                None
+            };
+
+            parameters.push(Parameter { name, type_name, is_rest, default_value });
 
             if is_rest {
                 // Rest param must be last — break after
@@ -1088,7 +1146,14 @@ impl Parser {
                 | TokenType::Question
                 | TokenType::LParen
                 | TokenType::Dot
-                | TokenType::LBracket => true,
+                | TokenType::QuestionDot
+                | TokenType::LBracket
+                | TokenType::Power
+                | TokenType::BitAnd
+                | TokenType::BitOr
+                | TokenType::BitXor
+                | TokenType::Shl
+                | TokenType::Shr => true,
                 _ => false,
             };
 
@@ -1158,7 +1223,10 @@ impl Parser {
                         else_expr: Box::new(else_expr),
                     }));
                 }
-            } else if self.current_token.token_type == TokenType::Dot {
+            } else if self.current_token.token_type == TokenType::Dot
+                || self.current_token.token_type == TokenType::QuestionDot
+            {
+                let is_optional = self.current_token.token_type == TokenType::QuestionDot;
                 let dot_line = self.current_token.line;
                 let dot_column = self.current_token.column;
 
@@ -1183,6 +1251,7 @@ impl Parser {
                         method,
                         arguments,
                         has_parens,
+                        is_optional,
                         line: dot_line,
                         column: dot_column,
                     }));
@@ -1259,7 +1328,7 @@ impl Parser {
             TokenType::False => Some(Expression::Boolean(false)),
             TokenType::KwNull => Some(Expression::Null),
 
-            TokenType::Bang | TokenType::Minus => {
+            TokenType::Bang | TokenType::Minus | TokenType::BitNot => {
                 let operator = self.current_token.literal.clone();
                 self.next_token();
                 let right = self.parse_expression(Precedence::Prefix)?;
@@ -1845,6 +1914,14 @@ impl Parser {
             };
             self.next_token(); // after visibility
 
+            // Check for static modifier
+            let is_static = if self.current_token.token_type == TokenType::KwStatic {
+                self.next_token();
+                true
+            } else {
+                false
+            };
+
             // Check for getter/setter
             let is_getter = if self.current_token.token_type == TokenType::KwGet {
                 self.next_token();
@@ -1936,6 +2013,7 @@ impl Parser {
                     is_abstract: is_member_abstract,
                     is_getter,
                     is_setter,
+                    is_static,
                     return_type,
                     parameters,
                     body,

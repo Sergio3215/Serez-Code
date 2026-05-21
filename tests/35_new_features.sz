@@ -55,14 +55,14 @@ out once;
 // ── Optional chaining (?.) ────────────────────────────────────────────────────
 class Box {
     public Box(int v) { this.val = v; }
-    public int get() { return this.val; }
+    public int getVal() { return this.val; }
 }
 
 let box = new Box(99);
 let empty = null;
-out box?.get();
-out empty?.get();
-out empty?.get() ?? -1;
+out box?.getVal();
+out empty?.getVal();
+out empty?.getVal() ?? -1;
 
 // ── Static methods ────────────────────────────────────────────────────────────
 class Calc {

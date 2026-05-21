@@ -110,6 +110,19 @@ pub enum TokenType {
     KwGet,      // get
     KwSet,      // set
     DotDotDot,  // ...
+
+    // Tokens from improve branch (bitwise, power, optional chaining, do/while, static, is)
+    Power,       // **
+    BitAnd,      // &
+    BitOr,       // |
+    BitXor,      // ^
+    BitNot,      // ~
+    Shl,         // <<
+    Shr,         // >>
+    QuestionDot, // ?.
+    KwDo,        // do
+    KwStatic,    // static
+    KwIs,        // is
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -171,6 +184,9 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "sealed"   => TokenType::KwSealed,
         "get"      => TokenType::KwGet,
         "set"      => TokenType::KwSet,
+        "do"       => TokenType::KwDo,
+        "static"   => TokenType::KwStatic,
+        "is"       => TokenType::KwIs,
         _ => TokenType::Ident,
     }
 }

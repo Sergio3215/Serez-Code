@@ -99,7 +99,7 @@ impl TypeChecker {
                     self.check_statement(s, ret);
                 }
             }
-            Statement::While(w) => {
+            Statement::While(w) | Statement::DoWhile(w) => {
                 for s in &w.body.statements {
                     self.check_statement(s, expected_return);
                 }
@@ -241,12 +241,10 @@ impl TypeChecker {
         if has_spread_arg { return; }
 
         let has_rest = func.parameters.last().map(|p| p.is_rest).unwrap_or(false);
-        let min_params = if has_rest { func.parameters.len().saturating_sub(1) } else { func.parameters.len() };
-        let arity_ok = if has_rest {
-            call.arguments.len() >= min_params
-        } else {
-            call.arguments.len() == func.parameters.len()
-        };
+        let required_count = func.parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
+        let min_params = if has_rest { required_count } else { required_count };
+        let max_params = if has_rest { usize::MAX } else { func.parameters.len() };
+        let arity_ok = call.arguments.len() >= min_params && call.arguments.len() <= max_params;
         if !arity_ok {
             eprintln!(
                 "❌ TYPE ERROR: '{}' expects {} argument(s) but got {}.",
@@ -258,6 +256,7 @@ impl TypeChecker {
         }
 
         for (i, param) in func.parameters.iter().enumerate() {
+            if i >= call.arguments.len() { break; }
             let expected = match &param.type_name {
                 Some(t) => t,
                 None => continue,
