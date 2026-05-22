@@ -15,7 +15,7 @@ license = false
 eula = false
 
 [dependencies]
-notify = "6"
+notify = "8"
 
 [[bin]]
 name = "sz"
