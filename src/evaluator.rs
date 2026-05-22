@@ -1599,7 +1599,7 @@ impl Evaluator {
                 let writeback_ctx: Option<(Expression, String)> =
                     if let Expression::DotCall(inner) = dot_call.object.as_ref() {
                         if inner.arguments.is_empty() {
-                            const MUTATING: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove", "Add", "Remove", "RemoveAll", "clear"];
+                            const MUTATING: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove", "reverse", "Add", "Remove", "RemoveAll", "clear"];
                             if MUTATING.contains(&dot_call.method.as_str()) {
                                 Some((*inner.object.clone(), inner.method.clone()))
                             } else { None }
@@ -4213,7 +4213,7 @@ impl Evaluator {
                 let mut e = elems;
                 e.reverse();
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(self.null_ref)
+                EvalResult::Value(arr_ref)
             }
 
             "every" => {
@@ -4521,11 +4521,11 @@ impl Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Str(sliced)))
             }
 
-            "trimStart" => {
+            "trimStart" | "trimLeft" => {
                 EvalResult::Value(self.alloc(ObjectData::Str(s.trim_start().to_string())))
             }
 
-            "trimEnd" => {
+            "trimEnd" | "trimRight" => {
                 EvalResult::Value(self.alloc(ObjectData::Str(s.trim_end().to_string())))
             }
 

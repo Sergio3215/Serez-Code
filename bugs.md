@@ -71,6 +71,8 @@
 | [B-59](#b-59--replace-only-replaced-first-occurrence) | `replace` only replaced the first occurrence instead of all | 🟢 Low | ✅ |
 | [B-60](#b-60--dict-indexassign-inside-nested-scope-loses-new-entries-on-scope-pop) | Dict `IndexAssign` inside nested scope loses new entries on scope pop | 🔴 Critical | ✅ |
 | [B-61](#b-61--is-operator-tokenized-as-identifier--never-worked-as-infix) | `is` operator tokenized as identifier — never worked as infix | 🔴 Critical | ✅ |
+| [B-62](#b-62--reverse-missing-from-mutating-list--returns-null-instead-of-array) | `.reverse()` missing from `MUTATING` list — writeback skipped on class fields; returns `null` | 🟡 High | ✅ |
+| [B-63](#b-63--trimleft--trimright-aliases-not-implemented) | `trimLeft` / `trimRight` aliases documented but not implemented | 🟢 Low | ✅ |
 
 ---
 
@@ -1524,7 +1526,112 @@ None => {
 
 ---
 
-*Last updated: 2026-05-20 — 61 bugs documented, 61 fixed, 0 open.*
+*Last updated: 2026-05-22 — 63 bugs documented, 63 fixed, 0 open.*
+
+---
+
+## B-62 — `.reverse()` missing from `MUTATING` list — writeback skipped on class fields; returns `null`
+
+**Date:** 2026-05-22
+**Files:** `src/evaluator.rs`
+**Severity:** 🟡 High
+**Status:** ✅ Fixed
+
+### Symptom
+
+Two related problems with `.reverse()`:
+
+**1. Chained mutation on a class field is silently ignored:**
+
+```serez
+class MyList {
+    public MyList([int] d) { this.data = d; }
+    public void doReverse() { this.data.reverse(); }
+}
+let ml = new MyList([3, 1, 2]);
+ml.doReverse();
+// ml.data is still [3, 1, 2] — expected [2, 1, 3]
+```
+
+**2. `.reverse()` returns `null` instead of the array, breaking chaining:**
+
+```serez
+let a [int] = [3, 1, 2];
+let r = a.reverse();
+out r;   // → null  (expected [2, 1, 3])
+```
+
+### Root cause
+
+Two independent oversights:
+
+**Writeback:** The evaluator detects `this.field.method()` chained calls and writes the mutated collection back to the instance field only when the method name is in the `MUTATING` constant list. `.reverse()` was not in that list, so the writeback was never triggered — the field remained pointing to the original (un-reversed) array copy.
+
+```rust
+// Before — reverse missing
+const MUTATING: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove", "Add", "Remove", "RemoveAll", "clear"];
+```
+
+**Return value:** The `reverse` arm in `eval_array_method` ended with `EvalResult::Value(self.null_ref)`, unlike `.sort()` which correctly returns `arr_ref`. This made assigning the result of `.reverse()` always produce `null`.
+
+### Fix
+
+Two targeted changes in `src/evaluator.rs`:
+
+**1. Add `"reverse"` to MUTATING:**
+
+```rust
+// After
+const MUTATING: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove", "reverse", "Add", "Remove", "RemoveAll", "clear"];
+```
+
+**2. Return `arr_ref` instead of `null_ref`:**
+
+```rust
+// Before
+self.update_array(arr_ref, element_type, e);
+EvalResult::Value(self.null_ref)
+
+// After
+self.update_array(arr_ref, element_type, e);
+EvalResult::Value(arr_ref)
+```
+
+---
+
+## B-63 — `trimLeft` / `trimRight` aliases not implemented
+
+**Date:** 2026-05-22
+**Files:** `src/evaluator.rs`
+**Severity:** 🟢 Low
+**Status:** ✅ Fixed
+
+### Symptom
+
+The reference documentation lists `trimLeft` and `trimRight` as aliases for `trimStart` and `trimEnd`, but calling them produced an unknown-method error:
+
+```serez
+out "  hello  ".trimLeft();    // ❌ ERROR: Unknown string method 'trimLeft'
+out "  hello  ".trimRight();   // ❌ ERROR: Unknown string method 'trimRight'
+```
+
+### Root cause
+
+The `eval_string_method` match arms only handled `"trimStart"` and `"trimEnd"`. The aliases were documented in the README string-methods table but never added to the evaluator.
+
+### Fix
+
+Extended the match arms in `src/evaluator.rs` to accept both names:
+
+```rust
+// Before
+"trimStart" => { ... }
+"trimEnd"   => { ... }
+
+// After
+"trimStart" | "trimLeft"  => { EvalResult::Value(self.alloc(ObjectData::Str(s.trim_start().to_string()))) }
+"trimEnd"   | "trimRight" => { EvalResult::Value(self.alloc(ObjectData::Str(s.trim_end().to_string()))) }
+```
 
 ---
 

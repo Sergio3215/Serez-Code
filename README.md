@@ -41,6 +41,11 @@ out fibonacci(10);   // → 55
    - [String Methods](#string-methods)
    - [Dictionaries](#dictionaries)
    - [Higher-Order Functions](#higher-order-functions)
+   - [Enums](#enums)
+   - [Set](#set)
+   - [Math](#math)
+   - [File](#file)
+   - [JSON](#json)
    - [Classes & Interfaces](#classes--interfaces)
    - [Type Conversions](#type-conversions)
    - [Output](#output)
@@ -163,6 +168,19 @@ Attempting to use or reassign an undeclared variable is a runtime error:
 x = 5;    // ❌ ERROR: Undeclared variable: x
 out y;    // ❌ ERROR: Variable not found: y
 ```
+
+#### `const`
+
+`const` declares an immutable variable. Any attempt to reassign it is a runtime error.
+
+```serez
+const PI = 3.14159;
+const MAX = 100;
+
+PI = 3.0;   // ❌ ERROR: Cannot reassign const 'PI'
+```
+
+`const` follows the same scoping rules as `let` — it is invisible outside its block.
 
 ---
 
@@ -858,6 +876,104 @@ out n;   // → 5
 
 ---
 
+#### Labeled loops
+
+A label can be placed before any loop. `break label` exits the labeled loop from any depth; `continue label` restarts the labeled loop's next iteration.
+
+```serez
+outer: for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) {
+        if (j == 1) { continue outer; }   // skip inner, go to next i
+        out "{i},{j}";
+    }
+}
+// → 0,0   1,0   2,0   (j=1 is always skipped)
+```
+
+```serez
+outer: while (true) {
+    let x = 0;
+    while (x < 10) {
+        if (x == 3) { break outer; }   // exit the outer while entirely
+        x++;
+    }
+}
+```
+
+Labels work with `while`, `for`, `for-in`, and `do-while`.
+
+---
+
+#### `switch`
+
+`switch` matches an expression against one or more `case` values. Each case body is a block. An optional `default` block runs when no case matches.
+
+```serez
+let day = 3;
+
+switch (day) {
+    case 1: { out "Monday"; }
+    case 2: { out "Tuesday"; }
+    case 3: { out "Wednesday"; }
+    default: { out "Other"; }
+}
+// → Wednesday
+```
+
+A single `case` can match multiple values separated by commas:
+
+```serez
+switch (day) {
+    case 1, 2, 3, 4, 5: { out "Weekday"; }
+    case 6, 7:           { out "Weekend"; }
+}
+```
+
+`switch` does **not** fall through — only the matched case runs. `break` is not needed.
+
+---
+
+#### Exceptions (`try` / `catch` / `finally` / `throw`)
+
+`throw` raises an exception with any value. `try/catch` intercepts it. `finally` always runs, whether or not an exception was thrown.
+
+```serez
+fn int divide(int a, int b) {
+    if (b == 0) { throw "Division by zero"; }
+    return a / b;
+}
+
+try {
+    let result = divide(10, 0);
+    out result;
+} catch (e) {
+    out "Caught: {e}";   // → Caught: Division by zero
+} finally {
+    out "Always runs";
+}
+```
+
+Any value can be thrown — strings, numbers, objects:
+
+```serez
+throw 42;
+throw { code: 404, msg: "Not found" };
+```
+
+`catch` is optional. `finally` is optional. Both together are also valid:
+
+```serez
+try {
+    riskyOperation();
+} finally {
+    cleanup();   // runs even if riskyOperation throws
+}
+```
+
+Unhandled exceptions (no enclosing `try`) terminate the program with a runtime error message. Runtime errors (stack overflow, out-of-bounds, etc.) are **not** catchable via `try/catch`.
+
+---
+
 #### Optional chaining (`?.`)
 
 `?.` calls a method or accesses a field only when the receiver is non-null. If the receiver is `null`, the whole expression evaluates to `null` without throwing.
@@ -1062,6 +1178,7 @@ out pair[1];   // → 99
 | `.some(cb)` | `bool` | `true` if `cb` returns `true` for **at least one** element (vacuously `false` for empty). |
 | `.slice(start, end)` | array | New array with elements from `start` (inclusive) to `end` (exclusive). Negative `start` counts from the end. |
 | `.flat()` | array | New flattened array — one level of nesting removed. |
+| `.join(sep?)` | `string` | Joins all elements into a string separated by `sep` (default: `","`). |
 
 ```serez
 let nums = [1, 2, 3, 4, 5];
@@ -1390,6 +1507,207 @@ out tripled;   // → [3, 6, 9, 12]
 
 ---
 
+### Enums
+
+`enum` declares a named set of variants. Variants are accessed as `EnumName.VariantName` and are stored as strings internally.
+
+```serez
+enum Direction { North, South, East, West }
+enum Color     { Red, Green, Blue }
+
+let d = Direction.North;
+let c = Color.Green;
+
+out d;   // → North
+out c;   // → Green
+
+if (d == Direction.North) {
+    out "Heading north!";
+}
+```
+
+Enum variants can be used anywhere a value is expected — in arrays, dicts, function arguments, and switch cases:
+
+```serez
+enum Status { Ok, Error, Pending }
+
+fn string describe(any s) {
+    switch (s) {
+        case Status.Ok:      { return "All good"; }
+        case Status.Error:   { return "Something failed"; }
+        case Status.Pending: { return "Still waiting"; }
+        default:             { return "Unknown"; }
+    }
+}
+
+out describe(Status.Ok);      // → All good
+out describe(Status.Error);   // → Something failed
+```
+
+---
+
+### Set
+
+`Set` is an unordered collection of unique values. Duplicate elements are silently ignored on insertion.
+
+#### Creating a Set
+
+```serez
+let s = new Set();                    // empty set
+let s2 = new Set([1, 2, 3, 2, 1]);   // initialized from array — duplicates removed
+out s2;   // → Set{1, 2, 3}
+```
+
+#### Methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `.size` | `int` | Number of elements (property, no parentheses). |
+| `.add(val)` | `Set` | Inserts `val` if not already present (mutates in-place). |
+| `.has(val)` / `.contains(val)` | `bool` | `true` if the set contains `val`. |
+| `.delete(val)` / `.remove(val)` | `bool` | Removes `val`, returns `true` if it was present. |
+| `.clear()` | `null` | Removes all elements. |
+| `.toArray()` | array | Returns all elements as an array (unordered). |
+| `.union(other)` | `Set` | New set with all elements from both sets. |
+| `.intersection(other)` | `Set` | New set with only elements present in both. |
+
+```serez
+let a = new Set([1, 2, 3, 4]);
+let b = new Set([3, 4, 5, 6]);
+
+out a.size;              // → 4
+out a.has(2);            // → true
+out a.has(99);           // → false
+
+a.add(5);
+out a.size;              // → 5
+
+a.delete(1);
+out a.toArray();         // → [2, 3, 4, 5]  (order may vary)
+
+out a.union(b);          // → Set{2, 3, 4, 5, 6}
+out a.intersection(b);   // → Set{3, 4, 5}
+```
+
+---
+
+### Math
+
+`Math` is a built-in namespace for mathematical functions. All functions are called as `Math.functionName(args)`.
+
+#### Constants
+
+| Constant | Value |
+|---|---|
+| `Math.PI` | `3.141592653589793` |
+| `Math.E`  | `2.718281828459045` |
+
+#### Basic functions
+
+| Function | Description |
+|---|---|
+| `Math.abs(x)` | Absolute value. |
+| `Math.floor(x)` | Rounds down to nearest integer (returns `int`). |
+| `Math.ceil(x)` | Rounds up to nearest integer (returns `int`). |
+| `Math.round(x)` | Rounds to nearest integer (returns `int`). |
+| `Math.trunc(x)` | Truncates toward zero (returns `int`). |
+| `Math.sqrt(x)` | Square root (returns `decimal`). |
+| `Math.pow(base, exp)` | `base` raised to `exp` (returns `decimal`). |
+| `Math.exp(x)` | `e` raised to `x` (returns `decimal`). |
+| `Math.log(x)` | Natural logarithm (base *e*). |
+| `Math.log2(x)` | Logarithm base 2. |
+| `Math.log10(x)` | Logarithm base 10. |
+| `Math.sign(x)` | Returns `1`, `0`, or `-1`. |
+| `Math.clamp(x, min, max)` | Clamps `x` to the `[min, max]` range. |
+| `Math.min(a, b, ...)` | Smallest of one or more arguments. |
+| `Math.max(a, b, ...)` | Largest of one or more arguments. |
+| `Math.random()` | Pseudo-random `decimal` in `[0, 1)` (LCG generator). |
+
+#### Trigonometric functions
+
+All accept and return `decimal`. Angles are in radians.
+
+| Function | Description |
+|---|---|
+| `Math.sin(x)` | Sine. |
+| `Math.cos(x)` | Cosine. |
+| `Math.tan(x)` | Tangent. |
+| `Math.asin(x)` | Arc sine. Returns value in `[-π/2, π/2]`. |
+| `Math.acos(x)` | Arc cosine. Returns value in `[0, π]`. |
+| `Math.atan(x)` | Arc tangent. Returns value in `[-π/2, π/2]`. |
+| `Math.atan2(y, x)` | Two-argument arc tangent. Returns angle in `(-π, π]`. |
+
+```serez
+out Math.PI;                    // → 3.141592653589793
+out Math.sqrt(16.0);            // → 4.0
+out Math.pow(2.0, 10.0);        // → 1024.0
+out Math.abs(-7);               // → 7
+out Math.floor(3.9);            // → 3
+out Math.ceil(3.1);             // → 4
+out Math.trunc(-3.9);           // → -3
+out Math.clamp(15, 0, 10);      // → 10
+out Math.min(3, 1, 4, 1, 5);   // → 1
+out Math.max(3, 1, 4, 1, 5);   // → 5
+
+out Math.sin(Math.PI / 2.0);   // → 1.0
+out Math.cos(0.0);              // → 1.0
+out Math.atan2(1.0, 1.0);      // → 0.7853981633974483  (π/4)
+```
+
+---
+
+### File
+
+`File` is a built-in namespace for file I/O operations.
+
+| Function | Description |
+|---|---|
+| `File.exists(path)` | Returns `true` if the file at `path` exists. |
+| `File.read(path)` | Returns the full file contents as a `string`. Runtime error if the file cannot be read. |
+| `File.write(path, content)` | Writes `content` (converted to string) to `path`. Creates the file if it does not exist; overwrites if it does. Returns `null`. |
+| `File.create(path)` | Creates an empty file at `path` if it does not already exist (touch). No-op if the file exists. Returns `null`. |
+| `File.read_asBinary(path)` | Returns the raw bytes of the file as a `[int]` array (each byte as an integer 0–255). |
+| `File.write_asBinary(path, bytes)` | Writes a `[int]` array of bytes to `path`. |
+
+```serez
+File.write("hello.txt", "Hello, world!");
+out File.exists("hello.txt");         // → true
+out File.read("hello.txt");           // → Hello, world!
+
+let bytes = File.read_asBinary("hello.txt");
+out bytes.length;                     // → 13
+
+File.create("empty.txt");
+out File.exists("empty.txt");         // → true
+```
+
+---
+
+### JSON
+
+`JSON` is a built-in namespace for serializing and deserializing data.
+
+| Function | Description |
+|---|---|
+| `JSON.stringify(value)` | Converts any value (int, decimal, bool, string, array, dict, null) to a JSON string. |
+| `JSON.parse(string)` | Parses a JSON string and returns the equivalent Serez-Code value. Runtime error on invalid JSON. |
+
+```serez
+let data <string,any> = ({"name","Sergio"},{"age",30},{"active",true});
+
+let json = JSON.stringify(data);
+out json;   // → {"name":"Sergio","age":30,"active":true}
+
+let parsed = JSON.parse(json);
+out parsed["name"];   // → Sergio
+out parsed["age"];    // → 30
+
+let arr = JSON.stringify([1, 2, 3]);
+out arr;              // → [1,2,3]
+```
+
+---
+
 ### Classes & Interfaces
 
 Serez-Code supports C#-style object-oriented programming with interfaces, classes, single inheritance, and `super()` constructor delegation.
@@ -1627,6 +1945,82 @@ out Counter.label();   // → Counter
 
 ---
 
+#### Abstract classes
+
+An `abstract` class cannot be instantiated directly. It is designed to be subclassed. Attempting to call `new` on it is a runtime error.
+
+```serez
+abstract class Shape {
+    public Shape(string name) {
+        this.name = name;
+    }
+    public abstract decimal area();   // abstract method — no body required
+    public string describe() {
+        return "{this.name}: area={this.area()}";
+    }
+}
+
+public class Circle : Shape {
+    public Circle(decimal r) {
+        super("Circle");
+        this.r = r;
+    }
+    public decimal area() { return 3.14159 * this.r * this.r; }
+}
+
+let c = new Circle(5.0);
+out c.describe();   // → Circle: area=78.53975
+// new Shape("x");  // ❌ ERROR: Cannot instantiate abstract class 'Shape'
+```
+
+---
+
+#### Sealed classes
+
+A `sealed` class cannot be inherited from. Attempting to extend it is a runtime error.
+
+```serez
+sealed class Token {
+    public Token(string kind, string value) {
+        this.kind  = kind;
+        this.value = value;
+    }
+}
+
+// public class MyToken : Token { ... }   // ❌ ERROR: Cannot inherit from sealed class 'Token'
+```
+
+---
+
+#### Getters and setters
+
+`get` and `set` mark computed properties on a class. A getter is called with no arguments when the property is read; a setter is called with one argument when the property is written.
+
+```serez
+public class Temperature {
+    public Temperature(decimal celsius) {
+        this.celsius = celsius;
+    }
+
+    public get decimal fahrenheit() {
+        return this.celsius * 9.0 / 5.0 + 32.0;
+    }
+
+    public set fahrenheit(decimal f) {
+        this.celsius = (f - 32.0) * 5.0 / 9.0;
+    }
+}
+
+let t = new Temperature(0.0);
+out t.fahrenheit;         // → 32.0   (getter called, no parentheses)
+t.fahrenheit = 212.0;     // setter called
+out t.celsius;            // → 100.0
+```
+
+A property with only a getter and no setter is read-only — assigning to it is a runtime error.
+
+---
+
 ### Type Conversions
 
 Two global functions convert between `string`, `int`, and `decimal`:
@@ -1703,6 +2097,15 @@ let x = 5;   // Inline comment
 
 // Commented-out code:
 // out x * 2;
+```
+
+Multi-line block comments with `/* ... */`. Everything between the delimiters is ignored, including newlines.
+
+```serez
+/* This is a
+   multi-line comment */
+
+let y = /* inline block */ 42;
 ```
 
 ---
@@ -2269,8 +2672,8 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] String interpolation — `"Hello, {name}!"`, supports nested quotes inside `{…}` (e.g. `{dict["key"]}`)
 - [x] Lexical closures — functions that capture variables from their defining scope
 - [x] Native higher-order functions — `map`, `filter`, `reduce` with lambda syntax `x => expr` / `(x, i) => expr`
-- [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.remove`, `.reverse`, `.sort`, `.find`, `.findIndex`, `.indexOf`, `.includes`, `.every`, `.some`, `.slice`, `.flat`
-- [x] String methods — `.length`, `.substring`, `.slice`, `.split`, `.replace`, `.includes`, `.indexOf`, `.startsWith`, `.endsWith`, `.charAt`, `.trim`, `.trimStart`, `.trimEnd`, `.toUpperCase`, `.toLowerCase`, `.padStart`, `.padEnd`, `.toString()`
+- [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.remove`, `.reverse`, `.sort`, `.find`, `.findIndex`, `.indexOf`, `.includes`, `.every`, `.some`, `.slice`, `.flat`, `.join`
+- [x] String methods — `.length`, `.substring`, `.slice`, `.split`, `.replace`, `.includes`, `.indexOf`, `.startsWith`, `.endsWith`, `.charAt`, `.trim`, `.trimStart` / `.trimLeft`, `.trimEnd` / `.trimRight`, `.toUpperCase`, `.toLowerCase`, `.padStart`, `.padEnd`, `.toString()`
 - [x] Dict methods — `.toList()` (keys array), `.toArray()` (2D entries array); missing key returns `null`
 - [x] `decimal` type — f64 literals (`3.14`), mixed arithmetic with `int`
 - [x] Global conversions — `parseInt(val)`, `parseDecimal(val)`
@@ -2279,12 +2682,25 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] Classes — C#-style OOP: `public class Foo`, constructor `public Foo(args)`, `this.field`, `public`/`private` methods, field assignment `obj.field = val`
 - [x] Single inheritance — `public class Bar : Foo`, `super(args)` constructor delegation, `super.method()`, method override, inherited method lookup
 - [x] Static methods — `public static T method(...)` on classes, called as `ClassName.method(args)`
+- [x] Abstract classes — `abstract class Foo` cannot be instantiated; abstract methods have no body
+- [x] Sealed classes — `sealed class Foo` cannot be subclassed
+- [x] Getters / setters — `public get T prop()` / `public set prop(T val)` computed properties on class instances
 - [x] `break` / `continue` — loop control flow inside `while`, `for`, `for-in`, and `do-while`
+- [x] Labeled `break` / `continue` — `label: for ...` with `break label` / `continue label` for nested loop control
 - [x] `do-while` loop — body executes at least once; `break`/`continue` supported
+- [x] `switch` — `switch(expr) { case val: {} case a, b: {} default: {} }` — no fall-through
+- [x] Exceptions — `try {} catch (e) {} finally {}` and `throw expr`; any value can be thrown
+- [x] `const` — immutable variable declarations enforced at runtime
+- [x] `enum` — `enum Color { Red, Green, Blue }` with `Color.Red` variant access
+- [x] `Set` type — `new Set([...])`, methods: `add`, `has`, `delete`, `clear`, `size`, `toArray`, `union`, `intersection`
 - [x] Null coalescing — `a ?? b` returns `a` if non-null, else evaluates `b`
 - [x] Optional chaining — `a?.method()` / `a?.field` returns `null` without error when `a` is `null`; chains with `??`
+- [x] Ternary operator — `cond ? then : else` with lazy evaluation and right-associativity
 - [x] Escape sequences — `\n`, `\t`, `\r`, `\\`, `\"`, `\{` inside string literals
-- [x] Math built-ins — `abs`, `sqrt`, `floor`, `ceil`, `round`, `min`, `max`, `pow`, `log`, `log2`, `log10`
+- [x] Block comments — `/* ... */` multi-line comments
+- [x] Math namespace — `abs`, `sqrt`, `floor`, `ceil`, `round`, `trunc`, `min`, `max`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `clamp`, `sign`, `random`, `PI`, `E`
+- [x] File namespace — `read`, `write`, `create`, `exists`, `read_asBinary`, `write_asBinary`
+- [x] JSON namespace — `stringify`, `parse`
 - [x] Power operator — `**` for integer and decimal exponentiation
 - [x] Bitwise operators — `&`, `|`, `^`, `~`, `<<`, `>>` (64-bit signed integers); binary (`0b`) and hex (`0x`) literals; numeric separators (`1_000_000`)
 - [x] `is` type-check operator — `expr is TypeName` returns `bool` at runtime
@@ -2299,7 +2715,6 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 ### Tooling
 - [x] Security test runner — `-security` flag on `run_tests.ps1` runs all security test files
 - [ ] Span-aware error diagnostics with source line preview
-- [ ] Standard library (string formatting, file I/O)
 - [ ] `.sz` file formatter
 - [ ] LSP server for editor support
 
