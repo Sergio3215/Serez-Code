@@ -2856,9 +2856,9 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] Cross-platform test runner — `run_tests.sh` (Bash) mirrors all flags of `run_tests.ps1` (PowerShell)
 - [x] Span-aware error diagnostics — parser and runtime errors show the source line with a `^` caret
 - [x] Watch mode — `sz --watch file.sz` re-runs on every save
-- [x] VS Code extension — syntax highlighting for `.sz` files (`vscode-serez/`)
+- [x] VS Code extension — syntax highlighting and formatter for `.sz` files (`vscode-serez/`)
 - [x] Demo apps — five `apps/*.sz` programs that exercise every language feature end-to-end
-- [ ] `.sz` file formatter
+- [x] `.sz` file formatter — `DocumentFormattingEditProvider` integrado en la extensión VS Code; `formatOnSave` activado automáticamente para `.sz`
 - [ ] LSP server for editor support
 
 ---

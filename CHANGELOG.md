@@ -7,6 +7,26 @@ Orden: del más reciente al más antiguo.
 
 ## [Unreleased] — rama `improve`
 
+### VS Code — Formatter (`vscode-serez` v0.2.0)
+
+**`extension.js`** — nuevo `DocumentFormattingEditProvider`:
+- Indentación automática con 4 espacios por nivel, basada en conteo de `{` y `}`
+- Ignora llaves dentro de strings literales y comentarios de línea (`//`)
+- `} else {` manejado correctamente: dedent antes de imprimir, indent después
+- Colapsa líneas en blanco consecutivas a una sola
+- Elimina trailing whitespace en todas las líneas
+- El archivo siempre termina con exactamente un `\n`
+
+**`package.json`** — versión `0.2.0`:
+- `"main": "./extension.js"` y `"activationEvents": ["onLanguage:serez"]`
+- Categoría `Formatters` añadida
+- `configurationDefaults` para `.sz`: `editor.defaultFormatter` y `editor.formatOnSave: true` activados automáticamente
+
+**Uso:** `Shift+Alt+F` para formatear manualmente, o guardar el archivo (formatOnSave).  
+**Rebuild:** `vsce package` en `vscode-serez/` genera `serez-code-0.2.0.vsix`.
+
+---
+
 ### CI / Tooling
 - `release.yml`: permisos acotados por job — solo `host` tiene `contents: write`; los demás `contents: read`
 - `.github/dependabot.yml`: actualizaciones semanales automáticas de GitHub Actions y dependencias Cargo
