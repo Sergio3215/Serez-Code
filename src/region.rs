@@ -158,10 +158,6 @@ impl Arena {
         Arena { storage: Vec::with_capacity(64) }
     }
 
-    pub fn with_capacity(n: usize) -> Self {
-        Arena { storage: Vec::with_capacity(n) }
-    }
-
     pub fn alloc(&mut self, data: ObjectData) -> usize {
         let idx = self.storage.len();
         self.storage.push(data);

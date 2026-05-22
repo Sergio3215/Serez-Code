@@ -72,7 +72,9 @@ pub struct Parameter {
 pub struct EnumDeclaration {
     pub name: String,
     pub variants: Vec<String>,
+    #[allow(dead_code)]
     pub line: usize,
+    #[allow(dead_code)]
     pub column: usize,
 }
 
@@ -130,6 +132,7 @@ pub struct OutStatement {
 #[derive(Debug, Clone)]
 pub struct InterfaceDeclaration {
     pub name: String,
+    #[allow(dead_code)]
     pub is_public: bool,
     pub fields: Vec<InterfaceField>,
 }
@@ -145,15 +148,19 @@ pub struct InterfaceField {
 #[derive(Debug, Clone)]
 pub struct ClassField {
     pub name: String,
+    #[allow(dead_code)]
     pub type_annotation: Option<String>,
     pub default_value: Option<Expression>,
+    #[allow(dead_code)]
     pub line: usize,
+    #[allow(dead_code)]
     pub column: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct ClassDeclaration {
     pub name: String,
+    #[allow(dead_code)]
     pub is_public: bool,
     pub is_abstract: bool,
     pub is_sealed: bool,
@@ -173,6 +180,7 @@ pub struct ClassConstructor {
 pub struct ClassMethod {
     pub name: String,
     pub is_public: bool,
+    #[allow(dead_code)]
     pub is_abstract: bool,
     pub is_getter: bool,
     pub is_setter: bool,
