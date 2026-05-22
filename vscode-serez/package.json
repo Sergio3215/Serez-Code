@@ -4,14 +4,27 @@
   "description": "Syntax highlighting for Serez-Code (.sz) files",
   "version": "0.1.0",
   "publisher": "sergio",
-  "engines": { "vscode": "^1.74.0" },
-  "categories": ["Programming Languages"],
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sergio3215/serez-code"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "serez",
-        "aliases": ["Serez-Code", "serez"],
-        "extensions": [".sz"],
+        "aliases": [
+          "Serez-Code",
+          "serez"
+        ],
+        "extensions": [
+          ".sz"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],

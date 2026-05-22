@@ -2,6 +2,17 @@
 name = "serez-code"
 version = "0.1.0"
 edition = "2024"
+description = "A hand-crafted interpreted programming language written in Rust"
+license = "MIT"
+repository = "https://github.com/Sergio3215/serez-code"
+homepage = "https://github.com/Sergio3215/serez-code"
+authors = ["Sergio"]
+
+[package.metadata.wix]
+upgrade-guid = "F9F26980-7808-45C3-B8EB-8C3A1F926920"
+path-guid = "21386D8D-F367-40C9-AB61-343B280BDE02"
+license = false
+eula = false
 
 [dependencies]
 notify = "6"
@@ -9,3 +20,8 @@ notify = "6"
 [[bin]]
 name = "sz"
 path = "src/main.rs"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
