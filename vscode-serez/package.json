@@ -1,8 +1,8 @@
 {
   "name": "serez-code",
   "displayName": "Serez-Code",
-  "description": "Syntax highlighting for Serez-Code (.sz) files",
-  "version": "0.1.0",
+  "description": "Syntax highlighting and formatter for Serez-Code (.sz) files",
+  "version": "0.2.0",
   "publisher": "sergio",
   "engines": {
     "vscode": "^1.74.0"
@@ -12,7 +12,12 @@
     "url": "https://github.com/Sergio3215/serez-code"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Formatters"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:serez"
   ],
   "contributes": {
     "languages": [
@@ -34,6 +39,14 @@
         "scopeName": "source.serez",
         "path": "./syntaxes/serez.tmLanguage.json"
       }
-    ]
+    ],
+    "configurationDefaults": {
+      "[serez]": {
+        "editor.defaultFormatter": "sergio.serez-code",
+        "editor.formatOnSave": true,
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      }
+    }
   }
 }
