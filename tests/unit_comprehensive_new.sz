@@ -1,0 +1,506 @@
+// unit_comprehensive_new.sz — deep tests for all newer language features
+
+// ── const ────────────────────────────────────────────────────────────────────
+test("const prevents reassignment", () => {
+    const int MAX = 100;
+    assert(MAX == 100, "const reads correctly");
+    let caught = false;
+    try {
+        MAX = 200;
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "const assignment throws");
+});
+
+test("const in expressions", () => {
+    const int BASE = 10;
+    assert(BASE * 2 == 20, "const in multiplication");
+    assert(BASE + BASE == 20, "const added to itself");
+});
+
+// ── enum ─────────────────────────────────────────────────────────────────────
+test("enum variants are distinct values", () => {
+    enum Status { Pending, Active, Closed }
+    assert(Status.Pending != Status.Active,  "Pending != Active");
+    assert(Status.Active  != Status.Closed,  "Active != Closed");
+    assert(Status.Pending != Status.Closed,  "Pending != Closed");
+});
+
+test("enum in switch-like if/else dispatch", () => {
+    enum Dir { North, South, East, West }
+    fn string describe(d) {
+        if (d == Dir.North) { return "up"; }
+        if (d == Dir.South) { return "down"; }
+        if (d == Dir.East)  { return "right"; }
+        return "left";
+    }
+    assert(describe(Dir.North) == "up",    "North");
+    assert(describe(Dir.South) == "down",  "South");
+    assert(describe(Dir.East)  == "right", "East");
+    assert(describe(Dir.West)  == "left",  "West");
+});
+
+test("enum stored in array and compared", () => {
+    enum Color { Red, Green, Blue }
+    let palette = [Color.Red, Color.Green, Color.Blue];
+    assert(palette[0] == Color.Red,   "first");
+    assert(palette[1] == Color.Green, "second");
+    assert(palette[2] == Color.Blue,  "third");
+});
+
+// ── labeled loops ─────────────────────────────────────────────────────────────
+test("labeled break exits outer loop", () => {
+    let count = 0;
+    outer: for (let i = 0; i < 5; i++) {
+        for (let j = 0; j < 5; j++) {
+            if (i == 2 && j == 2) { break outer; }
+            count = count + 1;
+        }
+    }
+    assert(count == 12, "stopped at i=2,j=2 => 5+5+2=12");
+});
+
+test("labeled continue skips outer iteration", () => {
+    let sum = 0;
+    outer: for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 4; j++) {
+            if (j == 2) { continue outer; }
+            sum = sum + 1;
+        }
+    }
+    assert(sum == 8, "2 inner iters per outer (j=0,1) x 4 = 8");
+});
+
+// ── abstract classes ──────────────────────────────────────────────────────────
+test("abstract class cannot be instantiated directly", () => {
+    abstract class Vehicle {
+        public string move() { return "moving"; }
+    }
+    class Car : Vehicle {
+        public Car() {}
+        public string move() { return "driving"; }
+    }
+    let caught = false;
+    try {
+        let v = new Vehicle();
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "abstract class throws on new");
+    let c = new Car();
+    assert(c.move() == "driving", "concrete subclass works");
+});
+
+test("abstract method dispatch via subclass", () => {
+    abstract class Shape {
+        public decimal area() { return 0.0; }
+    }
+    class Rect : Shape {
+        public Rect(decimal w, decimal h) { this.w = w; this.h = h; }
+        public decimal area() { return this.w * this.h; }
+    }
+    class Circle : Shape {
+        public Circle(decimal r) { this.r = r; }
+        public decimal area() { return 3.14159 * this.r * this.r; }
+    }
+    let r = new Rect(4.0, 5.0);
+    let c = new Circle(1.0);
+    assert(r.area() == 20.0,    "Rect area");
+    assert(c.area() > 3.14,     "Circle area > PI");
+    assert(c.area() < 3.15,     "Circle area < 3.15");
+});
+
+// ── sealed classes ────────────────────────────────────────────────────────────
+test("sealed class cannot be inherited", () => {
+    sealed class Final {
+        public Final() {}
+        public string name() { return "Final"; }
+    }
+    let caught = false;
+    try {
+        class Child : Final {}
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "sealed class throws on inheritance");
+    let f = new Final();
+    assert(f.name() == "Final", "sealed class instantiation works");
+});
+
+// ── getters and setters ───────────────────────────────────────────────────────
+test("getter returns computed value", () => {
+    class Rect {
+        public Rect(decimal w, decimal h) { this.w = w; this.h = h; }
+        public get decimal area() { return this.w * this.h; }
+        public get decimal perimeter() { return 2.0 * (this.w + this.h); }
+    }
+    let r = new Rect(3.0, 4.0);
+    assert(r.area == 12.0,    "area getter");
+    assert(r.perimeter == 14.0, "perimeter getter");
+});
+
+test("setter validates and stores", () => {
+    class BoundedInt {
+        public BoundedInt(int v) { this._val = v; }
+        public get int value() { return this._val; }
+        public set value(int v) {
+            if (v < 0) { throw "negative not allowed"; }
+            this._val = v;
+        }
+    }
+    let b = new BoundedInt(5);
+    assert(b.value == 5, "initial value");
+    b.value = 10;
+    assert(b.value == 10, "updated via setter");
+    let caught = false;
+    try { b.value = -1; } catch (e) { caught = true; }
+    assert(caught, "setter validation throws");
+    assert(b.value == 10, "value unchanged after failed set");
+});
+
+test("getter-only property raises error on write", () => {
+    class ReadOnly {
+        public ReadOnly(int n) { this._n = n; }
+        public get int value() { return this._n; }
+    }
+    let r = new ReadOnly(42);
+    assert(r.value == 42, "getter works");
+    let caught = false;
+    try { r.value = 99; } catch (e) { caught = true; }
+    assert(caught, "getter-only write throws");
+});
+
+// ── static methods ────────────────────────────────────────────────────────────
+test("static factory method pattern", () => {
+    class Point {
+        public Point(int x, int y) { this.x = x; this.y = y; }
+        public static Point origin() { return new Point(0, 0); }
+        public static Point unit(int axis) {
+            if (axis == 0) { return new Point(1, 0); }
+            return new Point(0, 1);
+        }
+        public int sum() { return this.x + this.y; }
+    }
+    let o = Point.origin();
+    assert(o.x == 0 && o.y == 0, "origin at (0,0)");
+    let ux = Point.unit(0);
+    assert(ux.x == 1 && ux.y == 0, "unit x");
+    let uy = Point.unit(1);
+    assert(uy.x == 0 && uy.y == 1, "unit y");
+});
+
+test("static utility methods", () => {
+    class StringUtils {
+        public static bool isBlank(string s) { return s.trim() == ""; }
+        public static string repeat(string s, int n) {
+            let r = "";
+            for (let i = 0; i < n; i++) { r = r + s; }
+            return r;
+        }
+        public static int countChar(string s, string ch) {
+            let count = 0;
+            for (let i = 0; i < s.length(); i++) {
+                if (s.charAt(i) == ch) { count = count + 1; }
+            }
+            return count;
+        }
+    }
+    assert(StringUtils.isBlank("   ") == true,       "blank string");
+    assert(StringUtils.isBlank("hi") == false,        "non-blank");
+    assert(StringUtils.repeat("ab", 3) == "ababab",   "repeat");
+    assert(StringUtils.countChar("hello", "l") == 2,  "countChar");
+});
+
+// ── default parameters ────────────────────────────────────────────────────────
+test("default params used when not provided", () => {
+    fn string greet(string name = "stranger", string greeting = "Hello") {
+        return greeting + ", " + name + "!";
+    }
+    assert(greet()              == "Hello, stranger!", "both defaults");
+    assert(greet("Alice")       == "Hello, Alice!",    "one provided");
+    assert(greet("Bob", "Hi")   == "Hi, Bob!",         "both provided");
+});
+
+test("default params in class constructor", () => {
+    class Config {
+        public Config(int timeout = 30, bool debug = false) {
+            this.timeout = timeout;
+            this.debug = debug;
+        }
+    }
+    let c1 = new Config();
+    assert(c1.timeout == 30,    "default timeout");
+    assert(c1.debug == false,   "default debug");
+    let c2 = new Config(60);
+    assert(c2.timeout == 60,    "custom timeout");
+    assert(c2.debug == false,   "still default debug");
+    let c3 = new Config(120, true);
+    assert(c3.timeout == 120,   "both custom");
+    assert(c3.debug == true,    "custom debug");
+});
+
+// ── optional chaining ─────────────────────────────────────────────────────────
+test("optional chaining returns null on null receiver", () => {
+    class Node {
+        public Node(int val) { this.val = val; }
+        public int getVal() { return this.val; }
+    }
+    let n = new Node(5);
+    let empty = null;
+    assert(n?.getVal() == 5,          "non-null optional chain");
+    assert(empty?.getVal() == null,   "null optional chain returns null");
+});
+
+test("optional chaining with null coalescing", () => {
+    class Box {
+        public Box(string s) { this.s = s; }
+        public string get() { return this.s; }
+    }
+    let b = null;
+    let result = b?.get() ?? "default";
+    assert(result == "default", "?? fallback on null chain");
+    let b2 = new Box("hello");
+    let r2 = b2?.get() ?? "default";
+    assert(r2 == "hello", "non-null result used");
+});
+
+// ── do-while ──────────────────────────────────────────────────────────────────
+test("do-while executes body at least once", () => {
+    let ran = 0;
+    do { ran = ran + 1; } while (false);
+    assert(ran == 1, "ran exactly once");
+});
+
+test("do-while loops until condition false", () => {
+    let n = 1;
+    let product = 1;
+    do {
+        product = product * n;
+        n = n + 1;
+    } while (n <= 5);
+    assert(product == 120, "5! = 120");
+});
+
+test("do-while with break", () => {
+    let i = 0;
+    let sum = 0;
+    do {
+        if (i == 5) { break; }
+        sum = sum + i;
+        i = i + 1;
+    } while (true);
+    assert(sum == 10, "0+1+2+3+4 = 10");
+});
+
+// ── bitwise operators ─────────────────────────────────────────────────────────
+test("bitwise AND, OR, XOR", () => {
+    assert((0b1100 & 0b1010) == 8,  "AND: 12&10=8");
+    assert((0b1100 | 0b1010) == 14, "OR: 12|10=14");
+    assert((0b1100 ^ 0b1010) == 6,  "XOR: 12^10=6");
+});
+
+test("bitwise NOT", () => {
+    assert(~0 == -1, "NOT 0 = -1");
+    assert(~(-1) == 0, "NOT -1 = 0");
+});
+
+test("left and right shifts", () => {
+    assert(1 << 4 == 16,   "1 << 4 = 16");
+    assert(32 >> 2 == 8,   "32 >> 2 = 8");
+    assert(255 >> 4 == 15, "255 >> 4 = 15");
+});
+
+test("bitwise flags pattern", () => {
+    const int READ    = 1;
+    const int WRITE   = 2;
+    const int EXECUTE = 4;
+    let perms = READ | WRITE;
+    assert((perms & READ)    != 0, "has READ");
+    assert((perms & WRITE)   != 0, "has WRITE");
+    assert((perms & EXECUTE) == 0, "no EXECUTE");
+    perms = perms | EXECUTE;
+    assert((perms & EXECUTE) != 0, "added EXECUTE");
+    perms = perms ^ WRITE;
+    assert((perms & WRITE) == 0,   "removed WRITE via XOR");
+});
+
+// ── power operator ────────────────────────────────────────────────────────────
+test("power operator", () => {
+    assert(2 ** 10 == 1024,   "2^10");
+    assert(3 ** 3  == 27,     "3^3");
+    assert(10 ** 0 == 1,      "x^0 = 1");
+    assert(1 ** 100 == 1,     "1^n = 1");
+});
+
+test("power with decimal", () => {
+    let sq = 4.0 ** 0.5;
+    assert(sq > 1.99 && sq < 2.01, "sqrt(4) via ** 0.5");
+});
+
+// ── spread operator ───────────────────────────────────────────────────────────
+test("spread merges arrays", () => {
+    let a = [1, 2, 3];
+    let b = [4, 5, 6];
+    let c = [...a, ...b];
+    assert(c.length() == 6, "merged length");
+    assert(c[0] == 1 && c[5] == 6, "merged values");
+});
+
+test("spread copies array", () => {
+    let a = [1, 2, 3];
+    let b = [...a];
+    b.push(4);
+    assert(a.length() == 3, "original unaffected");
+    assert(b.length() == 4, "copy has new element");
+});
+
+test("spread in function call", () => {
+    fn int sum3(int x, int y, int z) { return x + y + z; }
+    let args = [10, 20, 30];
+    assert(sum3(...args) == 60, "spread args");
+});
+
+// ── rest parameters ───────────────────────────────────────────────────────────
+test("rest captures remaining args", () => {
+    fn int sumAll(...nums) {
+        let t = 0;
+        for (let i = 0; i < nums.length(); i++) { t = t + nums[i]; }
+        return t;
+    }
+    assert(sumAll(1, 2, 3) == 6,          "3 args");
+    assert(sumAll(1, 2, 3, 4, 5) == 15,   "5 args");
+    assert(sumAll() == 0,                  "0 args");
+});
+
+// ── Math namespace ────────────────────────────────────────────────────────────
+test("Math functions", () => {
+    assert(Math.abs(-5) == 5,       "abs");
+    assert(Math.floor(3.7) == 3,    "floor");
+    assert(Math.ceil(3.2) == 4,     "ceil");
+    assert(Math.round(3.5) == 4,    "round up");
+    assert(Math.round(3.4) == 3,    "round down");
+    assert(Math.sqrt(9.0) == 3.0,   "sqrt");
+    assert(Math.pow(2.0, 8.0) == 256.0, "pow");
+});
+
+test("Math min/max variadic", () => {
+    assert(Math.min(3, 1, 4, 1, 5, 9) == 1, "min variadic");
+    assert(Math.max(3, 1, 4, 1, 5, 9) == 9, "max variadic");
+});
+
+test("Math trigonometry basics", () => {
+    let pi = Math.PI;
+    assert(pi > 3.14 && pi < 3.15, "PI in range");
+    let sin_0 = Math.sin(0.0);
+    assert(sin_0 > -0.01 && sin_0 < 0.01, "sin(0) ≈ 0");
+    let cos_0 = Math.cos(0.0);
+    assert(cos_0 > 0.99 && cos_0 < 1.01, "cos(0) ≈ 1");
+});
+
+test("Math.clamp", () => {
+    assert(Math.clamp(5, 0, 10) == 5,   "in range");
+    assert(Math.clamp(-5, 0, 10) == 0,  "below min");
+    assert(Math.clamp(15, 0, 10) == 10, "above max");
+});
+
+test("Math.sign", () => {
+    assert(Math.sign(5)  == 1,  "positive");
+    assert(Math.sign(-3) == -1, "negative");
+    assert(Math.sign(0)  == 0,  "zero");
+});
+
+// ── JSON namespace ────────────────────────────────────────────────────────────
+test("JSON.stringify primitives", () => {
+    assert(JSON.stringify(42)       == "42",     "int");
+    assert(JSON.stringify(true)     == "true",   "bool");
+    assert(JSON.stringify("hello")  == "\"hello\"", "string");
+});
+
+test("JSON roundtrip for numbers", () => {
+    let n = 99;
+    let s = JSON.stringify(n);
+    let parsed = JSON.parse(s);
+    assert(parsed == 99, "int roundtrip");
+});
+
+test("JSON.parse boolean", () => {
+    assert(JSON.parse("true") == true,   "parse true");
+    assert(JSON.parse("false") == false, "parse false");
+    assert(JSON.parse("null") == null,   "parse null");
+});
+
+// ── Set data structure ────────────────────────────────────────────────────────
+test("Set deduplicates elements", () => {
+    let s = new Set([1, 2, 3, 2, 1]);
+    assert(s.size() == 3, "unique count");
+    assert(s.has(1) && s.has(2) && s.has(3), "has all");
+});
+
+test("Set add/delete/clear lifecycle", () => {
+    let s = new Set();
+    s.add("a"); s.add("b"); s.add("c");
+    assert(s.size() == 3, "after adds");
+    s.delete("b");
+    assert(s.size() == 2, "after delete");
+    assert(!s.has("b"),   "deleted gone");
+    s.clear();
+    assert(s.size() == 0, "after clear");
+});
+
+test("Set toArray", () => {
+    let s = new Set([10, 20, 30]);
+    let a = s.toArray();
+    assert(a.length() == 3, "toArray length");
+});
+
+test("Set remove alias works", () => {
+    let s = new Set([1, 2, 3]);
+    s.remove(2);
+    assert(!s.has(2),   "removed");
+    assert(s.size() == 2, "size after remove");
+});
+
+test("Set contains alias works", () => {
+    let s = new Set(["x", "y"]);
+    assert(s.contains("x"),    "contains present");
+    assert(!s.contains("z"),   "contains absent");
+});
+
+// ── is type check ─────────────────────────────────────────────────────────────
+test("is type check for primitives", () => {
+    let n = 42;
+    let s = "hi";
+    let b = true;
+    let d = 3.14;
+    assert(n is int,     "int is int");
+    assert(s is string,  "string is string");
+    assert(b is bool,    "bool is bool");
+    assert(d is decimal, "decimal is decimal");
+});
+
+test("is type check for class instances", () => {
+    class Dog {}
+    class Cat {}
+    let d = new Dog();
+    assert(d is Dog,     "Dog is Dog");
+    assert(!(d is Cat),  "Dog is not Cat");
+});
+
+test("is type check with inheritance", () => {
+    class Animal {}
+    class Parrot : Animal {
+        public Parrot() {}
+    }
+    let p = new Parrot();
+    assert(p is Parrot,  "is subclass");
+    assert(p is Animal,  "is superclass (polymorphism)");
+});
+
+test("null is null", () => {
+    let x = null;
+    assert(x is null, "null is null");
+    assert(!(42 is null), "int is not null");
+});
+
+summary();

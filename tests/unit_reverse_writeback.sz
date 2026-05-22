@@ -1,0 +1,62 @@
+// unit_reverse_writeback.sz — B-62: reverse() mutates in-place AND returns the array
+
+test("reverse mutates the array", () => {
+    let a = [1, 2, 3, 4, 5];
+    a.reverse();
+    assert(a[0] == 5, "first element after reverse");
+    assert(a[4] == 1, "last element after reverse");
+});
+
+test("reverse returns the same array (can be used in expression)", () => {
+    let a = [10, 20, 30];
+    let b = a.reverse();
+    assert(b[0] == 30, "returned array first element");
+    assert(b[2] == 10, "returned array last element");
+});
+
+test("reverse return value is the same array (mutated in-place)", () => {
+    let a = [1, 2, 3];
+    let b = a.reverse();
+    // Both a and b should reflect the reversed state
+    assert(a[0] == 3, "original mutated");
+    assert(b[0] == 3, "returned is reversed");
+});
+
+test("reverse on empty array", () => {
+    let a = [];
+    a.reverse();
+    assert(a.length() == 0, "still empty");
+});
+
+test("reverse on single element", () => {
+    let a = [42];
+    a.reverse();
+    assert(a[0] == 42, "single element unchanged");
+});
+
+test("double reverse restores original order", () => {
+    let a = [1, 2, 3, 4];
+    a.reverse();
+    a.reverse();
+    assert(a[0] == 1, "back to original");
+    assert(a[3] == 4, "back to original end");
+});
+
+test("reverse and then iterate", () => {
+    let a = [3, 1, 4, 1, 5];
+    a.reverse();
+    let sum = 0;
+    for (let i = 0; i < a.length(); i++) {
+        sum = sum + a[i];
+    }
+    assert(sum == 14, "sum unchanged after reverse");
+});
+
+test("reverse works on string array", () => {
+    let a = ["a", "b", "c"];
+    a.reverse();
+    assert(a[0] == "c", "string array reversed");
+    assert(a[2] == "a", "string array reversed end");
+});
+
+summary();

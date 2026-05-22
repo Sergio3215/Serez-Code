@@ -1,0 +1,51 @@
+// unit_trim_aliases.sz — B-63: trimLeft/trimRight aliases for trimStart/trimEnd
+
+test("trimLeft removes leading whitespace", () => {
+    assert("   hello".trimLeft() == "hello", "leading spaces");
+    assert("\t\nhey".trimLeft() == "hey",    "tabs and newlines");
+    assert("none".trimLeft() == "none",      "no leading space");
+    assert("".trimLeft() == "",              "empty string");
+});
+
+test("trimRight removes trailing whitespace", () => {
+    assert("hello   ".trimRight() == "hello", "trailing spaces");
+    assert("bye\t\n".trimRight() == "bye",    "trailing tabs/newlines");
+    assert("none".trimRight() == "none",      "no trailing space");
+    assert("".trimRight() == "",              "empty string");
+});
+
+test("trimLeft and trimRight together mimic trim()", () => {
+    let s = "  hello world  ";
+    assert(s.trimLeft().trimRight() == "hello world", "trim both ends");
+});
+
+test("trimLeft is identical to trimStart", () => {
+    let s = "   abc";
+    assert(s.trimLeft() == s.trimStart(), "aliases match on leading");
+});
+
+test("trimRight is identical to trimEnd", () => {
+    let s = "xyz   ";
+    assert(s.trimRight() == s.trimEnd(), "aliases match on trailing");
+});
+
+test("trimLeft preserves trailing spaces", () => {
+    let s = "  hi  ";
+    assert(s.trimLeft() == "hi  ", "left only removes leading");
+});
+
+test("trimRight preserves leading spaces", () => {
+    let s = "  hi  ";
+    assert(s.trimRight() == "  hi", "right only removes trailing");
+});
+
+test("trim, trimStart, trimEnd, trimLeft, trimRight all consistent", () => {
+    let s = "  x  ";
+    assert(s.trim() == "x",             "trim full");
+    assert(s.trimStart() == "x  ",      "trimStart");
+    assert(s.trimEnd() == "  x",        "trimEnd");
+    assert(s.trimLeft() == "x  ",       "trimLeft = trimStart");
+    assert(s.trimRight() == "  x",      "trimRight = trimEnd");
+});
+
+summary();

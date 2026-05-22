@@ -1,0 +1,80 @@
+── PROGRAM 1: Bank Account ──
+Alice
+1000.0
+1300.0
+2
+Alice: $1300.0 (2 tx)
+CAUGHT
+-1.0
+── PROGRAM 2: Task Manager ──
+[WIP] Write tests (HIGH)
+[DONE] Deploy app (MED)
+[TODO] Fix typo (LOW)
+Done: 1/3
+Unique tags: 3
+── PROGRAM 3: Shape Hierarchy ──
+Circle area: 79
+Rectangle area: 24
+Square area: 9
+Total (rounded): 112
+Abstract throws: true
+── PROGRAM 4: Functional Pipeline ──
+11
+21
+[2, 4, 6, 8, 10]
+[2, 4]
+15
+[16, 25, 36]
+alpha, beta, gamma
+a-b-c-d
+── PROGRAM 5: JSON Config ──
+42
+"hello world"
+true
+null
+42
+true
+false
+null
+[98,87,76]
+true
+── PROGRAM 6: Algorithms ──
+3628800
+55
+true
+true
+true
+false
+false
+8
+8
+3
+1.414
+3.0
+4.0
+── PROGRAM 7: Error Handling ──
+Success: OK: 200
+Network: HTTP 404 (client=true)
+Network: HTTP 500 (client=false)
+App: [INVALID] Bad URL
+Success: OK: 201
+OK: 200
+Resource closed: true
+── PROGRAM 8: String Processing ──
+0007
+0042
+0999
+Alice,98,001
+Bob,87,010
+Charlie,76,100
+hello, world
+2
+HELLO
+WORLD
+17
+Hello
+World
+
+══════════════════════════════════════
+  38. REAL PROGRAMS E2E PASSED ✓
+══════════════════════════════════════
