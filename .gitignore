@@ -10,5 +10,5 @@ implementacion_clases.md
 *.vsix
 /.claude/
 !tests/*.sz
-apps/*.sz
+/apps/
 tests/_*.sz
