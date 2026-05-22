@@ -2714,7 +2714,9 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 
 ### Tooling
 - [x] Security test runner — `-security` flag on `run_tests.ps1` runs all security test files
-- [ ] Span-aware error diagnostics with source line preview
+- [x] Span-aware error diagnostics — parser and runtime errors show the source line with a `^` caret
+- [x] Watch mode — `sz --watch file.sz` re-runs on every save
+- [x] VS Code extension — syntax highlighting for `.sz` files (`vscode-serez/`)
 - [ ] `.sz` file formatter
 - [ ] LSP server for editor support
 

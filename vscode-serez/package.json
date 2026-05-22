@@ -1,0 +1,26 @@
+{
+  "name": "serez-code",
+  "displayName": "Serez-Code",
+  "description": "Syntax highlighting for Serez-Code (.sz) files",
+  "version": "0.1.0",
+  "publisher": "sergio",
+  "engines": { "vscode": "^1.74.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "serez",
+        "aliases": ["Serez-Code", "serez"],
+        "extensions": [".sz"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "serez",
+        "scopeName": "source.serez",
+        "path": "./syntaxes/serez.tmLanguage.json"
+      }
+    ]
+  }
+}

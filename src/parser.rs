@@ -50,6 +50,7 @@ pub struct Parser {
     lexer: Lexer,
     current_token: Token,
     peek_token: Token,
+    source_lines: Vec<String>,
 }
 
 impl Parser {
@@ -60,6 +61,22 @@ impl Parser {
             lexer,
             current_token,
             peek_token,
+            source_lines: Vec::new(),
+        }
+    }
+
+    pub fn set_source(&mut self, lines: Vec<String>) {
+        self.source_lines = lines;
+    }
+
+    fn parser_error(&self, msg: &str) {
+        let line = self.current_token.line;
+        let col  = self.current_token.column;
+        eprintln!("❌ PARSER ERROR [line {}:{}]: {}", line, col, msg);
+        if let Some(src) = self.source_lines.get(line.saturating_sub(1)) {
+            let ln = line.to_string();
+            eprintln!("  {} | {}", ln, src.trim_end());
+            eprintln!("  {}   {}^", " ".repeat(ln.len()), " ".repeat(col.saturating_sub(1)));
         }
     }
 
@@ -451,7 +468,7 @@ impl Parser {
 
     fn parse_while_statement_with_label(&mut self, label: Option<String>) -> Option<Statement> {
         if self.peek_token.token_type != TokenType::LParen {
-            eprintln!("❌ PARSER ERROR: Expected '(' after 'while'");
+            self.parser_error("Expected '(' after 'while'");
             return None;
         }
         self.next_token();
@@ -460,13 +477,13 @@ impl Parser {
         let condition = self.parse_expression(Precedence::Lowest)?;
 
         if self.peek_token.token_type != TokenType::RParen {
-            eprintln!("❌ PARSER ERROR: Expected ')' after condition in 'while'");
+            self.parser_error("Expected ')' after condition in 'while'");
             return None;
         }
         self.next_token();
 
         if self.peek_token.token_type != TokenType::LBrace {
-            eprintln!("❌ PARSER ERROR: Expected '{{' to start 'while' body");
+            self.parser_error("Expected '{{' to start 'while' body");
             return None;
         }
         self.next_token();
@@ -486,7 +503,7 @@ impl Parser {
     fn parse_do_while_statement(&mut self) -> Option<Statement> {
         // current = 'do'
         if self.peek_token.token_type != TokenType::LBrace {
-            eprintln!("❌ PARSER ERROR: Expected '{{' after 'do'");
+            self.parser_error("Expected '{{' after 'do'");
             return None;
         }
         self.next_token(); // current = '{'
@@ -496,19 +513,19 @@ impl Parser {
         };
         // current = '}', peek = 'while'
         if self.peek_token.token_type != TokenType::While {
-            eprintln!("❌ PARSER ERROR: Expected 'while' after 'do' body");
+            self.parser_error("Expected 'while' after 'do' body");
             return None;
         }
         self.next_token(); // current = 'while'
         if self.peek_token.token_type != TokenType::LParen {
-            eprintln!("❌ PARSER ERROR: Expected '(' after 'while' in do-while");
+            self.parser_error("Expected '(' after 'while' in do-while");
             return None;
         }
         self.next_token(); // current = '('
         self.next_token(); // current = first token of condition
         let condition = self.parse_expression(Precedence::Lowest)?;
         if self.peek_token.token_type != TokenType::RParen {
-            eprintln!("❌ PARSER ERROR: Expected ')' after condition in do-while");
+            self.parser_error("Expected ')' after condition in do-while");
             return None;
         }
         self.next_token(); // current = ')'
@@ -595,18 +612,18 @@ impl Parser {
 
     fn parse_for_inner(&mut self, label: Option<String>) -> Option<Statement> {
         if self.peek_token.token_type != TokenType::LParen {
-            eprintln!("❌ PARSER ERROR: Expected '(' after 'for'");
+            self.parser_error("Expected '(' after 'for'");
             return None;
         }
         self.next_token(); // current = '('
         self.next_token(); // current = 'let'
 
         if self.current_token.token_type != TokenType::Let {
-            eprintln!("❌ PARSER ERROR: Expected 'let' as for-loop initializer");
+            self.parser_error("Expected 'let' as for-loop initializer");
             return None;
         }
         if self.peek_token.token_type != TokenType::Ident {
-            eprintln!("❌ PARSER ERROR: Expected identifier after 'let' in for");
+            self.parser_error("Expected identifier after 'let' in for");
             return None;
         }
         self.next_token(); // current = var_name
@@ -619,13 +636,13 @@ impl Parser {
             let iterable = self.parse_expression(Precedence::Lowest)?;
 
             if self.peek_token.token_type != TokenType::RParen {
-                eprintln!("❌ PARSER ERROR: Expected ')' after for-in iterable");
+                self.parser_error("Expected ')' after for-in iterable");
                 return None;
             }
             self.next_token(); // current = ')'
 
             if self.peek_token.token_type != TokenType::LBrace {
-                eprintln!("❌ PARSER ERROR: Expected '{{' to start for-in body");
+                self.parser_error("Expected '{{' to start for-in body");
                 return None;
             }
             self.next_token(); // current = '{'
@@ -640,7 +657,7 @@ impl Parser {
 
         // ── Classic for: for (let i = 0; i < n; i = i + 1) { body } ─────────
         if self.peek_token.token_type != TokenType::Assign {
-            eprintln!("❌ PARSER ERROR: Expected '=' or 'in' after variable name in for");
+            self.parser_error("Expected '=' or 'in' after variable name in for");
             return None;
         }
         self.next_token(); // current = '='
@@ -650,7 +667,7 @@ impl Parser {
         if self.peek_token.token_type == TokenType::Semicolon {
             self.next_token(); // current = ';'
         } else if self.current_token.token_type != TokenType::Semicolon {
-            eprintln!("❌ PARSER ERROR: Expected ';' after for-loop initializer");
+            self.parser_error("Expected ';' after for-loop initializer");
             return None;
         }
         self.next_token(); // current = first token of condition
@@ -660,14 +677,14 @@ impl Parser {
         let condition = self.parse_expression(Precedence::Lowest)?;
 
         if self.peek_token.token_type != TokenType::Semicolon {
-            eprintln!("❌ PARSER ERROR: Expected ';' after for-loop condition");
+            self.parser_error("Expected ';' after for-loop condition");
             return None;
         }
         self.next_token();
         self.next_token();
 
         if self.current_token.token_type != TokenType::Ident {
-            eprintln!("❌ PARSER ERROR: Expected assignment as for-loop update");
+            self.parser_error("Expected assignment as for-loop update");
             return None;
         }
         let update = match self.peek_token.token_type {
@@ -698,19 +715,19 @@ impl Parser {
                 }
             }
             _ => {
-                eprintln!("❌ PARSER ERROR: Expected assignment as for-loop update");
+                self.parser_error("Expected assignment as for-loop update");
                 return None;
             }
         };
 
         if self.peek_token.token_type != TokenType::RParen {
-            eprintln!("❌ PARSER ERROR: Expected ')' after for-loop update");
+            self.parser_error("Expected ')' after for-loop update");
             return None;
         }
         self.next_token();
 
         if self.peek_token.token_type != TokenType::LBrace {
-            eprintln!("❌ PARSER ERROR: Expected '{{' to start for-loop body");
+            self.parser_error("Expected '{{' to start for-loop body");
             return None;
         }
         self.next_token();
@@ -725,7 +742,7 @@ impl Parser {
 
     fn parse_if_expression(&mut self) -> Option<Expression> {
         if self.peek_token.token_type != TokenType::LParen {
-            eprintln!("❌ PARSER ERROR: Expected '(' after 'if'");
+            self.parser_error("Expected '(' after 'if'");
             return None;
         }
         self.next_token();
@@ -734,13 +751,13 @@ impl Parser {
         let condition = self.parse_expression(Precedence::Lowest)?;
 
         if self.peek_token.token_type != TokenType::RParen {
-            eprintln!("❌ PARSER ERROR: Expected ')' after 'if' condition");
+            self.parser_error("Expected ')' after 'if' condition");
             return None;
         }
         self.next_token();
 
         if self.peek_token.token_type != TokenType::LBrace {
-            eprintln!("❌ PARSER ERROR: Expected '{{' to start 'if' consequence");
+            self.parser_error("Expected '{{' to start 'if' consequence");
             return None;
         }
         self.next_token();
@@ -765,7 +782,7 @@ impl Parser {
                 }
             } else {
                 if self.peek_token.token_type != TokenType::LBrace {
-                    eprintln!("❌ PARSER ERROR: Expected '{{' or 'if' after 'else'");
+                    self.parser_error("Expected '{{' or 'if' after 'else'");
                     return None;
                 }
                 self.next_token();
@@ -796,17 +813,17 @@ impl Parser {
             self.next_token(); // consume '['
             self.next_token(); // move to type keyword
             if !is_type_keyword(&self.current_token.token_type) {
-                eprintln!("❌ PARSER ERROR: Expected type keyword inside '[...]' array annotation");
+                self.parser_error("Expected type keyword inside '[...]' array annotation");
                 return None;
             }
             let element_type = self.parse_type_string()?;
             if self.peek_token.token_type != TokenType::RBracket {
-                eprintln!("❌ PARSER ERROR: Expected ']' after array type annotation");
+                self.parser_error("Expected ']' after array type annotation");
                 return None;
             }
             self.next_token(); // consume ']'
             if self.peek_token.token_type != TokenType::Assign {
-                eprintln!("❌ PARSER ERROR: Expected '=' after array type annotation");
+                self.parser_error("Expected '=' after array type annotation");
                 return None;
             }
             self.next_token(); // '='
@@ -815,7 +832,7 @@ impl Parser {
             match &mut value {
                 Expression::ArrayLiteral(arr) => arr.element_type = Some(element_type),
                 _ => {
-                    eprintln!("❌ PARSER ERROR: Expected '[...]' array literal after typed array annotation");
+                    self.parser_error("Expected '[...]' array literal after typed array annotation");
                     return None;
                 }
             }
@@ -829,14 +846,14 @@ impl Parser {
             let (key_type, value_type) = self.parse_dict_type_annotation()?;
 
             if self.peek_token.token_type != TokenType::Assign {
-                eprintln!("❌ PARSER ERROR: Expected '=' after dict type annotation");
+                self.parser_error("Expected '=' after dict type annotation");
                 return None;
             }
             self.next_token();
             self.next_token();
 
             if self.current_token.token_type != TokenType::LParen {
-                eprintln!("❌ PARSER ERROR: Expected '(' to start dict literal");
+                self.parser_error("Expected '(' to start dict literal");
                 return None;
             }
 
@@ -873,12 +890,12 @@ impl Parser {
             self.next_token(); // '['
             self.next_token(); // type keyword
             if !is_type_keyword(&self.current_token.token_type) {
-                eprintln!("❌ PARSER ERROR: Expected type keyword inside '[...]' return type");
+                self.parser_error("Expected type keyword inside '[...]' return type");
                 return None;
             }
             let elem_type = self.parse_type_string()?;
             if self.peek_token.token_type != TokenType::RBracket {
-                eprintln!("❌ PARSER ERROR: Expected ']' after return type annotation");
+                self.parser_error("Expected ']' after return type annotation");
                 return None;
             }
             self.next_token(); // ']'
@@ -962,12 +979,12 @@ impl Parser {
                 // [type] array parameter annotation
                 self.next_token(); // move to type keyword
                 if !is_type_keyword(&self.current_token.token_type) {
-                    eprintln!("❌ PARSER ERROR: Expected type keyword inside '[...]' parameter annotation");
+                    self.parser_error("Expected type keyword inside '[...]' parameter annotation");
                     return None;
                 }
                 let elem_type = self.parse_type_string()?;
                 if self.peek_token.token_type != TokenType::RBracket {
-                    eprintln!("❌ PARSER ERROR: Expected ']' after array parameter type");
+                    self.parser_error("Expected ']' after array parameter type");
                     return None;
                 }
                 self.next_token(); // consume ']'
@@ -1189,7 +1206,7 @@ impl Parser {
                     self.next_token();
                     if let Some(index) = self.parse_expression(Precedence::Lowest) {
                         if self.peek_token.token_type != TokenType::RBracket {
-                            eprintln!("❌ PARSER ERROR: Expected ']' after array index");
+                            self.parser_error("Expected ']' after array index");
                             return None;
                         }
                         self.next_token();
@@ -1210,7 +1227,7 @@ impl Parser {
                         None => return None,
                     };
                     if self.peek_token.token_type != TokenType::Colon {
-                        eprintln!("❌ PARSER ERROR: Expected ':' in ternary expression after '?'");
+                        self.parser_error("Expected ':' in ternary expression after '?'");
                         return None;
                     }
                     self.next_token(); // ':'
@@ -1248,7 +1265,7 @@ impl Parser {
                 let dot_column = self.current_token.column;
 
                 if self.peek_token.token_type != TokenType::Ident {
-                    eprintln!("❌ PARSER ERROR: Expected method name after '.'");
+                    self.parser_error("Expected method name after '.'");
                     return left_exp;
                 }
                 self.next_token();
@@ -1360,7 +1377,7 @@ impl Parser {
                     let body = self.parse_lambda_body()?;
                     Some(Expression::Lambda(LambdaExpression { params: vec![], body }))
                 } else {
-                    eprintln!("❌ PARSER ERROR: Empty parentheses '()' are not a valid expression");
+                    self.parser_error("Empty parentheses '()' are not a valid expression");
                     None
                 }
             }
@@ -1378,18 +1395,18 @@ impl Parser {
                             self.next_token(); // ','
                             self.next_token(); // next ident
                             if self.current_token.token_type != TokenType::Ident {
-                                eprintln!("❌ PARSER ERROR: Expected identifier in lambda parameters");
+                                self.parser_error("Expected identifier in lambda parameters");
                                 return None;
                             }
                             params.push(self.current_token.literal.clone());
                         }
                         if self.peek_token.token_type != TokenType::RParen {
-                            eprintln!("❌ PARSER ERROR: Expected ')' after lambda parameters");
+                            self.parser_error("Expected ')' after lambda parameters");
                             return None;
                         }
                         self.next_token(); // ')'
                         if self.peek_token.token_type != TokenType::Arrow {
-                            eprintln!("❌ PARSER ERROR: Expected '=>' after lambda parameters");
+                            self.parser_error("Expected '=>' after lambda parameters");
                             return None;
                         }
                         self.next_token(); // '=>'
@@ -1417,7 +1434,7 @@ impl Parser {
                         let first = Some(Expression::Identifier(first_name));
                         let inner = self.parse_infix_chain(first, Precedence::Lowest)?;
                         if self.peek_token.token_type != TokenType::RParen {
-                            eprintln!("❌ PARSER ERROR: Expected ')' in grouped expression");
+                            self.parser_error("Expected ')' in grouped expression");
                             return None;
                         }
                         self.next_token(); // ')'
@@ -1489,26 +1506,26 @@ impl Parser {
         self.next_token(); // key_type
 
         if !is_type_keyword(&self.current_token.token_type) {
-            eprintln!("❌ PARSER ERROR: Expected type keyword for dict key type, got '{}'", self.current_token.literal);
+            self.parser_error(&format!("Expected type keyword for dict key type, got '{}'", self.current_token.literal));
             return None;
         }
         let key_type = self.current_token.literal.clone();
 
         if self.peek_token.token_type != TokenType::Comma {
-            eprintln!("❌ PARSER ERROR: Expected ',' between key and value types in dict annotation");
+            self.parser_error("Expected ',' between key and value types in dict annotation");
             return None;
         }
         self.next_token(); // ','
         self.next_token(); // value_type
 
         if !is_type_keyword(&self.current_token.token_type) {
-            eprintln!("❌ PARSER ERROR: Expected type keyword for dict value type, got '{}'", self.current_token.literal);
+            self.parser_error(&format!("Expected type keyword for dict value type, got '{}'", self.current_token.literal));
             return None;
         }
         let value_type = self.current_token.literal.clone();
 
         if self.peek_token.token_type != TokenType::Gt {
-            eprintln!("❌ PARSER ERROR: Expected '>' to close dict type annotation");
+            self.parser_error("Expected '>' to close dict type annotation");
             return None;
         }
         self.next_token(); // '>'
@@ -1528,7 +1545,7 @@ impl Parser {
 
         loop {
             if self.current_token.token_type != TokenType::LBrace {
-                eprintln!("❌ PARSER ERROR: Expected '{{' to start dict entry");
+                self.parser_error("Expected '{{' to start dict entry");
                 return None;
             }
             self.next_token();
@@ -1536,7 +1553,7 @@ impl Parser {
             let key = self.parse_expression(Precedence::Lowest)?;
 
             if self.peek_token.token_type != TokenType::Comma {
-                eprintln!("❌ PARSER ERROR: Expected ',' between key and value in dict entry");
+                self.parser_error("Expected ',' between key and value in dict entry");
                 return None;
             }
             self.next_token();
@@ -1545,7 +1562,7 @@ impl Parser {
             let value = self.parse_expression(Precedence::Lowest)?;
 
             if self.peek_token.token_type != TokenType::RBrace {
-                eprintln!("❌ PARSER ERROR: Expected '}}' to close dict entry");
+                self.parser_error("Expected '}}' to close dict entry");
                 return None;
             }
             self.next_token(); // '}'
@@ -1558,7 +1575,7 @@ impl Parser {
             }
 
             if self.peek_token.token_type != TokenType::Comma {
-                eprintln!("❌ PARSER ERROR: Expected ',' or ')' after dict entry");
+                self.parser_error("Expected ',' or ')' after dict entry");
                 return None;
             }
             self.next_token(); // ','
@@ -1574,7 +1591,7 @@ impl Parser {
         let key = self.parse_expression(Precedence::Lowest)?;
 
         if self.peek_token.token_type != TokenType::Comma {
-            eprintln!("❌ PARSER ERROR: Expected ',' between key and value in entry literal");
+            self.parser_error("Expected ',' between key and value in entry literal");
             return None;
         }
         self.next_token();
@@ -1583,7 +1600,7 @@ impl Parser {
         let value = self.parse_expression(Precedence::Lowest)?;
 
         if self.peek_token.token_type != TokenType::RBrace {
-            eprintln!("❌ PARSER ERROR: Expected '}}' to close entry literal");
+            self.parser_error("Expected '}}' to close entry literal");
             return None;
         }
         self.next_token();
@@ -1616,12 +1633,12 @@ impl Parser {
         let mut fields = Vec::new();
         loop {
             if self.current_token.token_type != TokenType::Ident {
-                eprintln!("❌ PARSER ERROR: Expected field name in object literal");
+                self.parser_error("Expected field name in object literal");
                 return None;
             }
             let name = self.current_token.literal.clone();
             if self.peek_token.token_type != TokenType::Colon {
-                eprintln!("❌ PARSER ERROR: Expected ':' after field name in object literal");
+                self.parser_error("Expected ':' after field name in object literal");
                 return None;
             }
             self.next_token(); // ':'
@@ -1643,7 +1660,7 @@ impl Parser {
                     break;
                 }
                 _ => {
-                    eprintln!("❌ PARSER ERROR: Expected ',' or '}}' in object literal");
+                    self.parser_error("Expected ',' or '}}' in object literal");
                     return None;
                 }
             }
@@ -1657,14 +1674,14 @@ impl Parser {
         let key = self.parse_infix_chain(Some(key_start), Precedence::Lowest)?;
 
         if self.peek_token.token_type != TokenType::Comma {
-            eprintln!("❌ PARSER ERROR: Expected ',' between key and value in entry literal");
+            self.parser_error("Expected ',' between key and value in entry literal");
             return None;
         }
         self.next_token(); // ','
         self.next_token(); // value
         let value = self.parse_expression(Precedence::Lowest)?;
         if self.peek_token.token_type != TokenType::RBrace {
-            eprintln!("❌ PARSER ERROR: Expected '}}' to close entry literal");
+            self.parser_error("Expected '}}' to close entry literal");
             return None;
         }
         self.next_token(); // '}'
@@ -1675,14 +1692,14 @@ impl Parser {
     fn parse_new_expression(&mut self) -> Option<Expression> {
         // current = 'new'
         if self.peek_token.token_type != TokenType::Ident {
-            eprintln!("❌ PARSER ERROR: Expected class name after 'new'");
+            self.parser_error("Expected class name after 'new'");
             return None;
         }
         self.next_token();
         let class_name = self.current_token.literal.clone();
 
         if self.peek_token.token_type != TokenType::LParen {
-            eprintln!("❌ PARSER ERROR: Expected '(' after class name in 'new'");
+            self.parser_error("Expected '(' after class name in 'new'");
             return None;
         }
         self.next_token(); // '('
@@ -1697,12 +1714,12 @@ impl Parser {
                 && self.current_token.token_type != TokenType::Eof
             {
                 if self.current_token.token_type != TokenType::Ident {
-                    eprintln!("❌ PARSER ERROR: Expected field name in 'new' interface literal");
+                    self.parser_error("Expected field name in 'new' interface literal");
                     return None;
                 }
                 let field_name = self.current_token.literal.clone();
                 if self.peek_token.token_type != TokenType::Colon {
-                    eprintln!("❌ PARSER ERROR: Expected ':' after field name in 'new'");
+                    self.parser_error("Expected ':' after field name in 'new'");
                     return None;
                 }
                 self.next_token(); // ':'
@@ -1724,13 +1741,13 @@ impl Parser {
                         break;
                     }
                     _ => {
-                        eprintln!("❌ PARSER ERROR: Expected ',' or '}}' in interface fields");
+                        self.parser_error("Expected ',' or '}}' in interface fields");
                         return None;
                     }
                 }
             }
             if self.peek_token.token_type != TokenType::RParen {
-                eprintln!("❌ PARSER ERROR: Expected ')' after '}}' in 'new'");
+                self.parser_error("Expected ')' after '}}' in 'new'");
                 return None;
             }
             self.next_token(); // ')'
@@ -1751,14 +1768,14 @@ impl Parser {
     fn parse_interface_declaration(&mut self, is_public: bool) -> Option<Statement> {
         // current = 'interface'
         if self.peek_token.token_type != TokenType::Ident {
-            eprintln!("❌ PARSER ERROR: Expected interface name after 'interface'");
+            self.parser_error("Expected interface name after 'interface'");
             return None;
         }
         self.next_token();
         let name = self.current_token.literal.clone();
 
         if self.peek_token.token_type != TokenType::LBrace {
-            eprintln!("❌ PARSER ERROR: Expected '{{' after interface name");
+            self.parser_error("Expected '{{' after interface name");
             return None;
         }
         self.next_token(); // '{'
@@ -1769,13 +1786,13 @@ impl Parser {
             && self.current_token.token_type != TokenType::Eof
         {
             if self.current_token.token_type != TokenType::Ident {
-                eprintln!("❌ PARSER ERROR: Expected field name in interface body");
+                self.parser_error("Expected field name in interface body");
                 return None;
             }
             let field_name = self.current_token.literal.clone();
 
             if self.peek_token.token_type != TokenType::Colon {
-                eprintln!("❌ PARSER ERROR: Expected ':' after field name '{}' in interface", field_name);
+                self.parser_error(&format!("Expected ':' after field name '{}' in interface", field_name));
                 return None;
             }
             self.next_token(); // ':'
@@ -1789,11 +1806,11 @@ impl Parser {
                 } else if self.current_token.token_type == TokenType::Ident {
                     self.current_token.literal.clone()
                 } else {
-                    eprintln!("❌ PARSER ERROR: Expected element type inside '[...]' for field '{}' in interface", field_name);
+                    self.parser_error(&format!("Expected element type inside '[...]' for field '{}' in interface", field_name));
                     return None;
                 };
                 if self.peek_token.token_type != TokenType::RBracket {
-                    eprintln!("❌ PARSER ERROR: Expected ']' after array field type");
+                    self.parser_error("Expected ']' after array field type");
                     return None;
                 }
                 self.next_token(); // ']'
@@ -1802,7 +1819,7 @@ impl Parser {
                 match self.parse_type_string() {
                     Some(t) => t,
                     None => {
-                        eprintln!("❌ PARSER ERROR: Expected type after ':' for field '{}' in interface", field_name);
+                        self.parser_error(&format!("Expected type after ':' for field '{}' in interface", field_name));
                         return None;
                     }
                 }
@@ -1810,7 +1827,7 @@ impl Parser {
                 // Class/interface type name (possibly nullable)
                 self.parse_type_string().unwrap_or_else(|| self.current_token.literal.clone())
             } else {
-                eprintln!("❌ PARSER ERROR: Expected type after ':' for field '{}' in interface", field_name);
+                self.parser_error(&format!("Expected type after ':' for field '{}' in interface", field_name));
                 return None;
             };
             fields.push(InterfaceField { name: field_name, type_name });
@@ -1831,7 +1848,7 @@ impl Parser {
     fn parse_class_declaration(&mut self, is_public: bool, is_abstract: bool, is_sealed: bool) -> Option<Statement> {
         // current = 'class'
         if self.peek_token.token_type != TokenType::Ident {
-            eprintln!("❌ PARSER ERROR: Expected class name after 'class'");
+            self.parser_error("Expected class name after 'class'");
             return None;
         }
         self.next_token();
@@ -1841,7 +1858,7 @@ impl Parser {
         let parent = if self.peek_token.token_type == TokenType::Colon {
             self.next_token(); // ':'
             if self.peek_token.token_type != TokenType::Ident {
-                eprintln!("❌ PARSER ERROR: Expected parent class name after ':'");
+                self.parser_error("Expected parent class name after ':'");
                 return None;
             }
             self.next_token();
@@ -1851,7 +1868,7 @@ impl Parser {
         };
 
         if self.peek_token.token_type != TokenType::LBrace {
-            eprintln!("❌ PARSER ERROR: Expected '{{' after class name");
+            self.parser_error("Expected '{{' after class name");
             return None;
         }
         self.next_token(); // '{'
@@ -1963,7 +1980,7 @@ impl Parser {
                     self.current_token.literal.clone()
                 };
                 if self.peek_token.token_type != TokenType::RBracket {
-                    eprintln!("❌ PARSER ERROR: Expected ']' after array return type");
+                    self.parser_error("Expected ']' after array return type");
                     return None;
                 }
                 self.next_token(); // consume ']'
@@ -1987,13 +2004,13 @@ impl Parser {
 
             // Member name (constructor or method)
             if self.current_token.token_type != TokenType::Ident {
-                eprintln!("❌ PARSER ERROR: Expected method name in class body");
+                self.parser_error("Expected method name in class body");
                 return None;
             }
             let member_name = self.current_token.literal.clone();
 
             if self.peek_token.token_type != TokenType::LParen {
-                eprintln!("❌ PARSER ERROR: Expected '(' after '{}' in class", member_name);
+                self.parser_error(&format!("Expected '(' after '{}' in class", member_name));
                 return None;
             }
             self.next_token(); // '('
@@ -2005,7 +2022,7 @@ impl Parser {
                 BlockStatement { statements: vec![] }
             } else {
                 if self.peek_token.token_type != TokenType::LBrace {
-                    eprintln!("❌ PARSER ERROR: Expected '{{' to start body of '{}'", member_name);
+                    self.parser_error(&format!("Expected '{{' to start body of '{}'", member_name));
                     return None;
                 }
                 self.next_token();
@@ -2019,7 +2036,7 @@ impl Parser {
             if member_name == name && !is_getter && !is_setter {
                 // Constructor
                 if constructor.is_some() {
-                    eprintln!("❌ PARSER ERROR: Duplicate constructor in class '{}'", name);
+                    self.parser_error(&format!("Duplicate constructor in class '{}'", name));
                     return None;
                 }
                 constructor = Some(ClassConstructor { parameters, body });
@@ -2065,11 +2082,11 @@ impl Parser {
                 self.next_token(); // 'class'
                 self.parse_class_declaration(true, is_abstract, is_sealed)
             } else {
-                eprintln!("❌ PARSER ERROR: Expected 'class' after abstract/sealed");
+                self.parser_error("Expected 'class' after abstract/sealed");
                 None
             }
         } else {
-            eprintln!("❌ PARSER ERROR: Expected 'class' after abstract/sealed");
+            self.parser_error("Expected 'class' after abstract/sealed");
             None
         }
     }
@@ -2092,7 +2109,7 @@ impl Parser {
                     self.next_token(); // 'class'
                     self.parse_class_declaration(is_public, true, false)
                 } else {
-                    eprintln!("❌ PARSER ERROR: Expected 'class' after 'abstract'");
+                    self.parser_error("Expected 'class' after 'abstract'");
                     None
                 }
             }
@@ -2102,7 +2119,7 @@ impl Parser {
                     self.next_token(); // 'class'
                     self.parse_class_declaration(is_public, false, true)
                 } else {
-                    eprintln!("❌ PARSER ERROR: Expected 'class' after 'sealed'");
+                    self.parser_error("Expected 'class' after 'sealed'");
                     None
                 }
             }
@@ -2144,7 +2161,7 @@ impl Parser {
             }
 
             if self.peek_token.token_type != TokenType::Comma {
-                eprintln!("❌ PARSER ERROR: Missing closing bracket ']' or comma ',' in array");
+                self.parser_error("Missing closing bracket ']' or comma ',' in array");
                 return None;
             }
 
@@ -2159,19 +2176,19 @@ impl Parser {
     fn parse_switch_statement(&mut self) -> Option<Statement> {
         // switch (expr)
         if self.peek_token.token_type != TokenType::LParen {
-            eprintln!("❌ PARSER ERROR: Expected '(' after 'switch'");
+            self.parser_error("Expected '(' after 'switch'");
             return None;
         }
         self.next_token(); // '('
         self.next_token(); // first token of expr
         let value = self.parse_expression(Precedence::Lowest)?;
         if self.peek_token.token_type != TokenType::RParen {
-            eprintln!("❌ PARSER ERROR: Expected ')' after switch expression");
+            self.parser_error("Expected ')' after switch expression");
             return None;
         }
         self.next_token(); // ')'
         if self.peek_token.token_type != TokenType::LBrace {
-            eprintln!("❌ PARSER ERROR: Expected '{{' after switch(...)");
+            self.parser_error("Expected '{{' after switch(...)");
             return None;
         }
         self.next_token(); // '{'
@@ -2186,12 +2203,12 @@ impl Parser {
             if self.current_token.token_type == TokenType::KwDefault {
                 // default: { body }
                 if self.peek_token.token_type != TokenType::Colon {
-                    eprintln!("❌ PARSER ERROR: Expected ':' after 'default'");
+                    self.parser_error("Expected ':' after 'default'");
                     return None;
                 }
                 self.next_token(); // ':'
                 if self.peek_token.token_type != TokenType::LBrace {
-                    eprintln!("❌ PARSER ERROR: Expected '{{' after 'default:'");
+                    self.parser_error("Expected '{{' after 'default:'");
                     return None;
                 }
                 self.next_token(); // '{'
@@ -2210,19 +2227,19 @@ impl Parser {
                     values.push(v);
                 }
                 if self.peek_token.token_type != TokenType::Colon {
-                    eprintln!("❌ PARSER ERROR: Expected ':' after case value(s)");
+                    self.parser_error("Expected ':' after case value(s)");
                     return None;
                 }
                 self.next_token(); // ':'
                 if self.peek_token.token_type != TokenType::LBrace {
-                    eprintln!("❌ PARSER ERROR: Expected '{{' after 'case ...:'");
+                    self.parser_error("Expected '{{' after 'case ...:'");
                     return None;
                 }
                 self.next_token(); // '{'
                 let body = self.parse_inner_block()?;
                 cases.push(SwitchCase { values, body });
             } else {
-                eprintln!("❌ PARSER ERROR: Expected 'case' or 'default' inside switch, got '{}'", self.current_token.literal);
+                self.parser_error(&format!("Expected 'case' or 'default' inside switch, got '{}'", self.current_token.literal));
                 return None;
             }
             self.next_token(); // move past '}' of the case body
@@ -2248,7 +2265,7 @@ impl Parser {
     fn parse_try_statement(&mut self) -> Option<Statement> {
         // try { body }
         if self.peek_token.token_type != TokenType::LBrace {
-            eprintln!("❌ PARSER ERROR: Expected '{{' after 'try'");
+            self.parser_error("Expected '{{' after 'try'");
             return None;
         }
         self.next_token(); // '{'
@@ -2270,7 +2287,7 @@ impl Parser {
                 }
             }
             if self.peek_token.token_type != TokenType::LBrace {
-                eprintln!("❌ PARSER ERROR: Expected '{{' after catch");
+                self.parser_error("Expected '{{' after catch");
                 return None;
             }
             self.next_token(); // '{'
@@ -2281,7 +2298,7 @@ impl Parser {
         if self.peek_token.token_type == TokenType::KwFinally {
             self.next_token(); // 'finally'
             if self.peek_token.token_type != TokenType::LBrace {
-                eprintln!("❌ PARSER ERROR: Expected '{{' after 'finally'");
+                self.parser_error("Expected '{{' after 'finally'");
                 return None;
             }
             self.next_token(); // '{'
@@ -2289,7 +2306,7 @@ impl Parser {
         }
 
         if catch_body.is_none() && finally_body.is_none() {
-            eprintln!("❌ PARSER ERROR: 'try' must have at least one 'catch' or 'finally' block");
+            self.parser_error("'try' must have at least one 'catch' or 'finally' block");
             return None;
         }
 
@@ -2310,14 +2327,14 @@ impl Parser {
         let line = self.current_token.line;
         let column = self.current_token.column;
         if self.peek_token.token_type != TokenType::Ident {
-            eprintln!("❌ PARSER ERROR: Expected enum name after 'enum'");
+            self.parser_error("Expected enum name after 'enum'");
             return None;
         }
         self.next_token();
         let name = self.current_token.literal.clone();
 
         if self.peek_token.token_type != TokenType::LBrace {
-            eprintln!("❌ PARSER ERROR: Expected '{{' after enum name");
+            self.parser_error("Expected '{{' after enum name");
             return None;
         }
         self.next_token(); // '{'
@@ -2328,7 +2345,7 @@ impl Parser {
             && self.current_token.token_type != TokenType::Eof
         {
             if self.current_token.token_type != TokenType::Ident {
-                eprintln!("❌ PARSER ERROR: Expected variant name in enum body, got '{}'", self.current_token.literal);
+                self.parser_error(&format!("Expected variant name in enum body, got '{}'", self.current_token.literal));
                 return None;
             }
             variants.push(self.current_token.literal.clone());
@@ -2343,7 +2360,7 @@ impl Parser {
                 self.next_token();
                 break;
             } else {
-                eprintln!("❌ PARSER ERROR: Expected ',' or '}}' in enum body");
+                self.parser_error("Expected ',' or '}}' in enum body");
                 return None;
             }
         }
@@ -2363,7 +2380,7 @@ impl Parser {
             TokenType::For   => self.parse_for_statement_with_label(Some(label)),
             _ => {
                 // Fall back: not a labeled loop, re-interpret as assign
-                eprintln!("❌ PARSER ERROR: Expected 'while' or 'for' after label '{}'", label);
+                self.parser_error(&format!("Expected 'while' or 'for' after label '{}'", label));
                 None
             }
         }

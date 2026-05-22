@@ -51,6 +51,7 @@ pub struct Evaluator {
     sealed_classes: HashSet<String>,
     // LCG state for Math.random()
     lcg_state: u64,
+    source_lines: Vec<String>,
 }
 
 impl Evaluator {
@@ -83,7 +84,24 @@ impl Evaluator {
             enum_registry: HashMap::new(),
             sealed_classes: HashSet::new(),
             lcg_state: seed,
+            source_lines: Vec::new(),
         }
+    }
+
+    pub fn set_source(&mut self, lines: Vec<String>) {
+        self.source_lines = lines;
+    }
+
+    fn print_call_stack(&self) {
+        for frame in self.call_stack.iter().rev() {
+            eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
+            if let Some(src) = self.source_lines.get(frame.line.saturating_sub(1)) {
+                let ln = frame.line.to_string();
+                eprintln!("    {} | {}", ln, src.trim_end());
+                eprintln!("    {}   {}^", " ".repeat(ln.len()), " ".repeat(frame.column.saturating_sub(1)));
+            }
+        }
+        eprintln!();
     }
 
     fn alloc(&mut self, data: ObjectData) -> ObjectRef {
@@ -1251,10 +1269,7 @@ impl Evaluator {
                         "❌ ERROR: Function expected {} argument(s), got {}",
                         expected_str, arg_refs.len()
                     );
-                    for frame in self.call_stack.iter().rev() {
-                        eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
-                    }
-                    eprintln!();
+                    self.print_call_stack();
                     self.scopes.pop();
                     self.call_depth -= 1;
                     self.call_stack.pop();
@@ -1273,10 +1288,7 @@ impl Evaluator {
                                 "❌ TYPE ERROR: Parameter '{}' expected '{}' but received '{}'.",
                                 param.name, expected_type, actual_data.type_name()
                             );
-                            for frame in self.call_stack.iter().rev() {
-                                eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
-                            }
-                            eprintln!();
+                            self.print_call_stack();
                             self.scopes.pop();
                             self.call_depth -= 1;
                             self.call_stack.pop();
@@ -1358,13 +1370,7 @@ impl Evaluator {
                             "❌ TYPE ERROR: Function expected to return '{}' but returned another type.",
                             expected_ret
                         );
-                        for frame in self.call_stack.iter().rev() {
-                            eprintln!(
-                                "    called from '{}' [line {}:{}]",
-                                frame.name, frame.line, frame.column
-                            );
-                        }
-                        eprintln!();
+                        self.print_call_stack();
                         return EvalResult::Error;
                     }
                 }
@@ -1467,10 +1473,7 @@ impl Evaluator {
                     (ObjectData::Array { elements, .. }, ObjectData::Integer(i)) => {
                         if *i < 0 || *i as usize >= elements.len() {
                             eprintln!("❌ ERROR: Index out of bounds");
-                            for frame in self.call_stack.iter().rev() {
-                                eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
-                            }
-                            eprintln!();
+                            self.print_call_stack();
                             EvalResult::Error
                         } else {
                             EvalResult::Value(elements[*i as usize])
@@ -1489,10 +1492,7 @@ impl Evaluator {
                     }
                     _ => {
                         eprintln!("❌ ERROR: Index operator not supported for these types");
-                        for frame in self.call_stack.iter().rev() {
-                            eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
-                        }
-                        eprintln!();
+                        self.print_call_stack();
                         EvalResult::Error
                     }
                 }
@@ -2433,13 +2433,7 @@ impl Evaluator {
                     "❌ ERROR: Type mismatch — operator '{}' cannot be applied between '{}' and '{}' - [{}:{}]",
                     op, left_type, right_type, line, column
                 );
-                for frame in self.call_stack.iter().rev() {
-                    eprintln!(
-                        "    called from '{}' [line {}:{}]",
-                        frame.name, frame.line, frame.column
-                    );
-                }
-                eprintln!();
+                self.print_call_stack();
                 EvalResult::Error
             }
         }
