@@ -7,6 +7,7 @@ implementacion_clases.md
 *.txt
 *.json
 *.bin
+*.vsix
 /.claude/
 !tests/*.sz
 apps/*.sz
