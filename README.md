@@ -118,6 +118,14 @@ sz
 30
 ```
 
+### Watch mode (auto-rerun on save)
+
+```bash
+sz --watch script.sz
+```
+
+The script reruns automatically every time the file changes on disk.
+
 ### Analyze memory usage
 
 ```bash
@@ -131,6 +139,10 @@ sz --version
 ```
 
 > **Note:** Serez-Code does not auto-print expression results when running files. Use `out` to send values to stdout.
+
+### Pre-built binaries
+
+Pre-built binaries for Windows (MSI), Linux (shell installer), and macOS (shell/PowerShell installer) are available on the [GitHub Releases](https://github.com/your-org/serez-code/releases) page, generated with `cargo-dist`.
 
 ---
 
@@ -2617,12 +2629,16 @@ All contributions are welcome — bug fixes, new language features, documentatio
 
 ### Build and test
 
-```bash
+```powershell
 cargo build
-cargo test              # runs the lexer unit test
-sz test.sz              # run the integration test script
-sz test_arrays.sz       # run the array test script
-sz test_complex.sz      # run the advanced/edge-case test suite
+cargo test                         # Rust unit tests (lexer, etc.)
+
+.\run_tests.ps1                    # full suite (E2E + unit + error + security)
+.\run_tests.ps1 -unit              # unit tests only (framework-based)
+.\run_tests.ps1 -e2e               # E2E golden-file tests + error tests
+.\run_tests.ps1 -security          # security/error tests only
+.\run_tests.ps1 -filter "switch"   # run tests matching a name pattern
+.\run_tests.ps1 -generate          # regenerate .expected files after language changes
 ```
 
 ### Project conventions

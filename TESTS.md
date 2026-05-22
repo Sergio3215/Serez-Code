@@ -10,7 +10,7 @@
 .\run_tests.ps1 -generate          # regenera .expected (tras cambios en el lenguaje)
 ```
 
-**Resultado:** 78 archivos · 247 casos individuales · 0 fallos
+**Resultado:** 91 archivos · 162 casos unit · 0 fallos
 
 ---
 
@@ -627,6 +627,22 @@ Cobertura E2E completa del manejo de excepciones.
 
 ---
 
+### `38_real_programs.sz` — Programas reales E2E (8 programas completos)
+Integración completa del lenguaje: 8 programas reales que ejercen todas las características implementadas.
+
+| # | Programa | Qué verifica |
+|---|----------|--------------|
+| 1 | Bank Account | Clases, getters, excepciones, optional chaining `?.`, `??` |
+| 2 | Task Manager | Enums (`Priority`, `TaskStatus`), `Set` (deduplicación), métodos estáticos, factory |
+| 3 | Shape Hierarchy | Clases `abstract`/`sealed`, herencia, `Math.PI`, `Math.round` |
+| 4 | Functional Pipeline | Closures, `compose`, spread `...`, rest `...params`, `map`/`filter`/`reduce` |
+| 5 | JSON Config | `JSON.stringify` y `JSON.parse` con primitivos, arrays y roundtrip |
+| 6 | Algorithms | `factorial`, `fib`, bitwise `is_power_of_two`, `count_bits`, Newton `sqrt` |
+| 7 | Error Handling | Jerarquía `AppError`/`NetworkError`, `is` type dispatch, `finally` |
+| 8 | String Processing | `padStart`, `trimLeft`/`trimRight`, `split`, `slice`, `toUpperCase` |
+
+---
+
 ## Tests de Error (`err_*`)
 
 Cada archivo `tests/err_*.sz` debe producir al menos una línea `❌` en stderr.
@@ -968,6 +984,82 @@ Cubre tipos de clave no-string, construcción dinámica, semántica de paso por 
 
 ---
 
+### `unit_reverse_writeback.sz` — `.reverse()` muta en-lugar y retorna array (8 tests)
+
+Cubre B-62: `.reverse()` debe mutar el array y devolver la referencia al mismo array (igual que `.sort()`).
+
+| Test | Qué verifica |
+|------|--------------|
+| reverse mutates the array | `a.reverse(); a[0] == 5` — la mutación persiste |
+| reverse returns the same array | `let b = a.reverse(); b[0] == 30` — el valor retornado es el array revertido |
+| return value is the same array | `a` y `b` después de `b = a.reverse()` reflejan el mismo estado |
+| reverse on empty array | `[].reverse()` sin error, length sigue siendo 0 |
+| reverse on single element | `[42].reverse()` no cambia nada |
+| double reverse restores order | `a.reverse(); a.reverse()` → estado original |
+| reverse and then iterate | Suma de elementos es la misma antes y después del reverse |
+| reverse works on string array | `["a","b","c"].reverse()` → `["c","b","a"]` |
+
+---
+
+### `unit_trim_aliases.sz` — `trimLeft` / `trimRight` como aliases (8 tests)
+
+Cubre B-63: `trimLeft()` y `trimRight()` son aliases de `trimStart()` y `trimEnd()`.
+
+| Test | Qué verifica |
+|------|--------------|
+| trimLeft removes leading whitespace | `"   hello".trimLeft() == "hello"` |
+| trimRight removes trailing whitespace | `"hello   ".trimRight() == "hello"` |
+| trimLeft and trimRight together | `s.trimLeft().trimRight()` equivale a `s.trim()` |
+| trimLeft is identical to trimStart | Ambos producen el mismo resultado en el mismo string |
+| trimRight is identical to trimEnd | Ambos producen el mismo resultado en el mismo string |
+| trimLeft preserves trailing spaces | Solo elimina espacios iniciales, no los finales |
+| trimRight preserves leading spaces | Solo elimina espacios finales, no los iniciales |
+| all five trim variants consistent | `trim`, `trimStart`, `trimEnd`, `trimLeft`, `trimRight` en sintonía |
+
+---
+
+### `unit_comprehensive_new.sz` — Cobertura profunda de características nuevas (33 tests)
+
+Tests unitarios exhaustivos de todas las características añadidas: `const`, `enum`, labeled loops, clases `abstract`/`sealed`, getters/setters, métodos estáticos, parámetros por defecto, optional chaining, `do-while`, bitwise/power, spread/rest, `Math`, `JSON`, `Set`, y operador `is`.
+
+| Test | Área |
+|------|------|
+| const prevents reassignment | `const` — inmutabilidad forzada en runtime |
+| const in different type contexts | `const` para int, string, bool, decimal |
+| enum variant access | `Color.Red == Color.Red`, distintos variantes no son iguales |
+| enum in conditional | `if (prio == Priority.High)` |
+| labeled break exits outer loop | `outer: for ... break outer` |
+| labeled continue skips outer iteration | `outer: for ... continue outer` |
+| abstract class cannot be instantiated | `new AbstractBase()` lanza error no-catchable |
+| sealed class cannot be inherited | Herencia de sealed = error de tipo |
+| getter returns computed value | `get area()` calcula en el momento |
+| setter validates and stores | `set value(v)` valida entrada |
+| static method called on class | `MathHelper.add(3, 4)` sin instancia |
+| default parameter single | `greet("Bob")` usa `"Hello"` como default |
+| default parameter override | `greet("Bob", "Hi")` usa el override |
+| optional chaining short-circuits | `null?.method` retorna null sin error |
+| optional chaining with ?? | `obj?.field ?? "default"` |
+| do-while executes at least once | El cuerpo corre aunque la condición sea false inicial |
+| do-while with break | `break` dentro de do-while |
+| bitwise AND / OR / XOR | `5 & 3 == 1`, `5 \| 3 == 7`, `5 ^ 3 == 6` |
+| bitwise NOT | `~0 == -1`, `~7 == -8` |
+| shift operators | `1 << 3 == 8`, `8 >> 2 == 2` |
+| power operator | `2 ** 10 == 1024`, `3 ** 3 == 27` |
+| spread in array literal | `[...a, ...b]` concatena |
+| rest parameters | `fn sum(...nums)` acumula argumentos variables |
+| Math namespace | `Math.abs`, `Math.floor`, `Math.ceil`, `Math.sqrt`, `Math.PI` |
+| Math.min / Math.max variadic | `Math.min(3, 1, 4, 1, 5)`, `Math.max(...)` |
+| JSON.stringify primitives | int, string, bool, null a JSON |
+| JSON.stringify array | `[1,2,3]` → `"[1,2,3]"` |
+| JSON.parse roundtrip | stringify → parse → mismo valor |
+| Set deduplication | `new Set(["a","b","a"])` → size 2 |
+| Set operations | `add`, `has`, `delete`, `clear`, `toArray` |
+| is type check on primitives | `42 is int`, `"x" is string`, `true is bool` |
+| is type check on instances | `obj is ClassName` |
+| is type check in catch | `e is NetworkError` dispatch en catch |
+
+---
+
 ## Resumen de cobertura
 
 | Área | E2E | Unit | Error | Total |
@@ -991,3 +1083,16 @@ Cubre tipos de clave no-string, construcción dinámica, semántica de paso por 
 | Regresiones | 29_bug_regression | — | — | ~25 casos |
 | Casos extremos | 13_edge_cases, 15_arch_stress, 20_more_edge_cases, 23_boundary_cases, 28_final_checks | — | — | ~40 casos |
 | ForEach / Ternario / ++-- | — | unit_foreach_ternary_incr (22) + unit_foreach_edge (18) + unit_forin_string (10) | err_foreach_nonarray, err_foreach_dict | 50 casos |
+| const / enum | unit_comprehensive_new (parcial) | — | — | ~8 casos |
+| abstract / sealed / static / default params | unit_comprehensive_new (parcial) | — | — | ~8 casos |
+| optional chaining / do-while | unit_comprehensive_new (parcial) | — | — | ~4 casos |
+| Bitwise / power | unit_comprehensive_new (parcial) + unit_bitwise_edge | err_negative_shift, err_excessive_shift | — | ~12 casos |
+| Spread / rest | unit_comprehensive_new (parcial) | — | — | ~4 casos |
+| Math namespace | 12_math, 22_math_edge | unit_comprehensive_new (parcial) | — | ~10 casos |
+| JSON namespace | unit_comprehensive_new (parcial) + 38_real_programs (prog 5) | — | — | ~8 casos |
+| Set | unit_comprehensive_new (parcial) + 38_real_programs (prog 2) | — | — | ~6 casos |
+| is type check | unit_is_type_advanced + unit_comprehensive_new (parcial) | — | — | ~10 casos |
+| Excepciones avanzadas | 37_exceptions_e2e | unit_exceptions_advanced + unit_comprehensive_new (parcial) | sec_runtime_not_catchable | ~20 casos |
+| Programas reales integrados | 38_real_programs (8 programas) | — | — | ~80 casos |
+| `.reverse()` write-back | — | unit_reverse_writeback (8) | — | 8 casos |
+| trimLeft / trimRight aliases | — | unit_trim_aliases (8) | — | 8 casos |

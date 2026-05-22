@@ -1526,10 +1526,6 @@ None => {
 
 ---
 
-*Last updated: 2026-05-22 — 63 bugs documented, 63 fixed, 0 open.*
-
----
-
 ## B-62 — `.reverse()` missing from `MUTATING` list — writeback skipped on class fields; returns `null`
 
 **Date:** 2026-05-22
@@ -1632,6 +1628,10 @@ Extended the match arms in `src/evaluator.rs` to accept both names:
 "trimStart" | "trimLeft"  => { EvalResult::Value(self.alloc(ObjectData::Str(s.trim_start().to_string()))) }
 "trimEnd"   | "trimRight" => { EvalResult::Value(self.alloc(ObjectData::Str(s.trim_end().to_string()))) }
 ```
+
+---
+
+*Last updated: 2026-05-22 — 63 bugs documented, 63 fixed, 0 open.*
 
 ---
 
