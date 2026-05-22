@@ -4,8 +4,10 @@ serez_internal_architecture.docx
 AUDIT.md
 implementacion_clases.md
 *.sz
-!tests/*.sz
-tests/_*.sz
 *.txt
+*.json
 *.bin
 /.claude/
+!tests/*.sz
+apps/*.sz
+tests/_*.sz

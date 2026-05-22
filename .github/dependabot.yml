@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Mantiene las GitHub Actions actualizadas y con SHAs fijos
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+
+  # Mantiene las dependencias de Cargo actualizadas
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"

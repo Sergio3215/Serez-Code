@@ -56,10 +56,12 @@ out fibonacci(10);   // → 55
 7. [Static Profiler](#static-profiler-check-mode)
 8. [Error Reference](#error-reference)
 9. [Architecture Overview](#architecture-overview)
-10. [Contributing](#contributing)
-11. [Roadmap](#roadmap)
-12. [License](#license)
-13. [Bugs Fixed List](bugs.md)
+10. [Demo Apps](#demo-apps)
+11. [Known Gotchas](#known-gotchas)
+12. [Contributing](#contributing)
+13. [Roadmap](#roadmap)
+14. [License](#license)
+15. [Bugs Fixed List](bugs.md)
 
 ---
 
@@ -2506,16 +2508,28 @@ Parser errors always include the expected token or construct, making them action
 
 ```
 src/
-├── main.rs          — CLI entry point: file execution, --check mode, REPL
-├── token.rs         — Token enum and keyword-to-token lookup table
-├── lexer.rs         — Hand-rolled character scanner; byte-indexed over the source String
-├── ast.rs           — AST node definitions (Statement, Expression, BlockStatement, …)
-├── parser.rs        — Pratt (TDOP) parser with 8-level precedence + error recovery
-├── type_checker.rs  — Static pre-run type checker with literal and variable inference
-├── region.rs        — Arena allocator (with_capacity), ObjectRef, ObjectData/OwnedValue with Rc<BlockStatement>
-├── scope.rs         — ScopeStack — push/pop/lookup with watermark cleanup and all_bindings dedup
-├── evaluator.rs     — Tree-walking interpreter, Flash Scope protocol, StoredMethod cache, static profiler
-└── repl.rs          — Read-eval-print loop
+├── main.rs           — CLI entry point: file execution, --check mode, REPL
+├── token.rs          — Token enum and keyword-to-token lookup table
+├── lexer.rs          — Hand-rolled character scanner; byte-indexed over the source String
+├── ast.rs            — AST node definitions (Statement, Expression, BlockStatement, …)
+├── parser.rs         — Pratt (TDOP) parser with 8-level precedence + error recovery
+├── type_checker.rs   — Static pre-run type checker with literal and variable inference
+├── region.rs         — Arena allocator (with_capacity), ObjectRef, ObjectData/OwnedValue with Rc<BlockStatement>
+├── scope.rs          — ScopeStack — push/pop/lookup with watermark cleanup and all_bindings dedup
+├── repl.rs           — Read-eval-print loop
+└── evaluator/        — Tree-walking interpreter (split into focused submodules)
+    ├── mod.rs            — Core entry points, Flash Scope protocol, StoredMethod cache, static profiler
+    ├── stmt.rs           — Statement evaluation (let, assign, for, while, return, …)
+    ├── expr.rs           — Expression evaluation (calls, index, dot, ternary, …)
+    ├── ops.rs            — Infix and prefix operator evaluation
+    ├── check.rs          — Type-check helpers (parameter, return, typed array)
+    ├── builtins.rs       — Global built-in functions (parseInt, parseDecimal, readLine, …)
+    ├── classes.rs        — Class instantiation, method dispatch, inheritance, super
+    ├── methods_array.rs  — Array method dispatch (push, pop, map, filter, reduce, sort, …)
+    ├── methods_string.rs — String method dispatch (split, replace, trim, padStart, …)
+    ├── methods_set.rs    — Set method dispatch (add, has, delete, toArray, union, …)
+    ├── namespaces.rs     — Built-in namespace dispatch (Math, File, JSON)
+    └── control.rs        — Control flow helpers (break, continue, labeled loops, do-while)
 ```
 
 ### Data flow
@@ -2623,6 +2637,104 @@ Three helpers in `evaluator.rs` centralize patterns that previously appeared 6�
 
 ---
 
+## Demo Apps
+
+The `apps/` directory contains five console programs that together exercise every language feature. Run any of them with `sz apps/<name>.sz`.
+
+| File | What it exercises |
+|---|---|
+| `apps/01_task_manager.sz` | `enum`, class inheritance (`UrgentTask : Task`), static methods with `switch`, HOF (filter/map/reduce), `try/catch/throw` |
+| `apps/02_statistics.sz` | Typed `[decimal]` arrays, `Math` namespace, map/filter/reduce for mean/stddev/median/percentile, histogram, Pearson correlation |
+| `apps/03_text_analyzer.sz` | String methods (split, replace, trim, indexOf, charAt, padEnd, substring), dicts for word frequency, Caesar cipher, `File` I/O |
+| `apps/04_bank_system.sz` | `abstract` class, `sealed` class, `interface`, `const`, getters (`get`), `try/catch/throw`, optional chaining `?.`, null coalescing `??` |
+| `apps/05_data_pipeline.sz` | `JSON` (stringify/parse), `File` (write/read), `Set` (deduplication), bitwise ops (`&`, `\|`, `^`), power ops (`**`, `>>`), HOF pipeline |
+
+---
+
+## Known Gotchas
+
+These behaviors were discovered writing the demo apps. None are bugs — they are correct semantics — but they can surprise first-time users.
+
+### `for-in` loop variable is a copy
+
+`for (let x in arr)` binds a **value copy** of each element. Mutating `x` does not affect the original array.
+
+```serez
+let items = [1, 2, 3];
+for (let x in items) {
+    x = x * 10;   // ⚠️ mutates the copy only — items is unchanged
+}
+out items;   // → [1, 2, 3]
+```
+
+To mutate elements, use an index loop: `for (let i = 0; i < items.length; i++) { items[i] = ...; }`.
+
+### `this.field[i].method()` inside a class method does not persist
+
+Accessing `this.field` inside a method returns a copy of the stored value. Calling a mutating method on that copy does not write back to the instance.
+
+```serez
+// ⚠️ Does NOT work — arr is a copy of this.items
+fn void broken() {
+    this.items[0] = 99;   // index-assign on this.items DOES work
+    // but: this.items.push(4) — push on this.items DOES work
+    // ⚠️: this.items[0].someMethod() — calls method on a copy, not persisted
+}
+```
+
+Index-assign (`this.items[i] = value`) and direct method calls (`this.items.push(v)`) on `this.field` do persist. The limitation only applies to chained method calls on elements retrieved from `this.field`.
+
+### `{` inside a string literal triggers interpolation
+
+Any `{` starts an interpolation expression. Use `\{` for a literal brace:
+
+```serez
+out "Score: {score}";      // ✅ interpolation
+out "Empty dict: \{\}";    // ✅ literal braces → Empty dict: {}
+out "Block: {";            // ❌ parse error — unclosed interpolation
+```
+
+### `\"` inside `{…}` interpolation breaks the parser
+
+Escape sequences inside `{…}` expressions are not supported. Extract the value to a variable instead:
+
+```serez
+// ⚠️ This breaks the parser:
+out "Names: {arr.join(\", \")}";
+
+// ✅ Use a variable:
+let sep = ", ";
+out "Names: {arr.join(sep)}";
+```
+
+### Enum parameters must not be annotated as `string`
+
+Enum variants have their own type. Annotating a parameter as `string` when passing an enum value causes a type error:
+
+```serez
+enum Priority { Low, High }
+
+fn add(string p) { ... }   // ⚠️ type error when called with Priority.High
+fn add(p) { ... }          // ✅ untyped parameter accepts enum values
+```
+
+### `public abstract TYPE method()` is not valid syntax
+
+Abstract method *declarations* (no body) are not supported. Provide a default throwing body instead:
+
+```serez
+// ⚠️ Not supported:
+public abstract decimal area();
+
+// ✅ Use a default implementation that throws:
+public decimal area() {
+    throw "area() not implemented in " + this.name;
+    return 0.0;
+}
+```
+
+---
+
 ## Contributing
 
 All contributions are welcome — bug fixes, new language features, documentation, or test cases.
@@ -2633,12 +2745,23 @@ All contributions are welcome — bug fixes, new language features, documentatio
 cargo build
 cargo test                         # Rust unit tests (lexer, etc.)
 
+# Windows (PowerShell):
 .\run_tests.ps1                    # full suite (E2E + unit + error + security)
 .\run_tests.ps1 -unit              # unit tests only (framework-based)
 .\run_tests.ps1 -e2e               # E2E golden-file tests + error tests
 .\run_tests.ps1 -security          # security/error tests only
 .\run_tests.ps1 -filter "switch"   # run tests matching a name pattern
 .\run_tests.ps1 -generate          # regenerate .expected files after language changes
+```
+
+```bash
+# Linux / macOS (Bash):
+./run_tests.sh                     # full suite
+./run_tests.sh --unit              # unit tests only
+./run_tests.sh --e2e               # E2E golden-file tests + error tests
+./run_tests.sh --security          # security/error tests only
+./run_tests.sh --filter "switch"   # run tests matching a name pattern
+./run_tests.sh --generate          # regenerate .expected files after language changes
 ```
 
 ### Project conventions
@@ -2729,10 +2852,12 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] Optional / nullable types — `int?`, `string?`, `fn int? search()`, `null` literal, null equality (`== null`, `!= null`)
 
 ### Tooling
-- [x] Security test runner — `-security` flag on `run_tests.ps1` runs all security test files
+- [x] Security test runner — `-security` / `--security` flag on `run_tests.ps1` / `run_tests.sh` runs all security test files
+- [x] Cross-platform test runner — `run_tests.sh` (Bash) mirrors all flags of `run_tests.ps1` (PowerShell)
 - [x] Span-aware error diagnostics — parser and runtime errors show the source line with a `^` caret
 - [x] Watch mode — `sz --watch file.sz` re-runs on every save
 - [x] VS Code extension — syntax highlighting for `.sz` files (`vscode-serez/`)
+- [x] Demo apps — five `apps/*.sz` programs that exercise every language feature end-to-end
 - [ ] `.sz` file formatter
 - [ ] LSP server for editor support
 
