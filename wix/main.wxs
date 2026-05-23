@@ -62,7 +62,7 @@
         Id='*'
         Name='serez-code'
         UpgradeCode='F9F26980-7808-45C3-B8EB-8C3A1F926920'
-        Manufacturer='Sergio'
+        Manufacturer='SerezDev'
         Language='1033'
         Codepage='1252'
         Version='$(var.Version)'>
@@ -70,7 +70,7 @@
         <Package Id='*'
             Keywords='Installer'
             Description='A hand-crafted interpreted programming language written in Rust'
-            Manufacturer='Sergio'
+            Manufacturer='SerezDev'
             InstallerVersion='450'
             Languages='1033'
             Compressed='yes'

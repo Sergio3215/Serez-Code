@@ -6,7 +6,7 @@ description = "A hand-crafted interpreted programming language written in Rust"
 license = "MIT"
 repository = "https://github.com/Sergio3215/serez-code"
 homepage = "https://github.com/Sergio3215/serez-code"
-authors = ["Sergio"]
+authors = ["SerezDev"]
 publisher = "SerezDev"
 
 [package.metadata.wix]
