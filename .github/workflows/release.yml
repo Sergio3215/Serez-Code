@@ -259,16 +259,18 @@ jobs:
           name: artifacts-dist-manifest
           path: dist-manifest.json
       - name: Publish GitHub Release
+        env:
+          TAG: "${{ needs.plan.outputs.tag }}"
+          TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
+          BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
+          COMMIT: "${{ github.sha }}"
         shell: bash
         run: |
-          TAG="${{ needs.plan.outputs.tag }}"
-          TITLE="${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
-          BODY="${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
           echo "$BODY" > $RUNNER_TEMP/notes.txt
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release edit "$TAG" --draft=false --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.txt"
           else
-            gh release create "$TAG" --target "${{ github.sha }}" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.txt"
+            gh release create "$TAG" --target "$COMMIT" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.txt"
           fi
 
   announce:
