@@ -56,7 +56,7 @@ jobs:
       tag-flag: ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }}
       publishing: ${{ !github.event.pull_request }}
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_SCR }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -114,7 +114,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container && matrix.container.image || null }}
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_SCR }}
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
     steps:
       - name: enable windows longpaths
@@ -175,7 +175,7 @@ jobs:
       - build-local-artifacts
     runs-on: "ubuntu-latest"
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_SCR }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
     steps:
       - uses: actions/checkout@v4
@@ -224,7 +224,7 @@ jobs:
     permissions:
       contents: write
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_SCR }}
     runs-on: "ubuntu-latest"
     outputs:
       val: ${{ steps.host.outputs.manifest }}
@@ -269,7 +269,7 @@ jobs:
     if: ${{ always() && needs.host.result == 'success' }}
     runs-on: "ubuntu-latest"
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_SCR }}
     steps:
       - uses: actions/checkout@v4
         with:
