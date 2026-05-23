@@ -3,7 +3,7 @@
   "displayName": "Serez-Code",
   "description": "Syntax highlighting and formatter for Serez-Code (.sz) files",
   "version": "1.0.0",
-  "publisher": "sergio",
+  "publisher": "SerezDev",
   "engines": {
     "vscode": "^1.74.0"
   },
