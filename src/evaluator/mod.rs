@@ -224,6 +224,15 @@ impl Evaluator {
     // Extrae un valor completo de la arena a un OwnedValue independiente.
     // Debe llamarse ANTES de scopes.pop() para que los índices aún sean válidos.
     fn extract(&self, obj_ref: ObjectRef) -> OwnedValue {
+        self.extract_inner(obj_ref, 0)
+    }
+
+    fn extract_inner(&self, obj_ref: ObjectRef, depth: usize) -> OwnedValue {
+        const MAX_DEPTH: usize = 500;
+        if depth > MAX_DEPTH {
+            eprintln!("❌ ERROR: Maximum nesting depth ({}) exceeded", MAX_DEPTH);
+            return OwnedValue::Null;
+        }
         match self.resolve(obj_ref) {
             Some(ObjectData::Integer(i)) => OwnedValue::Integer(*i),
             Some(ObjectData::Decimal(d)) => OwnedValue::Decimal(*d),
@@ -232,13 +241,13 @@ impl Evaluator {
             Some(ObjectData::Array { element_type, elements: refs }) => {
                 OwnedValue::Array {
                     element_type: element_type.clone(),
-                    elements: refs.iter().map(|&r| self.extract(r)).collect(),
+                    elements: refs.iter().map(|&r| self.extract_inner(r, depth + 1)).collect(),
                 }
             }
             Some(ObjectData::Dict { key_type, value_type, entries }) => OwnedValue::Dict {
                 key_type: key_type.clone(),
                 value_type: value_type.clone(),
-                entries: entries.iter().map(|&(k, v)| (self.extract(k), self.extract(v))).collect(),
+                entries: entries.iter().map(|&(k, v)| (self.extract_inner(k, depth + 1), self.extract_inner(v, depth + 1))).collect(),
             },
             Some(ObjectData::Function {
                 return_type,
@@ -249,7 +258,7 @@ impl Evaluator {
                 return_type: return_type.clone(),
                 parameters: parameters.clone(),
                 body: body.clone(),
-                captured: captured.clone(), // Vec<(String, ObjectRef)> — global refs are stable
+                captured: captured.clone(),
             },
             Some(ObjectData::Instance { class_name, fields }) => OwnedValue::Instance {
                 class_name: class_name.clone(),
@@ -260,7 +269,7 @@ impl Evaluator {
                 variant: variant.clone(),
             },
             Some(ObjectData::Set { elements: refs }) => OwnedValue::Set {
-                elements: refs.iter().map(|&r| self.extract(r)).collect(),
+                elements: refs.iter().map(|&r| self.extract_inner(r, depth + 1)).collect(),
             },
             Some(ObjectData::Null) | None => OwnedValue::Null,
         }

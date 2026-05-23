@@ -84,7 +84,13 @@ impl super::Evaluator {
         };
         match self.resolve(r).cloned() {
             Some(ObjectData::Integer(i)) => EvalResult::Value(self.alloc(ObjectData::Integer(i))),
-            Some(ObjectData::Decimal(d)) => EvalResult::Value(self.alloc(ObjectData::Integer(d as i64))),
+            Some(ObjectData::Decimal(d)) => {
+                if !d.is_finite() || d > i64::MAX as f64 || d < i64::MIN as f64 {
+                    eprintln!("❌ ERROR: parseInt: decimal value is out of int range or not finite");
+                    return EvalResult::Error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Integer(d as i64)))
+            }
             Some(ObjectData::Str(s)) => match s.trim().parse::<i64>() {
                 Ok(n) => EvalResult::Value(self.alloc(ObjectData::Integer(n))),
                 Err(_) => {

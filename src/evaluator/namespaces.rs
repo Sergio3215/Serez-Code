@@ -99,6 +99,15 @@ impl super::Evaluator {
                     Some(ObjectData::Str(s)) => s,
                     _ => { eprintln!("❌ ERROR: File.read requires a string path"); return EvalResult::Error; }
                 };
+                const MAX_FILE_READ: u64 = 256 * 1024 * 1024; // 256 MB
+                match std::fs::metadata(&path) {
+                    Ok(meta) if meta.len() > MAX_FILE_READ => {
+                        eprintln!("❌ ERROR: File '{}' exceeds maximum read size of 256 MB", path);
+                        return EvalResult::Error;
+                    }
+                    Err(e) => { eprintln!("❌ ERROR: File error reading '{}': {}", path, e); return EvalResult::Error; }
+                    _ => {}
+                }
                 match std::fs::read_to_string(&path) {
                     Ok(content) => EvalResult::Value(self.alloc(ObjectData::Str(content))),
                     Err(e) => { eprintln!("❌ ERROR: File error reading '{}': {}", path, e); EvalResult::Error }
@@ -150,6 +159,15 @@ impl super::Evaluator {
                     Some(ObjectData::Str(s)) => s,
                     _ => { eprintln!("❌ ERROR: File.read_asBinary requires a string path"); return EvalResult::Error; }
                 };
+                const MAX_BINARY_READ: u64 = 256 * 1024 * 1024; // 256 MB
+                match std::fs::metadata(&path) {
+                    Ok(meta) if meta.len() > MAX_BINARY_READ => {
+                        eprintln!("❌ ERROR: File '{}' exceeds maximum read size of 256 MB", path);
+                        return EvalResult::Error;
+                    }
+                    Err(e) => { eprintln!("❌ ERROR: File error reading binary '{}': {}", path, e); return EvalResult::Error; }
+                    _ => {}
+                }
                 match std::fs::read(&path) {
                     Ok(bytes) => {
                         let refs: Vec<ObjectRef> = bytes.iter()

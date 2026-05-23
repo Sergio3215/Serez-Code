@@ -1,0 +1,3 @@
+// Seguridad: repeticion de string con n gigante debe dar error (DoS prevention)
+let s = "a" * 20000000;
+out "FALLO: deberia haber dado error";

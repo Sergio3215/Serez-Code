@@ -1,0 +1,3 @@
+// Seguridad: leer archivo inexistente debe dar error controlado (no panic)
+let content = File.read("archivo_que_no_existe_xyz.txt");
+out "FALLO: deberia haber dado error";

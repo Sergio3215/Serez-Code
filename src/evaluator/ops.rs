@@ -165,10 +165,14 @@ impl super::Evaluator {
                     "!=" => ObjectData::Boolean(l != r),
                     "**" => {
                         if r < 0 {
-                            // negative exponent → fractional result → decimal
-                            ObjectData::Decimal((l as f64).powi(r as i32))
+                            ObjectData::Decimal((l as f64).powf(r as f64))
                         } else {
-                            ObjectData::Integer((l as f64).powi(r as i32) as i64)
+                            let result = (l as f64).powf(r as f64);
+                            if !result.is_finite() || result > i64::MAX as f64 {
+                                eprintln!("❌ ERROR: Integer overflow in exponentiation");
+                                return EvalResult::Error;
+                            }
+                            ObjectData::Integer(result as i64)
                         }
                     }
                     "&"  => ObjectData::Integer(l & r),
@@ -300,6 +304,10 @@ impl super::Evaluator {
                     "*" => {
                         if n < 0 {
                             eprintln!("❌ ERROR: Cannot repeat a string with a negative n");
+                            return EvalResult::Error;
+                        }
+                        if n > 10_000_000 {
+                            eprintln!("❌ ERROR: String repeat count {} exceeds maximum (10,000,000)", n);
                             return EvalResult::Error;
                         }
                         ObjectData::Str(s.repeat(n as usize))

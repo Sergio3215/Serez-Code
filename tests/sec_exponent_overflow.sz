@@ -1,0 +1,4 @@
+// Seguridad: exponente i64 grande debe dar error, no resultado incorrecto
+// Antes: r as i32 truncaba silenciosamente (3000000000 → -1294967296)
+let a = 2 ** 3000000000;
+out "FALLO: deberia haber dado error de overflow";

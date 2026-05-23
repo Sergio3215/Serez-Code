@@ -1,0 +1,5 @@
+// Seguridad: parseInt con NaN (sqrt de negativo) debe dar error, no 0 silencioso
+let nan_val = Math.sqrt(-1.0);
+out nan_val;
+let i = parseInt(nan_val);
+out "FALLO: deberia haber dado error";
