@@ -282,26 +282,6 @@ jobs:
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
-  build-vsix:
-    needs: [plan, host]
-    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.host.result == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Build .vsix
-        run: |
-          npm install -g @vscode/vsce
-          cd vscode-serez && vsce package --no-dependencies
-      - name: Upload .vsix to release
-        run: gh release upload "${{ needs.plan.outputs.tag }}" vscode-serez/*.vsix
-
   announce:
     needs:
       - plan
