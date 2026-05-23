@@ -12,3 +12,4 @@ implementacion_clases.md
 !tests/*.sz
 #/apps/
 tests/_*.sz
+merge.ps1
