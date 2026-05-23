@@ -13,3 +13,4 @@ implementacion_clases.md
 #/apps/
 tests/_*.sz
 merge.ps1
+mergeFromMain.ps1
