@@ -258,6 +258,12 @@ jobs:
           # Overwrite the previous copy
           name: artifacts-dist-manifest
           path: dist-manifest.json
+      - name: Download artifacts for release
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-build-*
+          path: release-artifacts
+          merge-multiple: true
       - name: Publish GitHub Release
         env:
           TAG: "${{ needs.plan.outputs.tag }}"
@@ -267,10 +273,13 @@ jobs:
         shell: bash
         run: |
           echo "$BODY" > $RUNNER_TEMP/notes.txt
+          # Remove manifest json files, keep only distributable artifacts
+          find release-artifacts -name '*-dist-manifest.json' -delete
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release edit "$TAG" --draft=false --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.txt"
+            gh release upload "$TAG" release-artifacts/* --clobber
           else
-            gh release create "$TAG" --target "$COMMIT" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.txt"
+            gh release create "$TAG" --target "$COMMIT" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.txt" release-artifacts/*
           fi
 
   announce:
