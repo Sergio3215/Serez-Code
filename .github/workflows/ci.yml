@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main, improve]
+  pull_request:
+
+jobs:
+  build:
+    name: Build & Test — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build
+
+      - name: Check (no warnings as errors)
+        run: cargo check
