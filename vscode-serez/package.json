@@ -1,9 +1,10 @@
 {
-  "name": "serez-code",
-  "displayName": "Serez-Code",
+  "name": "serez-code-formatter",
+  "displayName": "Serez-Code Formatter",
   "description": "Syntax highlighting and formatter for Serez-Code (.sz) files",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "icon": "icon.png",
+  "license": "MIT",
   "publisher": "sd-tools",
   "engines": {
     "vscode": "^1.74.0"
@@ -18,7 +19,7 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:serez"
+    "onLanguage:serez-code"
   ],
   "contributes": {
     "languages": [
@@ -26,7 +27,9 @@
         "id": "serez",
         "aliases": [
           "Serez-Code",
-          "serez"
+          "serez-code-formatter",
+          "serez-dev",
+          "serezdev"
         ],
         "extensions": [
           ".sz"
@@ -36,14 +39,14 @@
     ],
     "grammars": [
       {
-        "language": "serez",
-        "scopeName": "source.serez",
+        "language": "serez-code",
+        "scopeName": "source.serez.code",
         "path": "./syntaxes/serez.tmLanguage.json"
       }
     ],
     "configurationDefaults": {
       "[serez]": {
-        "editor.defaultFormatter": "sergio.serez-code",
+        "editor.defaultFormatter": "sd-tools.serez-code-formatter",
         "editor.formatOnSave": true,
         "editor.tabSize": 4,
         "editor.insertSpaces": true
