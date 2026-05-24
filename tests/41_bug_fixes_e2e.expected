@@ -1,0 +1,44 @@
+── bug 1 & 2: bounded queue simulation ──
+3
+10
+10
+20
+1
+false
+30
+true
+null
+── bug 1 & 2: safe stack with guard ──
+c
+b
+a
+null
+0
+── bug 3: power tower within safe range ──
+1
+1024
+1048576
+1073741824
+4611686018427387904
+-1
+-1
+true
+true
+true
+false
+true
+── bug 4: typed registry with safe access ──
+3
+true
+false
+100
+5
+null
+250
+── integration: game loop using all fixed behaviors ──
+start
+collect
+collect
+boss
+idle
+1080

@@ -1,0 +1,4 @@
+// Security: pop() on an empty array must produce a controlled ❌ error (Bug 1 fix)
+let a = [];
+a.pop();
+out "FAIL: pop() on empty array should have errored";

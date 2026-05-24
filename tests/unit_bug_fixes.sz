@@ -1,0 +1,163 @@
+// Unit tests: regression suite for the 4 bugs fixed in commit dcd5785
+// Covers positive (should-work) behavior after each fix.
+// Negative (should-error) cases are in sec_pop_empty_array.sz,
+// sec_shift_empty_array.sz, sec_typed_dict_miss_key.sz, sec_power_2_63.sz.
+
+// ── Bug 1 fix: pop() on empty array now errors ─────────────────────────────────
+
+test("pop() on single-element array returns that element", () => {
+    let a = [99];
+    let v = a.pop();
+    assert(v == 99,         "popped value is 99");
+    assert(a.length() == 0, "array is empty after pop");
+});
+
+test("pop() removes from the end, not the front", () => {
+    let a = [1, 2, 3];
+    assert(a.pop() == 3, "first pop returns 3 (last)");
+    assert(a.pop() == 2, "second pop returns 2");
+    assert(a.length() == 1, "one element left");
+    assert(a[0] == 1, "remaining element is 1");
+});
+
+test("pop() on typed [int] array returns typed element", () => {
+    let a [int] = [10, 20, 30];
+    let v = a.pop();
+    assert(v is int,     "popped value is int");
+    assert(v == 30,      "popped value is 30");
+    assert(a.length() == 2, "length decreased");
+});
+
+test("pop() all elements one-by-one: last pop leaves empty array", () => {
+    let a = [5, 10];
+    a.pop();
+    a.pop();
+    assert(a.length() == 0, "array is empty after popping all elements");
+});
+
+// ── Bug 2 fix: shift() on empty array now errors ───────────────────────────────
+
+test("shift() on single-element array returns that element", () => {
+    let a = [42];
+    let v = a.shift();
+    assert(v == 42,         "shifted value is 42");
+    assert(a.length() == 0, "array is empty after shift");
+});
+
+test("shift() removes from the front, not the end", () => {
+    let a = [1, 2, 3];
+    assert(a.shift() == 1, "first shift returns 1 (front)");
+    assert(a.shift() == 2, "second shift returns 2");
+    assert(a.length() == 1, "one element left");
+    assert(a[0] == 3, "remaining element is 3");
+});
+
+test("shift() on typed [string] array returns typed element", () => {
+    let a [string] = ["alpha", "beta", "gamma"];
+    let v = a.shift();
+    assert(v is string,   "shifted value is string");
+    assert(v == "alpha",  "shifted value is 'alpha'");
+    assert(a.length() == 2, "length decreased");
+});
+
+test("shift() all elements one-by-one: last shift leaves empty array", () => {
+    let a = [7, 14];
+    a.shift();
+    a.shift();
+    assert(a.length() == 0, "array is empty after shifting all elements");
+});
+
+// ── Bug 3 fix: 2 ** 63 overflow detected exactly via checked_pow ───────────────
+
+test("2 ** 62 is safe and returns exact value", () => {
+    let r = 2 ** 62;
+    assert(r == 4611686018427387904, "2**62 = 4611686018427387904");
+    assert(r > 0, "positive");
+    assert(r is int, "result is int");
+});
+
+test("0 ** 0 = 1 (mathematical convention)", () => {
+    assert(0 ** 0 == 1, "0**0 = 1");
+});
+
+test("1 ** very_large = 1 (no overflow for base 1)", () => {
+    assert(1 ** 1000000 == 1, "1**1000000 = 1");
+    assert(1 ** 0       == 1, "1**0 = 1");
+});
+
+test("0 ** n = 0 for positive n (no overflow for base 0)", () => {
+    assert(0 ** 1   == 0, "0**1 = 0");
+    assert(0 ** 100 == 0, "0**100 = 0");
+});
+
+test("(-1) ** even = 1, (-1) ** odd = -1 (no overflow for base -1)", () => {
+    assert((-1) ** 2 ==  1, "(-1)**2 = 1");
+    assert((-1) ** 3 == -1, "(-1)**3 = -1");
+    assert((-1) ** 100 ==  1, "(-1)**100 = 1");
+    assert((-1) ** 101 == -1, "(-1)**101 = -1");
+});
+
+test("negative exponent returns decimal (no overflow path)", () => {
+    let r = 2 ** -1;
+    assert(r == 0.5,       "2**-1 = 0.5");
+    assert(r is decimal,   "result is decimal");
+});
+
+test("power in expressions: (2**30) * 2 = 2**31", () => {
+    let r = (2 ** 30) * 2;
+    assert(r == 2147483648, "2**31 = 2147483648");
+});
+
+// ── Bug 4 fix: typed dict missing key now errors ───────────────────────────────
+
+test("typed dict: existing key returns correct value", () => {
+    fn any makeDict() {
+        let d <string, int> = {};
+        d["alpha"] = 1;
+        d["beta"]  = 2;
+        d["gamma"] = 3;
+        return d;
+    }
+    let d = makeDict();
+    assert(d["alpha"] == 1, "alpha = 1");
+    assert(d["beta"]  == 2, "beta = 2");
+    assert(d["gamma"] == 3, "gamma = 3");
+});
+
+test("untyped dict: missing key still returns null (no regression)", () => {
+    fn any makeUntyped() {
+        let d = {};
+        d["x"] = 10;
+        return d;
+    }
+    let d = makeUntyped();
+    assert(d["x"]       == 10,   "existing key = 10");
+    assert(d["missing"] == null, "untyped dict: missing key = null");
+});
+
+test("typed dict after update: updated key accessible", () => {
+    fn any makeDict() {
+        let d <string, int> = {};
+        d["n"] = 5;
+        d["n"] = 99;
+        return d;
+    }
+    let d = makeDict();
+    assert(d["n"] == 99, "updated value is 99");
+});
+
+test("typed dict keys() and values() work correctly", () => {
+    fn any makeDict() {
+        let d <string, int> = {};
+        d["a"] = 1;
+        d["b"] = 2;
+        return d;
+    }
+    let d = makeDict();
+    let ks = d.keys();
+    let vs = d.values();
+    assert(ks.length() == 2, "2 keys");
+    assert(vs.length() == 2, "2 values");
+});
+
+summary();

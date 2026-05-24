@@ -1,0 +1,4 @@
+// Security: shift() on an empty array must produce a controlled ❌ error (Bug 2 fix)
+let a = [];
+a.shift();
+out "FAIL: shift() on empty array should have errored";

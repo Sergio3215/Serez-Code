@@ -1,0 +1,5 @@
+// Security: 2 ** 63 must produce ❌ overflow error (Bug 3 fix)
+// Before the fix, the f64 precision error caused this to silently return i64::MAX
+// instead of detecting overflow. checked_pow now catches this exactly.
+out 2 ** 63;
+out "FAIL: 2 ** 63 should have overflowed";

@@ -1,0 +1,6 @@
+// Security: accessing a missing key in a typed dict must produce ❌ error (Bug 4 fix)
+// Untyped dicts returning null is fine; typed dicts must enforce their value type.
+let d <string, int> = {};
+d["present"] = 42;
+out d["missing"];
+out "FAIL: typed dict missing key should have errored";
