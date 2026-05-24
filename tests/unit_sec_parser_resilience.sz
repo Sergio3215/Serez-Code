@@ -1,0 +1,118 @@
+// Security unit tests: parser / lexer resilience
+// Unusual-but-valid syntax, deeply nested expressions, very long chains,
+// and boundary token sequences must not crash the interpreter.
+
+test("deeply nested parentheses in arithmetic are evaluated correctly", () => {
+    let r = ((((((1 + 1) + 1) + 1) + 1) + 1) + 1);
+    assert(r == 7, "6 levels of paren nesting = 7");
+});
+
+test("deeply nested ternary chains resolve correctly", () => {
+    let x = 3;
+    let r = x == 1 ? "one"
+          : x == 2 ? "two"
+          : x == 3 ? "three"
+          : x == 4 ? "four"
+          : "other";
+    assert(r == "three", "5-level ternary chain selects 'three'");
+});
+
+test("empty string literal is parsed correctly", () => {
+    let s = "";
+    assert(s.length() == 0, "empty string has length 0");
+    assert(s == "",          "empty string equals empty string");
+});
+
+test("empty array literal is parsed correctly", () => {
+    let a = [];
+    assert(a.length() == 0, "empty array has length 0");
+    a.push(1);
+    assert(a.length() == 1, "push to empty array works");
+});
+
+test("empty dict literal is parsed correctly", () => {
+    fn any makeEmpty() { return {}; }
+    let d = makeEmpty();
+    d["x"] = 42;
+    assert(d["x"] == 42, "empty dict accepts assignment");
+});
+
+test("chained method calls on string parse and evaluate correctly", () => {
+    let s = "  Hello World  ";
+    let r = s.trim().toLowerCase().split(" ");
+    assert(r.length() == 2,    "split into 2 words after trim+toLower");
+    assert(r[0] == "hello",    "first word is 'hello'");
+    assert(r[1] == "world",    "second word is 'world'");
+});
+
+test("very long identifier names are handled correctly", () => {
+    let aVeryLongVariableNameThatGoesOnForAWhileToTestLexerCapacity = 999;
+    assert(aVeryLongVariableNameThatGoesOnForAWhileToTestLexerCapacity == 999,
+           "long variable name read back correctly");
+});
+
+test("multiline expressions spanning many tokens parse correctly", () => {
+    let result = 1 + 2 + 3 + 4 + 5
+               + 6 + 7 + 8 + 9 + 10
+               + 11 + 12 + 13 + 14 + 15;
+    assert(result == 120, "sum 1..15 = 120");
+});
+
+test("boolean short-circuit with side-effectful calls is safe", () => {
+    let called = false;
+    fn bool sideEffect() { called = true; return true; }
+    let r = false && sideEffect();
+    assert(r == false,    "false && anything = false");
+    assert(called == false, "right side of && not evaluated (short-circuit)");
+});
+
+test("boolean short-circuit OR: right side not evaluated when left is true", () => {
+    fn bool boom() { throw "should not be called"; }
+    let caught = false;
+    try {
+        let r = true || boom();
+        assert(r == true, "true || anything = true");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught == false, "boom() was never called");
+});
+
+test("nested function calls up to 5 levels deep are safe", () => {
+    fn int f1(int n) { return n + 1; }
+    fn int f2(int n) { return f1(n) + 1; }
+    fn int f3(int n) { return f2(n) + 1; }
+    fn int f4(int n) { return f3(n) + 1; }
+    fn int f5(int n) { return f4(n) + 1; }
+    assert(f5(0) == 5, "5 nested calls = 5");
+});
+
+test("switch with many cases parses and dispatches correctly", () => {
+    fn string classify(int n) {
+        switch (n) {
+            case 1: return "one";
+            case 2: return "two";
+            case 3: return "three";
+            case 4: return "four";
+            case 5: return "five";
+            case 6: return "six";
+            case 7: return "seven";
+            case 8: return "eight";
+            case 9: return "nine";
+            default: return "other";
+        }
+    }
+    assert(classify(1) == "one",   "case 1");
+    assert(classify(5) == "five",  "case 5");
+    assert(classify(9) == "nine",  "case 9");
+    assert(classify(0) == "other", "default case");
+});
+
+test("unicode content in string literals is preserved correctly", () => {
+    let emoji_like = "star: *  dash: -  bracket: [ok]";
+    assert(emoji_like.includes("star"), "contains 'star'");
+    assert(emoji_like.includes("[ok]"), "contains '[ok]'");
+    assert(emoji_like.length() > 10,    "string has content");
+});
+
+summary();

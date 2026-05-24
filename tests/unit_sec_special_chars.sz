@@ -1,0 +1,100 @@
+// Security unit tests: special / shell-metacharacter / boundary characters in strings
+// Null bytes, path separators, shell metacharacters, HTML/script chars, and other
+// boundary characters must be treated as literal string content — never interpreted.
+
+test("string with backslash path separator is a literal string", () => {
+    let path = "C:\\Users\\admin\\secret.txt";
+    assert(path.includes("Users"),   "contains 'Users' literally");
+    assert(path.includes("secret"),  "contains 'secret' literally");
+    assert(path.length() > 10,       "path string has content");
+});
+
+test("string with forward-slash path is a literal string", () => {
+    let path = "/etc/passwd";
+    assert(path.startsWith("/"),     "starts with /");
+    assert(path.includes("etc"),     "contains 'etc' literally");
+    assert(path.includes("passwd"),  "contains 'passwd' literally");
+});
+
+test("shell metacharacters stored in a string are not executed", () => {
+    let cmd = "rm -rf / ; echo DONE & ls | grep secret";
+    assert(cmd.includes("rm"),    "'rm' is literal text");
+    assert(cmd.includes("echo"),  "'echo' is literal text");
+    assert(cmd.includes("|"),     "'|' is literal text");
+    assert(cmd.includes("&"),     "'&' is literal text");
+    assert(cmd.includes(";"),     "';' is literal text");
+});
+
+test("HTML / XSS characters in strings are literal", () => {
+    let xss = "<script>alert('xss')</script>";
+    assert(xss.includes("<script>"),  "script tag literal");
+    assert(xss.includes("alert"),     "'alert' literal");
+    assert(xss.startsWith("<"),       "starts with <");
+    assert(xss.length() > 20,         "string has full content");
+});
+
+test("SQL-injection-like string is purely a string", () => {
+    let sql = "'; DROP TABLE users; --";
+    assert(sql.includes("DROP"),   "'DROP' is literal text");
+    assert(sql.includes("users"),  "'users' is literal text");
+    assert(sql.length() > 5,       "string has content");
+});
+
+test("null-byte escape sequence in a string does not crash the interpreter", () => {
+    // \0 may produce an empty string or a single-char string depending on implementation
+    // The important invariant: it is always a string and does not panic
+    let s = "\0";
+    assert(s is string, "\\0 escape produces a string value, not a crash");
+});
+
+test("newline and tab escape sequences are literal characters", () => {
+    let s = "line1\nline2\ttabbed";
+    assert(s.includes("line1"),   "line1 literal");
+    assert(s.includes("line2"),   "line2 literal");
+    assert(s.includes("tabbed"),  "tabbed literal");
+    assert(s.length() > 10,       "escape sequences contribute to length");
+});
+
+test("backslash escape sequences are safely parsed", () => {
+    let s = "quote: \" slash: \\ ";
+    assert(s.includes("quote"),  "contains 'quote'");
+    assert(s.includes("slash"),  "contains 'slash'");
+    assert(s.length() > 5,       "string has content");
+});
+
+test("string containing braces does not trigger spurious interpolation", () => {
+    let a = 1;
+    let s = "value is {a}";    // this DOES interpolate — expected
+    assert(s == "value is 1",  "interpolation of {a} = 1");
+    // A string with only literal braces and no identifier:
+    // {} is an empty dict literal, not a string — so we test the interpolated case
+    let s2 = "braces: " + "{" + "}";
+    assert(s2.includes("{"), "brace preserved when concatenated as string");
+});
+
+test("percent and arithmetic operator chars in strings are literal", () => {
+    let s = "100% safe: a+b=c, a-b=d, a*b=e, a/b=f, a%b=g";
+    assert(s.includes("%"),  "percent sign literal");
+    assert(s.includes("+"),  "plus sign literal");
+    assert(s.includes("*"),  "star literal");
+    assert(s.includes("/"),  "slash literal");
+});
+
+test("very long string with special chars does not overflow lexer", () => {
+    let chunk = "!@#$%^&*()-_=+[]{};':\",./<>?";
+    let s = chunk + chunk + chunk + chunk + chunk;
+    assert(s.length() == chunk.length() * 5, "concatenated length is correct");
+    assert(s.includes("!"), "! preserved");
+    assert(s.includes(">"), "> preserved");
+});
+
+test("path traversal sequences in a string are purely literal", () => {
+    let traversal = "../../../etc/passwd";
+    assert(traversal.includes(".."),     ".. is literal text");
+    assert(traversal.includes("passwd"), "passwd is literal text");
+    assert(traversal.startsWith(".."),   "starts with ..");
+    // The string itself is just data — no file is accessed
+    assert(traversal.length() > 5, "string has content");
+});
+
+summary();

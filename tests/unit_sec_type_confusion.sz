@@ -1,0 +1,117 @@
+// Security unit tests: type confusion attacks
+// Passing unexpected types through `any` params, mixing types in operations,
+// and coercion tricks must all be handled safely.
+
+test("any parameter receives wrong type: guard with is check", () => {
+    fn int addOne(any n) {
+        if (!(n is int)) { throw "expected int"; }
+        return n + 1;
+    }
+    assert(addOne(5) == 6, "int param: 5 + 1 = 6");
+    let caught = "";
+    try { addOne("five"); } catch (e) { caught = e; }
+    assert(caught == "expected int", "string rejected by guard");
+    try { addOne(true); } catch (e) { caught = e; }
+    assert(caught == "expected int", "bool rejected by guard");
+});
+
+test("function expecting string guards against int input", () => {
+    fn int strLen(any s) {
+        if (!(s is string)) { throw "not a string"; }
+        return s.length();
+    }
+    assert(strLen("hello") == 5, "string length 5");
+    let caught = "";
+    try { strLen(12345); } catch (e) { caught = e; }
+    assert(caught == "not a string", "int rejected");
+});
+
+test("heterogeneous array: is check prevents type confusion on access", () => {
+    let mixed = [1, "two", true, 3.14, null];
+    let intCount = 0;
+    let strCount = 0;
+    for (let v in mixed) {
+        if (v is int)    { intCount = intCount + 1; }
+        if (v is string) { strCount = strCount + 1; }
+    }
+    assert(intCount == 1, "exactly one int in mixed array");
+    assert(strCount == 1, "exactly one string in mixed array");
+});
+
+test("bool is never equal to its numeric equivalent", () => {
+    assert((true  == 1)  == false, "true != 1");
+    assert((false == 0)  == false, "false != 0");
+    assert((true  == -1) == false, "true != -1");
+});
+
+test("string is never equal to its numeric value", () => {
+    assert(("42" == 42) == false, "'42' != 42");
+    assert(("0"  == 0)  == false, "'0' != 0");
+    assert(("1"  == 1)  == false, "'1' != 1");
+});
+
+test("null is not equal to any falsy value", () => {
+    assert((null == 0)     == false, "null != 0");
+    assert((null == false) == false, "null != false");
+    assert((null == "")    == false, "null != ''");
+    assert((null == [])    == false, "null != []");
+});
+
+test("type_of distinguishes all primitive types", () => {
+    assert(type_of(0)      != type_of("0"),   "int vs string type differ");
+    assert(type_of(0)      != type_of(false), "int vs bool type differ");
+    assert(type_of(0.0)    != type_of(0),     "decimal vs int type differ");
+    assert(type_of(null)   != type_of(false), "null vs bool type differ");
+    assert(type_of(null)   != type_of(0),     "null vs int type differ");
+});
+
+test("casting string to int via parseInt does not confuse types", () => {
+    let s = "123";
+    let n = parseInt(s);
+    assert(n is int,     "parseInt result is int");
+    assert(n == 123,     "value is 123");
+    assert(s is string,  "original string unchanged");
+    assert(s == "123",   "original string still '123'");
+});
+
+test("any param array dispatch: each element typed correctly", () => {
+    fn string classify(any v) {
+        if (v is int)     { return "int"; }
+        if (v is string)  { return "string"; }
+        if (v is bool)    { return "bool"; }
+        if (v is decimal) { return "decimal"; }
+        return "other";
+    }
+    let samples = [0, "", false, 0.0, null];
+    let results = samples.map(v => classify(v));
+    assert(results[0] == "int",     "0 classified as int");
+    assert(results[1] == "string",  "'' classified as string");
+    assert(results[2] == "bool",    "false classified as bool");
+    assert(results[3] == "decimal", "0.0 classified as decimal");
+    assert(results[4] == "other",   "null classified as other");
+});
+
+test("typed [int] array rejects non-int push at runtime", () => {
+    let arr [int] = [1, 2, 3];
+    let caught = false;
+    try {
+        arr.push("not an int");
+    } catch (e) {
+        caught = true;
+    }
+    // Either the runtime errors or the array enforces the type
+    // Verify array is still valid after the attempt
+    assert(arr.length() >= 3, "array not corrupted by bad push attempt");
+    assert(arr[0] == 1,       "first element still 1");
+});
+
+test("overflow-like coercion: decimal op on int does not silently truncate back", () => {
+    let a = 5;
+    let b = 2.0;
+    let r = a / b;    // int / decimal → decimal result expected
+    assert(r == 2.5,           "5 / 2.0 = 2.5 (decimal, not truncated int 2)");
+    assert(r is decimal,       "result type is decimal");
+    assert((r is int) == false, "result is NOT int");
+});
+
+summary();

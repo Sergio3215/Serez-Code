@@ -1,0 +1,96 @@
+// Security unit tests: memory / resource exhaustion safety
+// Large allocations and exponential growth must either terminate safely
+// within acceptable time or produce a controlled error — never hang or panic.
+
+test("allocating a large array in a bounded loop does not panic", () => {
+    let arr = [];
+    let i = 0;
+    while (i < 10000) {
+        arr.push(i);
+        i = i + 1;
+    }
+    assert(arr.length() == 10000, "10 000-element array created safely");
+    assert(arr[0]    == 0,     "first element correct");
+    assert(arr[9999] == 9999,  "last element correct");
+});
+
+test("string concatenation across many iterations stays safe", () => {
+    let s = "";
+    let i = 0;
+    while (i < 500) {
+        s = s + "x";
+        i = i + 1;
+    }
+    assert(s.length() == 500, "500-char string built without crash");
+});
+
+test("nested arrays up to reasonable depth do not cause stack overflow", () => {
+    let root = [];
+    let inner = [];
+    let i = 0;
+    while (i < 100) {
+        inner.push(i);
+        i = i + 1;
+    }
+    root.push(inner);
+    root.push(inner);
+    assert(root.length() == 2,    "outer array has 2 elements");
+    assert(root[0].length() == 100, "inner array has 100 elements");
+});
+
+test("repeated push/pop cycle does not leak memory (length stays stable)", () => {
+    let buf = [];
+    let rounds = 0;
+    while (rounds < 1000) {
+        buf.push(rounds);
+        buf.pop();
+        rounds = rounds + 1;
+    }
+    assert(buf.length() == 0, "buf is empty after 1000 push/pop cycles");
+});
+
+test("many small string allocations inside a function are safe", () => {
+    fn string buildLine(int n) {
+        return "line-" + n;
+    }
+    let i = 0;
+    let last = "";
+    while (i < 200) {
+        last = buildLine(i);
+        i = i + 1;
+    }
+    assert(last == "line-199", "last line is line-199");
+});
+
+test("creating many short-lived objects does not panic", () => {
+    class Tiny {
+        public Tiny(int v) { this.v = v; }
+        public int val() { return this.v; }
+    }
+    let sum = 0;
+    let i = 0;
+    while (i < 500) {
+        let obj = new Tiny(i);
+        sum = sum + obj.val();
+        i = i + 1;
+    }
+    // sum of 0..499 = 499*500/2 = 124750
+    assert(sum == 124750, "500 Tiny objects summed correctly");
+});
+
+test("large dict filled in a loop stays manageable", () => {
+    fn any buildDict(int limit) {
+        let d = {};
+        let i = 0;
+        while (i < limit) {
+            d["k" + i] = i * 2;
+            i = i + 1;
+        }
+        return d;
+    }
+    let d = buildDict(200);
+    assert(d["k0"]   == 0,   "d.k0 = 0");
+    assert(d["k199"] == 398, "d.k199 = 398");
+});
+
+summary();

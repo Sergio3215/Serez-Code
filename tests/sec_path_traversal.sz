@@ -1,0 +1,4 @@
+// Security: path traversal via relative segments must be rejected (❌)
+// An attacker might try to escape the sandbox with ../../
+let content = File.read("../../etc/passwd");
+out "FAIL: should have rejected path traversal";

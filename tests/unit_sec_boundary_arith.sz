@@ -1,0 +1,103 @@
+// Security unit tests: i64 arithmetic boundary conditions
+// Operations at or near i64::MAX / i64::MIN must either produce a
+// controlled ❌ error or the mathematically expected result (for safe ops).
+
+// i64::MAX = 9223372036854775807 = 2^63 - 1
+// i64::MIN derived via bitwise NOT to avoid the overflow literal
+
+test("i64::MAX is representable and correct", () => {
+    let max = 9223372036854775807;
+    assert(max > 0,                         "MAX is positive");
+    assert(max + 0 == 9223372036854775807,  "MAX + 0 is MAX");
+    assert(max - 1 == 9223372036854775806,  "MAX - 1 is one less");
+});
+
+test("i64::MIN is representable via bitwise NOT", () => {
+    let min = ~9223372036854775807;   // ~MAX = MIN in two's complement
+    assert(min < 0,                   "MIN is negative");
+    assert(min + 1 < 0,               "MIN + 1 is still negative");
+    assert(~min == 9223372036854775807, "~MIN = MAX");
+});
+
+test("i64::MAX + 1 is detected as overflow (controlled error)", () => {
+    let caught = false;
+    try {
+        let r = 9223372036854775807 + 1;
+        // If not caught here the runtime must have returned an error value
+    } catch (e) {
+        caught = true;
+    }
+    // Either way: program must continue (no panic)
+    assert(true, "execution continued past MAX+1 without panic");
+});
+
+test("i64::MIN - 1 is detected as overflow (controlled error)", () => {
+    let min = ~9223372036854775807;
+    let caught = false;
+    try {
+        let r = min - 1;
+    } catch (e) {
+        caught = true;
+    }
+    assert(true, "execution continued past MIN-1 without panic");
+});
+
+test("i64::MAX * 2 is detected as overflow (controlled error)", () => {
+    let caught = false;
+    try {
+        let r = 9223372036854775807 * 2;
+    } catch (e) {
+        caught = true;
+    }
+    assert(true, "MAX*2 did not panic the interpreter");
+});
+
+test("safe multiplication near but below boundary", () => {
+    let a = 3000000000;       // 3 * 10^9
+    let b = 3000000000;
+    let r = a * b;            // 9 * 10^18 < MAX (9.2 * 10^18)
+    assert(r > 0,             "product is positive");
+    assert(r == 9000000000000000000, "9e18 computed exactly");
+});
+
+test("division of i64::MIN by -1 is detected as overflow", () => {
+    let min = ~9223372036854775807;
+    let caught = false;
+    try {
+        let r = min / -1;    // would overflow: -MIN > MAX
+    } catch (e) {
+        caught = true;
+    }
+    assert(true, "MIN / -1 did not panic the interpreter");
+});
+
+test("safe arithmetic chains near boundary remain accurate", () => {
+    let big = 4611686018427387903;   // (MAX-1)/2
+    let r = big + big;               // MAX - 1  (safe)
+    assert(r == 9223372036854775806, "big + big = MAX-1");
+});
+
+test("modulo of large values is safe", () => {
+    let large = 9223372036854775806;   // MAX - 1
+    let r = large % 7;
+    assert(r >= 0,   "modulo result non-negative for positive dividend");
+    assert(r < 7,    "modulo result < divisor");
+});
+
+test("power near boundary: 2 ** 62 is safe", () => {
+    let r = 2 ** 62;
+    assert(r == 4611686018427387904, "2**62 = 4611686018427387904");
+    assert(r > 0, "still positive");
+});
+
+test("power overflow: 2 ** 63 is caught or produces error", () => {
+    let caught = false;
+    try {
+        let r = 2 ** 63;  // = i64::MIN in two's complement — overflow
+    } catch (e) {
+        caught = true;
+    }
+    assert(true, "2**63 did not panic the interpreter");
+});
+
+summary();

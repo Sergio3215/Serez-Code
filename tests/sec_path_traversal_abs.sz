@@ -1,0 +1,4 @@
+// Security: absolute path access to sensitive system file must be rejected (❌)
+// Even if ../.. is caught, a direct /etc/shadow attempt must also fail
+let content = File.read("/etc/shadow");
+out "FAIL: should have rejected absolute path to system file";

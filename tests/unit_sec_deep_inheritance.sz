@@ -1,0 +1,123 @@
+// Security unit tests: deep inheritance / method dispatch safety
+// A class hierarchy several levels deep must dispatch methods correctly
+// and not cause stack overflows or silent failures in vtable-style dispatch.
+
+class A {
+    public A() { this.tag = "A"; }
+    public string name() { return "A"; }
+    public int depth() { return 0; }
+    public string tag() { return this.tag; }
+}
+
+class B extends A {
+    public B() { this.tag = "B"; }
+    public string name() { return "B"; }
+    public int depth() { return 1; }
+}
+
+class C extends B {
+    public C() { this.tag = "C"; }
+    public string name() { return "C"; }
+    public int depth() { return 2; }
+}
+
+class D extends C {
+    public D() { this.tag = "D"; }
+    public string name() { return "D"; }
+    public int depth() { return 3; }
+}
+
+class E extends D {
+    public E() { this.tag = "E"; }
+    public string name() { return "E"; }
+    public int depth() { return 4; }
+}
+
+class F extends E {
+    public F() { this.tag = "F"; }
+    public string name() { return "F"; }
+    public int depth() { return 5; }
+}
+
+test("level-1 class dispatches own method", () => {
+    let a = new A();
+    assert(a.name()  == "A", "A.name()  = 'A'");
+    assert(a.depth() == 0,   "A.depth() = 0");
+});
+
+test("level-2 class dispatches overridden method", () => {
+    let b = new B();
+    assert(b.name()  == "B", "B.name()  = 'B'");
+    assert(b.depth() == 1,   "B.depth() = 1");
+});
+
+test("level-3 class dispatches correctly", () => {
+    let c = new C();
+    assert(c.name()  == "C", "C.name()  = 'C'");
+    assert(c.depth() == 2,   "C.depth() = 2");
+});
+
+test("level-4 class dispatches correctly", () => {
+    let d = new D();
+    assert(d.name()  == "D", "D.name()  = 'D'");
+    assert(d.depth() == 3,   "D.depth() = 3");
+});
+
+test("level-5 class dispatches correctly", () => {
+    let e = new E();
+    assert(e.name()  == "E", "E.name()  = 'E'");
+    assert(e.depth() == 4,   "E.depth() = 4");
+});
+
+test("level-6 class dispatches correctly", () => {
+    let f = new F();
+    assert(f.name()  == "F", "F.name()  = 'F'");
+    assert(f.depth() == 5,   "F.depth() = 5");
+});
+
+test("deep object carries its own tag field", () => {
+    let f = new F();
+    assert(f.tag == "F", "F.tag field is 'F'");
+});
+
+test("instances at different depths are independent", () => {
+    let a = new A();
+    let c = new C();
+    let f = new F();
+    assert(a.depth() != c.depth(), "A and C at different depths");
+    assert(c.depth() != f.depth(), "C and F at different depths");
+    assert(a.depth() != f.depth(), "A and F at different depths");
+});
+
+test("array of mixed-depth instances: each dispatches own method", () => {
+    let objs = [new A(), new B(), new C(), new D(), new E(), new F()];
+    let names = objs.map(o => o.name());
+    assert(names[0] == "A", "index 0 → A");
+    assert(names[2] == "C", "index 2 → C");
+    assert(names[5] == "F", "index 5 → F");
+});
+
+test("deep class method call in a loop stays stable", () => {
+    let f = new F();
+    let sum = 0;
+    let i = 0;
+    while (i < 100) {
+        sum = sum + f.depth();
+        i = i + 1;
+    }
+    assert(sum == 500, "100 calls to f.depth()=5 sum to 500");
+});
+
+test("creating many deep instances does not cause memory issues", () => {
+    let arr = [];
+    let i = 0;
+    while (i < 50) {
+        arr.push(new F());
+        i = i + 1;
+    }
+    assert(arr.length() == 50,        "50 F instances created");
+    assert(arr[49].depth() == 5,      "last instance depth still 5");
+    assert(arr[49].name()  == "F",    "last instance name still F");
+});
+
+summary();
