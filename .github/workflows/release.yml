@@ -34,7 +34,7 @@ jobs:
             binary: sz
             asset: sz-macos-arm64
 
-          - os: macos-13
+          - os: macos-latest
             name: macOS x64
             target: x86_64-apple-darwin
             binary: sz

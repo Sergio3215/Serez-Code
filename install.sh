@@ -42,6 +42,11 @@ mkdir -p "${BIN_DIR}"
 curl -fsSL "${URL}" -o "${BIN_DIR}/sz"
 chmod +x "${BIN_DIR}/sz"
 
+# Remove macOS quarantine attribute so Gatekeeper doesn't block the binary
+if [ "${OS}" = "Darwin" ]; then
+  xattr -d com.apple.quarantine "${BIN_DIR}/sz" 2>/dev/null || true
+fi
+
 echo ""
 echo "Installed: ${BIN_DIR}/sz"
 
