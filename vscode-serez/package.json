@@ -24,7 +24,7 @@
   "contributes": {
     "languages": [
       {
-        "id": "serez",
+        "id": "serez-code",
         "aliases": [
           "Serez-Code",
           "serez-code-formatter",
@@ -45,7 +45,7 @@
       }
     ],
     "configurationDefaults": {
-      "[serez]": {
+      "[serez-code]": {
         "editor.defaultFormatter": "sd-tools.serez-code-formatter",
         "editor.formatOnSave": true,
         "editor.tabSize": 4,
