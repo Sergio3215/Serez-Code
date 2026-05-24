@@ -15,8 +15,16 @@ path-guid = "21386D8D-F367-40C9-AB61-343B280BDE02"
 license = false
 eula = false
 
+[features]
+llvm = ["inkwell"]
+
 [dependencies]
 notify = "8"
+
+[dependencies.inkwell]
+version = "0.4"
+optional = true
+features = ["llvm17-0"]
 
 [[bin]]
 name = "sz"
