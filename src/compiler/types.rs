@@ -79,3 +79,134 @@ impl SzType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_primitive ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn primitives_fit_on_stack() {
+        assert!(SzType::Int.is_primitive());
+        assert!(SzType::Decimal.is_primitive());
+        assert!(SzType::Bool.is_primitive());
+        assert!(SzType::Null.is_primitive());
+    }
+
+    #[test]
+    fn heap_and_void_types_are_not_primitive() {
+        assert!(!SzType::Str.is_primitive());
+        assert!(!SzType::Void.is_primitive());
+        assert!(!SzType::Unknown.is_primitive());
+        assert!(!SzType::Array(Box::new(SzType::Int)).is_primitive());
+        assert!(!SzType::Class("Foo".to_string()).is_primitive());
+        assert!(!SzType::Enum("Color".to_string()).is_primitive());
+        assert!(!SzType::Dict(Box::new(SzType::Str), Box::new(SzType::Int)).is_primitive());
+        assert!(!SzType::Function { params: vec![], ret: Box::new(SzType::Void) }.is_primitive());
+    }
+
+    // ── display ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn display_scalar_types() {
+        assert_eq!(SzType::Int.display(),     "int");
+        assert_eq!(SzType::Decimal.display(), "decimal");
+        assert_eq!(SzType::Bool.display(),    "bool");
+        assert_eq!(SzType::Str.display(),     "string");
+        assert_eq!(SzType::Null.display(),    "null");
+        assert_eq!(SzType::Void.display(),    "void");
+        assert_eq!(SzType::Unknown.display(), "?");
+    }
+
+    #[test]
+    fn display_named_types() {
+        assert_eq!(SzType::Class("Point".to_string()).display(), "Point");
+        assert_eq!(SzType::Enum("Color".to_string()).display(),  "Color");
+    }
+
+    #[test]
+    fn display_array_nested() {
+        assert_eq!(SzType::Array(Box::new(SzType::Int)).display(), "[int]");
+        assert_eq!(
+            SzType::Array(Box::new(SzType::Array(Box::new(SzType::Bool)))).display(),
+            "[[bool]]"
+        );
+    }
+
+    #[test]
+    fn display_dict() {
+        assert_eq!(
+            SzType::Dict(Box::new(SzType::Str), Box::new(SzType::Int)).display(),
+            "Dict<string,int>"
+        );
+    }
+
+    #[test]
+    fn display_function_type() {
+        let ty = SzType::Function {
+            params: vec![SzType::Int, SzType::Bool],
+            ret:    Box::new(SzType::Decimal),
+        };
+        assert_eq!(ty.display(), "fn(int, bool) -> decimal");
+    }
+
+    #[test]
+    fn display_function_no_params() {
+        let ty = SzType::Function { params: vec![], ret: Box::new(SzType::Void) };
+        assert_eq!(ty.display(), "fn() -> void");
+    }
+
+    // ── from_annotation ───────────────────────────────────────────────────────
+
+    #[test]
+    fn from_annotation_builtin_types() {
+        assert_eq!(SzType::from_annotation("int"),     SzType::Int);
+        assert_eq!(SzType::from_annotation("decimal"), SzType::Decimal);
+        assert_eq!(SzType::from_annotation("bool"),    SzType::Bool);
+        assert_eq!(SzType::from_annotation("string"),  SzType::Str);
+        assert_eq!(SzType::from_annotation("void"),    SzType::Void);
+        assert_eq!(SzType::from_annotation("null"),    SzType::Null);
+    }
+
+    #[test]
+    fn from_annotation_unknown_name_becomes_class() {
+        assert_eq!(SzType::from_annotation("Animal"), SzType::Class("Animal".to_string()));
+        assert_eq!(SzType::from_annotation("Vec2"),   SzType::Class("Vec2".to_string()));
+        assert_eq!(SzType::from_annotation("MyType"), SzType::Class("MyType".to_string()));
+    }
+
+    // ── equality ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn same_scalars_are_equal() {
+        assert_eq!(SzType::Int,  SzType::Int);
+        assert_eq!(SzType::Bool, SzType::Bool);
+        assert_eq!(SzType::Void, SzType::Void);
+    }
+
+    #[test]
+    fn different_scalars_are_not_equal() {
+        assert_ne!(SzType::Int,  SzType::Decimal);
+        assert_ne!(SzType::Bool, SzType::Int);
+        assert_ne!(SzType::Str,  SzType::Null);
+    }
+
+    #[test]
+    fn arrays_compared_by_element_type() {
+        assert_eq!(
+            SzType::Array(Box::new(SzType::Int)),
+            SzType::Array(Box::new(SzType::Int))
+        );
+        assert_ne!(
+            SzType::Array(Box::new(SzType::Int)),
+            SzType::Array(Box::new(SzType::Bool))
+        );
+    }
+
+    #[test]
+    fn classes_compared_by_name() {
+        assert_eq!(SzType::Class("A".to_string()), SzType::Class("A".to_string()));
+        assert_ne!(SzType::Class("A".to_string()), SzType::Class("B".to_string()));
+    }
+}

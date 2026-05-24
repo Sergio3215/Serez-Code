@@ -122,3 +122,133 @@ pub enum HirUnaryOp {
     Neg,
     Not,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── HirExpr::ty() ────────────────────────────────────────────────────────
+
+    #[test]
+    fn literal_types() {
+        assert_eq!(HirExpr::LitInt(0).ty(),               SzType::Int);
+        assert_eq!(HirExpr::LitInt(-999).ty(),            SzType::Int);
+        assert_eq!(HirExpr::LitDecimal(3.14).ty(),        SzType::Decimal);
+        assert_eq!(HirExpr::LitBool(true).ty(),           SzType::Bool);
+        assert_eq!(HirExpr::LitBool(false).ty(),          SzType::Bool);
+        assert_eq!(HirExpr::LitStr("hi".to_string()).ty(), SzType::Str);
+        assert_eq!(HirExpr::Null.ty(),                    SzType::Null);
+    }
+
+    #[test]
+    fn var_preserves_its_type() {
+        let e = HirExpr::Var("score".to_string(), SzType::Decimal);
+        assert_eq!(e.ty(), SzType::Decimal);
+
+        let e2 = HirExpr::Var("flag".to_string(), SzType::Bool);
+        assert_eq!(e2.ty(), SzType::Bool);
+    }
+
+    #[test]
+    fn binop_carries_result_type() {
+        let add = HirExpr::BinOp {
+            op: HirBinOp::Add,
+            left:  Box::new(HirExpr::LitInt(1)),
+            right: Box::new(HirExpr::LitInt(2)),
+            ty: SzType::Int,
+        };
+        assert_eq!(add.ty(), SzType::Int);
+
+        let cmp = HirExpr::BinOp {
+            op: HirBinOp::Lt,
+            left:  Box::new(HirExpr::LitInt(1)),
+            right: Box::new(HirExpr::LitInt(2)),
+            ty: SzType::Bool,
+        };
+        assert_eq!(cmp.ty(), SzType::Bool);
+    }
+
+    #[test]
+    fn unary_op_carries_type() {
+        let neg = HirExpr::UnaryOp {
+            op:      HirUnaryOp::Neg,
+            operand: Box::new(HirExpr::LitInt(5)),
+            ty:      SzType::Int,
+        };
+        assert_eq!(neg.ty(), SzType::Int);
+
+        let not = HirExpr::UnaryOp {
+            op:      HirUnaryOp::Not,
+            operand: Box::new(HirExpr::LitBool(true)),
+            ty:      SzType::Bool,
+        };
+        assert_eq!(not.ty(), SzType::Bool);
+    }
+
+    #[test]
+    fn call_returns_declared_type() {
+        let e = HirExpr::Call {
+            name: "parse".to_string(),
+            args: vec![HirExpr::LitStr("42".to_string())],
+            ty:   SzType::Int,
+        };
+        assert_eq!(e.ty(), SzType::Int);
+    }
+
+    #[test]
+    fn method_call_returns_declared_type() {
+        let e = HirExpr::MethodCall {
+            object: Box::new(HirExpr::Var("s".to_string(), SzType::Str)),
+            method: "length".to_string(),
+            args:   vec![],
+            ty:     SzType::Int,
+        };
+        assert_eq!(e.ty(), SzType::Int);
+    }
+
+    #[test]
+    fn index_returns_declared_element_type() {
+        let e = HirExpr::Index {
+            array: Box::new(HirExpr::Var("arr".to_string(), SzType::Array(Box::new(SzType::Int)))),
+            index: Box::new(HirExpr::LitInt(0)),
+            ty:    SzType::Int,
+        };
+        assert_eq!(e.ty(), SzType::Int);
+    }
+
+    #[test]
+    fn field_returns_declared_type() {
+        let e = HirExpr::Field {
+            object: Box::new(HirExpr::Var("p".to_string(), SzType::Class("Point".to_string()))),
+            name:   "x".to_string(),
+            ty:     SzType::Decimal,
+        };
+        assert_eq!(e.ty(), SzType::Decimal);
+    }
+
+    #[test]
+    fn new_type_is_class_with_name() {
+        let e = HirExpr::New { class: "Vec2".to_string(), args: vec![] };
+        assert_eq!(e.ty(), SzType::Class("Vec2".to_string()));
+    }
+
+    #[test]
+    fn array_literal_type_wraps_element() {
+        let e = HirExpr::Array {
+            elements: vec![HirExpr::LitInt(1), HirExpr::LitInt(2)],
+            elem_ty:  SzType::Int,
+        };
+        assert_eq!(e.ty(), SzType::Array(Box::new(SzType::Int)));
+    }
+
+    #[test]
+    fn if_expr_carries_branch_type() {
+        let e = HirExpr::If {
+            cond:      Box::new(HirExpr::LitBool(true)),
+            then_expr: Box::new(HirExpr::LitDecimal(1.0)),
+            else_expr: Box::new(HirExpr::LitDecimal(0.0)),
+            ty:        SzType::Decimal,
+        };
+        assert_eq!(e.ty(), SzType::Decimal);
+    }
+}

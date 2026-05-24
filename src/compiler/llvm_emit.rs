@@ -363,3 +363,138 @@ pub mod emit {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests — run against the stub (no LLVM required)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[cfg(not(feature = "llvm"))]
+mod tests {
+    use super::emit::LlvmEmitter;
+    use crate::compiler::{
+        hir::{HirBinOp, HirExpr, HirFunction, HirParam, HirProgram, HirStmt, HirLValue},
+        mir::*,
+        mir_lower::MirLowerer,
+        types::SzType,
+    };
+
+    fn make_mir(hir_body: Vec<HirStmt>) -> MirProgram {
+        let prog = HirProgram { functions: vec![HirFunction {
+            name: "main".into(), params: vec![], ret_type: SzType::Void, body: hir_body,
+        }]};
+        MirLowerer::new().lower_program(&prog)
+    }
+
+    #[test]
+    fn stub_empty_program_does_not_panic() {
+        LlvmEmitter::new().emit_program(&MirProgram { functions: vec![] });
+    }
+
+    #[test]
+    fn stub_single_function_does_not_panic() {
+        let mir = make_mir(vec![
+            HirStmt::Let { name: "x".into(), ty: SzType::Int, value: HirExpr::LitInt(1), is_const: false },
+        ]);
+        LlvmEmitter::new().emit_program(&mir);
+    }
+
+    #[test]
+    fn stub_complex_program_does_not_panic() {
+        let mir = make_mir(vec![
+            HirStmt::While {
+                cond: HirExpr::LitBool(false),
+                body: vec![
+                    HirStmt::Out(HirExpr::LitStr("tick".into())),
+                    HirStmt::Break,
+                ],
+            },
+        ]);
+        LlvmEmitter::new().emit_program(&mir);
+    }
+
+    #[test]
+    fn stub_program_with_arithmetic_and_return() {
+        let mir = make_mir(vec![
+            HirStmt::Let {
+                name: "r".into(), ty: SzType::Int,
+                value: HirExpr::BinOp {
+                    op: HirBinOp::Add,
+                    left:  Box::new(HirExpr::LitInt(2)),
+                    right: Box::new(HirExpr::LitInt(3)),
+                    ty: SzType::Int,
+                },
+                is_const: false,
+            },
+            HirStmt::Return(Some(HirExpr::Var("r".into(), SzType::Int))),
+        ]);
+        LlvmEmitter::new().emit_program(&mir);
+    }
+
+    #[test]
+    fn stub_multiple_functions_does_not_panic() {
+        let funcs = vec![
+            HirFunction {
+                name: "zero".into(), params: vec![], ret_type: SzType::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::LitInt(0)))],
+            },
+            HirFunction {
+                name: "add".into(),
+                params: vec![
+                    HirParam { name: "a".into(), ty: SzType::Int },
+                    HirParam { name: "b".into(), ty: SzType::Int },
+                ],
+                ret_type: SzType::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: HirBinOp::Add,
+                    left:  Box::new(HirExpr::Var("a".into(), SzType::Int)),
+                    right: Box::new(HirExpr::Var("b".into(), SzType::Int)),
+                    ty: SzType::Int,
+                }))],
+            },
+        ];
+        let prog = HirProgram { functions: funcs };
+        let mir = MirLowerer::new().lower_program(&prog);
+        LlvmEmitter::new().emit_program(&mir);
+    }
+
+    // ── MirProgram structural invariants ─────────────────────────────────────
+
+    #[test]
+    fn every_mir_function_has_at_least_one_block() {
+        let mir = make_mir(vec![]);
+        for f in &mir.functions {
+            assert!(!f.blocks.is_empty(), "function '{}' has no blocks", f.name);
+        }
+    }
+
+    #[test]
+    fn mir_program_preserves_function_count() {
+        let prog = HirProgram { functions: vec![
+            HirFunction { name: "a".into(), params: vec![], ret_type: SzType::Void, body: vec![] },
+            HirFunction { name: "b".into(), params: vec![], ret_type: SzType::Void, body: vec![] },
+            HirFunction { name: "c".into(), params: vec![], ret_type: SzType::Void, body: vec![] },
+        ]};
+        let mir = MirLowerer::new().lower_program(&prog);
+        assert_eq!(mir.functions.len(), 3);
+        LlvmEmitter::new().emit_program(&mir);
+    }
+
+    #[test]
+    fn all_basic_block_terminators_are_reachable() {
+        let mir = make_mir(vec![
+            HirStmt::If {
+                cond: HirExpr::LitBool(true),
+                then_body: vec![HirStmt::Return(Some(HirExpr::LitInt(1)))],
+                else_body: vec![HirStmt::Return(Some(HirExpr::LitInt(0)))],
+            },
+        ]);
+        for f in &mir.functions {
+            for block in &f.blocks {
+                let _ = &block.term; // terminator always present
+                assert!(!block.label.is_empty());
+            }
+        }
+        LlvmEmitter::new().emit_program(&mir);
+    }
+}

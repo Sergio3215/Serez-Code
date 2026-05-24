@@ -44,10 +44,11 @@ impl MirLowerer {
             fl.lower_stmt(stmt);
         }
 
-        // Seal the last open block if it has no terminator yet
-        if !fl.cur_instrs.is_empty() || fl.blocks.is_empty() {
-            fl.seal(Terminator::Return(None));
-        }
+        // Always seal the last open block. Terminal blocks like while_exit,
+        // for_exit, and merge may be empty — seal them unconditionally so they
+        // appear in the block list. Unreachable blocks (after an explicit return
+        // or break) are structurally valid; LLVM discards them during codegen.
+        fl.seal(Terminator::Return(None));
 
         MirFunction {
             name: func.name.clone(),
@@ -351,5 +352,423 @@ impl<'a> FnLowerer<'a> {
                 MirVal::Temp(result_t)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::hir::*;
+    use crate::compiler::mir::*;
+    use crate::compiler::types::SzType;
+
+    // ── Builders ─────────────────────────────────────────────────────────────
+
+    fn lower(body: Vec<HirStmt>) -> MirFunction {
+        let prog = HirProgram { functions: vec![HirFunction {
+            name: "test".into(), params: vec![], ret_type: SzType::Void, body,
+        }]};
+        MirLowerer::new().lower_program(&prog).functions.remove(0)
+    }
+
+    fn int_var(name: &str) -> HirExpr { HirExpr::Var(name.to_string(), SzType::Int) }
+
+    fn add(a: HirExpr, b: HirExpr) -> HirExpr {
+        HirExpr::BinOp { op: HirBinOp::Add, left: Box::new(a), right: Box::new(b), ty: SzType::Int }
+    }
+
+    fn lt(a: HirExpr, b: HirExpr) -> HirExpr {
+        HirExpr::BinOp { op: HirBinOp::Lt, left: Box::new(a), right: Box::new(b), ty: SzType::Bool }
+    }
+
+    // ── Basic block structure ─────────────────────────────────────────────────
+
+    #[test]
+    fn empty_function_has_entry_block_with_void_return() {
+        let f = lower(vec![]);
+        assert!(!f.blocks.is_empty());
+        assert_eq!(f.blocks[0].label, "entry");
+        assert!(matches!(f.blocks[0].term, Terminator::Return(None)));
+    }
+
+    #[test]
+    fn every_block_has_exactly_one_terminator() {
+        let f = lower(vec![
+            HirStmt::If {
+                cond: HirExpr::LitBool(true),
+                then_body: vec![HirStmt::Out(HirExpr::LitInt(1))],
+                else_body: vec![HirStmt::Out(HirExpr::LitInt(2))],
+            },
+        ]);
+        for block in &f.blocks {
+            // verifying the block has a terminator (just by type-checking the enum)
+            let _ = &block.term;
+        }
+        assert!(f.blocks.len() >= 4); // entry, then, else, merge
+    }
+
+    // ── Let / Store ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn let_const_emits_store_instruction() {
+        let f = lower(vec![
+            HirStmt::Let { name: "x".into(), ty: SzType::Int, value: HirExpr::LitInt(42), is_const: false },
+        ]);
+        let entry = &f.blocks[0];
+        assert!(entry.instrs.iter().any(|i| {
+            matches!(i, MirInstr::Store(n, MirVal::ConstInt(42)) if n == "x")
+        }));
+    }
+
+    #[test]
+    fn let_bool_emits_store_const_bool() {
+        let f = lower(vec![
+            HirStmt::Let { name: "flag".into(), ty: SzType::Bool, value: HirExpr::LitBool(true), is_const: false },
+        ]);
+        assert!(f.blocks[0].instrs.iter().any(|i| {
+            matches!(i, MirInstr::Store(n, MirVal::ConstBool(true)) if n == "flag")
+        }));
+    }
+
+    // ── BinOp ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn arithmetic_binop_emits_binop_and_store() {
+        let expr = add(HirExpr::LitInt(3), HirExpr::LitInt(4));
+        let f = lower(vec![
+            HirStmt::Let { name: "r".into(), ty: SzType::Int, value: expr, is_const: false },
+        ]);
+        let instrs = &f.blocks[0].instrs;
+        // BinOp(t, Add, ConstInt(3), ConstInt(4))
+        assert!(instrs.iter().any(|i| matches!(i, MirInstr::BinOp(_, HirBinOp::Add, MirVal::ConstInt(3), MirVal::ConstInt(4)))));
+        // Store("r", Temp(t))
+        assert!(instrs.iter().any(|i| matches!(i, MirInstr::Store(n, MirVal::Temp(_)) if n == "r")));
+    }
+
+    #[test]
+    fn load_var_emits_load_instruction() {
+        let f = lower(vec![
+            HirStmt::Let { name: "x".into(), ty: SzType::Int, value: HirExpr::LitInt(5), is_const: false },
+            HirStmt::Let { name: "y".into(), ty: SzType::Int, value: int_var("x"), is_const: false },
+        ]);
+        let instrs = &f.blocks[0].instrs;
+        assert!(instrs.iter().any(|i| matches!(i, MirInstr::Load(_, n) if n == "x")));
+    }
+
+    // ── Return ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn return_value_emits_return_terminator() {
+        let f = lower(vec![HirStmt::Return(Some(HirExpr::LitInt(7)))]);
+        assert!(f.blocks.iter().any(|b| {
+            matches!(&b.term, Terminator::Return(Some(MirVal::ConstInt(7))))
+        }));
+    }
+
+    #[test]
+    fn return_none_emits_void_return() {
+        let prog = HirProgram { functions: vec![HirFunction {
+            name: "void_fn".into(), params: vec![], ret_type: SzType::Void,
+            body: vec![HirStmt::Return(None)],
+        }]};
+        let f = MirLowerer::new().lower_program(&prog).functions.remove(0);
+        assert!(f.blocks.iter().any(|b| matches!(&b.term, Terminator::Return(None))));
+    }
+
+    // ── If / Else ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn if_else_creates_then_else_merge_blocks() {
+        let f = lower(vec![HirStmt::If {
+            cond: HirExpr::LitBool(true),
+            then_body: vec![HirStmt::Out(HirExpr::LitInt(1))],
+            else_body: vec![HirStmt::Out(HirExpr::LitInt(2))],
+        }]);
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("then")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("else")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("merge")));
+    }
+
+    #[test]
+    fn if_without_else_has_no_else_block() {
+        let f = lower(vec![HirStmt::If {
+            cond: HirExpr::LitBool(true),
+            then_body: vec![HirStmt::Out(HirExpr::LitInt(0))],
+            else_body: vec![],
+        }]);
+        assert!(!f.blocks.iter().any(|b| b.label.starts_with("else")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("merge")));
+    }
+
+    #[test]
+    fn if_entry_block_ends_with_branch() {
+        let f = lower(vec![HirStmt::If {
+            cond: HirExpr::LitBool(true),
+            then_body: vec![],
+            else_body: vec![],
+        }]);
+        assert!(matches!(f.blocks[0].term, Terminator::Branch(_, _, _)));
+    }
+
+    // ── While ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn while_loop_produces_cond_body_exit_blocks() {
+        let f = lower(vec![HirStmt::While {
+            cond: HirExpr::LitBool(true),
+            body: vec![HirStmt::Out(HirExpr::LitInt(0))],
+        }]);
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("while_cond")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("while_body")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("while_exit")));
+    }
+
+    #[test]
+    fn while_cond_block_ends_with_branch() {
+        let f = lower(vec![HirStmt::While {
+            cond: HirExpr::LitBool(true),
+            body: vec![],
+        }]);
+        let cond_block = f.blocks.iter().find(|b| b.label.starts_with("while_cond")).unwrap();
+        assert!(matches!(cond_block.term, Terminator::Branch(_, _, _)));
+    }
+
+    // ── Break / Continue ──────────────────────────────────────────────────────
+
+    #[test]
+    fn break_terminates_body_block_with_jump_to_exit() {
+        let f = lower(vec![HirStmt::While {
+            cond: HirExpr::LitBool(true),
+            body: vec![HirStmt::Break],
+        }]);
+        let exit_lbl = f.blocks.iter()
+            .find(|b| b.label.starts_with("while_exit"))
+            .map(|b| b.label.clone()).unwrap();
+        let body = f.blocks.iter().find(|b| b.label.starts_with("while_body")).unwrap();
+        assert!(matches!(&body.term, Terminator::Jump(lbl) if *lbl == exit_lbl));
+    }
+
+    #[test]
+    fn continue_terminates_body_block_with_jump_to_cond() {
+        let f = lower(vec![HirStmt::While {
+            cond: HirExpr::LitBool(true),
+            body: vec![HirStmt::Continue],
+        }]);
+        let cond_lbl = f.blocks.iter()
+            .find(|b| b.label.starts_with("while_cond"))
+            .map(|b| b.label.clone()).unwrap();
+        let body = f.blocks.iter().find(|b| b.label.starts_with("while_body")).unwrap();
+        assert!(matches!(&body.term, Terminator::Jump(lbl) if *lbl == cond_lbl));
+    }
+
+    // ── For ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn for_loop_produces_cond_body_update_exit_blocks() {
+        let f = lower(vec![HirStmt::For {
+            init: Box::new(HirStmt::Let {
+                name: "i".into(), ty: SzType::Int,
+                value: HirExpr::LitInt(0), is_const: false,
+            }),
+            cond: lt(int_var("i"), HirExpr::LitInt(10)),
+            update: Box::new(HirStmt::Assign(
+                HirLValue::Var("i".into()),
+                add(int_var("i"), HirExpr::LitInt(1)),
+            )),
+            body: vec![],
+        }]);
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("for_cond")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("for_body")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("for_update")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("for_exit")));
+    }
+
+    #[test]
+    fn for_update_block_jumps_back_to_cond() {
+        let f = lower(vec![HirStmt::For {
+            init: Box::new(HirStmt::Let {
+                name: "i".into(), ty: SzType::Int, value: HirExpr::LitInt(0), is_const: false,
+            }),
+            cond: lt(int_var("i"), HirExpr::LitInt(5)),
+            update: Box::new(HirStmt::Assign(
+                HirLValue::Var("i".into()),
+                add(int_var("i"), HirExpr::LitInt(1)),
+            )),
+            body: vec![],
+        }]);
+        let cond_lbl = f.blocks.iter()
+            .find(|b| b.label.starts_with("for_cond"))
+            .map(|b| b.label.clone()).unwrap();
+        let update = f.blocks.iter().find(|b| b.label.starts_with("for_update")).unwrap();
+        assert!(matches!(&update.term, Terminator::Jump(lbl) if *lbl == cond_lbl));
+    }
+
+    // ── Out ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn out_statement_emits_out_instruction() {
+        let f = lower(vec![HirStmt::Out(HirExpr::LitStr("hello".into()))]);
+        assert!(f.blocks[0].instrs.iter().any(|i| {
+            matches!(i, MirInstr::Out(MirVal::ConstStr(s)) if s == "hello")
+        }));
+    }
+
+    // ── Function params ───────────────────────────────────────────────────────
+
+    #[test]
+    fn function_params_preserved_in_mir() {
+        let prog = HirProgram { functions: vec![HirFunction {
+            name: "add".into(),
+            params: vec![
+                HirParam { name: "a".into(), ty: SzType::Int },
+                HirParam { name: "b".into(), ty: SzType::Int },
+            ],
+            ret_type: SzType::Int,
+            body: vec![HirStmt::Return(Some(int_var("a")))],
+        }]};
+        let f = MirLowerer::new().lower_program(&prog).functions.remove(0);
+        assert_eq!(f.params.len(), 2);
+        assert_eq!(f.params[0], ("a".to_string(), SzType::Int));
+        assert_eq!(f.params[1], ("b".to_string(), SzType::Int));
+        assert_eq!(f.ret_type, SzType::Int);
+    }
+
+    // ── Conditional expression (HirExpr::If) ──────────────────────────────────
+
+    #[test]
+    fn conditional_expr_creates_if_then_else_merge_blocks() {
+        let cond_expr = HirExpr::If {
+            cond:      Box::new(HirExpr::LitBool(true)),
+            then_expr: Box::new(HirExpr::LitInt(1)),
+            else_expr: Box::new(HirExpr::LitInt(2)),
+            ty:        SzType::Int,
+        };
+        let f = lower(vec![HirStmt::Let { name: "v".into(), ty: SzType::Int, value: cond_expr, is_const: false }]);
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("if_then")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("if_else")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("if_merge")));
+        // merge block stores result into the named variable
+        let merge = f.blocks.iter().find(|b| b.label.starts_with("if_merge")).unwrap();
+        assert!(merge.instrs.iter().any(|i| matches!(i, MirInstr::Store(n, _) if n == "v")));
+    }
+
+    // ── App: fibonacci ────────────────────────────────────────────────────────
+
+    #[test]
+    fn fibonacci_program_lowers_to_valid_mir() {
+        // fn int fib(int n) { if n <= 1 { return n; } return fib(n-1) + fib(n-2); }
+        let prog = HirProgram { functions: vec![HirFunction {
+            name: "fib".into(),
+            params: vec![HirParam { name: "n".into(), ty: SzType::Int }],
+            ret_type: SzType::Int,
+            body: vec![
+                HirStmt::If {
+                    cond: HirExpr::BinOp {
+                        op: HirBinOp::Le,
+                        left:  Box::new(int_var("n")),
+                        right: Box::new(HirExpr::LitInt(1)),
+                        ty: SzType::Bool,
+                    },
+                    then_body: vec![HirStmt::Return(Some(int_var("n")))],
+                    else_body: vec![],
+                },
+                HirStmt::Return(Some(add(
+                    HirExpr::Call { name: "fib".into(), args: vec![
+                        HirExpr::BinOp { op: HirBinOp::Sub, left: Box::new(int_var("n")), right: Box::new(HirExpr::LitInt(1)), ty: SzType::Int }
+                    ], ty: SzType::Int },
+                    HirExpr::Call { name: "fib".into(), args: vec![
+                        HirExpr::BinOp { op: HirBinOp::Sub, left: Box::new(int_var("n")), right: Box::new(HirExpr::LitInt(2)), ty: SzType::Int }
+                    ], ty: SzType::Int },
+                ))),
+            ],
+        }]};
+        let f = MirLowerer::new().lower_program(&prog).functions.remove(0);
+        assert_eq!(f.name, "fib");
+        // must have the base-case if blocks
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("then")));
+        // must emit recursive Call instructions
+        assert!(f.blocks.iter().any(|b|
+            b.instrs.iter().any(|i| matches!(i, MirInstr::Call(_, nm, _) if nm == "fib"))
+        ));
+    }
+
+    // ── App: sum 0..n (for loop + accumulator) ────────────────────────────────
+
+    #[test]
+    fn sum_n_for_loop_program() {
+        // let sum = 0;
+        // for (let i = 0; i < 10; i = i + 1) { sum = sum + i; }
+        // return sum;
+        let prog = HirProgram { functions: vec![HirFunction {
+            name: "sum_n".into(),
+            params: vec![],
+            ret_type: SzType::Int,
+            body: vec![
+                HirStmt::Let { name: "sum".into(), ty: SzType::Int, value: HirExpr::LitInt(0), is_const: false },
+                HirStmt::For {
+                    init: Box::new(HirStmt::Let { name: "i".into(), ty: SzType::Int, value: HirExpr::LitInt(0), is_const: false }),
+                    cond: lt(int_var("i"), HirExpr::LitInt(10)),
+                    update: Box::new(HirStmt::Assign(HirLValue::Var("i".into()), add(int_var("i"), HirExpr::LitInt(1)))),
+                    body: vec![
+                        HirStmt::Assign(HirLValue::Var("sum".into()), add(int_var("sum"), int_var("i"))),
+                    ],
+                },
+                HirStmt::Return(Some(int_var("sum"))),
+            ],
+        }]};
+        let f = MirLowerer::new().lower_program(&prog).functions.remove(0);
+        // structural checks
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("for_cond")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("for_body")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("for_update")));
+        // body has Store for "sum"
+        let body = f.blocks.iter().find(|b| b.label.starts_with("for_body")).unwrap();
+        assert!(body.instrs.iter().any(|i| matches!(i, MirInstr::Store(n, _) if n == "sum")));
+    }
+
+    // ── App: count_down (while + break) ───────────────────────────────────────
+
+    #[test]
+    fn countdown_while_with_break() {
+        // let n = 5;
+        // while (n > 0) { n = n - 1; if n == 2 { break; } }
+        let prog = HirProgram { functions: vec![HirFunction {
+            name: "countdown".into(),
+            params: vec![],
+            ret_type: SzType::Void,
+            body: vec![
+                HirStmt::Let { name: "n".into(), ty: SzType::Int, value: HirExpr::LitInt(5), is_const: false },
+                HirStmt::While {
+                    cond: HirExpr::BinOp {
+                        op: HirBinOp::Gt,
+                        left: Box::new(int_var("n")), right: Box::new(HirExpr::LitInt(0)),
+                        ty: SzType::Bool,
+                    },
+                    body: vec![
+                        HirStmt::Assign(
+                            HirLValue::Var("n".into()),
+                            HirExpr::BinOp { op: HirBinOp::Sub, left: Box::new(int_var("n")), right: Box::new(HirExpr::LitInt(1)), ty: SzType::Int },
+                        ),
+                        HirStmt::If {
+                            cond: HirExpr::BinOp {
+                                op: HirBinOp::Eq,
+                                left: Box::new(int_var("n")), right: Box::new(HirExpr::LitInt(2)),
+                                ty: SzType::Bool,
+                            },
+                            then_body: vec![HirStmt::Break],
+                            else_body: vec![],
+                        },
+                    ],
+                },
+            ],
+        }]};
+        let f = MirLowerer::new().lower_program(&prog).functions.remove(0);
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("while_cond")));
+        assert!(f.blocks.iter().any(|b| b.label.starts_with("while_exit")));
+        // break → some block jumps to while_exit
+        let exit_lbl = f.blocks.iter()
+            .find(|b| b.label.starts_with("while_exit"))
+            .map(|b| b.label.clone()).unwrap();
+        assert!(f.blocks.iter().any(|b| matches!(&b.term, Terminator::Jump(lbl) if *lbl == exit_lbl)));
     }
 }

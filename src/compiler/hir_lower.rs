@@ -552,3 +552,367 @@ impl HirLowerer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast;
+
+    // ── AST builder helpers ───────────────────────────────────────────────────
+
+    fn program(stmts: Vec<ast::Statement>) -> ast::Program {
+        ast::Program { statements: stmts }
+    }
+
+    fn block(stmts: Vec<ast::Statement>) -> ast::BlockStatement {
+        ast::BlockStatement { statements: stmts }
+    }
+
+    fn let_int(name: &str, val: i64) -> ast::Statement {
+        ast::Statement::Let(ast::LetStatement {
+            name: name.to_string(),
+            value: ast::Expression::Integer(val),
+            is_const: false,
+        })
+    }
+
+    fn let_bool(name: &str, val: bool) -> ast::Statement {
+        ast::Statement::Let(ast::LetStatement {
+            name: name.to_string(),
+            value: ast::Expression::Boolean(val),
+            is_const: false,
+        })
+    }
+
+    fn infix(l: ast::Expression, op: &str, r: ast::Expression) -> ast::Expression {
+        ast::Expression::Infix(ast::InfixExpression {
+            left: Box::new(l), operator: op.to_string(), right: Box::new(r),
+            line: 0, column: 0,
+        })
+    }
+
+    fn ident(name: &str) -> ast::Expression { ast::Expression::Identifier(name.to_string()) }
+
+    fn out(expr: ast::Expression) -> ast::Statement {
+        ast::Statement::Out(ast::OutStatement { value: expr })
+    }
+
+    fn fn_decl(
+        name: &str,
+        params: Vec<(&str, &str)>,
+        ret: &str,
+        body: Vec<ast::Statement>,
+    ) -> ast::Statement {
+        ast::Statement::FunctionDeclaration(ast::FunctionDeclaration {
+            name: name.to_string(),
+            function: ast::FunctionLiteral {
+                return_type: Some(ret.to_string()),
+                parameters: params.iter().map(|(n, t)| ast::Parameter {
+                    name: n.to_string(),
+                    type_name: Some(t.to_string()),
+                    is_rest: false,
+                    default_value: None,
+                }).collect(),
+                body: block(body),
+            },
+        })
+    }
+
+    fn main_fn(hir: &crate::compiler::hir::HirProgram) -> &crate::compiler::hir::HirFunction {
+        hir.functions.iter().find(|f| f.name == "__sz_main").expect("no __sz_main")
+    }
+
+    // ── Let / Assign ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn let_integer_lowers_to_hir_let() {
+        let hir = HirLowerer::new().lower_program(&program(vec![let_int("x", 99)]));
+        let m = main_fn(&hir);
+        assert_eq!(m.body.len(), 1);
+        match &m.body[0] {
+            HirStmt::Let { name, ty, value, .. } => {
+                assert_eq!(name, "x");
+                assert_eq!(*ty, SzType::Int);
+                assert!(matches!(value, HirExpr::LitInt(99)));
+            }
+            s => panic!("expected Let, got {:?}", s),
+        }
+    }
+
+    #[test]
+    fn let_bool_infers_bool_type() {
+        let hir = HirLowerer::new().lower_program(&program(vec![let_bool("flag", false)]));
+        let m = main_fn(&hir);
+        match &m.body[0] {
+            HirStmt::Let { ty, value, .. } => {
+                assert_eq!(*ty, SzType::Bool);
+                assert!(matches!(value, HirExpr::LitBool(false)));
+            }
+            s => panic!("{:?}", s),
+        }
+    }
+
+    #[test]
+    fn multiple_top_level_stmts_all_go_to_sz_main() {
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            let_int("a", 1),
+            let_int("b", 2),
+            let_int("c", 3),
+        ]));
+        let m = main_fn(&hir);
+        assert_eq!(m.body.len(), 3);
+    }
+
+    // ── Arithmetic / BinOp ───────────────────────────────────────────────────
+
+    #[test]
+    fn addition_becomes_binop_add() {
+        let expr = infix(ast::Expression::Integer(3), "+", ast::Expression::Integer(4));
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            ast::Statement::Let(ast::LetStatement { name: "r".into(), value: expr, is_const: false }),
+        ]));
+        match &main_fn(&hir).body[0] {
+            HirStmt::Let { value: HirExpr::BinOp { op, ty, .. }, .. } => {
+                assert_eq!(*op, HirBinOp::Add);
+                assert_eq!(*ty, SzType::Int);
+            }
+            s => panic!("{:?}", s),
+        }
+    }
+
+    #[test]
+    fn comparison_produces_bool_type() {
+        let expr = infix(ident("x"), "<", ast::Expression::Integer(10));
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            ast::Statement::Let(ast::LetStatement { name: "c".into(), value: expr, is_const: false }),
+        ]));
+        match &main_fn(&hir).body[0] {
+            HirStmt::Let { ty, value: HirExpr::BinOp { op, .. }, .. } => {
+                assert_eq!(*ty, SzType::Bool);
+                assert_eq!(*op, HirBinOp::Lt);
+            }
+            s => panic!("{:?}", s),
+        }
+    }
+
+    // ── Control flow ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn out_statement_lowers_correctly() {
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            out(ast::Expression::Integer(42)),
+        ]));
+        assert!(matches!(&main_fn(&hir).body[0], HirStmt::Out(HirExpr::LitInt(42))));
+    }
+
+    #[test]
+    fn while_loop_lowers_to_hir_while() {
+        let w = ast::Statement::While(ast::WhileStatement {
+            condition: ast::Expression::Boolean(true),
+            body: block(vec![ast::Statement::Break]),
+            label: None,
+        });
+        let hir = HirLowerer::new().lower_program(&program(vec![w]));
+        let stmt = &main_fn(&hir).body[0];
+        assert!(matches!(stmt, HirStmt::While { .. }));
+        if let HirStmt::While { cond, body } = stmt {
+            assert!(matches!(cond, HirExpr::LitBool(true)));
+            assert!(matches!(body[0], HirStmt::Break));
+        }
+    }
+
+    #[test]
+    fn break_and_continue_lower_directly() {
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            ast::Statement::Break,
+            ast::Statement::Continue,
+        ]));
+        let m = main_fn(&hir);
+        assert!(matches!(m.body[0], HirStmt::Break));
+        assert!(matches!(m.body[1], HirStmt::Continue));
+    }
+
+    #[test]
+    fn if_statement_with_else_lowers_correctly() {
+        let if_stmt = ast::Statement::Expression(ast::Expression::If(ast::IfExpression {
+            condition: Box::new(ast::Expression::Boolean(true)),
+            consequence: block(vec![out(ast::Expression::Integer(1))]),
+            alternative: Some(block(vec![out(ast::Expression::Integer(2))])),
+        }));
+        let hir = HirLowerer::new().lower_program(&program(vec![if_stmt]));
+        let m = main_fn(&hir);
+        match &m.body[0] {
+            HirStmt::If { cond, then_body, else_body } => {
+                assert!(matches!(cond, HirExpr::LitBool(true)));
+                assert_eq!(then_body.len(), 1);
+                assert_eq!(else_body.len(), 1);
+            }
+            s => panic!("{:?}", s),
+        }
+    }
+
+    #[test]
+    fn do_while_desugars_to_body_plus_while() {
+        let dw = ast::Statement::DoWhile(ast::WhileStatement {
+            condition: ast::Expression::Boolean(false),
+            body: block(vec![out(ast::Expression::Integer(0))]),
+            label: None,
+        });
+        let hir = HirLowerer::new().lower_program(&program(vec![dw]));
+        // DoWhile → Block([Block(body), While{...}])
+        match &main_fn(&hir).body[0] {
+            HirStmt::Block(outer) => {
+                assert!(outer.iter().any(|s| matches!(s, HirStmt::While { .. })));
+            }
+            s => panic!("expected Block from DoWhile, got {:?}", s),
+        }
+    }
+
+    #[test]
+    fn ternary_desugars_to_hir_if_expr() {
+        let ternary = ast::Expression::Ternary(ast::TernaryExpression {
+            condition: Box::new(ast::Expression::Boolean(true)),
+            then_expr: Box::new(ast::Expression::Integer(1)),
+            else_expr: Box::new(ast::Expression::Integer(0)),
+        });
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            ast::Statement::Let(ast::LetStatement { name: "v".into(), value: ternary, is_const: false }),
+        ]));
+        match &main_fn(&hir).body[0] {
+            HirStmt::Let { value: HirExpr::If { .. }, .. } => {}
+            s => panic!("expected Let with HirExpr::If, got {:?}", s),
+        }
+    }
+
+    #[test]
+    fn null_coalescing_desugars_to_hir_if_expr() {
+        let nc = infix(ident("maybe"), "??", ast::Expression::Integer(0));
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            ast::Statement::Let(ast::LetStatement { name: "v".into(), value: nc, is_const: false }),
+        ]));
+        match &main_fn(&hir).body[0] {
+            HirStmt::Let { value: HirExpr::If { .. }, .. } => {}
+            s => panic!("expected Let with HirExpr::If from ??, got {:?}", s),
+        }
+    }
+
+    #[test]
+    fn switch_desugars_to_if_else_chain() {
+        let sw = ast::Statement::Switch(ast::SwitchStatement {
+            value: ident("x"),
+            cases: vec![
+                ast::SwitchCase {
+                    values: vec![ast::Expression::Integer(1)],
+                    body: block(vec![out(ast::Expression::Integer(10))]),
+                },
+                ast::SwitchCase {
+                    values: vec![ast::Expression::Integer(2)],
+                    body: block(vec![out(ast::Expression::Integer(20))]),
+                },
+            ],
+            default: Some(block(vec![out(ast::Expression::Integer(0))])),
+        });
+        let hir = HirLowerer::new().lower_program(&program(vec![sw]));
+        // Switch → Block([let_tmp, If{...}])
+        match &main_fn(&hir).body[0] {
+            HirStmt::Block(stmts) => {
+                // first stmt is the temp let binding
+                assert!(matches!(stmts[0], HirStmt::Let { .. }));
+                // rest are if/else
+                assert!(matches!(stmts[1], HirStmt::If { .. }));
+            }
+            s => panic!("expected Block from switch, got {:?}", s),
+        }
+    }
+
+    // ── Function declarations ─────────────────────────────────────────────────
+
+    #[test]
+    fn function_params_and_return_type_resolved() {
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            fn_decl("add", vec![("a", "int"), ("b", "int")], "int", vec![
+                ast::Statement::Return(ast::ReturnStatement {
+                    return_value: infix(ident("a"), "+", ident("b")),
+                }),
+            ]),
+        ]));
+        let f = hir.functions.iter().find(|f| f.name == "add").unwrap();
+        assert_eq!(f.params.len(), 2);
+        assert_eq!(f.params[0].ty, SzType::Int);
+        assert_eq!(f.params[1].ty, SzType::Int);
+        assert_eq!(f.ret_type, SzType::Int);
+        assert!(matches!(f.body[0], HirStmt::Return(Some(_))));
+    }
+
+    #[test]
+    fn function_void_return_is_void() {
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            fn_decl("greet", vec![], "void", vec![
+                out(ast::Expression::String("hi".to_string())),
+            ]),
+        ]));
+        let f = hir.functions.iter().find(|f| f.name == "greet").unwrap();
+        assert_eq!(f.ret_type, SzType::Void);
+        assert_eq!(f.params.len(), 0);
+    }
+
+    #[test]
+    fn foreach_desugars_to_block_with_for_loop() {
+        let fe = ast::Statement::ForEach(ast::ForEachStatement {
+            var_name: "n".to_string(),
+            iterable: ident("items"),
+            body: block(vec![out(ident("n"))]),
+            label: None,
+        });
+        let hir = HirLowerer::new().lower_program(&program(vec![fe]));
+        match &main_fn(&hir).body[0] {
+            HirStmt::Block(stmts) => {
+                // let_iter + let_len + For
+                assert!(stmts.len() >= 3, "expected let_iter, let_len, For");
+                assert!(matches!(stmts[2], HirStmt::For { .. }));
+            }
+            s => panic!("expected Block from foreach, got {:?}", s),
+        }
+    }
+
+    // ── App: fibonacci function ───────────────────────────────────────────────
+
+    #[test]
+    fn fibonacci_function_structure() {
+        // fn int fib(int n) { if (n <= 1) { return n; } return fib(n-1) + fib(n-2); }
+        let body = vec![
+            ast::Statement::Expression(ast::Expression::If(ast::IfExpression {
+                condition: Box::new(infix(ident("n"), "<=", ast::Expression::Integer(1))),
+                consequence: block(vec![ast::Statement::Return(ast::ReturnStatement {
+                    return_value: ident("n"),
+                })]),
+                alternative: None,
+            })),
+            ast::Statement::Return(ast::ReturnStatement {
+                return_value: infix(
+                    ast::Expression::Call(ast::CallExpression {
+                        function: Box::new(ident("fib")),
+                        arguments: vec![infix(ident("n"), "-", ast::Expression::Integer(1))],
+                        line: 0, column: 0,
+                    }),
+                    "+",
+                    ast::Expression::Call(ast::CallExpression {
+                        function: Box::new(ident("fib")),
+                        arguments: vec![infix(ident("n"), "-", ast::Expression::Integer(2))],
+                        line: 0, column: 0,
+                    }),
+                ),
+            }),
+        ];
+        let hir = HirLowerer::new().lower_program(&program(vec![
+            fn_decl("fib", vec![("n", "int")], "int", body),
+        ]));
+        let f = hir.functions.iter().find(|f| f.name == "fib").unwrap();
+        assert_eq!(f.ret_type, SzType::Int);
+        assert_eq!(f.params[0].name, "n");
+        // body: If + Return
+        assert_eq!(f.body.len(), 2);
+        assert!(matches!(f.body[0], HirStmt::If { .. }));
+        assert!(matches!(f.body[1], HirStmt::Return(Some(_))));
+    }
+}
