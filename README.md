@@ -84,19 +84,29 @@ Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, all b
 
 ## Getting Started
 
-### Prerequisites
-
-- [Rust](https://rustup.rs/) stable, edition 2024
-
 ### Install
 
+**Linux / macOS:**
+```sh
+curl -fsSL https://raw.githubusercontent.com/Sergio3215/serez-code/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/Sergio3215/serez-code/main/install.ps1 | iex
+```
+
+Or download a binary directly from the [GitHub Releases](https://github.com/Sergio3215/serez-code/releases) page.
+
+### Build from source
+
+Requires [Rust](https://rustup.rs/) stable, edition 2024:
+
 ```bash
-git clone https://github.com/your-org/serez-code
+git clone https://github.com/Sergio3215/serez-code
 cd serez-code
 cargo install --path . --force
 ```
-
-This installs the `sz` binary globally.
 
 ### Run a script
 
@@ -144,7 +154,7 @@ sz --version
 
 ### Pre-built binaries
 
-Pre-built binaries for Windows (MSI), Linux (shell installer), and macOS (shell/PowerShell installer) are available on the [GitHub Releases](https://github.com/your-org/serez-code/releases) page, generated with `cargo-dist`.
+Pre-built binaries for Windows x64, Linux x64 (static musl), macOS ARM64, and macOS x64 are published automatically on every tagged release via GitHub Actions. No Rust installation required to run them.
 
 ---
 
@@ -1170,8 +1180,8 @@ out pair[1];   // → 99
 | Method | Effect |
 |---|---|
 | `.push(val)` | Appends `val` to the end of the array (mutates in-place). |
-| `.pop()` | Removes and returns the last element (returns `null` on empty array). |
-| `.shift()` | Removes and returns the first element (returns `null` on empty array). |
+| `.pop()` | Removes and returns the last element. **Runtime error if called on an empty array.** |
+| `.shift()` | Removes and returns the first element. **Runtime error if called on an empty array.** |
 | `.unshift(val)` | Prepends `val` to the beginning (mutates in-place). |
 | `.remove(idx)` | Removes the element at index `idx` and returns it. |
 | `.reverse()` | Reverses the array in-place (mutates, returns the same array). |
@@ -1340,7 +1350,7 @@ out precios["jamon"];  // → 12
 out mixto["Shen"];     // → true
 ```
 
-If the key does not exist, `null` is returned. Use `??` to provide a default value: `d["missing"] ?? 0`.
+For **untyped dicts** (`<K, any>`), accessing a missing key returns `null`. Use `??` to provide a default: `d["missing"] ?? 0`. For **typed dicts** (`<K, V>` where V ≠ `any`), accessing a missing key is a **runtime error**.
 
 #### Printing the whole dict
 
@@ -2478,7 +2488,8 @@ sz script.sz > output.txt 2> errors.txt
 | `❌ ERROR: Attempt to call a non-function` | Calling a value that is not a function |
 | `❌ ERROR: Function expected N arguments, got M` | Arity mismatch at call site |
 | `❌ ERROR: Index out of bounds` | Array access outside `[0, len-1]` |
-| (dict returns `null` for missing key) | Accessing a dict key that doesn't exist returns `null`; use `??` to provide a default |
+| `❌ ERROR: Key 'k' not found in typed dict` | Accessing a missing key in a typed dict `<K, V>` (V ≠ `any`) |
+| (untyped dict: missing key → `null`) | Accessing a missing key in an untyped dict returns `null`; use `??` for a default |
 | `❌ ERROR: Unknown dict method 'x'` | Calling an undefined method on a dict |
 | `❌ TYPE ERROR: Dict key/value type mismatch` | Adding an entry whose types violate the dict's annotation |
 | `❌ ERROR: Division by zero` | `/` with zero on the right |
@@ -2517,6 +2528,14 @@ src/
 ├── region.rs         — Arena allocator (with_capacity), ObjectRef, ObjectData/OwnedValue with Rc<BlockStatement>
 ├── scope.rs          — ScopeStack — push/pop/lookup with watermark cleanup and all_bindings dedup
 ├── repl.rs           — Read-eval-print loop
+├── compiler/         — Native backend pipeline (2.0.0 — work in progress)
+│   ├── types.rs          — Compile-time type system (SzType) mapping Serez types to LLVM types
+│   ├── hir.rs            — High-level IR: desugared AST nodes (HirStmt, HirExpr, HirBinOp)
+│   ├── hir_lower.rs      — AST → HIR lowering pass (resolves syntax sugar)
+│   ├── mir.rs            — Mid-level IR: three-address code with basic blocks and terminators
+│   ├── mir_lower.rs      — HIR → MIR flattening (SSA-like temporaries, explicit control flow)
+│   ├── llvm_emit.rs      — MIR → LLVM IR text emission
+│   └── mod.rs            — Module glue
 └── evaluator/        — Tree-walking interpreter (split into focused submodules)
     ├── mod.rs            — Core entry points, Flash Scope protocol, StoredMethod cache, static profiler
     ├── stmt.rs           — Statement evaluation (let, assign, for, while, return, …)

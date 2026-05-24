@@ -5,7 +5,57 @@ Order: most recent to oldest.
 
 ---
 
-## [Unreleased] — branch `improve`
+## [2.0.0] — branch `improve`
+
+### Breaking changes
+
+**`pop()` on empty array is now a runtime error (Bug 1)**
+- Before: returned `null` silently
+- Now: `❌ ERROR: pop() called on an empty array`
+- Rationale: silent null masked logic bugs where callers expected a real value
+
+**`shift()` on empty array is now a runtime error (Bug 2)**
+- Before: returned `null` silently
+- Now: `❌ ERROR: shift() called on an empty array`
+- Rationale: same as pop() — silent null was undetectable
+
+**`2 ** 63` and exponent overflow are now runtime errors (Bug 3)**
+- Before: f64 precision caused `2 ** 63` to silently return `i64::MAX` instead of detecting overflow
+- Now: uses `i64::checked_pow` — exact overflow detection with no floating-point rounding
+- Now: `❌ ERROR: Integer overflow in exponentiation`
+- Base 0, 1, -1 at any exponent are still handled correctly (no overflow possible)
+- Decimal exponent path (`2 ** 63.0`) is unchanged — goes through `f64::powf`
+
+**Typed dict missing key is now a runtime error (Bug 4)**
+- Before: `d["missing"]` on a `<K, V>` dict (V ≠ `any`) silently returned `null`
+- Now: `❌ ERROR: Key 'missing' not found in typed dict <_, V>`
+- Untyped dicts (`<K, any>`) still return `null` for missing keys — no change
+
+### Distribution
+
+- **Release pipeline**: GitHub Actions workflow builds binaries for Windows x64, Linux x64 (static musl), macOS ARM64, macOS x64 on every version tag and publishes them to GitHub Releases
+- **`install.sh`**: one-line installer for Linux and macOS — auto-detects OS and arch, installs to `~/.local/bin/sz`
+- **`install.ps1`**: one-line installer for Windows — downloads to `%LOCALAPPDATA%\SerezCode\bin\sz.exe` and adds to user PATH
+- **CI workflow** (`ci.yml`): builds on `main` and `integration` on every push and pull request
+
+### Tests (214 total, 0 failures)
+
+- `41_bug_fixes_e2e.sz` — E2E integration test covering all 4 bug fixes (Queue, SafeStack, safePow2, Registry, game loop)
+- `unit_bug_fixes.sz` — 21 unit tests for positive regression across all 4 fixes
+- `sec_pop_empty_array.sz`, `sec_shift_empty_array.sz`, `sec_typed_dict_miss_key.sz`, `sec_power_2_63.sz` — security tests verifying each fix produces the correct error
+- `unit_sec_pentest_bugs.sz` — 16 penetration tests with boundary exhaustion, alternating cycles, power edge cases, dict key patterns
+- `run_tests.ps1` — new `-cli` flag runs 12 tests covering CLI flags (`--version`, unknown flags, non-.sz), REPL behavior (arithmetic, variable persistence, function definition, error recovery), and `--check` mode output
+
+### Native backend (foundation — not yet connected to runtime)
+
+- `src/compiler/types.rs` — compile-time type system (`SzType`) mapping Serez types to LLVM types
+- `src/compiler/hir.rs` + `hir_lower.rs` — AST → HIR lowering with full desugar pass
+- `src/compiler/mir.rs` + `mir_lower.rs` — HIR → MIR three-address code with basic blocks
+- `src/compiler/llvm_emit.rs` — MIR → LLVM IR text emission (74 tests passing)
+
+---
+
+## [1.0.0] — VS Code formatter and CI
 
 ### VS Code — Formatter (`vscode-serez` v0.2.0)
 
