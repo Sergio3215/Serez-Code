@@ -13,3 +13,5 @@
 pub mod types;
 pub mod hir;
 pub mod hir_lower;
+pub mod mir;
+pub mod mir_lower;
