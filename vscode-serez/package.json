@@ -40,7 +40,7 @@
     "grammars": [
       {
         "language": "serez-code",
-        "scopeName": "source.serez.code",
+        "scopeName": "source.serez",
         "path": "./syntaxes/serez.tmLanguage.json"
       }
     ],
