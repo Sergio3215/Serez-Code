@@ -1,0 +1,139 @@
+// Scope and shadowing tests
+// Exercises the ScopeStack: variable declaration, lookup, shadowing, closure capture
+
+test("block scope: value assigned from inner scope visible after block", () => {
+    let outer = 1;
+    {
+        let inner = 99;
+        outer = inner;
+    }
+    assert(outer == 99, "value assigned from inner scope is visible");
+});
+
+test("shadowing: inner let shadows outer, outer unchanged after block", () => {
+    let x = 10;
+    {
+        let x = 20;
+        assert(x == 20, "inner x = 20 inside block");
+    }
+    assert(x == 10, "outer x = 10 after block");
+});
+
+test("shadowing: multiple nesting levels", () => {
+    let n = 1;
+    {
+        let n = 2;
+        {
+            let n = 3;
+            assert(n == 3, "innermost n = 3");
+        }
+        assert(n == 2, "middle n = 2 after innermost block");
+    }
+    assert(n == 1, "outermost n = 1 after all blocks");
+});
+
+test("assignment (not let) modifies the nearest enclosing binding", () => {
+    let val = 5;
+    {
+        val = 42;
+    }
+    assert(val == 42, "assignment inside block modifies outer binding");
+});
+
+test("for-loop produces correct sum (loop var scoped to loop)", () => {
+    let sum = 0;
+    for (let i = 0; i < 5; i++) {
+        sum = sum + i;
+    }
+    assert(sum == 10, "sum 0+1+2+3+4 = 10");
+});
+
+test("named fn closure captures outer variable by reference", () => {
+    let count = 0;
+    fn void inc() { count = count + 1; }
+    inc();
+    inc();
+    inc();
+    assert(count == 3, "named fn closure increments captured count to 3");
+});
+
+test("arrow lambda captures by snapshot: outer variable unchanged", () => {
+    // Arrow lambdas use value-snapshot semantics — mutations inside do not
+    // propagate back to the outer binding.
+    let n = 10;
+    let bump = () => { n = n + 1; };
+    bump();
+    bump();
+    assert(n == 10, "arrow lambda captures by value; outer n unchanged at 10");
+});
+
+test("recursive function: each call has its own scope", () => {
+    fn int fib(int n) {
+        if (n <= 1) { return n; }
+        return fib(n - 1) + fib(n - 2);
+    }
+    assert(fib(0) == 0,  "fib(0) = 0");
+    assert(fib(1) == 1,  "fib(1) = 1");
+    assert(fib(7) == 13, "fib(7) = 13");
+});
+
+test("while loop body: per-iteration variable stores correct squares", () => {
+    let results = [];
+    let i = 0;
+    while (i < 5) {
+        let sq = i * i;
+        results.push(sq);
+        i = i + 1;
+    }
+    assert(results[0] == 0,  "0^2 = 0");
+    assert(results[2] == 4,  "2^2 = 4");
+    assert(results[4] == 16, "4^2 = 16");
+});
+
+test("closure in loop: each lambda captures its own copy of loop var", () => {
+    let fns = [];
+    for (let i = 0; i < 3; i++) {
+        let captured = i;
+        fns.push(() => captured);
+    }
+    assert(fns[0]() == 0, "lambda 0 captured 0");
+    assert(fns[1]() == 1, "lambda 1 captured 1");
+    assert(fns[2]() == 2, "lambda 2 captured 2");
+});
+
+test("class method scope: local variable shadows this.field name", () => {
+    class Box {
+        public int value;
+        fn Box(int v) { this.value = v; }
+        fn int compute() {
+            let value = this.value * 2;
+            return value;
+        }
+    }
+    let b = new Box(5);
+    assert(b.compute() == 10, "local 'value' = this.value*2 = 10");
+    assert(b.value == 5,      "this.value unchanged = 5");
+});
+
+test("parameter shadows outer same-name variable inside function", () => {
+    let x = 100;
+    fn int addOne(int x) { return x + 1; }
+    assert(addOne(3) == 4,  "parameter x = 3, not outer 100");
+    assert(x == 100,        "outer x still 100");
+});
+
+test("deeply nested blocks: each level can read outer variables", () => {
+    let a = 1;
+    {
+        let b = 2;
+        {
+            let c = 3;
+            {
+                let d = 4;
+                assert(a + b + c + d == 10, "all outer vars readable from deepest block");
+            }
+        }
+    }
+});
+
+summary();

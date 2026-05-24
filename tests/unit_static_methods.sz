@@ -1,70 +1,129 @@
-// Unit tests: static methods on classes
-
-class Counter {
-    public static int zero() { return 0; }
-    public static int add(int a, int b) { return a + b; }
-    public static string label() { return "Counter"; }
-    public static bool isPositive(int n) { return n > 0; }
-}
+// Static methods on classes
+// Tests the `static` keyword added in the improve branch
 
 class MathUtils {
-    public static int square(int n) { return n * n; }
-    public static int cube(int n) { return n * n * n; }
-    public static decimal half(int n) { return n / 2.0; }
-    public static int max(int a, int b) {
-        if (a > b) { return a; }
+    static fn int abs(int n) {
+        if (n < 0) { return -n; }
+        return n;
+    }
+    static fn int max(int a, int b) {
+        if (a >= b) { return a; }
         return b;
     }
-}
-
-class Singleton {
-    public static string getInstance() { return "instance"; }
-}
-
-test("static method returns value", () => {
-    assert(Counter.zero() == 0,            "Counter.zero() = 0");
-    assert(Counter.label() == "Counter",   "Counter.label()");
-});
-
-test("static method with arguments", () => {
-    assert(Counter.add(3, 4) == 7,         "Counter.add(3,4) = 7");
-    assert(Counter.add(-1, 1) == 0,        "Counter.add(-1,1) = 0");
-});
-
-test("static method returning bool", () => {
-    assert(Counter.isPositive(5) == true,  "isPositive(5) = true");
-    assert(Counter.isPositive(-1) == false,"isPositive(-1) = false");
-    assert(Counter.isPositive(0) == false, "isPositive(0) = false");
-});
-
-test("multiple static methods on same class", () => {
-    assert(MathUtils.square(4) == 16,      "square(4) = 16");
-    assert(MathUtils.cube(3) == 27,        "cube(3) = 27");
-    assert(MathUtils.max(7, 3) == 7,       "max(7,3) = 7");
-    assert(MathUtils.max(2, 9) == 9,       "max(2,9) = 9");
-});
-
-test("static method result in expression", () => {
-    let a = MathUtils.square(3);
-    let b = MathUtils.square(4);
-    assert(a + b == 25,                    "3^2 + 4^2 = 25");
-});
-
-test("static methods from different classes", () => {
-    let s = Singleton.getInstance();
-    assert(s == "instance",                "Singleton.getInstance()");
-    let label = Counter.label();
-    assert(label == "Counter",             "Counter.label() in variable");
-});
-
-test("static result used in condition", () => {
-    let result = "";
-    if (Counter.isPositive(10)) {
-        result = "yes";
-    } else {
-        result = "no";
+    static fn int min(int a, int b) {
+        if (a <= b) { return a; }
+        return b;
     }
-    assert(result == "yes", "static bool in if condition");
+    static fn int clamp(int val, int lo, int hi) {
+        return MathUtils.max(lo, MathUtils.min(val, hi));
+    }
+}
+
+class Counter {
+    public int value;
+    fn Counter(int start) {
+        this.value = start;
+    }
+    static fn Counter zero() {
+        return new Counter(0);
+    }
+    static fn Counter from(int n) {
+        return new Counter(n);
+    }
+    fn void inc() { this.value = this.value + 1; }
+}
+
+class StringUtils {
+    static fn bool isEmpty(string s) {
+        return s.length() == 0;
+    }
+    static fn string repeat(string s, int n) {
+        let result = "";
+        let i = 0;
+        while (i < n) {
+            result = result + s;
+            i = i + 1;
+        }
+        return result;
+    }
+    static fn int countChar(string s, string ch) {
+        let count = 0;
+        for (let i = 0; i < s.length(); i++) {
+            if (s.charAt(i) == ch) { count = count + 1; }
+        }
+        return count;
+    }
+}
+
+test("static method: basic call via ClassName.method()", () => {
+    assert(MathUtils.abs(-5) == 5,   "abs(-5) = 5");
+    assert(MathUtils.abs(3)  == 3,   "abs(3) = 3");
+    assert(MathUtils.abs(0)  == 0,   "abs(0) = 0");
+});
+
+test("static method: max and min", () => {
+    assert(MathUtils.max(3, 7)  == 7, "max(3,7) = 7");
+    assert(MathUtils.max(7, 3)  == 7, "max(7,3) = 7");
+    assert(MathUtils.min(3, 7)  == 3, "min(3,7) = 3");
+    assert(MathUtils.min(7, 3)  == 3, "min(7,3) = 3");
+});
+
+test("static method calling another static method", () => {
+    assert(MathUtils.clamp(5, 1, 10)  == 5,  "clamp(5,1,10) = 5");
+    assert(MathUtils.clamp(-5, 1, 10) == 1,  "clamp(-5,1,10) = 1");
+    assert(MathUtils.clamp(15, 1, 10) == 10, "clamp(15,1,10) = 10");
+});
+
+test("static factory method returns instance", () => {
+    let c = Counter.zero();
+    assert(c.value == 0, "Counter.zero().value == 0");
+});
+
+test("static factory: Counter.from(n) sets initial value", () => {
+    let c = Counter.from(42);
+    assert(c.value == 42, "Counter.from(42).value == 42");
+});
+
+test("static factory + instance method interaction", () => {
+    let c = Counter.from(10);
+    c.inc();
+    c.inc();
+    assert(c.value == 12, "from(10).inc().inc() => 12");
+});
+
+test("multiple independent instances from static factory", () => {
+    let a = Counter.from(1);
+    let b = Counter.from(100);
+    a.inc();
+    assert(a.value == 2,   "a incremented to 2");
+    assert(b.value == 100, "b unchanged at 100");
+});
+
+test("static method on StringUtils: isEmpty", () => {
+    assert(StringUtils.isEmpty("") == true,    "empty string is empty");
+    assert(StringUtils.isEmpty("hi") == false, "non-empty string is not empty");
+});
+
+test("static method on StringUtils: repeat", () => {
+    assert(StringUtils.repeat("ab", 3) == "ababab", "repeat 3 times");
+    assert(StringUtils.repeat("x", 0)  == "",       "repeat 0 times = empty");
+    assert(StringUtils.repeat("!", 1)  == "!",      "repeat 1 time");
+});
+
+test("static method on StringUtils: countChar", () => {
+    assert(StringUtils.countChar("hello", "l") == 2, "2 l's in hello");
+    assert(StringUtils.countChar("banana", "a") == 3, "3 a's in banana");
+    assert(StringUtils.countChar("abc", "z")    == 0, "0 z's in abc");
+});
+
+test("static method result used in expression", () => {
+    let total = MathUtils.abs(-3) + MathUtils.abs(-4);
+    assert(total == 7, "abs(-3) + abs(-4) = 7");
+});
+
+test("static method result stored in variable", () => {
+    let big = MathUtils.max(MathUtils.abs(-99), MathUtils.abs(50));
+    assert(big == 99, "max(abs(-99), abs(50)) = 99");
 });
 
 summary();

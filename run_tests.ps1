@@ -169,6 +169,25 @@
 #                          break en catch sale del for (B-54), continue en catch salta iter (B-54),
 #                          throw en for-init se captura (B-55)
 #
+# ── Tests for improve-branch features (tests/unit_*.sz) ───────────────────────
+#
+#   unit_bitwise_ops       Bitwise operators: & | ^ ~ << >> including flag manipulation,
+#                          boundary shifts, sign-extending >>, ops in expressions
+#   unit_do_while          do/while loops: body-runs-once-on-false, counting, factorial,
+#                          break/continue, nested, return-inside, vs while equivalence
+#   unit_lexer_edge        Lexer/parser edge cases: ++ --, hex/binary literals, escape seqs,
+#                          string interpolation, spread (...), arrow =>, keyword-as-method
+#   unit_optional_chain    Optional chaining (?.) with Node/Container classes: null vs non-null,
+#                          chained ?., with ??, in conditionals, describe method
+#   unit_power_op          Power operator (**): int**int, negative exponent→decimal,
+#                          decimal, mixed, in expressions, vs recursive ipow
+#   unit_scope_shadow      Scope/ScopeStack: block scope, shadowing multiple levels,
+#                          assignment-modifies-outer, for-loop scoping, named fn vs arrow
+#                          closure capture semantics, class method local-shadows-field
+#   unit_static_methods    Static methods: ClassName.method(), calling another static,
+#                          factory pattern (Counter.zero/from), multiple instances,
+#                          StringUtils helpers
+#
 # ── Security tests ────────────────────────────────────────────────────────────
 #
 #   tests/sec_*.sz       -> Security error tests (run with -security or all)

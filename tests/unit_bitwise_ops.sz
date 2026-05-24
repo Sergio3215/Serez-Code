@@ -1,0 +1,89 @@
+// Bitwise operators: &, |, ^, ~, <<, >>
+// Tests operators added in the improve branch
+
+test("bitwise AND: basic cases", () => {
+    assert((0b1010 & 0b1100) == 8,  "0b1010 & 0b1100 = 0b1000 = 8");
+    assert((0xFF & 0x0F) == 15,      "0xFF & 0x0F = 0x0F = 15");
+    assert((7 & 3) == 3,             "7 & 3 = 3");
+    assert((0 & 255) == 0,           "0 & anything = 0");
+    assert((255 & 255) == 255,       "255 & 255 = 255");
+});
+
+test("bitwise OR: basic cases", () => {
+    assert((0b1010 | 0b0101) == 15,  "0b1010 | 0b0101 = 0b1111 = 15");
+    assert((8 | 4) == 12,            "8 | 4 = 12");
+    assert((0 | 42) == 42,           "0 | n = n");
+    assert((255 | 255) == 255,       "255 | 255 = 255");
+});
+
+test("bitwise XOR: basic cases", () => {
+    assert((0xFF ^ 0x0F) == 240,     "0xFF ^ 0x0F = 0xF0 = 240");
+    assert((5 ^ 3) == 6,             "5 ^ 3 = 6");
+    assert((n => n ^ n)(42) == 0,    "n ^ n = 0");
+    assert((0 ^ 42) == 42,           "0 ^ n = n");
+    assert((42 ^ 0) == 42,           "n ^ 0 = n");
+});
+
+test("bitwise NOT (unary ~): basic cases", () => {
+    assert(~0 == -1,       "~0 = -1 (all bits flipped)");
+    assert(~(-1) == 0,     "~(-1) = 0");
+    assert(~1 == -2,       "~1 = -2");
+    assert(~127 == -128,   "~127 = -128");
+});
+
+test("left shift <<: basic cases", () => {
+    assert((1 << 0) == 1,    "1 << 0 = 1");
+    assert((1 << 1) == 2,    "1 << 1 = 2");
+    assert((1 << 4) == 16,   "1 << 4 = 16");
+    assert((1 << 10) == 1024, "1 << 10 = 1024");
+    assert((3 << 2) == 12,   "3 << 2 = 12");
+});
+
+test("right shift >>: basic cases", () => {
+    assert((16 >> 1) == 8,   "16 >> 1 = 8");
+    assert((16 >> 4) == 1,   "16 >> 4 = 1");
+    assert((255 >> 4) == 15, "255 >> 4 = 15");
+    assert((1 >> 0) == 1,    "1 >> 0 = 1");
+    assert((1024 >> 10) == 1, "1024 >> 10 = 1");
+});
+
+test("shift and restore: (n << k) >> k == n for small n", () => {
+    let n = 42;
+    assert((n << 3) >> 3 == n, "shift left then right restores value");
+    let m = 100;
+    assert((m << 5) >> 5 == m, "100 << 5 >> 5 = 100");
+});
+
+test("bitwise flag manipulation pattern", () => {
+    let READ    = 4;
+    let WRITE   = 2;
+    let EXECUTE = 1;
+    let perms = READ | WRITE;
+    assert((perms & READ) != 0,    "READ flag is set");
+    assert((perms & WRITE) != 0,   "WRITE flag is set");
+    assert((perms & EXECUTE) == 0, "EXECUTE flag is not set");
+    perms = perms | EXECUTE;
+    assert((perms & EXECUTE) != 0, "EXECUTE added via OR");
+    perms = perms & ~WRITE;
+    assert((perms & WRITE) == 0,   "WRITE removed via AND NOT");
+});
+
+test("bitwise ops in expressions with arithmetic", () => {
+    assert((2 + 3) & 7 == 5,    "(2+3) & 7 = 5");
+    assert((8 | 4) + 1 == 13,   "(8|4)+1 = 13");
+    assert((15 ^ 7) * 2 == 16,  "(15^7)*2 = 16");
+});
+
+test("left shift: boundary — shift by 63 bits", () => {
+    let r = 1 << 62;
+    assert(r == 4611686018427387904, "1 << 62 = 2^62");
+});
+
+test("right shift on negative (arithmetic shift)", () => {
+    // In Serez, >> on i64 is arithmetic (sign-extending)
+    let neg = -16;
+    assert(neg >> 1 == -8, "-16 >> 1 = -8 (arithmetic shift)");
+    assert(neg >> 2 == -4, "-16 >> 2 = -4");
+});
+
+summary();

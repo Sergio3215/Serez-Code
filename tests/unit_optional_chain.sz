@@ -1,0 +1,102 @@
+// Optional chaining (?.) operator
+// Tests the ?. operator added in the improve branch
+
+class Node {
+    public int value;
+    public Node? next;
+    fn Node(int v) {
+        this.value = v;
+        this.next = null;
+    }
+    fn int getValue() { return this.value; }
+    fn string describe() { return "Node(" + this.value + ")"; }
+}
+
+class Container {
+    public Node? inner;
+    fn Container() { this.inner = null; }
+    fn void setInner(Node n) { this.inner = n; }
+}
+
+test("?. on null returns null without error", () => {
+    let n = null;
+    let r = n?.getValue();
+    assert(r == null, "null?.method() should return null, not throw");
+});
+
+test("?. on non-null calls the method normally", () => {
+    let n = new Node(42);
+    let r = n?.getValue();
+    assert(r == 42, "non-null?.getValue() should return 42");
+});
+
+test("?. chain: two levels, first non-null", () => {
+    let a = new Node(1);
+    let b = new Node(2);
+    a.next = b;
+    let r = a?.next?.getValue();
+    assert(r == 2, "a?.next?.getValue() = 2");
+});
+
+test("?. chain: two levels, first null", () => {
+    let n = null;
+    let r = n?.next?.getValue();
+    assert(r == null, "null?.next?.getValue() returns null");
+});
+
+test("?. chain: two levels, second null", () => {
+    let a = new Node(10);
+    // a.next is null by default
+    let r = a?.next?.getValue();
+    assert(r == null, "a?.next is null, so ?.getValue() returns null");
+});
+
+test("?. with ?? fallback", () => {
+    let n = null;
+    let r = n?.getValue() ?? -1;
+    assert(r == -1, "null?.method() ?? -1 = -1");
+});
+
+test("?. with ?? fallback when non-null", () => {
+    let n = new Node(99);
+    let r = n?.getValue() ?? -1;
+    assert(r == 99, "non-null?.getValue() ?? -1 = 99");
+});
+
+test("?. on nullable field through container", () => {
+    let c = new Container();
+    let r = c.inner?.getValue();
+    assert(r == null, "container.inner is null, so ?.getValue() = null");
+});
+
+test("?. on nullable field after setting it", () => {
+    let c = new Container();
+    let n = new Node(55);
+    c.setInner(n);
+    let r = c.inner?.getValue();
+    assert(r == 55, "after setInner, container.inner?.getValue() = 55");
+});
+
+test("?. in conditional expression", () => {
+    let n = null;
+    let result = "none";
+    let v = n?.getValue();
+    if (v != null) {
+        result = "found";
+    }
+    assert(result == "none", "null?.getValue() is null, branch not taken");
+});
+
+test("?. on describe() method with string result", () => {
+    let n = new Node(7);
+    let s = n?.describe();
+    assert(s == "Node(7)", "?. on describe() returns string normally");
+});
+
+test("?. on null: describe() returns null not error", () => {
+    let n = null;
+    let s = n?.describe() ?? "missing";
+    assert(s == "missing", "null?.describe() ?? 'missing' = 'missing'");
+});
+
+summary();

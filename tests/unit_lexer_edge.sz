@@ -1,0 +1,122 @@
+// Lexer and parser edge cases
+// Tests unusual token combinations, operator precedence, and parsing corners
+
+test("compound operators: ++ and -- as standalone statements", () => {
+    let n = 5;
+    n++;
+    assert(n == 6, "n++ increments n");
+    n--;
+    assert(n == 5, "n-- decrements n");
+});
+
+test("compound operators: ++ -- in expressions", () => {
+    let a = 10;
+    let b = a++;
+    assert(a == 11, "a++ leaves a=11");
+    assert(b == 10, "b captures pre-increment value 10");
+    let c = ++a;
+    assert(a == 12, "++a leaves a=12");
+    assert(c == 12, "c captures post-increment value 12");
+});
+
+test("null coalescing operator ?? parses correctly", () => {
+    let a = null;
+    let b = a ?? "default";
+    assert(b == "default", "?? with null LHS returns RHS");
+    let c = "value" ?? "default";
+    assert(c == "value", "?? with non-null LHS returns LHS");
+});
+
+test("arrow => parses in lambda", () => {
+    let double = (int x) => x * 2;
+    assert(double(5) == 10, "arrow lambda works");
+});
+
+test("... spread operator in function call", () => {
+    fn int sum3(int a, int b, int c) { return a + b + c; }
+    let args = [1, 2, 3];
+    let r = sum3(...args);
+    assert(r == 6, "spread args [1,2,3] into sum3 = 6");
+});
+
+test("string interpolation: expressions inside {}", () => {
+    let x = 5;
+    let y = 3;
+    let s = "sum is {x + y}";
+    assert(s == "sum is 8", "expression interpolated correctly");
+});
+
+test("string interpolation: method call inside {}", () => {
+    let arr = [1, 2, 3];
+    let s = "length: {arr.length()}";
+    assert(s == "length: 3", "method call interpolated");
+});
+
+test("string interpolation: nested quotes not needed", () => {
+    let name = "world";
+    let s = "hello {name}!";
+    assert(s == "hello world!", "variable interpolated in string");
+});
+
+test("escape sequences parse correctly", () => {
+    let tab  = "\t";
+    let nl   = "\n";
+    let bs   = "\\";
+    let dq   = "\"";
+    assert(tab.length() == 1,  "\\t is one character");
+    assert(nl.length()  == 1,  "\\n is one character");
+    assert(bs.length()  == 1,  "\\\\ is one character");
+    assert(dq.length()  == 1,  "\\\" is one character");
+});
+
+test("negative number literal parses correctly", () => {
+    let a = -42;
+    let b = -3.14;
+    assert(a == -42,  "negative int literal -42");
+    assert(b < -3.13, "negative decimal literal -3.14");
+});
+
+test("chained comparison: a < b < c parsed as (a < b) && (b < c) semantics via explicit", () => {
+    let a = 1;
+    let b = 5;
+    let c = 10;
+    assert(a < b && b < c, "1 < 5 && 5 < 10 is true");
+    assert(!(b < a && a < c), "not (5 < 1 && 1 < 10)");
+});
+
+test("multi-line string expression", () => {
+    let s = "line1" +
+            "\n" +
+            "line2";
+    assert(s.includes("\n"), "multi-line string has newline");
+    assert(s.startsWith("line1"), "starts with line1");
+});
+
+test("keyword used as method name (get/set)", () => {
+    class Prop {
+        public int _val;
+        fn Prop(int v) { this._val = v; }
+        fn int get() { return this._val; }
+        fn void set(int v) { this._val = v; }
+    }
+    let p = new Prop(7);
+    assert(p.get() == 7,  "get() method returns 7");
+    p.set(99);
+    assert(p.get() == 99, "set() then get() returns 99");
+});
+
+test("hex literals parse correctly", () => {
+    assert(0xFF == 255,   "0xFF = 255");
+    assert(0x10 == 16,    "0x10 = 16");
+    assert(0x00 == 0,     "0x00 = 0");
+    assert(0xDEAD == 57005, "0xDEAD = 57005");
+});
+
+test("binary literals parse correctly", () => {
+    assert(0b1111 == 15,   "0b1111 = 15");
+    assert(0b0000 == 0,    "0b0000 = 0");
+    assert(0b1010 == 10,   "0b1010 = 10");
+    assert(0b100  == 4,    "0b100 = 4");
+});
+
+summary();
