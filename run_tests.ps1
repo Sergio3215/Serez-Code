@@ -6,6 +6,7 @@
 #   .\run_tests.ps1 -unit              # only run unit_*.sz tests (using framework)
 #   .\run_tests.ps1 -e2e               # only run E2E tests (numbered NN_*.sz)
 #   .\run_tests.ps1 -security          # only run security tests (sec_*.sz + unit_sec_*.sz)
+#   .\run_tests.ps1 -cli               # only run CLI flag, REPL, and --check mode tests
 #
 # ── Test types ────────────────────────────────────────────────────────────────
 #
@@ -226,6 +227,14 @@
 #   err_undeclared_assign  Asignar variable no declarada (sin let)
 #   err_undeclared_class   new de clase no definida
 #
+# ── CLI / REPL / --check Tests (-cli) ────────────────────────────────────────
+#
+#   CLI flag tests:  --version, unknown flags, non-.sz extension, missing file
+#   REPL tests:      piped stdin; arithmetic, strings, variable persistence,
+#                    function definition+call, error recovery across lines
+#   --check tests:   Flash Scope Criticality output, Estimated Global Memory,
+#                    missing file error
+#
 # Exit code: 0 = all passed, 1 = failures found
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -234,7 +243,8 @@ param(
     [switch]$generate  = $false,
     [switch]$unit      = $false,
     [switch]$e2e       = $false,
-    [switch]$security  = $false
+    [switch]$security  = $false,
+    [switch]$cli       = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -352,8 +362,48 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
     }
 }
 
+# ── CLI / REPL / check-mode test helper ──────────────────────────────────────
+function Invoke-Binary([string[]]$binArgs, [string]$stdinContent = "") {
+    $outFile = [System.IO.Path]::GetTempFileName()
+    $errFile = [System.IO.Path]::GetTempFileName()
+    if ($stdinContent -ne "") {
+        $inFile  = [System.IO.Path]::GetTempFileName()
+        [System.IO.File]::WriteAllText($inFile, $stdinContent)
+        Start-Process -FilePath $binary -ArgumentList $binArgs `
+            -NoNewWindow -Wait `
+            -RedirectStandardInput  $inFile `
+            -RedirectStandardOutput $outFile `
+            -RedirectStandardError  $errFile
+        Remove-Item $inFile -ErrorAction SilentlyContinue
+    } else {
+        Start-Process -FilePath $binary -ArgumentList $binArgs `
+            -NoNewWindow -Wait `
+            -RedirectStandardOutput $outFile `
+            -RedirectStandardError  $errFile
+    }
+    $stdout = if (Test-Path $outFile) { (Get-Content $outFile -Raw) } else { "" }
+    $stderr = if (Test-Path $errFile) { (Get-Content $errFile -Raw) } else { "" }
+    Remove-Item $outFile, $errFile -ErrorAction SilentlyContinue
+    return @{ stdout = ($stdout ?? ""); stderr = ($stderr ?? "") }
+}
+
+function Run-CLI-Test([string]$label, [string[]]$binArgs, [string]$expectOut = "",
+                      [string]$expectErr = "", [string]$stdinContent = "") {
+    if ($filter -and $label -notlike "*$filter*") { return }
+    $r = Invoke-Binary $binArgs $stdinContent
+    $ok = $true; $reason = ""
+    if ($expectOut -ne "" -and $r.stdout -notmatch [regex]::Escape($expectOut)) {
+        $ok = $false; $reason = "stdout missing '$expectOut'"
+    }
+    if ($expectErr -ne "" -and $r.stderr -notmatch [regex]::Escape($expectErr)) {
+        $ok = $false; $reason = "stderr missing '$expectErr'"
+    }
+    if ($ok) { Write-Host "[PASS] $label" -ForegroundColor Green; $script:pass++ }
+    else     { Write-Host "[FAIL] $label — $reason" -ForegroundColor Red; $script:fail++ }
+}
+
 # ── Discover and run tests ────────────────────────────────────────────────────
-$runAll  = -not $unit -and -not $e2e -and -not $security
+$runAll  = -not $unit -and -not $e2e -and -not $security -and -not $cli
 
 Write-Host "═══ E2E Tests ════════════════════════════════" -ForegroundColor Cyan
 if ($runAll -or $e2e) {
@@ -399,6 +449,52 @@ if ($runAll -or $security) {
         $label = $_.BaseName
         Run-Test $label $_.FullName "" $true $false
     }
+}
+
+# ── CLI Tests ─────────────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "═══ CLI Tests ════════════════════════════════" -ForegroundColor Cyan
+if ($runAll -or $cli) {
+    Run-CLI-Test "cli: --version prints version"       @("--version") `
+                 -expectOut "Serez-Code v"
+    Run-CLI-Test "cli: unknown flag reports error"     @("--unknown-flag") `
+                 -expectErr "Unknown flag"
+    Run-CLI-Test "cli: non-.sz file rejected"          @("readme.txt") `
+                 -expectErr ".sz extension"
+    $noSz = "`"$(Join-Path $testsDir 'this_file_does_not_exist.sz')`""
+    Run-CLI-Test "cli: missing .sz file reports error" @($noSz) `
+                 -expectErr "ERROR reading file"
+}
+
+# ── REPL Tests ────────────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "═══ REPL Tests ═══════════════════════════════" -ForegroundColor Cyan
+if ($runAll -or $cli) {
+    Run-CLI-Test "repl: arithmetic output"              @() `
+                 -expectOut "5"        -stdinContent "out 2+3;"
+    Run-CLI-Test "repl: string output"                  @() `
+                 -expectOut "hello"    -stdinContent "out `"hello`";"
+    Run-CLI-Test "repl: variable persists across lines" @() `
+                 -expectOut "42"       -stdinContent "let x = 42;`nout x;"
+    Run-CLI-Test "repl: function defined and called"    @() `
+                 -expectOut "12"       -stdinContent "fn int add(int a, int b) { return a + b; }`nout add(5, 7);"
+    Run-CLI-Test "repl: error recovery continues"       @() `
+                 -expectOut "survived" -expectErr "❌" `
+                 -stdinContent "out undefined_xyz_var;`nout `"survived`";"
+}
+
+# ── --check Mode Tests ────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "═══ --check Mode Tests ═══════════════════════" -ForegroundColor Cyan
+if ($runAll -or $cli) {
+    $chk    = "`"$(Join-Path $testsDir '01_basic.sz')`""
+    $noChk  = "`"$(Join-Path $testsDir 'no_such_check_file.sz')`""
+    Run-CLI-Test "check: Flash Scope Criticality header" @("--check", $chk) `
+                 -expectOut "Flash Scope Criticality"
+    Run-CLI-Test "check: Estimated Global Memory line"   @("--check", $chk) `
+                 -expectOut "Estimated Global Memory"
+    Run-CLI-Test "check: missing file reports error"     @("--check", $noChk) `
+                 -expectErr "ERROR reading file"
 }
 
 # ── Summary ───────────────────────────────────────────────────────────────────
