@@ -11,3 +11,5 @@
 ///   llvm_emit  — LLVM IR emission via inkwell
 
 pub mod types;
+pub mod hir;
+pub mod hir_lower;
