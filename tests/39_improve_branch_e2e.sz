@@ -1,0 +1,125 @@
+// ── 39. Improve-Branch Features E2E ──────────────────────────────────────────
+// Integration test for all features added in the improve branch:
+// bitwise ops, ** power, ?. optional chaining, do/while, static methods, is
+
+out "── bitwise operators ──";
+
+let flags = 0;
+let READ    = 4;
+let WRITE   = 2;
+let EXECUTE = 1;
+
+flags = flags | READ | WRITE;
+out flags;                    // 6
+out (flags & READ) != 0;      // true
+out (flags & EXECUTE) == 0;   // true
+flags = flags | EXECUTE;
+out flags;                    // 7
+flags = flags & ~WRITE;
+out flags;                    // 5
+out (1 << 8);                 // 256
+out (256 >> 4);               // 16
+out (0xFF ^ 0x0F);            // 240
+out ~0;                       // -1
+
+out "── power operator ──";
+
+out 2 ** 10;                  // 1024
+out 3 ** 0;                   // 1
+out 2 ** -1;                  // 0.5
+out 4.0 ** 0.5;               // 2.0
+out 9 ** 0.5;                 // 3.0
+
+out "── do/while ──";
+
+let n = 1;
+let product = 1;
+do {
+    product = product * n;
+    n = n + 1;
+} while (n <= 5);
+out product;                  // 120  (5!)
+
+let fired = false;
+do {
+    fired = true;
+} while (false);
+out fired;                    // true (body ran once)
+
+out "── optional chaining ──";
+
+class Link {
+    public Link(int v) {
+        this.val = v;
+        this.nxt = null;
+    }
+    public int getValue() { return this.val; }
+}
+
+let head = new Link(10);
+let mid  = new Link(20);
+head.nxt = mid;
+
+out head?.getValue();                    // 10
+out head?.nxt?.getValue();               // 20
+
+let dead = null;
+out dead?.getValue() ?? -1;              // -1
+out head?.nxt?.nxt?.getValue() ?? 0;    // 0
+
+out "── static methods ──";
+
+class Maths {
+    public static int abs(int x) { if (x < 0) { return -x; } return x; }
+    public static int max(int a, int b) { if (a >= b) { return a; } return b; }
+}
+
+out Maths.abs(-42);           // 42
+out Maths.abs(7);             // 7
+out Maths.max(3, 9);          // 9
+out Maths.max(Maths.abs(-5), Maths.abs(3)); // 5
+
+class Registry {
+    public Registry() { this.count = 0; }
+    public static Registry empty() { return new Registry(); }
+    public void register() { this.count = this.count + 1; }
+    public int getCount() { return this.count; }
+}
+
+let reg = Registry.empty();
+reg.register();
+reg.register();
+reg.register();
+out reg.getCount();           // 3
+
+out "── is type check ──";
+
+let vals = [42, "hello", true, 3.14, null];
+for (let v in vals) {
+    if (v is int)          { out "int"; }
+    else if (v is string)  { out "string"; }
+    else if (v is bool)    { out "bool"; }
+    else if (v is decimal) { out "decimal"; }
+    else                   { out "null"; }
+}
+
+out "── integration: permissions system ──";
+
+const PERM_READ    = 1;
+const PERM_WRITE   = 2;
+const PERM_EXECUTE = 4;
+const PERM_ADMIN   = 8;
+
+fn string checkAccess(int userPerms, int required) {
+    if ((userPerms & required) == required) { return "granted"; }
+    return "denied";
+}
+
+let admin  = PERM_READ | PERM_WRITE | PERM_EXECUTE | PERM_ADMIN;
+let viewer = PERM_READ;
+let editor = PERM_READ | PERM_WRITE;
+
+out checkAccess(admin, PERM_ADMIN);              // granted
+out checkAccess(viewer, PERM_WRITE);             // denied
+out checkAccess(editor, PERM_READ | PERM_WRITE); // granted
+out checkAccess(editor, PERM_EXECUTE);           // denied

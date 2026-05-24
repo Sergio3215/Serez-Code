@@ -1,0 +1,108 @@
+// const keyword: immutability rules, all types, scope, array contents
+// The test framework catches throws, so const reassignment tests
+// are in sec_const_*.sz (error tests). Here we test valid const usage.
+
+const MAX_SIZE = 100;
+const PI = 3.14159;
+const APP_NAME = "Serez";
+const DEBUG = false;
+const EMPTY_BASE = 0;
+
+test("const int is readable at global scope", () => {
+    assert(MAX_SIZE == 100,    "MAX_SIZE = 100");
+    assert(EMPTY_BASE == 0,    "EMPTY_BASE = 0");
+});
+
+test("const decimal is readable at global scope", () => {
+    assert(PI > 3.14,          "PI > 3.14");
+    assert(PI < 3.15,          "PI < 3.15");
+});
+
+test("const string is readable at global scope", () => {
+    assert(APP_NAME == "Serez",    "APP_NAME = 'Serez'");
+    assert(APP_NAME.length() == 5, "APP_NAME has 5 chars");
+});
+
+test("const bool is readable at global scope", () => {
+    assert(DEBUG == false, "DEBUG = false");
+    assert(!DEBUG,         "!DEBUG is true");
+});
+
+test("const used in expression", () => {
+    let radius = 5.0;
+    let area = PI * radius * radius;
+    assert(area > 78.5 && area < 78.6, "area = PI * 5^2 ≈ 78.54");
+});
+
+test("const used as loop bound", () => {
+    let sum = 0;
+    const LIMIT = 10;
+    for (let i = 1; i <= LIMIT; i++) {
+        sum = sum + i;
+    }
+    assert(sum == 55, "sum 1..10 = 55 using const LIMIT");
+});
+
+test("const in function scope is locally scoped", () => {
+    fn int computeMax() {
+        const LOCAL_MAX = 42;
+        return LOCAL_MAX;
+    }
+    assert(computeMax() == 42, "const in function returns 42");
+    assert(computeMax() == 42, "second call also returns 42");
+});
+
+test("multiple calls to function with const don't interfere", () => {
+    fn decimal circleArea(decimal r) {
+        const LOCAL_PI = 3.14159;
+        return LOCAL_PI * r * r;
+    }
+    let a1 = circleArea(1.0);
+    let a2 = circleArea(2.0);
+    assert(a2 > a1 * 3.9 && a2 < a1 * 4.1, "area(2r) ≈ 4 * area(r)");
+});
+
+test("const array is readable (elements accessible)", () => {
+    const PRIMES = [2, 3, 5, 7, 11, 13];
+    assert(PRIMES[0] == 2,  "PRIMES[0] = 2");
+    assert(PRIMES[4] == 11, "PRIMES[4] = 11");
+    assert(PRIMES.length() == 6, "6 primes");
+});
+
+test("const array can be iterated with for-in", () => {
+    const VOWELS = ["a", "e", "i", "o", "u"];
+    let count = 0;
+    for (let v in VOWELS) {
+        count = count + 1;
+    }
+    assert(count == 5, "iterated all 5 vowels");
+});
+
+test("const used in switch case", () => {
+    const CODE_OK    = 200;
+    const CODE_ERROR = 500;
+    fn string httpStatus(int code) {
+        switch (code) {
+            case 200: return "ok";
+            case 500: return "error";
+            default:  return "other";
+        }
+    }
+    assert(httpStatus(CODE_OK)    == "ok",    "200 -> ok");
+    assert(httpStatus(CODE_ERROR) == "error", "500 -> error");
+});
+
+test("const string used in concatenation", () => {
+    const PREFIX = "Hello, ";
+    let greeting = PREFIX + "world!";
+    assert(greeting == "Hello, world!", "const prefix concatenated");
+});
+
+test("const bool used in logical expression", () => {
+    const IS_PROD = true;
+    const ENABLE_LOGS = false;
+    let shouldLog = !IS_PROD || ENABLE_LOGS;
+    assert(shouldLog == false, "not prod and logs disabled = false");
+});
+
+summary();

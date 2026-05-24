@@ -1,0 +1,41 @@
+── bitwise operators ──
+6
+true
+true
+7
+5
+256
+16
+240
+-1
+── power operator ──
+1024
+1
+0.5
+2.0
+3.0
+── do/while ──
+120
+true
+── optional chaining ──
+10
+20
+-1
+0
+── static methods ──
+42
+7
+9
+5
+3
+── is type check ──
+int
+string
+bool
+decimal
+null
+── integration: permissions system ──
+granted
+denied
+granted
+denied

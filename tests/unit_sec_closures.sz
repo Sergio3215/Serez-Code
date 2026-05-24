@@ -1,0 +1,111 @@
+// Security unit tests: closure scoping and capture safety
+// Closures should not leak variables, expose private state, or confuse scopes
+
+test("arrow lambda: outer variable not mutated (snapshot semantics)", () => {
+    let secret = 42;
+    let tryLeak = () => { secret = 0; };
+    tryLeak();
+    assert(secret == 42, "arrow lambda cannot mutate outer variable");
+});
+
+test("named fn closure: own local does not bleed into outer", () => {
+    let outer = "safe";
+    fn void run() {
+        let outer = "hijacked";
+    }
+    run();
+    assert(outer == "safe", "fn-local shadow does not overwrite outer binding");
+});
+
+test("two closures with same captured name are independent", () => {
+    fn any makeAdder(int n) {
+        return (int x) => x + n;
+    }
+    let add3 = makeAdder(3);
+    let add7 = makeAdder(7);
+    assert(add3(10) == 13, "add3(10) = 13");
+    assert(add7(10) == 17, "add7(10) = 17");
+    assert(add3(0)  == 3,  "add3 always adds 3");
+    assert(add7(0)  == 7,  "add7 always adds 7");
+});
+
+test("closure cannot read variables declared after it", () => {
+    fn int getValue() {
+        let local = 99;
+        return local;
+    }
+    let f = getValue;
+    assert(f() == 99, "function returns its own local, not outer scope");
+});
+
+test("deep closure chain: each level isolates its scope", () => {
+    fn any level1() {
+        let a = 1;
+        return () => {
+            let b = 2;
+            return a + b;
+        };
+    }
+    let inner = level1();
+    assert(inner() == 3, "inner closure sees a=1 from level1, b=2 locally");
+});
+
+test("multiple calls to closure factory produce isolated instances", () => {
+    fn any makeCounter() {
+        let n = 0;
+        return () => {
+            n = n + 1;
+            return n;
+        };
+    }
+    let c1 = makeCounter();
+    let c2 = makeCounter();
+    c1(); c1(); c1();
+    c2();
+    assert(c1() == 4, "c1 at 4, independent from c2");
+    assert(c2() == 2, "c2 at 2, independent from c1");
+});
+
+test("closure over loop variable: each lambda captures its own copy", () => {
+    let fns = [];
+    for (let i = 0; i < 5; i++) {
+        let snap = i;
+        fns.push(() => snap);
+    }
+    assert(fns[0]() == 0, "lambda 0 captured 0");
+    assert(fns[2]() == 2, "lambda 2 captured 2");
+    assert(fns[4]() == 4, "lambda 4 captured 4");
+});
+
+test("closure does not see variables declared in sibling blocks", () => {
+    let result = 0;
+    {
+        let a = 10;
+        result = a;
+    }
+    // 'a' is out of scope here
+    fn int getResult() { return result; }
+    assert(getResult() == 10, "closure reads result (set from block), not a");
+});
+
+test("class method closure: this.field is not leaked via return value", () => {
+    class Safe {
+        private int _secret;
+        fn Safe(int s) { this._secret = s; }
+        fn int exposedComputed() { return this._secret * 2; }
+    }
+    let obj = new Safe(21);
+    let doubled = obj.exposedComputed();
+    assert(doubled == 42, "method returns computed value, not raw secret");
+});
+
+test("recursive closure: stack does not pollute outer scope", () => {
+    fn int countdown(int n) {
+        if (n <= 0) { return 0; }
+        return 1 + countdown(n - 1);
+    }
+    assert(countdown(5) == 5, "countdown(5) = 5 recursive calls");
+    assert(countdown(0) == 0, "countdown(0) = 0");
+});
+
+summary();

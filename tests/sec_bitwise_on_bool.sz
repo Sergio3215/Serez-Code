@@ -1,0 +1,4 @@
+// Security: bitwise | on bool must produce ❌ error
+let b = true;
+let r = b | 1;
+out r;

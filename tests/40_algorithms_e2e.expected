@@ -1,0 +1,35 @@
+── selection sort ──
+11
+25
+90
+── binary search ──
+5
+0
+9
+-1
+── sieve of eratosthenes ──
+10
+2
+29
+── fibonacci (iterative) ──
+55
+6765
+832040
+── palindrome check ──
+true
+false
+true
+true
+true
+── stack via class ──
+true
+3
+30
+30
+20
+1
+── run-length encoding ──
+3a3b2c4d2e
+1a1b1c1d
+4a
+

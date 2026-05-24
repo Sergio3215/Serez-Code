@@ -1,0 +1,120 @@
+// Comprehensive enum tests using the test framework
+// Covers: declaration, equality, switch matching, arrays, functions, dicts
+
+enum Direction { North, South, East, West }
+enum Color { Red, Green, Blue }
+enum Status { Active, Inactive, Pending }
+enum Priority { Low, Medium, High, Critical }
+
+test("enum variants are equal to themselves", () => {
+    assert(Direction.North == Direction.North, "North == North");
+    assert(Color.Red == Color.Red,             "Red == Red");
+    assert(Status.Active == Status.Active,     "Active == Active");
+});
+
+test("enum variants are not equal to each other", () => {
+    assert(Direction.North != Direction.South, "North != South");
+    assert(Color.Red != Color.Blue,            "Red != Blue");
+    assert(Status.Active != Status.Inactive,   "Active != Inactive");
+});
+
+test("enum variants from different enums are not equal", () => {
+    assert(Direction.North != Status.Active,  "cross-enum != comparison");
+    assert(Color.Red != Priority.High,        "cross-enum != comparison 2");
+});
+
+test("enum in switch: matches correct case", () => {
+    fn string describeDir(any d) {
+        switch (d) {
+            case Direction.North: return "going north";
+            case Direction.South: return "going south";
+            case Direction.East:  return "going east";
+            case Direction.West:  return "going west";
+            default: return "unknown";
+        }
+    }
+    assert(describeDir(Direction.North) == "going north", "North -> going north");
+    assert(describeDir(Direction.East)  == "going east",  "East -> going east");
+    assert(describeDir(Direction.West)  == "going west",  "West -> going west");
+});
+
+test("enum in switch: default branch", () => {
+    fn string classify(any p) {
+        switch (p) {
+            case Priority.Critical: return "urgent";
+            default: return "normal";
+        }
+    }
+    assert(classify(Priority.Critical) == "urgent", "Critical -> urgent");
+    assert(classify(Priority.High)     == "normal", "High -> normal (default)");
+    assert(classify(Priority.Low)      == "normal", "Low -> normal (default)");
+});
+
+test("enum stored in variable and compared", () => {
+    let current = Status.Pending;
+    assert(current == Status.Pending,   "variable holds Pending");
+    assert(current != Status.Active,    "Pending != Active");
+    current = Status.Active;
+    assert(current == Status.Active,    "after reassign, Active");
+});
+
+test("enum in array: store and retrieve", () => {
+    let dirs = [Direction.North, Direction.East, Direction.South, Direction.West];
+    assert(dirs[0] == Direction.North, "dirs[0] = North");
+    assert(dirs[1] == Direction.East,  "dirs[1] = East");
+    assert(dirs[3] == Direction.West,  "dirs[3] = West");
+    assert(dirs.length() == 4,         "4 directions");
+});
+
+test("enum in array: filter with lambda", () => {
+    let statuses = [Status.Active, Status.Inactive, Status.Active, Status.Pending];
+    let actives = statuses.filter(s => s == Status.Active);
+    assert(actives.length() == 2, "2 active statuses");
+});
+
+test("enum in function parameter and return", () => {
+    fn bool isUrgent(any p) {
+        return p == Priority.Critical || p == Priority.High;
+    }
+    assert(isUrgent(Priority.Critical) == true,  "Critical is urgent");
+    assert(isUrgent(Priority.High)     == true,  "High is urgent");
+    assert(isUrgent(Priority.Medium)   == false, "Medium is not urgent");
+    assert(isUrgent(Priority.Low)      == false, "Low is not urgent");
+});
+
+test("enum in if/else chain", () => {
+    fn string toLabel(any c) {
+        if (c == Color.Red)   { return "red"; }
+        if (c == Color.Green) { return "green"; }
+        if (c == Color.Blue)  { return "blue"; }
+        return "other";
+    }
+    assert(toLabel(Color.Red)   == "red",   "Red -> red");
+    assert(toLabel(Color.Green) == "green", "Green -> green");
+    assert(toLabel(Color.Blue)  == "blue",  "Blue -> blue");
+});
+
+test("enum used as dict value", () => {
+    let config = {};
+    config["status"]   = Status.Active;
+    config["priority"] = Priority.High;
+    assert(config["status"]   == Status.Active,   "dict stores Status.Active");
+    assert(config["priority"] == Priority.High,    "dict stores Priority.High");
+});
+
+test("enum comparison in while loop", () => {
+    let steps = [Direction.North, Direction.East, Direction.South, Direction.West];
+    let i = 0;
+    let found = false;
+    while (i < steps.length()) {
+        if (steps[i] == Direction.South) {
+            found = true;
+            break;
+        }
+        i = i + 1;
+    }
+    assert(found, "South found in steps array");
+    assert(i == 2, "South at index 2");
+});
+
+summary();

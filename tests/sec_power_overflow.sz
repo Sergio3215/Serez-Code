@@ -1,0 +1,4 @@
+// Security: ** that overflows i64 must produce ❌ error
+// 100 ** 20 = 10^40 >> i64::MAX (~9.2 * 10^18)
+let r = 100 ** 20;
+out r;

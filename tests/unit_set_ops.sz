@@ -1,0 +1,131 @@
+// Set data structure: comprehensive operations
+// Covers: add, has/contains, remove, size, clear, iteration, uniqueness
+
+test("new Set starts empty", () => {
+    let s = new Set();
+    assert(s.size() == 0,       "empty set has size 0");
+    assert(s.has(1) == false,   "empty set has no elements");
+    assert(s.has("x") == false, "empty set has no strings either");
+});
+
+test("add elements and check size", () => {
+    let s = new Set();
+    s.add(1);
+    assert(s.size() == 1, "size = 1 after one add");
+    s.add(2);
+    s.add(3);
+    assert(s.size() == 3, "size = 3 after three adds");
+});
+
+test("Set enforces uniqueness: duplicate add is ignored", () => {
+    let s = new Set();
+    s.add(10);
+    s.add(10);
+    s.add(10);
+    assert(s.size() == 1, "adding same value 3 times = size 1");
+});
+
+test("has / contains after adding elements", () => {
+    let s = new Set();
+    s.add(5);
+    s.add(99);
+    s.add(-1);
+    assert(s.has(5)   == true,  "has 5");
+    assert(s.has(99)  == true,  "has 99");
+    assert(s.has(-1)  == true,  "has -1");
+    assert(s.has(0)   == false, "does not have 0");
+    assert(s.has(100) == false, "does not have 100");
+});
+
+test("remove: element removed is no longer in set", () => {
+    let s = new Set();
+    s.add(1);
+    s.add(2);
+    s.add(3);
+    s.remove(2);
+    assert(s.has(2)   == false, "2 removed");
+    assert(s.has(1)   == true,  "1 still present");
+    assert(s.has(3)   == true,  "3 still present");
+    assert(s.size()   == 2,     "size = 2 after remove");
+});
+
+test("remove non-existent element does not crash or change size", () => {
+    let s = new Set();
+    s.add(1);
+    s.remove(999);
+    assert(s.size() == 1, "size unchanged after removing non-existent");
+    assert(s.has(1) == true, "1 still present");
+});
+
+test("clear: empties the set", () => {
+    let s = new Set();
+    s.add(1);
+    s.add(2);
+    s.add(3);
+    s.clear();
+    assert(s.size() == 0,     "size = 0 after clear");
+    assert(s.has(1) == false, "1 not present after clear");
+});
+
+test("Set with string elements", () => {
+    let s = new Set();
+    s.add("apple");
+    s.add("banana");
+    s.add("apple");
+    assert(s.size() == 2,              "2 unique strings");
+    assert(s.has("apple")  == true,    "has apple");
+    assert(s.has("banana") == true,    "has banana");
+    assert(s.has("cherry") == false,   "no cherry");
+});
+
+test("Set used as deduplication tool for array", () => {
+    let arr = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+    let s = new Set();
+    for (let v in arr) { s.add(v); }
+    assert(s.size() == 7, "7 unique values: 1,2,3,4,5,6,9");
+    assert(s.has(1) == true, "has 1");
+    assert(s.has(9) == true, "has 9");
+});
+
+test("Set add-remove-add cycle", () => {
+    let s = new Set();
+    s.add(42);
+    s.remove(42);
+    assert(s.has(42) == false, "42 removed");
+    s.add(42);
+    assert(s.has(42) == true,  "42 re-added");
+    assert(s.size() == 1,      "size = 1");
+});
+
+test("Set with boolean elements", () => {
+    let s = new Set();
+    s.add(true);
+    s.add(false);
+    s.add(true);
+    assert(s.size()           == 2,    "2 unique booleans");
+    assert(s.has(true)  == true,  "has true");
+    assert(s.has(false) == true,  "has false");
+});
+
+test("two independent Sets do not share state", () => {
+    let a = new Set();
+    let b = new Set();
+    a.add(1);
+    a.add(2);
+    b.add(3);
+    assert(a.size() == 2, "a has 2");
+    assert(b.size() == 1, "b has 1");
+    assert(a.has(3) == false, "a does not have 3");
+    assert(b.has(1) == false, "b does not have 1");
+});
+
+test("Set size matches manual add count", () => {
+    let s = new Set();
+    let target = 20;
+    for (let i = 0; i < target; i++) {
+        s.add(i);
+    }
+    assert(s.size() == target, "20 unique elements added");
+});
+
+summary();

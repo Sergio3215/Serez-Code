@@ -1,0 +1,137 @@
+// Abstract class polymorphism tests
+// Covers: method override, polymorphic dispatch, type_of, arrays of abstract type
+
+abstract class Shape {
+    fn string name() { return "Shape"; }
+    fn decimal area() { return 0.0; }
+    fn decimal perimeter() { return 0.0; }
+    fn string describe() {
+        return this.name() + ": area=" + this.area() + " perim=" + this.perimeter();
+    }
+}
+
+class Circle : Shape {
+    public decimal radius;
+    fn Circle(decimal r) { this.radius = r; }
+    fn string name() { return "Circle"; }
+    fn decimal area() { return 3.14159 * this.radius * this.radius; }
+    fn decimal perimeter() { return 2.0 * 3.14159 * this.radius; }
+}
+
+class Rectangle : Shape {
+    public decimal width;
+    public decimal height;
+    fn Rectangle(decimal w, decimal h) { this.width = w; this.height = h; }
+    fn string name() { return "Rectangle"; }
+    fn decimal area() { return this.width * this.height; }
+    fn decimal perimeter() { return 2.0 * (this.width + this.height); }
+}
+
+class Triangle : Shape {
+    public decimal base;
+    public decimal h;
+    public decimal side;
+    fn Triangle(decimal b, decimal h, decimal s) {
+        this.base = b;
+        this.h = h;
+        this.side = s;
+    }
+    fn string name() { return "Triangle"; }
+    fn decimal area() { return 0.5 * this.base * this.h; }
+    fn decimal perimeter() { return this.base + this.side * 2.0; }
+}
+
+test("abstract subclass: name() returns correct type name", () => {
+    let c = new Circle(1.0);
+    let r = new Rectangle(3.0, 4.0);
+    let t = new Triangle(4.0, 3.0, 5.0);
+    assert(c.name() == "Circle",    "Circle.name()");
+    assert(r.name() == "Rectangle", "Rectangle.name()");
+    assert(t.name() == "Triangle",  "Triangle.name()");
+});
+
+test("Circle: area and perimeter", () => {
+    let c = new Circle(5.0);
+    assert(c.area() > 78.5 && c.area() < 78.6, "circle area ≈ 78.54");
+    assert(c.perimeter() > 31.4 && c.perimeter() < 31.5, "circle perimeter ≈ 31.42");
+});
+
+test("Rectangle: area and perimeter", () => {
+    let r = new Rectangle(4.0, 6.0);
+    assert(r.area() == 24.0,       "rect area = 24");
+    assert(r.perimeter() == 20.0,  "rect perimeter = 20");
+});
+
+test("Triangle: area and perimeter", () => {
+    let t = new Triangle(6.0, 4.0, 5.0);
+    assert(t.area() == 12.0,       "triangle area = 12");
+    assert(t.perimeter() == 16.0,  "triangle perimeter = 16");
+});
+
+test("describe() calls overridden name() and area()", () => {
+    let c = new Circle(1.0);
+    let s = c.describe();
+    assert(s.startsWith("Circle:"), "describe starts with Circle:");
+    assert(s.includes("area="),     "describe includes area=");
+});
+
+test("polymorphic function accepting abstract base", () => {
+    fn decimal totalArea(any shapes) {
+        let total = 0.0;
+        for (let s in shapes) {
+            total = total + s.area();
+        }
+        return total;
+    }
+    let shapes = [new Circle(1.0), new Rectangle(2.0, 3.0), new Triangle(4.0, 3.0, 5.0)];
+    let total = totalArea(shapes);
+    // circle(r=1) ≈ 3.14159, rect(2x3) = 6, triangle(b=4,h=3) = 6 => total ≈ 15.14
+    assert(total > 15.1 && total < 15.2, "total area of 3 shapes ≈ 15.14");
+});
+
+test("array of shapes: each calls its own override", () => {
+    let shapes = [new Circle(2.0), new Rectangle(3.0, 4.0)];
+    let names = shapes.map(s => s.name());
+    assert(names[0] == "Circle",    "first shape is Circle");
+    assert(names[1] == "Rectangle", "second shape is Rectangle");
+});
+
+test("type_of returns class name for each subclass", () => {
+    let c = new Circle(1.0);
+    let r = new Rectangle(1.0, 1.0);
+    assert(type_of(c) == "Circle",    "type_of Circle");
+    assert(type_of(r) == "Rectangle", "type_of Rectangle");
+});
+
+test("is type check works for subclasses", () => {
+    let c = new Circle(3.0);
+    assert((c is Circle)    == true,  "Circle is Circle");
+    assert((c is Rectangle) == false, "Circle is not Rectangle");
+});
+
+test("largest shape by area: polymorphic max", () => {
+    fn any largestBy(any shapes) {
+        let best = shapes[0];
+        for (let s in shapes) {
+            if (s.area() > best.area()) { best = s; }
+        }
+        return best;
+    }
+    let shapes = [
+        new Circle(1.0),
+        new Rectangle(10.0, 10.0),
+        new Triangle(6.0, 4.0, 5.0)
+    ];
+    let winner = largestBy(shapes);
+    assert(winner.name() == "Rectangle", "Rectangle has largest area (100)");
+});
+
+test("subclass can have extra fields not in base", () => {
+    let c = new Circle(7.0);
+    assert(c.radius == 7.0, "Circle.radius is accessible");
+    let r = new Rectangle(3.0, 5.0);
+    assert(r.width  == 3.0, "Rectangle.width is accessible");
+    assert(r.height == 5.0, "Rectangle.height is accessible");
+});
+
+summary();

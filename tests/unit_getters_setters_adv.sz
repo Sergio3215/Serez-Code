@@ -1,0 +1,151 @@
+// Advanced getter/setter tests using the test framework
+// Covers: computed properties, validation in setters, readonly, chaining
+
+class Temperature {
+    public decimal _celsius;
+    fn Temperature(decimal c) { this._celsius = c; }
+    fn get decimal celsius()    { return this._celsius; }
+    fn set celsius(decimal v)   { this._celsius = v; }
+    fn get decimal fahrenheit() { return this._celsius * 1.8 + 32.0; }
+    fn get decimal kelvin()     { return this._celsius + 273.15; }
+}
+
+class BoundedValue {
+    public int _value;
+    public int _min;
+    public int _max;
+    fn BoundedValue(int lo, int hi, int init) {
+        this._min = lo;
+        this._max = hi;
+        this._value = init;
+    }
+    fn get int value() { return this._value; }
+    fn set value(int v) {
+        if (v < this._min) { this._value = this._min; return; }
+        if (v > this._max) { this._value = this._max; return; }
+        this._value = v;
+    }
+    fn get bool atMin() { return this._value == this._min; }
+    fn get bool atMax() { return this._value == this._max; }
+}
+
+class FullName {
+    public string _first;
+    public string _last;
+    fn FullName(string f, string l) { this._first = f; this._last = l; }
+    fn get string first() { return this._first; }
+    fn get string last()  { return this._last; }
+    fn set first(string v) { this._first = v; }
+    fn set last(string v)  { this._last = v; }
+    fn get string full()   { return this._first + " " + this._last; }
+    fn get int nameLength() { return this.full().length(); }
+}
+
+class Counter2 {
+    public int _count;
+    fn Counter2() { this._count = 0; }
+    fn get int count() { return this._count; }
+    fn void increment() { this._count = this._count + 1; }
+    fn void reset()     { this._count = 0; }
+    fn get bool isZero() { return this._count == 0; }
+}
+
+test("getter: celsius returns stored value", () => {
+    let t = new Temperature(100.0);
+    assert(t.celsius == 100.0, "celsius getter returns 100.0");
+});
+
+test("getter: fahrenheit computed from celsius", () => {
+    let t = new Temperature(0.0);
+    assert(t.fahrenheit == 32.0, "0C = 32F");
+    let t2 = new Temperature(100.0);
+    assert(t2.fahrenheit == 212.0, "100C = 212F");
+});
+
+test("getter: kelvin computed from celsius", () => {
+    let t = new Temperature(0.0);
+    assert(t.kelvin == 273.15, "0C = 273.15K");
+    let t2 = new Temperature(100.0);
+    assert(t2.kelvin == 373.15, "100C = 373.15K");
+});
+
+test("setter: celsius setter updates value", () => {
+    let t = new Temperature(20.0);
+    t.celsius = 37.0;
+    assert(t.celsius == 37.0,    "celsius updated to 37");
+    assert(t.fahrenheit == 98.6, "fahrenheit recalculated: 37C = 98.6F");
+});
+
+test("setter: updating celsius changes all computed getters", () => {
+    let t = new Temperature(-40.0);
+    assert(t.fahrenheit == -40.0, "-40C = -40F");
+    t.celsius = 0.0;
+    assert(t.fahrenheit == 32.0,  "after update: 0C = 32F");
+    assert(t.kelvin == 273.15,    "after update: 0C = 273.15K");
+});
+
+test("BoundedValue: set within range", () => {
+    let b = new BoundedValue(0, 100, 50);
+    assert(b.value == 50, "initial value = 50");
+    b.value = 75;
+    assert(b.value == 75, "updated to 75");
+});
+
+test("BoundedValue: set below min clamps to min", () => {
+    let b = new BoundedValue(0, 100, 50);
+    b.value = -10;
+    assert(b.value == 0,     "clamped to min (0)");
+    assert(b.atMin == true,  "atMin = true");
+    assert(b.atMax == false, "atMax = false");
+});
+
+test("BoundedValue: set above max clamps to max", () => {
+    let b = new BoundedValue(0, 100, 50);
+    b.value = 200;
+    assert(b.value == 100,   "clamped to max (100)");
+    assert(b.atMax == true,  "atMax = true");
+    assert(b.atMin == false, "atMin = false");
+});
+
+test("BoundedValue: exact boundary values accepted", () => {
+    let b = new BoundedValue(1, 10, 5);
+    b.value = 1;
+    assert(b.value == 1,  "exactly at min = 1");
+    b.value = 10;
+    assert(b.value == 10, "exactly at max = 10");
+});
+
+test("FullName: computed full name getter", () => {
+    let n = new FullName("John", "Doe");
+    assert(n.full == "John Doe", "full = John Doe");
+    assert(n.first == "John",    "first = John");
+    assert(n.last == "Doe",      "last = Doe");
+    assert(n.nameLength == 8,    "nameLength = 8");
+});
+
+test("FullName: setter updates computed getter", () => {
+    let n = new FullName("Alice", "Smith");
+    n.last = "Johnson";
+    assert(n.full == "Alice Johnson", "full updated after last change");
+    assert(n.nameLength == 13,        "nameLength = 13");
+});
+
+test("Counter2: isZero getter", () => {
+    let c = new Counter2();
+    assert(c.isZero == true,  "starts at zero");
+    c.increment();
+    assert(c.isZero == false, "not zero after increment");
+    assert(c.count == 1,      "count = 1");
+    c.reset();
+    assert(c.isZero == true,  "zero after reset");
+});
+
+test("Counter2: multiple increments via getter", () => {
+    let c = new Counter2();
+    c.increment();
+    c.increment();
+    c.increment();
+    assert(c.count == 3, "count = 3 after 3 increments");
+});
+
+summary();

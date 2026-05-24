@@ -1,0 +1,180 @@
+// ── 40. Classic Algorithms E2E ────────────────────────────────────────────────
+// Real algorithm implementations using Serez features
+
+out "── selection sort ──";
+
+fn any selectionSort(any arr) {
+    let sorted = [];
+    for (let v in arr) { sorted.push(v); }
+    let n = sorted.length();
+    let i = 0;
+    while (i < n - 1) {
+        let minIdx = i;
+        let j = i + 1;
+        while (j < n) {
+            if (sorted[j] < sorted[minIdx]) { minIdx = j; }
+            j = j + 1;
+        }
+        if (minIdx != i) {
+            let tmp = sorted[i];
+            sorted[i] = sorted[minIdx];
+            sorted[minIdx] = tmp;
+        }
+        i = i + 1;
+    }
+    return sorted;
+}
+
+let nums = selectionSort([64, 34, 25, 12, 22, 11, 90]);
+out nums[0];   // 11
+out nums[3];   // 25
+out nums[6];   // 90
+
+out "── binary search ──";
+
+fn int binarySearch(any arr, int target) {
+    let lo = 0;
+    let hi = arr.length() - 1;
+    while (lo <= hi) {
+        let mid = (lo + hi) / 2;
+        if (arr[mid] == target) { return mid; }
+        if (arr[mid] < target)  { lo = mid + 1; }
+        else                    { hi = mid - 1; }
+    }
+    return -1;
+}
+
+let sorted = [2, 5, 8, 12, 16, 23, 38, 56, 72, 91];
+out binarySearch(sorted, 23);   // 5
+out binarySearch(sorted, 2);    // 0
+out binarySearch(sorted, 91);   // 9
+out binarySearch(sorted, 50);   // -1
+
+out "── sieve of eratosthenes ──";
+
+fn any sieve(int limit) {
+    let isPrime = [];
+    let i = 0;
+    while (i <= limit) { isPrime.push(true); i = i + 1; }
+    isPrime[0] = false;
+    if (limit >= 1) { isPrime[1] = false; }
+    let p = 2;
+    while (p * p <= limit) {
+        if (isPrime[p]) {
+            let mult = p * p;
+            while (mult <= limit) {
+                isPrime[mult] = false;
+                mult = mult + p;
+            }
+        }
+        p = p + 1;
+    }
+    let primes = [];
+    let j = 2;
+    while (j <= limit) {
+        if (isPrime[j]) { primes.push(j); }
+        j = j + 1;
+    }
+    return primes;
+}
+
+let primes = sieve(30);
+out primes.length();   // 10  (2,3,5,7,11,13,17,19,23,29)
+out primes[0];         // 2
+out primes[9];         // 29
+
+out "── fibonacci (iterative) ──";
+
+fn int fib(int n) {
+    if (n <= 1) { return n; }
+    let a = 0;
+    let b = 1;
+    let i = 2;
+    while (i <= n) {
+        let c = a + b;
+        a = b;
+        b = c;
+        i = i + 1;
+    }
+    return b;
+}
+
+out fib(10);   // 55
+out fib(20);   // 6765
+out fib(30);   // 832040
+
+out "── palindrome check ──";
+
+fn bool isPalindrome(string s) {
+    let lo = 0;
+    let hi = s.length() - 1;
+    while (lo < hi) {
+        if (s.charAt(lo) != s.charAt(hi)) { return false; }
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return true;
+}
+
+out isPalindrome("racecar");   // true
+out isPalindrome("hello");     // false
+out isPalindrome("abba");      // true
+out isPalindrome("a");         // true
+out isPalindrome("");          // true
+
+out "── stack via class ──";
+
+class Stack {
+    public Stack() { this._data = []; }
+    public void push(any val)  { this._data.push(val); }
+    public any pop() {
+        if (this._data.length() == 0) { return null; }
+        return this._data.pop();
+    }
+    public any peek() {
+        let n = this._data.length();
+        if (n == 0) { return null; }
+        return this._data[n - 1];
+    }
+    public int size() { return this._data.length(); }
+    public bool isEmpty() { return this._data.length() == 0; }
+}
+
+let stack = new Stack();
+out stack.isEmpty();   // true
+stack.push(10);
+stack.push(20);
+stack.push(30);
+out stack.size();      // 3
+out stack.peek();      // 30
+out stack.pop();       // 30
+out stack.pop();       // 20
+out stack.size();      // 1
+
+out "── run-length encoding ──";
+
+fn string rle(string s) {
+    if (s.length() == 0) { return ""; }
+    let result = "";
+    let current = s.charAt(0);
+    let count = 1;
+    let i = 1;
+    while (i < s.length()) {
+        let ch = s.charAt(i);
+        if (ch == current) {
+            count = count + 1;
+        } else {
+            result = result + count + current;
+            current = ch;
+            count = 1;
+        }
+        i = i + 1;
+    }
+    result = result + count + current;
+    return result;
+}
+
+out rle("aaabbbccddddee");   // 3a3b2c4d2e
+out rle("abcd");             // 1a1b1c1d
+out rle("aaaa");             // 4a
+out rle("");                 // (empty line)

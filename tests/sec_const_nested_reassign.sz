@@ -1,0 +1,7 @@
+// Security: reassigning a const inside a nested function must produce ❌ error
+const LIMIT = 100;
+fn void badUpdate() {
+    LIMIT = 200;
+}
+badUpdate();
+out LIMIT;
