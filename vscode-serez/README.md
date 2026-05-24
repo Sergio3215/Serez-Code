@@ -1,9 +1,11 @@
-# Serez-Code
+# Serez-Code Formatter
 
-Syntax highlighting for **Serez-Code** (`.sz`) files — a hand-crafted interpreted language written in Rust.
+Syntax highlighting and formatter for **Serez-Code** (`.sz`) files — a hand-crafted interpreted language written in Rust.
 
 ## Features
 
+- **Syntax highlighting** for keywords, types, operators, strings, numbers and comments
+- **Auto-formatter** on save (configurable via `editor.formatOnSave`)
 - Keywords: `fn`, `let`, `const`, `class`, `interface`, `enum`, `if`, `while`, `for`, `switch`, `try`, `throw`, ...
 - Types: `int`, `decimal`, `string`, `bool`, `any`, `void`
 - String interpolation: `"Hello, {name}!"`
@@ -14,24 +16,24 @@ Syntax highlighting for **Serez-Code** (`.sz`) files — a hand-crafted interpre
 
 ## Usage
 
-Files with the `.sz` extension are automatically detected.
+Files with the `.sz` extension are automatically detected and formatted on save.
 
 ## Installation
 
-### VS Code
+### Open VSX / Antigravity IDE
 
-Install via the Extensions marketplace, or from a `.vsix` file:
+Search for **Serez-Code Formatter** in the Extensions marketplace.
+
+Or install manually from a `.vsix` file:
 
 ```bash
-code --install-extension serez-code-0.1.0.vsix
+antigravity-ide.cmd --install-extension serez-code-formatter-1.1.0.vsix
 ```
 
-### Antigravity IDE (fork of VS Code)
-
-Use the `antigravity-ide.cmd` launcher instead of `code`:
+### VS Code
 
 ```bash
-antigravity-ide.cmd --install-extension serez-code-0.1.0.vsix
+code --install-extension serez-code-formatter-1.1.0.vsix
 ```
 
 ## Language
