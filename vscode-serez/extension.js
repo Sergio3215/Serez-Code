@@ -80,7 +80,7 @@ function formatDocument(text) {
 // ---------------------------------------------------------------------------
 
 function activate(context) {
-    const selector = { language: 'serez', scheme: 'file' };
+    const selector = { language: 'serez-code', scheme: 'file' };
 
     const provider = vscode.languages.registerDocumentFormattingEditProvider(selector, {
         provideDocumentFormattingEdits(document) {
