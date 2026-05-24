@@ -2,7 +2,7 @@
   "name": "serez-code",
   "displayName": "Serez-Code",
   "description": "Syntax highlighting and formatter for Serez-Code (.sz) files",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "icon": "icon.png",
   "publisher": "sd-tools",
   "engines": {
