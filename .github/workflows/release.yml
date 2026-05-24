@@ -61,11 +61,31 @@ jobs:
         shell: bash
         run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.asset }}
 
+      - name: Install cargo-wix (Windows only)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo install cargo-wix --no-default-features
+
+      - name: Build MSI installer (Windows only)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo wix --no-build --target x86_64-pc-windows-msvc --nocapture
+
+      - name: Rename MSI (Windows only)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: cp target/wix/*.msi sz-windows-x64-setup.msi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
+
+      - name: Upload MSI artifact (Windows only)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sz-windows-x64-setup.msi
+          path: sz-windows-x64-setup.msi
 
   release:
     name: Publish GitHub Release
@@ -92,6 +112,7 @@ jobs:
           gh release create "${{ github.ref_name }}" \
             --title "Serez-Code ${{ github.ref_name }}" \
             --generate-notes \
+            artifacts/sz-windows-x64-setup.msi \
             artifacts/sz-windows-x64.exe \
             artifacts/sz-linux-x64 \
             artifacts/sz-macos-arm64 \
