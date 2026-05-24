@@ -1,0 +1,3 @@
+// shift() on empty array
+let a = [];
+a.shift();

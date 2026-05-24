@@ -55,7 +55,8 @@ impl super::Evaluator {
 
             "pop" => {
                 if elems.is_empty() {
-                    return EvalResult::Value(self.null_ref);
+                    eprintln!("❌ ERROR: pop() called on an empty array");
+                    return EvalResult::Error;
                 }
                 let mut e = elems;
                 let last = e.pop().unwrap();
@@ -66,7 +67,8 @@ impl super::Evaluator {
 
             "shift" => {
                 if elems.is_empty() {
-                    return EvalResult::Value(self.null_ref);
+                    eprintln!("❌ ERROR: shift() called on an empty array");
+                    return EvalResult::Error;
                 }
                 let mut e = elems;
                 let first = e.remove(0);

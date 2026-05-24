@@ -401,7 +401,7 @@ impl super::Evaluator {
                             EvalResult::Value(elements[*i as usize])
                         }
                     }
-                    (ObjectData::Dict { entries, .. }, _) => {
+                    (ObjectData::Dict { entries, value_type, .. }, _) => {
                         let search_key = obj_data_to_key_str(&idx_data);
                         let found = entries.iter().find(|&&(k_ref, _)| {
                             let k_data = self.resolve(k_ref).unwrap();
@@ -409,7 +409,16 @@ impl super::Evaluator {
                         });
                         match found {
                             Some(&(_, v_ref)) => EvalResult::Value(v_ref),
-                            None => EvalResult::Value(self.null_ref),
+                            None => {
+                                if value_type != "any" {
+                                    eprintln!(
+                                        "❌ ERROR: Key '{}' not found in typed dict <_, {}>",
+                                        search_key, value_type
+                                    );
+                                    return EvalResult::Error;
+                                }
+                                EvalResult::Value(self.null_ref)
+                            }
                         }
                     }
                     _ => {

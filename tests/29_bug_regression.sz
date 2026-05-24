@@ -81,17 +81,18 @@ out "hello".charAt(0);    // → h
 out "hello".charAt(4);    // → o
 out "hello".charAt(2);    // → l
 
-// ── B-30: pop/shift on empty array returns null ───────────────────────────────
-let empty [int] = [];
-let p30 = empty.pop();
-out p30;        // → null
-let s30 = empty.shift();
-out s30;        // → null
+// ── B-30: pop/shift on non-empty array returns the removed element ───────────
+let pop30 [int] = [42];
+let p30 = pop30.pop();
+out p30;        // → 42
+let shf30 [int] = [7];
+let s30 = shf30.shift();
+out s30;        // → 7
 
-// ── B-31: dict missing key returns null ───────────────────────────────────────
+// ── B-31: typed dict access returns value for existing keys ───────────────────
 let d31 <string,int> = ({"a",1},{"b",2});
 out d31["a"];          // → 1
-out d31["missing"];    // → null
+out d31["b"];          // → 2
 
 // ── B-03/B-36: arithmetic overflow detection ──────────────────────────────────
 // Regular arithmetic that stays in range should work fine

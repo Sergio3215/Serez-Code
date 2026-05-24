@@ -1,0 +1,2 @@
+let d <string, int> = ({"a", 1});
+out d["noexiste"];

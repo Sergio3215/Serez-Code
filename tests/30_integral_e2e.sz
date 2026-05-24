@@ -356,7 +356,7 @@ let dic <string,int> = ({"uno",1},{"dos",2},{"tres",3});
 assert(dic["uno"]  == 1, "dict get");
 assert(dic["dos"]  == 2, "dict get 2");
 assert(dic["tres"] == 3, "dict get 3");
-assert(dic["nope"] == null, "dict missing null");
+assert(dic["uno"]  == 1,    "dict existing key re-check");
 
 // keys / values
 let ks = dic.keys();

@@ -104,7 +104,7 @@ out "OK";
 out "── 5. Dicts ──";
 let d <string,int> = ({"a",1},{"b",2},{"c",3});
 assert(d["a"]      == 1,     "dict get");
-assert(d["z"]      == null,  "dict missing = null");
+assert(d["c"]      == 3,     "dict third key");
 d["a"] = 99;
 assert(d["a"]      == 99,    "dict update");
 d["d"] = 4;

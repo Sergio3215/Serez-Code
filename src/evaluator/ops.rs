@@ -166,13 +166,26 @@ impl super::Evaluator {
                     "**" => {
                         if r < 0 {
                             ObjectData::Decimal((l as f64).powf(r as f64))
-                        } else {
-                            let result = (l as f64).powf(r as f64);
-                            if !result.is_finite() || result > i64::MAX as f64 {
-                                eprintln!("❌ ERROR: Integer overflow in exponentiation");
-                                return EvalResult::Error;
+                        } else if r > u32::MAX as i64 {
+                            // Exponent too large for any i64 base except 0, 1, -1
+                            match l {
+                                0 => ObjectData::Integer(0),
+                                1 => ObjectData::Integer(1),
+                                -1 => ObjectData::Integer(if r % 2 == 0 { 1 } else { -1 }),
+                                _ => {
+                                    eprintln!("❌ ERROR: Integer overflow in exponentiation");
+                                    return EvalResult::Error;
+                                }
                             }
-                            ObjectData::Integer(result as i64)
+                        } else {
+                            // Use checked_pow for exact overflow detection (avoids f64 precision issues)
+                            match l.checked_pow(r as u32) {
+                                Some(v) => ObjectData::Integer(v),
+                                None => {
+                                    eprintln!("❌ ERROR: Integer overflow in exponentiation");
+                                    return EvalResult::Error;
+                                }
+                            }
                         }
                     }
                     "&"  => ObjectData::Integer(l & r),
