@@ -53,6 +53,8 @@ jobs:
         run: sudo apt-get install -y musl-tools
 
       - name: Build release binary
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package binary
