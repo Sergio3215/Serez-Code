@@ -151,7 +151,10 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
                 match self.resolve(r).cloned() {
-                    Some(ObjectData::Integer(i)) => EvalResult::Value(self.alloc(ObjectData::Integer(i.abs()))),
+                    Some(ObjectData::Integer(i)) => match i.checked_abs() {
+                        Some(v) => EvalResult::Value(self.alloc(ObjectData::Integer(v))),
+                        None => { eprintln!("❌ ERROR: abs() overflow (i64::MIN has no positive representation)"); EvalResult::Error }
+                    },
                     Some(ObjectData::Decimal(d)) => EvalResult::Value(self.alloc(ObjectData::Decimal(d.abs()))),
                     _ => { eprintln!("❌ ERROR: abs() expects a numeric argument"); EvalResult::Error }
                 }
@@ -165,16 +168,19 @@ impl super::Evaluator {
             "floor" => {
                 if args.len() != 1 { eprintln!("❌ ERROR: floor() expects 1 argument"); return EvalResult::Error; }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v.is_nan() || v.is_infinite() { eprintln!("❌ ERROR: floor() argument must be a finite number"); return EvalResult::Error; }
                 EvalResult::Value(self.alloc(ObjectData::Integer(v.floor() as i64)))
             }
             "ceil" => {
                 if args.len() != 1 { eprintln!("❌ ERROR: ceil() expects 1 argument"); return EvalResult::Error; }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v.is_nan() || v.is_infinite() { eprintln!("❌ ERROR: ceil() argument must be a finite number"); return EvalResult::Error; }
                 EvalResult::Value(self.alloc(ObjectData::Integer(v.ceil() as i64)))
             }
             "round" => {
                 if args.len() != 1 { eprintln!("❌ ERROR: round() expects 1 argument"); return EvalResult::Error; }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v.is_nan() || v.is_infinite() { eprintln!("❌ ERROR: round() argument must be a finite number"); return EvalResult::Error; }
                 EvalResult::Value(self.alloc(ObjectData::Integer(v.round() as i64)))
             }
             "log" => {
