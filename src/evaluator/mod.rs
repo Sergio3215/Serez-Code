@@ -752,6 +752,7 @@ fn json_stringify_owned(val: &OwnedValue) -> String {
         OwnedValue::Boolean(b) => b.to_string(),
         OwnedValue::Integer(i) => i.to_string(),
         OwnedValue::Decimal(d) => {
+            if !d.is_finite() { return "null".to_string(); }
             if d.fract() == 0.0 { format!("{:.1}", d) }
             else {
                 let s = format!("{:.10}", d);
