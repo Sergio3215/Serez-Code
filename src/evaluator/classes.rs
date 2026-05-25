@@ -105,7 +105,10 @@ impl super::Evaluator {
         });
 
         if let Some(ctor) = class.constructor {
-            if arg_vals.len() != ctor.parameters.len() {
+            let has_rest = ctor.parameters.last().map(|p| p.is_rest).unwrap_or(false);
+            let required = ctor.parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
+            let max_pos  = if has_rest { usize::MAX } else { ctor.parameters.len() };
+            if arg_vals.len() < required || arg_vals.len() > max_pos {
                 eprintln!("❌ ERROR: Constructor '{}' expects {} arguments, got {}",
                     new_expr.class_name, ctor.parameters.len(), arg_vals.len());
                 return EvalResult::Error;
@@ -115,7 +118,25 @@ impl super::Evaluator {
             self.scopes.declare("this".to_string(), instance_ref);
 
             for (i, param) in ctor.parameters.iter().enumerate() {
-                let arg_ref = self.plant(arg_vals[i].clone());
+                if param.is_rest {
+                    let rest_refs: Vec<ObjectRef> = arg_vals[i..].iter()
+                        .map(|v| self.plant(v.clone()))
+                        .collect();
+                    let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+                    self.scopes.declare(param.name.clone(), rest_ref);
+                    break;
+                }
+                let arg_ref = if i < arg_vals.len() {
+                    self.plant(arg_vals[i].clone())
+                } else if let Some(default_expr) = &param.default_value {
+                    let default_expr = default_expr.clone();
+                    match self.eval_expression(&default_expr) {
+                        EvalResult::Value(v) => v,
+                        _ => self.null_ref,
+                    }
+                } else {
+                    self.null_ref
+                };
                 self.scopes.declare(param.name.clone(), arg_ref);
             }
 
