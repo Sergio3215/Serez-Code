@@ -105,6 +105,9 @@ impl super::Evaluator {
                 }
                 let from = match self.eval_str_arg(&dot_call.arguments[0]) { Some(v) => v, None => return EvalResult::Error };
                 let to   = match self.eval_str_arg(&dot_call.arguments[1]) { Some(v) => v, None => return EvalResult::Error };
+                if from.is_empty() {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(s.clone())));
+                }
                 EvalResult::Value(self.alloc(ObjectData::Str(s.replacen(&from[..], &to, 1))))
             }
 
@@ -115,6 +118,9 @@ impl super::Evaluator {
                 }
                 let from = match self.eval_str_arg(&dot_call.arguments[0]) { Some(v) => v, None => return EvalResult::Error };
                 let to   = match self.eval_str_arg(&dot_call.arguments[1]) { Some(v) => v, None => return EvalResult::Error };
+                if from.is_empty() {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(s.clone())));
+                }
                 EvalResult::Value(self.alloc(ObjectData::Str(s.replace(&from[..], &to))))
             }
 

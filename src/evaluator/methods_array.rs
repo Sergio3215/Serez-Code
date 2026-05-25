@@ -315,23 +315,39 @@ impl super::Evaluator {
             }
 
             "reduce" => {
-                if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: reduce expects 2 arguments (initial, callback)");
+                if dot_call.arguments.is_empty() || dot_call.arguments.len() > 2 {
+                    eprintln!("❌ ERROR: reduce expects 1 argument (callback) or 2 (initial, callback)");
                     return EvalResult::Error;
                 }
-                let init_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
-                };
-                let cb_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
-                };
                 let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
-                let mut acc_ref = init_ref;
-                for val in owned_elems {
+                let (mut acc_ref, cb_ref, start_idx) = if dot_call.arguments.len() == 2 {
+                    // reduce(initial, callback)
+                    let init = match self.eval_expression(&dot_call.arguments[0]) {
+                        EvalResult::Value(r) => r,
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
+                        _ => return EvalResult::Error,
+                    };
+                    let cb = match self.eval_expression(&dot_call.arguments[1]) {
+                        EvalResult::Value(r) => r,
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
+                        _ => return EvalResult::Error,
+                    };
+                    (init, cb, 0usize)
+                } else {
+                    // reduce(callback) — first element is the initial accumulator
+                    if owned_elems.is_empty() {
+                        eprintln!("❌ ERROR: reduce with no initial value requires a non-empty array");
+                        return EvalResult::Error;
+                    }
+                    let cb = match self.eval_expression(&dot_call.arguments[0]) {
+                        EvalResult::Value(r) => r,
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
+                        _ => return EvalResult::Error,
+                    };
+                    let first_ref = self.plant(owned_elems[0].clone());
+                    (first_ref, cb, 1usize)
+                };
+                for val in owned_elems.into_iter().skip(start_idx) {
                     let acc_val = self.extract(acc_ref);
                     acc_ref = match self.call_function(cb_ref, vec![acc_val, val]) {
                         EvalResult::Value(r) => r,
