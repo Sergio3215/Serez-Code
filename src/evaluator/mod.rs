@@ -601,7 +601,10 @@ impl Evaluator {
         let func_data = self.resolve(func_ref).cloned();
         match func_data {
             Some(ObjectData::Function { parameters, body, captured, .. }) => {
-                if arg_vals.len() != parameters.len() {
+                let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
+                let required = parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
+                let max_pos  = if has_rest { usize::MAX } else { parameters.len() };
+                if arg_vals.len() < required || arg_vals.len() > max_pos {
                     eprintln!(
                         "❌ ERROR: Callback expected {} argument(s), got {}",
                         parameters.len(), arg_vals.len()
@@ -613,9 +616,27 @@ impl Evaluator {
                 for (name, cap_ref) in &captured {
                     self.scopes.declare(name.clone(), *cap_ref);
                 }
-                for (param, val) in parameters.iter().zip(arg_vals.into_iter()) {
-                    let r = self.plant(val);
-                    self.scopes.declare(param.name.clone(), r);
+                for (i, param) in parameters.iter().enumerate() {
+                    if param.is_rest {
+                        let rest_refs: Vec<ObjectRef> = arg_vals[i..].iter()
+                            .map(|v| self.plant(v.clone()))
+                            .collect();
+                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+                        self.scopes.declare(param.name.clone(), rest_ref);
+                        break;
+                    }
+                    let local_ref = if i < arg_vals.len() {
+                        self.plant(arg_vals[i].clone())
+                    } else if let Some(default_expr) = &param.default_value {
+                        let default_expr = default_expr.clone();
+                        match self.eval_expression(&default_expr) {
+                            EvalResult::Value(v) => v,
+                            _ => self.null_ref,
+                        }
+                    } else {
+                        self.null_ref
+                    };
+                    self.scopes.declare(param.name.clone(), local_ref);
                 }
                 let mut result_ref = self.null_ref;
                 let mut fn_throw: Option<ObjectRef> = None;
