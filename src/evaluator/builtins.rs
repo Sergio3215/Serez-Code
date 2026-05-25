@@ -266,11 +266,13 @@ impl super::Evaluator {
             "asin" => {
                 if args.len() != 1 { eprintln!("❌ ERROR: asin() expects 1 argument"); return EvalResult::Error; }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v < -1.0 || v > 1.0 { eprintln!("❌ ERROR: asin() argument must be in [-1, 1]"); return EvalResult::Error; }
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.asin())))
             }
             "acos" => {
                 if args.len() != 1 { eprintln!("❌ ERROR: acos() expects 1 argument"); return EvalResult::Error; }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v < -1.0 || v > 1.0 { eprintln!("❌ ERROR: acos() argument must be in [-1, 1]"); return EvalResult::Error; }
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.acos())))
             }
             "atan" => {

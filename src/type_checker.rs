@@ -242,7 +242,7 @@ impl TypeChecker {
 
         let has_rest = func.parameters.last().map(|p| p.is_rest).unwrap_or(false);
         let required_count = func.parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
-        let min_params = if has_rest { required_count } else { required_count };
+        let min_params = required_count;
         let max_params = if has_rest { usize::MAX } else { func.parameters.len() };
         let arity_ok = call.arguments.len() >= min_params && call.arguments.len() <= max_params;
         if !arity_ok {
