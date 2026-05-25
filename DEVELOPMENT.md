@@ -27,8 +27,8 @@ Documentación completa del proyecto: arquitectura, decisiones técnicas, toolin
 
 | Métrica | Valor |
 |---|---|
-| Versión | 0.1.0 |
-| Tests pasando | 166 (0 fallando) |
+| Versión | 2.0.1 |
+| Tests pasando | 214 (0 fallando) |
 | Archivos Rust | 22 (`src/`) |
 | Tamaño del parser | ~100 KB |
 | Tamaño del evaluador (total submodulos) | ~258 KB |
@@ -144,7 +144,7 @@ Evaluator (evaluator/ — 12 módulos)
 | Arena allocator + watermarks | GC / Rc<RefCell<T>> | Determinístico, O(k) por scope, zero unsafe |
 | `ObjectRef { region, index }` | Raw pointers / Box | No puede dangling: index inválido ≠ memoria inválida |
 | `Rc<BlockStatement>` para fn bodies | Clone del AST | Clonar una función es O(1) en lugar de O(n) |
-| `StoredMethod` cache en clases | Buscar en ClassDecl | Dispatch O(1) sin recorrer el AST |
+| `StoredClass` con 4 HashMaps | Vec<ClassMethod> lineal | Dispatch O(1): methods, static_methods, getters, setters |
 | Pratt TDOP parser | Recursive descent clásico | Precedencia de operadores fácil de extender |
 | Zero `unsafe` | — | Invariante de seguridad no negociable |
 
@@ -236,7 +236,7 @@ El evaluador original era un solo archivo de 5300+ líneas. Fue dividido en 12 m
 
 | Módulo | Tamaño | Responsabilidad principal |
 |---|---|---|
-| `mod.rs` | 39.5 KB | Entrada, Flash Scope protocol, StoredMethod cache, profiler |
+| `mod.rs` | 39.5 KB | Entrada, Flash Scope protocol, StoredClass (4 HashMaps O(1)), profiler |
 | `expr.rs` | 45.9 KB | Todas las expresiones: calls, index, dot, ternary, interpolation |
 | `stmt.rs` | 32.3 KB | Todos los statements: let, assign, for, while, if, class, enum… |
 | `classes.rs` | 24.8 KB | Instanciación, dispatch, herencia, super, getters/setters |
@@ -265,13 +265,14 @@ El evaluador original era un solo archivo de 5300+ líneas. Fue dividido en 12 m
 
 | Categoría | Cantidad | Descripción |
 |---|---|---|
-| `unit_*.sz` | 66 | Tests unitarios usando `framework.sz` (assert, expect) |
-| `NN_*.sz` + `.expected` | 51 | Tests E2E con golden files — diff exacto de stdout |
-| `err_*.sz` | 24 | Verifican que ciertos inputs producen error de runtime |
-| `sec_*.sz` | 22 | Suite de seguridad: overflow, OOB, null safety, stack overflow |
-| `demo_*.sz` | 3 | Programas demo usados como tests de integración |
+| `unit_*.sz` (no sec) | 71 | Tests unitarios usando `framework.sz` (assert, expect) |
+| `NN_*.sz` + `.expected` | 53 | Tests E2E con golden files — diff exacto de stdout |
+| `err_*.sz` | 27 | Verifican que ciertos inputs producen error de runtime |
+| `sec_*.sz` | 36 | Suite de seguridad: overflow, OOB, null safety, stack overflow |
+| `unit_sec_*.sz` | 15 | Tests unitarios de seguridad (con framework.sz) |
+| CLI / REPL / --check | 12 | Tests de modo de ejecución del CLI |
 | `framework.sz` | 1 | Framework compartido por todos los unit tests |
-| **Total** | **166** | **0 fallando** |
+| **Total** | **214** | **0 fallando** |
 
 ### Test runners
 
