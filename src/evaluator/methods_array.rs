@@ -156,19 +156,31 @@ impl super::Evaluator {
                     let n = owned_vals.len();
                     // Bubble sort (simple, avoids borrow issues with call_function)
                     let mut i = 0;
-                    while i < n {
+                    let mut sort_err: Option<EvalResult> = None;
+                    'outer: while i < n {
                         let mut j = 0;
                         while j < n - i - 1 {
                             let a = owned_vals[j].clone();
                             let b = owned_vals[j + 1].clone();
-                            let result = self.call_function(cb_ref, vec![a, b]);
-                            let should_swap = match result {
-                                EvalResult::Value(r) => match self.resolve(r).cloned() {
-                                    Some(ObjectData::Integer(v)) => v > 0,
-                                    Some(ObjectData::Decimal(v)) => v > 0.0,
-                                    _ => false,
+                            let cmp_result = self.call_function(cb_ref, vec![a, b]);
+                            let should_swap = match cmp_result {
+                                EvalResult::Value(r) => match self.resolve(r) {
+                                    Some(ObjectData::Integer(v)) => *v > 0,
+                                    Some(ObjectData::Decimal(v)) => *v > 0.0,
+                                    _ => {
+                                        eprintln!("❌ ERROR: sort comparator must return a number");
+                                        sort_err = Some(EvalResult::Error);
+                                        break 'outer;
+                                    }
                                 },
-                                _ => false,
+                                EvalResult::Throw(v) => {
+                                    sort_err = Some(EvalResult::Throw(v));
+                                    break 'outer;
+                                }
+                                _ => {
+                                    sort_err = Some(EvalResult::Error);
+                                    break 'outer;
+                                }
                             };
                             if should_swap {
                                 owned_vals.swap(j, j + 1);
@@ -176,6 +188,9 @@ impl super::Evaluator {
                             j += 1;
                         }
                         i += 1;
+                    }
+                    if let Some(err) = sort_err {
+                        return err;
                     }
                     let new_refs: Vec<ObjectRef> = owned_vals.into_iter().map(|v| {
                         match arr_ref.region {
@@ -401,7 +416,7 @@ impl super::Evaluator {
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
-                    if self.is_truthy(&self.resolve(result).unwrap().clone()) {
+                    if self.is_truthy(self.resolve(result).unwrap()) {
                         return EvalResult::Value(self.plant(val_clone));
                     }
                 }
@@ -425,7 +440,7 @@ impl super::Evaluator {
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
-                    if self.is_truthy(&self.resolve(result).unwrap().clone()) {
+                    if self.is_truthy(self.resolve(result).unwrap()) {
                         return EvalResult::Value(self.alloc(ObjectData::Integer(i as i64)));
                     }
                 }
@@ -481,7 +496,7 @@ impl super::Evaluator {
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
-                    if !self.is_truthy(&self.resolve(result).unwrap().clone()) {
+                    if !self.is_truthy(self.resolve(result).unwrap()) {
                         return EvalResult::Value(self.alloc(ObjectData::Boolean(false)));
                     }
                 }
@@ -505,7 +520,7 @@ impl super::Evaluator {
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
-                    if self.is_truthy(&self.resolve(result).unwrap().clone()) {
+                    if self.is_truthy(self.resolve(result).unwrap()) {
                         return EvalResult::Value(self.alloc(ObjectData::Boolean(true)));
                     }
                 }

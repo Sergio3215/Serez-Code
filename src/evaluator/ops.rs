@@ -152,7 +152,7 @@ impl super::Evaluator {
                         match l.checked_rem(r) {
                             Some(v) => ObjectData::Integer(v),
                             None => {
-                                eprintln!("❌ ERROR: Integer overflow");
+                                eprintln!("❌ ERROR: Modulo overflow (i64::MIN % -1 is undefined)");
                                 return EvalResult::Error;
                             }
                         }

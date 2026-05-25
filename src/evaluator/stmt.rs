@@ -162,8 +162,7 @@ impl super::Evaluator {
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
-                    let cond_data = self.resolve(cond_ref).unwrap().clone();
-                    if !self.is_truthy(&cond_data) {
+                    if !self.is_truthy(self.resolve(cond_ref).unwrap()) {
                         break;
                     }
                 }
@@ -519,10 +518,29 @@ impl super::Evaluator {
                 if decl.is_sealed {
                     self.sealed_classes.insert(decl.name.clone());
                 }
+                let mut methods = HashMap::new();
+                let mut static_methods = HashMap::new();
+                let mut getters = HashMap::new();
+                let mut setters = HashMap::new();
+                for m in &decl.methods {
+                    if m.is_getter {
+                        getters.insert(m.name.clone(), m.clone());
+                    } else if m.is_setter {
+                        setters.insert(m.name.clone(), m.clone());
+                    } else {
+                        if m.is_static {
+                            static_methods.insert(m.name.clone(), m.clone());
+                        }
+                        methods.insert(m.name.clone(), m.clone());
+                    }
+                }
                 self.class_registry.insert(decl.name.clone(), StoredClass {
                     parent: decl.parent.clone(),
                     constructor: decl.constructor.clone(),
-                    methods: decl.methods.clone(),
+                    methods,
+                    static_methods,
+                    getters,
+                    setters,
                     is_abstract: decl.is_abstract,
                     is_sealed: decl.is_sealed,
                     fields: decl.fields.clone(),

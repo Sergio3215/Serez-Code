@@ -505,7 +505,7 @@ impl super::Evaluator {
                     // ── Static method call: ClassName.method(args) ───────────────
                     if let Some(class) = self.class_registry.get(name).cloned() {
                         let method_name = dot_call.method.clone();
-                        if let Some(m) = class.methods.iter().find(|m| m.name == method_name && m.is_static).cloned() {
+                        if let Some(m) = class.static_methods.get(&method_name).cloned() {
                             // Evaluate arguments
                             let mut arg_vals = Vec::new();
                             for arg in &dot_call.arguments {

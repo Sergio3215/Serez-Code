@@ -86,7 +86,7 @@ impl super::Evaluator {
         // ── Class field defaults ──────────────────────────────────────────────
         // Evaluate default values for class fields and add to initial instance
         let mut initial_fields: Vec<(String, OwnedValue)> = Vec::new();
-        for field in &class.fields.clone() {
+        for field in &class.fields {
             if let Some(ref default_expr) = field.default_value {
                 match self.eval_expression(default_expr) {
                     EvalResult::Value(r) => {
@@ -442,7 +442,7 @@ impl super::Evaluator {
         let mut current = class_name.to_string();
         loop {
             let class = self.class_registry.get(&current)?;
-            if let Some(m) = class.methods.iter().find(|m| m.name == method_name && !m.is_getter && !m.is_setter) {
+            if let Some(m) = class.methods.get(method_name) {
                 return Some(m.clone());
             }
             match &class.parent {
@@ -456,7 +456,7 @@ impl super::Evaluator {
         let mut current = class_name.to_string();
         loop {
             let class = self.class_registry.get(&current)?;
-            if let Some(m) = class.methods.iter().find(|m| m.name == prop_name && m.is_getter) {
+            if let Some(m) = class.getters.get(prop_name) {
                 return Some(m.clone());
             }
             match &class.parent {
@@ -470,7 +470,7 @@ impl super::Evaluator {
         let mut current = class_name.to_string();
         loop {
             let class = self.class_registry.get(&current)?;
-            if let Some(m) = class.methods.iter().find(|m| m.name == prop_name && m.is_setter) {
+            if let Some(m) = class.setters.get(prop_name) {
                 return Some(m.clone());
             }
             match &class.parent {

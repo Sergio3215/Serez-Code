@@ -165,8 +165,8 @@ impl super::Evaluator {
                 let pad_str = if dot_call.arguments.len() >= 2 {
                     self.eval_str_arg(&dot_call.arguments[1]).unwrap_or_else(|| " ".to_string())
                 } else { " ".to_string() };
-                let s_chars: Vec<char> = s.chars().collect();
-                if s_chars.len() >= target_len {
+                let s_len = s.chars().count();
+                if s_len >= target_len || pad_str.is_empty() {
                     return EvalResult::Value(self.alloc(ObjectData::Str(s.clone())));
                 }
                 let mut result = s.clone();
@@ -190,7 +190,7 @@ impl super::Evaluator {
                 let pad_str = if dot_call.arguments.len() >= 2 {
                     self.eval_str_arg(&dot_call.arguments[1]).unwrap_or_else(|| " ".to_string())
                 } else { " ".to_string() };
-                if s.chars().count() >= target_len {
+                if s.chars().count() >= target_len || pad_str.is_empty() {
                     return EvalResult::Value(self.alloc(ObjectData::Str(s.clone())));
                 }
                 let mut result = s.clone();

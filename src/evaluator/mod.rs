@@ -19,7 +19,14 @@ use std::collections::{HashMap, HashSet};
 struct StoredClass {
     parent: Option<String>,
     constructor: Option<ast::ClassConstructor>,
-    methods: Vec<ast::ClassMethod>,
+    /// Non-getter, non-setter methods (includes static). O(1) lookup by name.
+    methods: HashMap<String, ast::ClassMethod>,
+    /// Static-only methods (subset of methods). O(1) static dispatch.
+    static_methods: HashMap<String, ast::ClassMethod>,
+    /// Getter methods keyed by property name.
+    getters: HashMap<String, ast::ClassMethod>,
+    /// Setter methods keyed by property name.
+    setters: HashMap<String, ast::ClassMethod>,
     is_abstract: bool,
     #[allow(dead_code)]
     is_sealed: bool,
