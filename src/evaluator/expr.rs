@@ -176,7 +176,7 @@ impl super::Evaluator {
                 // Check for rest parameter (last param with is_rest=true)
                 let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
                 let required_count = parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
-                let min_params = if has_rest { parameters.len().saturating_sub(1) } else { required_count };
+                let min_params = required_count;
                 let max_params = if has_rest { usize::MAX } else { parameters.len() };
 
                 if arg_refs.len() < min_params || arg_refs.len() > max_params {
