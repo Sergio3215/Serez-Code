@@ -287,6 +287,7 @@ impl super::Evaluator {
             "trunc" => {
                 if args.len() != 1 { eprintln!("❌ ERROR: trunc() expects 1 argument"); return EvalResult::Error; }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
+                if v.is_nan() || v.is_infinite() { eprintln!("❌ ERROR: trunc() argument must be a finite number"); return EvalResult::Error; }
                 EvalResult::Value(self.alloc(ObjectData::Integer(v.trunc() as i64)))
             }
             "exp" => {

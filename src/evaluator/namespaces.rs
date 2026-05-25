@@ -17,7 +17,8 @@ impl super::Evaluator {
             "random" => {
                 // LCG random: state = (a*state + c) mod m
                 self.lcg_state = self.lcg_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-                let val = (self.lcg_state >> 33) as f64 / (u32::MAX as f64);
+                // >> 33 gives 31 significant bits; divide by 2^31 to get [0, 1)
+                let val = (self.lcg_state >> 33) as f64 / (1u64 << 31) as f64;
                 EvalResult::Value(self.alloc(ObjectData::Decimal(val)))
             }
             "clamp" => {
