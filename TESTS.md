@@ -10,7 +10,7 @@
 .\run_tests.ps1 -generate          # regenerate .expected (after language changes)
 ```
 
-**Result:** 91 files · 162 unit cases · 0 failures
+**Result:** 214 tests · 0 failures
 
 ---
 

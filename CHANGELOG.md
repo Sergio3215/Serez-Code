@@ -5,6 +5,60 @@ Order: most recent to oldest.
 
 ---
 
+## [2.0.1] — branch `improve`
+
+### Bug fixes
+
+**B-64 — `abs(i64::MIN)` overflow** (`src/evaluator/builtins.rs`)
+- Before: called `.abs()` on `i64::MIN` — overflows in release mode (|i64::MIN| > i64::MAX).
+- Now: uses `i64::checked_abs()` — returns an error for `i64::MIN`.
+
+**B-65 — `floor` / `ceil` / `round` / `trunc` UB on non-finite f64** (`src/evaluator/builtins.rs`)
+- Before: casting `f64::INFINITY`, `f64::NEG_INFINITY`, or `f64::NAN` to `i64` via `as i64` is undefined behavior in Rust.
+- Now: each function validates `!v.is_nan() && !v.is_infinite()` before casting.
+
+**B-66 — `Math.random()` only produced values in `[0, ~0.5)`** (`src/evaluator/namespaces.rs`)
+- Before: LCG state shifted right 33 bits (31-bit range `[0, 2³¹)`) divided by `u32::MAX` (2³²−1) — maximum ≈ 0.5.
+- Now: divides by `1u64 << 31` to produce the documented `[0, 1.0)` range.
+
+**B-67 — `asin` / `acos` accepted out-of-domain arguments** (`src/evaluator/builtins.rs`)
+- Before: any `f64` was accepted — inputs outside `[-1, 1]` silently produced `NaN`.
+- Now: validates `v >= -1.0 && v <= 1.0` before calling the intrinsic.
+
+**B-68 — `JSON.stringify` emitted invalid JSON for `NaN` / `Infinity`** (`src/evaluator/mod.rs`)
+- Before: non-finite `f64` values were formatted with Rust's `Display`, producing `"inf"`, `"-inf"`, or `"NaN"`.
+- Now: `if !d.is_finite() { return "null".to_string(); }` per the JSON specification.
+
+**B-69 — `call_function` (map / filter / sort callbacks) rejected default and rest parameters** (`src/evaluator/mod.rs`)
+- Before: arity checked as `arg_count != params.len()` and parameters bound via `args[i]` direct indexing.
+- Now: computes `required_count`, checks `arg_count >= required` with upper bound for non-rest, binds defaults and collects rest parameter into an array.
+
+**B-70 — `min_params` formula wrong for functions with default + rest parameters** (`src/evaluator/expr.rs`)
+- Before: `if has_rest { params.len() - 1 } else { required_count }` — gives wrong count when both rest and defaults are present.
+- Now: `let min_params = required_count` in all cases.
+
+**B-71 — `super()` constructor call rejected default and rest parameters** (`src/evaluator/classes.rs`)
+- Before: `eval_super_call` used strict arity and `args[i]` direct indexing.
+- Now: same default/rest parameter handling as `call_function`.
+
+**B-72 — `new ClassName()` constructor call rejected default and rest parameters** (`src/evaluator/classes.rs`)
+- Before: `eval_new_class` used strict arity and direct indexing for constructor binding.
+- Now: same default/rest parameter handling.
+
+**B-73 — `super.method()` call rejected default and rest parameters** (`src/evaluator/classes.rs`)
+- Before: `eval_super_method_call` used strict arity.
+- Now: same default/rest parameter handling.
+
+**B-74 — `invoke_method` rest parameter not collected** (`src/evaluator/classes.rs`)
+- Before: parameter binding loop did not handle rest parameters — extra arguments beyond the last named param were silently discarded.
+- Now: rest parameter is collected from `args[i..]` into an `Array` and declared in scope.
+
+### Version
+
+- `Cargo.toml`: `2.0.0` → `2.0.1`
+
+---
+
 ## [2.0.0] — branch `improve`
 
 ### Breaking changes

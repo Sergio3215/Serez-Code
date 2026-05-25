@@ -73,6 +73,17 @@
 | [B-61](#b-61--is-operator-tokenized-as-identifier--never-worked-as-infix) | `is` operator tokenized as identifier — never worked as infix | 🔴 Critical | ✅ |
 | [B-62](#b-62--reverse-missing-from-mutating-list--returns-null-instead-of-array) | `.reverse()` missing from `MUTATING` list — writeback skipped on class fields; returns `null` | 🟡 High | ✅ |
 | [B-63](#b-63--trimleft--trimright-aliases-not-implemented) | `trimLeft` / `trimRight` aliases documented but not implemented | 🟢 Low | ✅ |
+| [B-64](#b-64--absi64min-overflow) | `abs(i64::MIN)` overflow | 🔴 Critical | ✅ |
+| [B-65](#b-65--floorceilthroundrunc-ub-on-non-finite-f64) | `floor` / `ceil` / `round` / `trunc` UB on non-finite f64 | 🔴 Critical | ✅ |
+| [B-66](#b-66--mathrandom-only-produced-values-in-0-05) | `Math.random()` only produced values in `[0, ~0.5)` | 🟡 High | ✅ |
+| [B-67](#b-67--asinacos-accepted-out-of-domain-arguments) | `asin` / `acos` accepted out-of-domain arguments | 🟡 High | ✅ |
+| [B-68](#b-68--jsonstringify-emitted-invalid-json-for-nan--infinity) | `JSON.stringify` emitted invalid JSON for `NaN` / `Infinity` | 🟡 High | ✅ |
+| [B-69](#b-69--call_function-callbacks-rejected-default-and-rest-parameters) | `call_function` (map/filter/sort callbacks) rejected default and rest parameters | 🔴 Critical | ✅ |
+| [B-70](#b-70--min_params-formula-wrong-for-default--rest-combination) | `min_params` formula wrong for default + rest parameter combination | 🟡 High | ✅ |
+| [B-71](#b-71--superconstructor-call-rejected-default-and-rest-parameters) | `super()` constructor call rejected default and rest parameters | 🔴 Critical | ✅ |
+| [B-72](#b-72--new-classname-constructor-call-rejected-default-and-rest-parameters) | `new ClassName()` constructor call rejected default and rest parameters | 🔴 Critical | ✅ |
+| [B-73](#b-73--supermethodargs-call-rejected-default-and-rest-parameters) | `super.method(args)` call rejected default and rest parameters | 🟡 High | ✅ |
+| [B-74](#b-74--invoke_method-rest-parameter-not-collected) | `invoke_method` rest parameter not collected in binding loop | 🟡 High | ✅ |
 
 ---
 
@@ -1631,7 +1642,434 @@ Extended the match arms in `src/evaluator.rs` to accept both names:
 
 ---
 
-*Last updated: 2026-05-22 — 63 bugs documented, 63 fixed, 0 open.*
+## B-64 — `abs(i64::MIN)` overflow
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/builtins.rs`
+**Severity:** 🔴 Critical
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+out Math.abs(-9223372036854775808);   // i64::MIN
+// In debug: panic — attempt to negate with overflow
+// In release: silent wrap (result is i64::MIN itself, wrong sign)
+```
+
+### Root cause
+
+The `abs()` builtin dispatched to `i.abs()` on an `i64`. In Rust, `i64::MIN.abs()` panics in debug mode because |i64::MIN| = 9223372036854775808 > i64::MAX = 9223372036854775807 — it is not representable as a positive `i64`.
+
+### Fix
+
+Replaced `.abs()` with `.checked_abs()`. When `checked_abs()` returns `None` (only for `i64::MIN`), the builtin returns `EvalResult::Error` with a clear message:
+
+```rust
+Some(ObjectData::Integer(i)) => match i.checked_abs() {
+    Some(v) => EvalResult::Value(self.alloc(ObjectData::Integer(v))),
+    None => { eprintln!("❌ ERROR: abs() overflow (i64::MIN has no positive representation)"); EvalResult::Error }
+},
+```
+
+---
+
+## B-65 — `floor` / `ceil` / `round` / `trunc` UB on non-finite f64
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/builtins.rs`
+**Severity:** 🔴 Critical
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+out Math.floor(1.0 / 0.0);    // f64::INFINITY as i64 — undefined behavior
+out Math.ceil(Math.sqrt(-1.0)); // NaN as i64 — undefined behavior
+```
+
+These calls reached the `as i64` cast with a non-finite `f64` value. In Rust, casting a non-finite `f64` to `i64` via `as` is **undefined behavior** — the result is implementation-defined and can produce any value, including 0, i64::MIN, or arbitrary garbage.
+
+### Root cause
+
+All four functions (`floor`, `ceil`, `round`, `trunc`) applied `.floor()` / `.ceil()` / `.round()` / `.trunc()` on the f64 value and then cast directly with `as i64`, without first checking if the value is finite.
+
+### Fix
+
+Added a guard before the cast in each of the four functions:
+
+```rust
+if v.is_nan() || v.is_infinite() {
+    eprintln!("❌ ERROR: floor() argument must be a finite number");
+    return EvalResult::Error;
+}
+```
+
+---
+
+## B-66 — `Math.random()` only produced values in `[0, ~0.5)`
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/namespaces.rs`
+**Severity:** 🟡 High
+**Status:** ✅ Fixed
+
+### Symptom
+
+`Math.random()` documented range is `[0, 1.0)` but all returned values were below 0.5. Statistical sampling confirmed the effective range was `[0, ~0.4999999995)`.
+
+### Root cause
+
+The LCG generator (128-bit Lehmer) stored the state as `u128`. The value extraction was:
+
+```rust
+let val = (self.lcg_state >> 33) as f64 / (u32::MAX as f64);
+```
+
+- `>> 33` produces a value in `[0, 2^95)`, but cast to `f64` it clips to the lower bits, effectively giving a 31-bit value in `[0, 2^31)`.
+- Dividing by `u32::MAX` = 2^32 − 1 gives a maximum of `(2^31 - 1) / (2^32 - 1) ≈ 0.5`.
+
+### Fix
+
+Divide by the actual range of the 31-bit extracted value:
+
+```rust
+// Before:
+let val = (self.lcg_state >> 33) as f64 / (u32::MAX as f64);
+
+// After:
+let val = (self.lcg_state >> 33) as f64 / (1u64 << 31) as f64;
+```
+
+This correctly maps `[0, 2^31)` to `[0, 1.0)`.
+
+---
+
+## B-67 — `asin` / `acos` accepted out-of-domain arguments
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/builtins.rs`
+**Severity:** 🟡 High
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+out Math.asin(2.0);    // → NaN  (silent, no error)
+out Math.acos(-5.0);   // → NaN  (silent, no error)
+```
+
+Both functions are only defined for inputs in `[-1, 1]`. Values outside this domain produce `NaN` from the underlying Rust intrinsic, but the interpreter returned the `NaN` as a valid `decimal` value with no error.
+
+### Root cause
+
+No domain validation was performed before calling `v.asin()` or `v.acos()`.
+
+### Fix
+
+Added a domain check before each call:
+
+```rust
+if v < -1.0 || v > 1.0 {
+    eprintln!("❌ ERROR: asin() argument must be in [-1, 1]");
+    return EvalResult::Error;
+}
+```
+
+---
+
+## B-68 — `JSON.stringify` emitted invalid JSON for `NaN` / `Infinity`
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/mod.rs`
+**Severity:** 🟡 High
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+let d <string,any> = ({"x", Math.sqrt(-1.0)});
+out JSON.stringify(d);   // → {"x":NaN}   (invalid JSON)
+
+let d2 <string,any> = ({"y", 1.0 / 0.0});
+out JSON.stringify(d2);  // → {"y":inf}   (invalid JSON)
+```
+
+The output was syntactically invalid JSON — `NaN`, `inf`, and `-inf` are not recognized JSON tokens. Any downstream JSON parser would reject the output.
+
+### Root cause
+
+`json_stringify_owned` formatted `f64` values using Rust's `Display` formatting (`format!("{:.10}", v)`), which produces `"NaN"`, `"inf"`, or `"-inf"` for non-finite inputs.
+
+### Fix
+
+Added a finiteness check at the top of the `OwnedValue::Decimal` arm:
+
+```rust
+OwnedValue::Decimal(d) => {
+    if !d.is_finite() { return "null".to_string(); }
+    // ... rest of formatting
+}
+```
+
+The JSON specification (RFC 8259) does not support non-finite numbers. The standard-compliant replacement is `null`.
+
+---
+
+## B-69 — `call_function` (map / filter / sort callbacks) rejected default and rest parameters
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/mod.rs`
+**Severity:** 🔴 Critical
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+fn string fmt(string s, string prefix = "→") {
+    return prefix + s;
+}
+
+let words = ["a", "b", "c"];
+let result = words.map(fmt);   // ❌ ERROR: Function expected 1 arguments, got 2
+```
+
+Any callback passed to `map`, `filter`, `reduce`, or `sort` that had default parameters or rest parameters was rejected with an arity error or caused an index panic.
+
+### Root cause
+
+`call_function()` checked arity strictly:
+
+```rust
+if arg_vals.len() != parameters.len() { /* error */ }
+```
+
+And bound parameters with direct indexing:
+
+```rust
+for (i, param) in parameters.iter().enumerate() {
+    self.scopes.declare(param.name.clone(), self.plant(arg_vals[i].clone()));
+}
+```
+
+Both checks and the binding loop assumed every parameter consumed exactly one argument at the matching position, with no support for defaults or rest collection.
+
+### Fix
+
+Replaced both with a correct arity check and parameter binding loop:
+
+```rust
+let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
+let required = parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
+let max_pos  = if has_rest { usize::MAX } else { parameters.len() };
+if arg_vals.len() < required || arg_vals.len() > max_pos { /* error */ }
+
+for (i, param) in parameters.iter().enumerate() {
+    if param.is_rest {
+        let rest_refs = arg_vals[i..].iter().map(|v| self.plant(v.clone())).collect();
+        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+        self.scopes.declare(param.name.clone(), rest_ref);
+        break;
+    }
+    let local_ref = if i < arg_vals.len() {
+        self.plant(arg_vals[i].clone())
+    } else if let Some(default_expr) = &param.default_value {
+        let default_expr = default_expr.clone();
+        match self.eval_expression(&default_expr) { EvalResult::Value(v) => v, _ => self.null_ref }
+    } else { self.null_ref };
+    self.scopes.declare(param.name.clone(), local_ref);
+}
+```
+
+---
+
+## B-70 — `min_params` formula wrong for default + rest parameter combination
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/expr.rs`
+**Severity:** 🟡 High
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+fn int f(int a, int b = 5, ...rest) { return a; }
+
+f(1);      // ❌ ERROR: expected ≥ 2 arguments, got 1  (wrong)
+f(1, 2);   // ✅ worked
+f(1, 2, 3); // ✅ worked
+```
+
+Calling with only the required argument (no default or rest values supplied) incorrectly triggered an arity error.
+
+### Root cause
+
+In `eval_expression`, the arity lower-bound was computed as:
+
+```rust
+let min_params = if has_rest { parameters.len().saturating_sub(1) } else { required_count };
+```
+
+For `fn f(int a, int b = 5, ...rest)`:
+- `has_rest = true`
+- `parameters.len() = 3`
+- `parameters.len().saturating_sub(1) = 2` — **wrong**; the actual minimum is `required_count = 1`.
+
+### Fix
+
+```rust
+let min_params = required_count;
+```
+
+`required_count` is the count of parameters that are neither rest nor have a default value — the correct minimum in all cases.
+
+---
+
+## B-71 — `super()` constructor call rejected default and rest parameters
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/classes.rs`
+**Severity:** 🔴 Critical
+**Status:** ✅ Fixed
+
+### Symptom
+
+A child class calling `super()` where the parent constructor had default parameters always produced an arity error, even when the call was valid:
+
+```serez
+public class Base {
+    public Base(string name, int level = 1) {
+        this.name  = name;
+        this.level = level;
+    }
+}
+public class Child : Base {
+    public Child(string name) {
+        super(name);   // ❌ ERROR: expected 2 arguments, got 1
+    }
+}
+```
+
+### Root cause
+
+`eval_super_call` used strict arity (`if arg_vals.len() != params.len()`) and bound parameters with `args[i]` direct indexing, with no handling for defaults or rest.
+
+### Fix
+
+Applied the same default/rest parameter handling as B-69 (`call_function`).
+
+---
+
+## B-72 — `new ClassName()` constructor call rejected default and rest parameters
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/classes.rs`
+**Severity:** 🔴 Critical
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+public class Point {
+    public Point(decimal x, decimal y = 0.0) {
+        this.x = x;
+        this.y = y;
+    }
+}
+let p = new Point(3.0);   // ❌ ERROR: expected 2 arguments, got 1
+```
+
+### Root cause
+
+`eval_new_class` used strict arity checking and `args[i]` direct indexing for the constructor's parameter binding, mirroring the same bug as B-69 and B-71.
+
+### Fix
+
+Applied the same default/rest parameter handling pattern.
+
+---
+
+## B-73 — `super.method(args)` call rejected default and rest parameters
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/classes.rs`
+**Severity:** 🟡 High
+**Status:** ✅ Fixed
+
+### Symptom
+
+```serez
+public class Base {
+    public string describe(string prefix = "→") {
+        return prefix + this.name;
+    }
+}
+public class Child : Base {
+    public string describe() {
+        return super.describe();   // ❌ ERROR: expected 1 arguments, got 0
+    }
+}
+```
+
+### Root cause
+
+`eval_super_method_call` used strict arity (`arg_count != params.len()`), making it impossible to call a parent method with fewer arguments than the total parameter count when defaults were involved.
+
+### Fix
+
+Applied the same default/rest parameter handling pattern.
+
+---
+
+## B-74 — `invoke_method` rest parameter not collected in binding loop
+
+**Date:** 2026-05-25
+**Files:** `src/evaluator/classes.rs`
+**Severity:** 🟡 High
+**Status:** ✅ Fixed
+
+### Symptom
+
+A class method with a rest parameter received only `null` in the rest slot instead of an array of the extra arguments:
+
+```serez
+public class Logger {
+    public void log(string level, ...messages) {
+        out level;
+        out messages.length;   // always 0 — bug
+    }
+}
+let l = new Logger();
+l.log("INFO", "msg1", "msg2");   // → 0 (wrong, expected 2)
+```
+
+### Root cause
+
+`invoke_method` had a correct arity check (it already used `required_count` and `has_rest`), but its parameter binding loop used direct `args[i]` indexing without special-casing the rest parameter. Arguments beyond the last named parameter were silently discarded.
+
+### Fix
+
+Added a rest-collection block at the start of the binding loop:
+
+```rust
+for (i, param) in m.parameters.iter().enumerate() {
+    if param.is_rest {
+        let rest_refs: Vec<ObjectRef> = arg_vals[i..].iter()
+            .map(|v| self.plant(v.clone())).collect();
+        let rest_ref = self.alloc(ObjectData::Array {
+            element_type: None,
+            elements: rest_refs,
+        });
+        self.scopes.declare(param.name.clone(), rest_ref);
+        break;
+    }
+    // ... existing default param handling unchanged
+}
+```
+
+---
+
+*Last updated: 2026-05-25 — 74 bugs documented, 74 fixed, 0 open.*
 
 ---
 

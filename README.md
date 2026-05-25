@@ -2537,7 +2537,7 @@ src/
 │   ├── llvm_emit.rs      — MIR → LLVM IR text emission
 │   └── mod.rs            — Module glue
 └── evaluator/        — Tree-walking interpreter (split into focused submodules)
-    ├── mod.rs            — Core entry points, Flash Scope protocol, StoredMethod cache, static profiler
+    ├── mod.rs            — Core entry points, Flash Scope protocol, StoredClass dispatch, static profiler
     ├── stmt.rs           — Statement evaluation (let, assign, for, while, return, …)
     ├── expr.rs           — Expression evaluation (calls, index, dot, ternary, …)
     ├── ops.rs            — Infix and prefix operator evaluation
@@ -2624,9 +2624,9 @@ Several optimizations reduce redundant allocations and clones during hot paths.
 
 Every function value stores its AST body as `Rc<BlockStatement>` rather than an owned `BlockStatement`. Looking up a function from the arena, passing it as a callback, or returning it from `find_method` increments a reference count instead of deep-cloning the body. This applies to both `OwnedValue::Function` and `ObjectData::Function` in `region.rs`.
 
-#### `StoredMethod` — O(1) method dispatch
+#### `StoredClass` — O(1) method dispatch
 
-Class methods are stored as `Vec<StoredMethod>` inside `StoredClass`. `StoredMethod` holds a `body: Rc<BlockStatement>`, so each `find_method()` clone is O(1) regardless of how large the method body is. Previously, every method call cloned the entire `ast::ClassMethod` including its body.
+Class methods are stored in `StoredClass` using four separate `HashMap`s: `methods`, `static_methods`, `getters`, and `setters`. Each lookup is O(1) by name. Method values (`StoredMethod`) hold a `body: Rc<BlockStatement>`, so each clone is O(1) regardless of how large the method body is. Previously, every method call cloned the entire `ast::ClassMethod` including its body.
 
 #### Arena and HashMap pre-sizing
 
