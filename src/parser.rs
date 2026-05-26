@@ -5,6 +5,7 @@ use crate::token::{Token, TokenType};
 #[derive(PartialEq, PartialOrd)]
 pub enum Precedence {
     Lowest,
+    Pipe,         // |>
     Ternary,      // ? :
     NullCoalesce, // ??
     LogicalOr,    // ||
@@ -25,6 +26,7 @@ pub enum Precedence {
 
 pub fn token_precedence(token_type: &TokenType) -> Precedence {
     match token_type {
+        TokenType::Pipe         => Precedence::Pipe,
         TokenType::Question     => Precedence::Ternary,
         TokenType::NullCoalesce => Precedence::NullCoalesce,
         TokenType::Or => Precedence::LogicalOr,
@@ -1526,7 +1528,8 @@ impl Parser {
                 | TokenType::BitXor
                 | TokenType::Shl
                 | TokenType::Shr
-                | TokenType::KwIs => true,
+                | TokenType::KwIs
+                | TokenType::Pipe => true,
                 _ => false,
             };
 
@@ -1645,6 +1648,25 @@ impl Parser {
                         line: dot_line,
                         column: dot_column,
                     }));
+                }
+            } else if self.current_token.token_type == TokenType::Pipe {
+                // |> desugars: left |> fn  →  fn(left)
+                let call_line   = self.current_token.line;
+                let call_column = self.current_token.column;
+                self.next_token(); // advance to the function expression
+                if let Some(left) = left_exp {
+                    if let Some(func) = self.parse_expression(current_precedence) {
+                        left_exp = Some(Expression::Call(CallExpression {
+                            function: Box::new(func),
+                            arguments: vec![left],
+                            line: call_line,
+                            column: call_column,
+                        }));
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
                 }
             } else {
                 let op_line = self.current_token.line;

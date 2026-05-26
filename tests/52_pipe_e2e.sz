@@ -1,0 +1,51 @@
+// E2E: pipe operator |> (expr |> fn  →  fn(expr))
+
+// ── Basic function piping ──────────────────────────────────────────────────────
+fn double(int n) { return n * 2; }
+fn inc(int n)    { return n + 1; }
+fn negate(int n) { return -n; }
+
+out 5 |> double;           // 10
+out 5 |> double |> inc;    // 11
+out 5 |> inc |> double;    // 12
+out 4 |> double |> negate; // -8
+
+// ── Piping into lambdas ────────────────────────────────────────────────────────
+out 7 |> n => n * n;          // 49
+out "hello" |> s => s.length();  // 5
+
+// ── Array pipeline ────────────────────────────────────────────────────────────
+fn sumArr(any arr)  { return arr.reduce(0, (acc, x) => acc + x); }
+fn lenArr(any arr)  { return arr.length(); }
+
+let pipeline = [1, 2, 3, 4, 5]
+    |> arr => arr.filter(x => x % 2 == 0)
+    |> arr => arr.map(x => x * 10);
+out pipeline.length();  // 2
+out pipeline[0];        // 20
+out pipeline[1];        // 40
+
+out [1, 2, 3, 4, 5] |> sumArr;  // 15
+
+// ── Pipe preserves value for further ops ──────────────────────────────────────
+let s = "  hello  " |> str => str.trim();
+out s;              // hello
+out s.length();     // 5
+
+// ── String pipe chain ─────────────────────────────────────────────────────────
+fn shout(string s) { return s.upper(); }
+fn wrap(string s)  { return "[" + s + "]"; }
+
+out "world" |> shout |> wrap;   // [WORLD]
+
+// ── Pipe with match ────────────────────────────────────────────────────────────
+fn classify(int n) {
+    return match n {
+        0 => "zero",
+        n if n > 0 => "positive",
+        _ => "negative",
+    };
+}
+out -3 |> classify;    // negative
+out 0  |> classify;    // zero
+out 7  |> classify;    // positive

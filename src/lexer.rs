@@ -158,6 +158,9 @@ impl Lexer {
                 if self.peek_char() == '|' {
                     self.read_char();
                     Token::new(TokenType::Or, "||".to_string(), self.line, self.column)
+                } else if self.peek_char() == '>' {
+                    self.read_char();
+                    Token::new(TokenType::Pipe, "|>".to_string(), self.line, self.column)
                 } else {
                     Token::new(TokenType::BitOr, "|".to_string(), self.line, self.column)
                 }

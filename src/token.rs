@@ -130,6 +130,7 @@ pub enum TokenType {
     KwExport,    // export
     KwYield,     // yield
     KwMatch,     // match
+    Pipe,        // |>  (pipe operator: expr |> fn  →  fn(expr))
 }
 
 #[derive(Debug, PartialEq, Clone)]
