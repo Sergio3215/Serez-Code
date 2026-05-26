@@ -554,7 +554,8 @@ impl HirLowerer {
             // Phase 1: lambdas, dicts, spread, object-patch are unsupported
             Expression::FunctionLiteral(_) | Expression::Lambda(_)
             | Expression::DictLiteral(_)  | Expression::EntryLiteral(_, _)
-            | Expression::ObjectPatch(_)  | Expression::Spread(_) => HirExpr::Null,
+            | Expression::ObjectPatch(_)  | Expression::Spread(_)
+            | Expression::Match(_) => HirExpr::Null,
         }
     }
 

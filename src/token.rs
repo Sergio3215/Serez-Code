@@ -129,6 +129,7 @@ pub enum TokenType {
     KwImport,    // import
     KwExport,    // export
     KwYield,     // yield
+    KwMatch,     // match
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -199,6 +200,7 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "import"   => TokenType::KwImport,
         "export"   => TokenType::KwExport,
         "yield"    => TokenType::KwYield,
+        "match"    => TokenType::KwMatch,
         _ => TokenType::Ident,
     }
 }

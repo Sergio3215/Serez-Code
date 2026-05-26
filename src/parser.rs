@@ -1867,6 +1867,8 @@ impl Parser {
                 Some(Expression::FunctionLiteral(FunctionLiteral { return_type, parameters, body, is_generator: false }))
             }
 
+            TokenType::KwMatch => self.parse_match_expression(),
+
             _ => None,
         };
 
@@ -2632,6 +2634,123 @@ impl Parser {
             self.next_token();
         }
         Some(BlockStatement { statements })
+    }
+
+    // ── match expr { pattern => body, ... } ──────────────────────────────────
+
+    /// Called when current_token == KwMatch. Returns Expression::Match.
+    fn parse_match_expression(&mut self) -> Option<Expression> {
+        // Advance past 'match' to the subject expression
+        self.next_token();
+        let subject = self.parse_expression(Precedence::Lowest)?;
+        // Now current = last token of subject, peek = '{'
+        if self.peek_token.token_type != TokenType::LBrace {
+            self.parser_error("Expected '{' after match subject");
+            return None;
+        }
+        self.next_token(); // current = '{'
+        self.next_token(); // current = first token inside match body
+
+        let mut arms = Vec::new();
+        while self.current_token.token_type != TokenType::RBrace
+            && self.current_token.token_type != TokenType::Eof
+        {
+            // Parse pattern (possibly OR-ed with '|')
+            let pattern = self.parse_match_pattern()?;
+
+            // Optional guard: if expr
+            let guard = if self.peek_token.token_type == TokenType::If {
+                self.next_token(); // consume 'if'
+                self.next_token(); // start of guard expression
+                let g = self.parse_expression(Precedence::Lowest)?;
+                Some(Box::new(g))
+            } else {
+                None
+            };
+
+            // Expect '=>'
+            if self.peek_token.token_type != TokenType::Arrow {
+                self.parser_error("Expected '=>' in match arm");
+                return None;
+            }
+            self.next_token(); // current = '=>'
+            self.next_token(); // current = first token of body
+
+            // Parse body: block or single expression
+            let body = if self.current_token.token_type == TokenType::LBrace {
+                self.parse_inner_block()?  // current ends on '}'
+            } else {
+                let expr = self.parse_expression(Precedence::Lowest)?;
+                BlockStatement { statements: vec![Statement::Expression(expr)] }
+            };
+
+            // Optional trailing ','
+            if self.peek_token.token_type == TokenType::Comma {
+                self.next_token(); // current = ','
+            }
+
+            arms.push(MatchArm { pattern, guard, body });
+
+            // Advance to next arm or closing '}'
+            if self.peek_token.token_type == TokenType::RBrace {
+                self.next_token(); // current = '}'
+                break;
+            }
+            if self.current_token.token_type != TokenType::RBrace {
+                self.next_token();
+            }
+        }
+
+        Some(Expression::Match(Box::new(MatchExpression { subject: Box::new(subject), arms })))
+    }
+
+    /// Parse one match pattern (which may be pat | pat | ...).
+    fn parse_match_pattern(&mut self) -> Option<MatchPattern> {
+        let first = self.parse_single_match_pattern()?;
+        if self.peek_token.token_type != TokenType::BitOr {
+            return Some(first);
+        }
+        let mut pats = vec![first];
+        while self.peek_token.token_type == TokenType::BitOr {
+            self.next_token(); // '|'
+            self.next_token(); // start of next pattern
+            pats.push(self.parse_single_match_pattern()?);
+        }
+        Some(MatchPattern::Or(pats))
+    }
+
+    /// Parse a single non-OR match pattern.
+    fn parse_single_match_pattern(&mut self) -> Option<MatchPattern> {
+        match self.current_token.token_type {
+            TokenType::Ident if self.current_token.literal == "_" => Some(MatchPattern::Wildcard),
+            TokenType::Ident => Some(MatchPattern::Binding(self.current_token.literal.clone())),
+            TokenType::Int => {
+                let n: i64 = self.current_token.literal.parse().ok()?;
+                Some(MatchPattern::Literal(Expression::Integer(n)))
+            }
+            TokenType::Minus => {
+                // Negative literal: -42
+                self.next_token();
+                if self.current_token.token_type != TokenType::Int {
+                    self.parser_error("Expected integer after '-' in match pattern");
+                    return None;
+                }
+                let n: i64 = self.current_token.literal.parse().ok()?;
+                Some(MatchPattern::Literal(Expression::Integer(-n)))
+            }
+            TokenType::Decimal => {
+                let n: f64 = self.current_token.literal.parse().ok()?;
+                Some(MatchPattern::Literal(Expression::Decimal(n)))
+            }
+            TokenType::String => Some(MatchPattern::Literal(Expression::String(self.current_token.literal.clone()))),
+            TokenType::True  => Some(MatchPattern::Literal(Expression::Boolean(true))),
+            TokenType::False => Some(MatchPattern::Literal(Expression::Boolean(false))),
+            TokenType::KwNull => Some(MatchPattern::Literal(Expression::Null)),
+            _ => {
+                self.parser_error(&format!("Unexpected token '{}' in match pattern", self.current_token.literal));
+                None
+            }
+        }
     }
 
     // ── try { } catch (e) { } finally { } ────────────────────────────────────

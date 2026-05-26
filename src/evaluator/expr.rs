@@ -1034,6 +1034,105 @@ impl super::Evaluator {
                     }
                 }
             }
+
+            Expression::Match(m) => {
+                let subject_ref = match self.eval_expression(&m.subject) {
+                    EvalResult::Value(v) => v,
+                    other => return other,
+                };
+                let subject_data = match self.resolve(subject_ref) {
+                    Some(d) => d.clone(),
+                    None => return EvalResult::Error,
+                };
+
+                let arms = m.arms.clone();
+                for arm in &arms {
+                    let mut bindings: Vec<(String, ObjectRef)> = Vec::new();
+                    if !self.match_pattern(&arm.pattern, &subject_data, subject_ref, &mut bindings) {
+                        continue;
+                    }
+
+                    // Push scope for bindings, guard, and body
+                    self.scopes.push();
+                    for (name, val_ref) in &bindings {
+                        self.scopes.declare(name.clone(), *val_ref);
+                    }
+
+                    // Evaluate guard if present
+                    if let Some(guard) = &arm.guard {
+                        let guard = guard.clone();
+                        let guard_ref = match self.eval_expression(&guard) {
+                            EvalResult::Value(v) => v,
+                            other => { self.scopes.pop(); return other; }
+                        };
+                        let truthy = {
+                            let d = self.resolve(guard_ref).unwrap();
+                            self.is_truthy(d)
+                        };
+                        if !truthy {
+                            self.scopes.pop();
+                            continue;
+                        }
+                    }
+
+                    // Evaluate body statements
+                    let mut result_ref = self.null_ref;
+                    let mut early: Option<EvalResult> = None;
+                    let body = arm.body.clone();
+                    for s in &body.statements {
+                        match self.eval_statement(s) {
+                            EvalResult::Value(v) => result_ref = v,
+                            other => { early = Some(other); break; }
+                        }
+                    }
+
+                    let owned = self.extract(result_ref);
+                    self.scopes.pop();
+
+                    if let Some(r) = early { return r; }
+                    return EvalResult::Value(self.plant(owned));
+                }
+
+                // No arm matched — null
+                EvalResult::Value(self.null_ref)
+            }
+        }
+    }
+
+    fn match_pattern(
+        &mut self,
+        pattern: &ast::MatchPattern,
+        subject: &ObjectData,
+        subject_ref: ObjectRef,
+        bindings: &mut Vec<(String, ObjectRef)>,
+    ) -> bool {
+        match pattern {
+            ast::MatchPattern::Wildcard => true,
+            ast::MatchPattern::Binding(name) => {
+                bindings.push((name.clone(), subject_ref));
+                true
+            }
+            ast::MatchPattern::Literal(lit_expr) => {
+                let lit_ref = match self.eval_expression(lit_expr) {
+                    EvalResult::Value(v) => v,
+                    _ => return false,
+                };
+                let lit_data = match self.resolve(lit_ref) {
+                    Some(d) => d.clone(),
+                    None => return false,
+                };
+                self.values_equal(subject, &lit_data)
+            }
+            ast::MatchPattern::Or(patterns) => {
+                for p in patterns {
+                    let mut temp = Vec::new();
+                    if self.match_pattern(p, subject, subject_ref, &mut temp) {
+                        bindings.extend(temp);
+                        return true;
+                    }
+                }
+                false
+            }
         }
     }
 

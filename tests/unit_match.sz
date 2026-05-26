@@ -1,0 +1,96 @@
+// Unit tests: match expression
+
+test("match — integer literals", () => {
+    assert(match 1 { 1 => "one", _ => "x" } == "one", "exact");
+    assert(match 99 { 1 => "a", 2 => "b", _ => "other" } == "other", "wildcard");
+});
+
+test("match — OR patterns", () => {
+    let f = n => match n {
+        1 | 2 | 3 => "low",
+        _ => "high",
+    };
+    assert(f(1) == "low", "1");
+    assert(f(3) == "low", "3");
+    assert(f(4) == "high", "4");
+});
+
+test("match — binding pattern", () => {
+    let doubled = match 7 {
+        n => n * 2,
+    };
+    assert(doubled == 14, "binding");
+});
+
+test("match — guard on binding", () => {
+    fn classify(int n) {
+        return match n {
+            x if x < 0 => "neg",
+            x if x == 0 => "zero",
+            _ => "pos",
+        };
+    }
+    assert(classify(-5) == "neg", "neg");
+    assert(classify(0) == "zero", "zero");
+    assert(classify(3) == "pos", "pos");
+});
+
+test("match — string patterns", () => {
+    let s = "hello";
+    assert(match s { "hi" | "hello" => true, _ => false } == true, "match");
+    assert(match s { "bye" => true, _ => false } == false, "no match");
+});
+
+test("match — bool patterns", () => {
+    assert(match true { true => 1, false => 0 } == 1, "true");
+    assert(match false { true => 1, false => 0 } == 0, "false");
+});
+
+test("match — null pattern", () => {
+    assert(match null { null => "nil", _ => "val" } == "nil", "null");
+    assert(match 42 { null => "nil", _ => "val" } == "val", "not null");
+});
+
+test("match — block body", () => {
+    let r = match 10 {
+        n if n > 5 => {
+            let x = n + 1;
+            x * 2;
+        },
+        _ => 0,
+    };
+    assert(r == 22, "block body");
+});
+
+test("match — as expression in let", () => {
+    let v = 42;
+    let label = match v {
+        0 => "zero",
+        n if n < 50 => "small",
+        _ => "large",
+    };
+    assert(label == "small", "label");
+});
+
+test("match — no arm returns null", () => {
+    let r = match 5 { 1 => "a", 2 => "b" };
+    assert(r == null, "null when no match");
+});
+
+test("match — early return from arm", () => {
+    fn first_positive([int] arr) {
+        let i = 0;
+        while (i < arr.length()) {
+            let found = match arr[i] {
+                n if n > 0 => n,
+                _ => null,
+            };
+            if (found != null) { return found; }
+            i = i + 1;
+        }
+        return -1;
+    }
+    assert(first_positive([-3, -1, 4, 7]) == 4, "first positive");
+});
+
+summary();

@@ -291,12 +291,34 @@ pub enum Expression {
     SizeOf(SizeOfTarget),                            // sizeof(int)  /  sizeof(expr)
     AddressOf(Box<Expression>),                      // &varname
     Deref(Box<Expression>),                          // *ptr
+    Match(Box<MatchExpression>),                     // match expr { pat => body, ... }
 }
 
 #[derive(Debug, Clone)]
 pub enum SizeOfTarget {
     Type(String),           // sizeof(int), sizeof(bool), ...
     Expr(Box<Expression>),  // sizeof(someVar)
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchExpression {
+    pub subject: Box<Expression>,
+    pub arms: Vec<MatchArm>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub guard: Option<Box<Expression>>,
+    pub body: BlockStatement,
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchPattern {
+    Wildcard,              // _
+    Literal(Expression),   // 42, "hello", true, false, null
+    Binding(String),       // x  (binds the matched value to a new variable)
+    Or(Vec<MatchPattern>), // pat | pat | ...
 }
 
 #[derive(Debug, Clone)]

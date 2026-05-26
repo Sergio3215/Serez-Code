@@ -1,0 +1,97 @@
+// E2E: match expression
+
+// ── Basic integer match ────────────────────────────────────────────────────────
+let x = 5;
+let msg = match x {
+    1 => "one",
+    2 => "two",
+    5 => "five",
+    _ => "other",
+};
+out msg;        // five
+
+// ── OR patterns ────────────────────────────────────────────────────────────────
+fn describe(int n) {
+    return match n {
+        0 => "zero",
+        1 | 2 | 3 => "small",
+        4 | 5 | 6 => "medium",
+        _ => "large",
+    };
+}
+out describe(0);     // zero
+out describe(2);     // small
+out describe(5);     // medium
+out describe(100);   // large
+
+// ── Guard expressions ──────────────────────────────────────────────────────────
+fn grade(int score) {
+    return match score {
+        n if n >= 90 => "A",
+        n if n >= 80 => "B",
+        n if n >= 70 => "C",
+        _ => "F",
+    };
+}
+out grade(95);   // A
+out grade(83);   // B
+out grade(72);   // C
+out grade(50);   // F
+
+// ── String matching ────────────────────────────────────────────────────────────
+let lang = "Serez";
+out match lang {
+    "Python" | "Ruby" => "scripting",
+    "Rust" | "C" => "systems",
+    "Serez" => "custom",
+    _ => "unknown",
+};  // custom
+
+// ── Null matching ─────────────────────────────────────────────────────────────
+fn safe_len(any s) {
+    return match s {
+        null => -1,
+        v => v.length(),
+    };
+}
+out safe_len(null);      // -1
+out safe_len("hello");   // 5
+
+// ── Bool matching ─────────────────────────────────────────────────────────────
+fn bool_to_str(bool b) {
+    return match b {
+        true  => "yes",
+        false => "no",
+    };
+}
+out bool_to_str(true);    // yes
+out bool_to_str(false);   // no
+
+// ── Match as expression in let ────────────────────────────────────────────────
+let category = match 42 {
+    n if n < 0 => "negative",
+    0 => "zero",
+    n if n < 100 => "double-digit",
+    _ => "big",
+};
+out category;   // double-digit
+
+// ── Block body in arm ─────────────────────────────────────────────────────────
+let result = match 7 {
+    n if n % 2 == 0 => {
+        let label = "even";
+        label;
+    },
+    _ => {
+        let label = "odd";
+        label;
+    },
+};
+out result;   // odd
+
+// ── No arm matches — returns null ─────────────────────────────────────────────
+let fallthrough = match 999 {
+    1 => "one",
+    2 => "two",
+};
+out fallthrough == null;   // true

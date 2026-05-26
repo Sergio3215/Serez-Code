@@ -216,6 +216,16 @@ impl super::Evaluator {
             ast::Expression::SizeOf(_)    => 8,
             ast::Expression::AddressOf(inner) => 8 + self.estimate_expression(inner),
             ast::Expression::Deref(inner)     => 8 + self.estimate_expression(inner),
+            ast::Expression::Match(m) => {
+                let subject_cost = self.estimate_expression(&m.subject);
+                let arms_cost: usize = m.arms.iter().map(|arm| {
+                    arm.body.statements.iter().filter_map(|s| {
+                        if let ast::Statement::Expression(e) = s { Some(self.estimate_expression(e)) }
+                        else { None }
+                    }).sum::<usize>()
+                }).max().unwrap_or(0);
+                subject_cost + arms_cost
+            }
         }
     }
 

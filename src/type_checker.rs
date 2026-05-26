@@ -208,6 +208,17 @@ impl TypeChecker {
                 self.check_expression(&t.then_expr, expected_return);
                 self.check_expression(&t.else_expr, expected_return);
             }
+            Expression::Match(m) => {
+                self.check_expression(&m.subject, expected_return);
+                for arm in &m.arms {
+                    if let Some(g) = &arm.guard {
+                        self.check_expression(g, expected_return);
+                    }
+                    for s in &arm.body.statements {
+                        self.check_statement(s, expected_return);
+                    }
+                }
+            }
             _ => {}
         }
     }
