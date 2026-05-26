@@ -261,6 +261,9 @@ impl super::Evaluator {
                 }
             }
             "sum" => {
+                if data.is_empty() {
+                    return EvalResult::Value(self.alloc(ObjectData::Decimal(0.0)));
+                }
                 let s: f64 = data.iter().sum();
                 EvalResult::Value(self.alloc(ObjectData::Decimal(s)))
             }

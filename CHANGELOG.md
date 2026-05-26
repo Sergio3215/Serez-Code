@@ -37,9 +37,20 @@ Order: most recent to oldest.
 - **Clamp**: `clamp(min, max)` — clips all elements to `[min, max]`.
 - **Broadcast add**: `broadcastAdd(bias)` — adds a 1D tensor to each row of a 2D tensor `(m, n) + (n,)`.
 
+### Bug fixes
+
+- **B-75** — Keyword token as method name rejected by class parser: methods named `get`, `set`, or `static` (lexed as `KwGet`/`KwSet`/`KwStatic`) were unconditionally rejected by the `Ident`-only check in `parse_class_declaration`. Fixed by extracting `token_type_is_name()` helper and using `current_token_is_name()` at the method-name check point.
+- **B-76** — `Tensor.sum()` on empty tensor returned `-0.0`: Rust's `Iterator::sum` initialises the accumulator with `0.0_f64` and produces negative zero on empty input. Fixed by adding an `is_empty()` early-return guard matching the pattern already used by `Tensor.mean()`.
+- **B-65 assertion corrected** — `Math.round(-4.5)` returns `-5` (Rust "half away from zero"), not `-4`. Test expectation updated.
+- **`unit_class_arch` assertion corrected** — `pts.find(p => p.sum() > 6)` returns the first match (x=3), not the last (x=5). Test expectation updated.
+
+### New parser feature
+
+- **Enum.Variant in match patterns** — `match dir { case Direction.North => ... }` now works. The parser detects `Ident.Ident` in match position and creates a `MatchPattern::Literal(DotCall)`, evaluated at runtime by the existing literal-pattern path.
+
 ### Test count
 
-- 249 passing (0 failing) — added: `unit_memory`, `unit_native`, `unit_tensor_math`, `56_memory_e2e`, `57_tensor_math_e2e`.
+- 274 passing (0 failing) — added: `unit_memory`, `unit_native`, `unit_tensor_math`, `56_memory_e2e`, `57_tensor_math_e2e`, `unit_match_enum`, `unit_bug_b64_b74`, `unit_math_trig`, `unit_memory_offsetof`, `unit_tensor_ops`, `unit_set_ops` (extended), `unit_bug_b75_b76`, `unit_class_arch` (extended), `sec_memory_requires_unsafe`, `sec_memory_write_requires_unsafe`, `sec_memory_read_requires_unsafe`, `sec_memory_free_requires_unsafe`, `sec_json_invalid`, `59_integral2_e2e`.
 
 ---
 

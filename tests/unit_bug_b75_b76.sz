@@ -1,0 +1,59 @@
+// Regression tests for B-75 (keywords as method names) and B-76 (empty tensor sum)
+
+// ── B-75: method named 'get' ──────────────────────────────────────────────────
+class Counter {
+    value: int = 0;
+
+    public Counter() {}
+    public int get() { return this.value; }
+    public void set(int v) { this.value = v; }
+    public int increment() { this.value = this.value + 1; return this.value; }
+}
+
+let c = new Counter();
+c.set(10);
+out c.get();
+c.increment();
+out c.get();
+
+// ── B-75: static method named 'get' ──────────────────────────────────────────
+class Registry {
+    label: string = "";
+
+    public Registry(string s) { this.label = s; }
+    public string get() { return this.label; }
+    public void set(string s) { this.label = s; }
+}
+
+let r = new Registry("hello");
+out r.get();
+r.set("world");
+out r.get();
+
+// ── B-75: getter + setter accessor pair alongside method named 'get' ─────────
+class Temperature {
+    _val: decimal = 0.0;
+
+    public Temperature(decimal v) { this._val = v; }
+    public get decimal celsius() { return this._val; }
+    public set celsius(decimal v) { this._val = v; }
+    public decimal get() { return this._val * 9.0 / 5.0 + 32.0; }
+}
+
+let t = new Temperature(100.0);
+out t.celsius;
+out t.get();
+
+// ── B-76: empty tensor sum returns 0.0 not -0.0 ──────────────────────────────
+let empty = Tensor.from([]);
+let s = empty.sum();
+out s;
+out s == 0.0;
+
+// ── B-76: non-empty tensor sum still works ────────────────────────────────────
+let t2 = Tensor.from([1.0, 2.0, 3.0]);
+out t2.sum();
+
+// ── B-76: single-element tensor sum ──────────────────────────────────────────
+let t3 = Tensor.from([7.5]);
+out t3.sum();

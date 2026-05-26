@@ -28,7 +28,7 @@ Documentación completa del proyecto: arquitectura, decisiones técnicas, toolin
 | Métrica | Valor |
 |---|---|
 | Versión | 2.1.0 |
-| Tests pasando | 249 (0 fallando) |
+| Tests pasando | 274 (0 fallando) |
 | Archivos Rust | 28 (`src/`) |
 | Tamaño del parser | ~100 KB |
 | Tamaño del evaluador (total submodulos) | ~320 KB |
@@ -79,10 +79,10 @@ serez-code/
 │   │   ├── math-helpers/index.sz
 │   │   ├── string-tools/index.sz
 │   │   └── serez.json
-│   ├── unit_*.sz               — 95 tests unitarios
-│   ├── sec_*.sz + err_*.sz     — 70 tests de seguridad y error
+│   ├── unit_*.sz               — 105 tests unitarios
+│   ├── sec_*.sz + err_*.sz     — 75 tests de seguridad y error
 │   ├── demo_*.sz               — 3 demos
-│   └── NN_*.sz + *.expected    — 68 tests E2E con golden files
+│   └── NN_*.sz + *.expected    — 70 tests E2E con golden files
 │
 ├── apps/                       — 5 apps demo (ejercitan todo el lenguaje)
 │
@@ -283,14 +283,14 @@ El evaluador original era un solo archivo de 5300+ líneas. Fue dividido en 17 m
 
 | Categoría | Cantidad | Descripción |
 |---|---|---|
-| `unit_*.sz` (no sec) | 73 | Tests unitarios usando `framework.sz` (assert, expect) |
-| `NN_*.sz` + `.expected` | 55 | Tests E2E con golden files — diff exacto de stdout |
+| `unit_*.sz` (no sec) | 83 | Tests unitarios usando `framework.sz` (assert, expect) |
+| `NN_*.sz` + `.expected` | 57 | Tests E2E con golden files — diff exacto de stdout |
 | `err_*.sz` | 27 | Verifican que ciertos inputs producen error de runtime |
-| `sec_*.sz` | 36 | Suite de seguridad: overflow, OOB, null safety, stack overflow |
+| `sec_*.sz` | 41 | Suite de seguridad: overflow, OOB, null safety, stack overflow |
 | `unit_sec_*.sz` | 15 | Tests unitarios de seguridad (con framework.sz) |
 | CLI / REPL / --check | 13 | Tests de modo de ejecución del CLI |
 | `framework.sz` | 1 | Framework compartido por todos los unit tests |
-| **Total** | **256** | **0 fallando** |
+| **Total** | **274** | **0 fallando** |
 
 ### Test runners
 
@@ -550,6 +550,29 @@ public abstract decimal area();
 public decimal area() {
     throw "area() not implemented in " + this.name;
     return 0.0;
+}
+```
+
+### Enum.Variant en `match` ✅ (arreglado en v2.1.0)
+
+Antes era necesario capturar el enum en una variable y usar condicionales. Desde la corrección del parser (B-75 antecedente), los patrones `Enum.Variant` funcionan directamente:
+
+```sz
+match dir {
+    case Direction.North => out "north";
+    case Direction.South => out "south";
+}
+```
+
+### Métodos de clase con nombre de keyword ✅ (arreglado en v2.1.0)
+
+Antes, un método llamado `get`, `set` o `static` fallaba en el parser porque esos tokens son keywords (`KwGet`, `KwSet`, `KwStatic`). Desde B-75, el parser acepta cualquier token que no sea operador/delimitador como nombre de método:
+
+```sz
+class Counter {
+    value: int = 0;
+    public int get() { return this.value; }   // ✅ ahora funciona
+    public void set(int v) { this.value = v; }  // ✅
 }
 ```
 

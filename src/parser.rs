@@ -91,11 +91,19 @@ impl Parser {
         token_precedence(&self.peek_token.token_type)
     }
 
-    /// Returns true if the peek token is a valid method name (identifier or keyword).
+    /// Returns true if the peek token is a valid method/field name (identifier or keyword).
     /// After '.', keywords like 'get', 'set', 'in', etc. are valid method names.
     fn peek_token_is_name(&self) -> bool {
+        Self::token_type_is_name(&self.peek_token.token_type)
+    }
+
+    fn current_token_is_name(&self) -> bool {
+        Self::token_type_is_name(&self.current_token.token_type)
+    }
+
+    fn token_type_is_name(tt: &TokenType) -> bool {
         !matches!(
-            self.peek_token.token_type,
+            tt,
             TokenType::Illegal | TokenType::Eof
             | TokenType::Int | TokenType::Decimal | TokenType::String
             | TokenType::Assign | TokenType::Plus | TokenType::Minus | TokenType::Bang
@@ -2414,8 +2422,8 @@ impl Parser {
                 None
             };
 
-            // Member name (constructor or method)
-            if self.current_token.token_type != TokenType::Ident {
+            // Member name (constructor or method) — allow keywords as names (e.g. "get", "set")
+            if !self.current_token_is_name() {
                 self.parser_error("Expected method name in class body");
                 return None;
             }

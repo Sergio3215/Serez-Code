@@ -84,6 +84,8 @@
 | [B-72](#b-72--new-classname-constructor-call-rejected-default-and-rest-parameters) | `new ClassName()` constructor call rejected default and rest parameters | 🔴 Critical | ✅ |
 | [B-73](#b-73--supermethodargs-call-rejected-default-and-rest-parameters) | `super.method(args)` call rejected default and rest parameters | 🟡 High | ✅ |
 | [B-74](#b-74--invoke_method-rest-parameter-not-collected) | `invoke_method` rest parameter not collected in binding loop | 🟡 High | ✅ |
+| [B-75](#b-75--keyword-token-as-method-name-rejected-by-class-parser) | Keyword token (`get`/`set`/`static`) as method name rejected by class parser | 🟡 High | ✅ |
+| [B-76](#b-76--tensorsumon-empty-tensor-returns--00-instead-of-00) | `Tensor.sum()` on empty tensor returns `-0.0` instead of `0.0` | 🟢 Low | ✅ |
 
 ---
 
@@ -3414,3 +3416,97 @@ if op == "is" {
 ### Lesson
 
 A Pratt infix operator requires registration in **both** `token_precedence()` AND the `is_infix` matches list. Missing either one produces silent failure. For operators whose right-hand side is a keyword/type name (not a general expression), `parse_expression()` must not be called — consume the token directly and wrap it as a string constant.
+
+---
+
+## B-75 — Keyword token (`get`/`set`/`static`) as method name rejected by class parser
+
+**Date:** 2026-05-26  
+**Files:** `src/parser.rs`  
+**Severity:** 🟡 High
+
+### Symptom
+
+A class method whose name is a language keyword (`get`, `set`, or `static`) caused a parser error even when the name appeared in a valid method-name position (after the return type):
+
+```serez
+class Counter {
+    value: int = 0;
+    public int get() { return this.value; }   // ❌ PARSER ERROR: Expected method name in class body
+    public void set(int v) { this.value = v; }  // ❌ same
+}
+```
+
+### Root cause
+
+The class method name check in `parse_class_declaration` used `current_token.token_type != TokenType::Ident`. The tokens `get`, `set`, and `static` are lexed as `KwGet`, `KwSet`, and `KwStatic` respectively — not as `Ident` — so they were unconditionally rejected.
+
+### Fix
+
+Extracted the reusable `token_type_is_name(tt: &TokenType) -> bool` helper (same exclusion list as the existing `peek_token_is_name`) and added `current_token_is_name()` as its mirror. Changed the method-name check from:
+
+```rust
+if self.current_token.token_type != TokenType::Ident {
+```
+
+to:
+
+```rust
+if !self.current_token_is_name() {
+```
+
+This allows any non-operator, non-delimiter token — keywords included — as a valid method name.
+
+### Lesson
+
+The class parser had two distinct paths for consuming keywords: (a) as **modifiers** (the `KwStatic`/`KwGet`/`KwSet` branches that advance the token before reaching the name check) and (b) as **names** (the final `Ident`-only check). The modifier branches consume the keyword when it appears at the right structural position; the remaining keyword check must be broad enough to accept them when they appear in name position instead.
+
+---
+
+## B-76 — `Tensor.sum()` on empty tensor returns `-0.0` instead of `0.0`
+
+**Date:** 2026-05-26  
+**Files:** `src/evaluator/methods_tensor.rs`  
+**Severity:** 🟢 Low
+
+### Symptom
+
+Calling `.sum()` on a zero-element tensor returned negative zero:
+
+```serez
+let t = Tensor.from([]);
+out t.sum();   // → -0.0  (expected 0.0)
+out t.sum() == 0.0;  // → true (comparison works, but display is wrong)
+```
+
+### Root cause
+
+The `"sum"` branch in `methods_tensor.rs` called `data.iter().sum::<f64>()` directly without an empty-check. Rust's `Iterator::sum` on an empty `f64` iterator returns negative zero (`-0.0`) because the accumulator is initialised with `0.0_f64` and no IEEE sign-correction is applied.
+
+The adjacent `"mean"` branch already had an explicit guard:
+
+```rust
+if data.is_empty() {
+    return EvalResult::Value(self.alloc(ObjectData::Decimal(0.0)));
+}
+```
+
+but `"sum"` did not.
+
+### Fix
+
+Added the same early-return guard before the sum computation:
+
+```rust
+"sum" => {
+    if data.is_empty() {
+        return EvalResult::Value(self.alloc(ObjectData::Decimal(0.0)));
+    }
+    let s: f64 = data.iter().sum();
+    EvalResult::Value(self.alloc(ObjectData::Decimal(s)))
+}
+```
+
+### Lesson
+
+Any aggregation over a potentially empty iterator must handle the zero-element case explicitly before calling `sum()` / `product()` / similar — Rust's accumulator-based implementation returns negative zero for `f64` sums over empty ranges.

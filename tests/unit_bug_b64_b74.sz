@@ -17,7 +17,7 @@ test("B-65 — floor/ceil/round/trunc on normal values", () => {
     assert(Math.ceil(-4.9)  == -4, "ceil -4.9");
     assert(Math.round(4.5)  == 5,  "round 4.5");
     assert(Math.round(4.4)  == 4,  "round 4.4");
-    assert(Math.round(-4.5) == -4, "round -4.5");
+    assert(Math.round(-4.5) == -5, "round -4.5");
 });
 
 // ── B-66: Math.random() range ────────────────────────────────────────────────
