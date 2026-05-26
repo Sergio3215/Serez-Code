@@ -54,4 +54,28 @@ test("isDigit and isAlpha", () => {
     assert(!isAlphaNumeric("!"), "! is not alphanumeric");
 });
 
+test("titleCase", () => {
+    assert(titleCase("the quick brown fox") == "The Quick Brown Fox", "four words");
+    assert(titleCase("hello world")         == "Hello World",         "two words");
+    assert(titleCase("hello")               == "Hello",               "single word");
+    assert(titleCase("UPPER CASE")          == "Upper Case",          "already upper");
+});
+
+test("lines", () => {
+    let l = lines("a\nb\nc");
+    assert(l.length() == 3, "three lines");
+    assert(l[0] == "a" && l[1] == "b" && l[2] == "c", "values");
+    let single = lines("hello");
+    assert(single.length() == 1 && single[0] == "hello", "single line");
+});
+
+test("countOccurrences", () => {
+    assert(countOccurrences("abcabc", "bc") == 2,             "two non-overlapping");
+    assert(countOccurrences("hello world hello", "hello") == 2, "two occurrences");
+    assert(countOccurrences("hello", "x") == 0,               "no match");
+    assert(countOccurrences("hello", "") == 0,                 "empty sub → 0");
+    assert(countOccurrences("aaaa", "aa") == 2,               "non-overlapping aa in aaaa");
+    assert(countOccurrences("abc", "abc") == 1,               "full string match");
+});
+
 summary();

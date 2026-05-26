@@ -54,4 +54,54 @@ test("Deque pushFront and pushBack", () => {
     assert(d.size() == 1, "size 1 remaining");
 });
 
+test("Stack peek on empty throws", () => {
+    let s = new Stack();
+    let caught = false;
+    try { s.peek(); } catch (e) { caught = true; }
+    assert(caught, "peek on empty throws");
+});
+
+test("Queue front on empty throws", () => {
+    let q = new Queue();
+    let caught = false;
+    try { q.front(); } catch (e) { caught = true; }
+    assert(caught, "front on empty throws");
+});
+
+test("Queue clear", () => {
+    let q = new Queue();
+    q.enqueue(1); q.enqueue(2);
+    q.clear();
+    assert(q.isEmpty() && q.size() == 0, "empty after clear");
+});
+
+test("Deque underflow throws", () => {
+    let d = new Deque();
+    let caughtFront = false;
+    let caughtBack  = false;
+    try { d.popFront(); } catch (e) { caughtFront = true; }
+    try { d.popBack();  } catch (e) { caughtBack  = true; }
+    assert(caughtFront, "popFront on empty throws");
+    assert(caughtBack,  "popBack on empty throws");
+});
+
+test("Deque peek on empty throws", () => {
+    let d = new Deque();
+    let caughtFront = false;
+    let caughtBack  = false;
+    try { d.front(); } catch (e) { caughtFront = true; }
+    try { d.back();  } catch (e) { caughtBack  = true; }
+    assert(caughtFront, "front on empty throws");
+    assert(caughtBack,  "back on empty throws");
+});
+
+test("Deque isEmpty", () => {
+    let d = new Deque();
+    assert(d.isEmpty(), "new deque is empty");
+    d.pushBack(1);
+    assert(!d.isEmpty(), "not empty after push");
+    d.popBack();
+    assert(d.isEmpty(), "empty again");
+});
+
 summary();

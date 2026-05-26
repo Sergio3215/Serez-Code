@@ -57,4 +57,32 @@ test("Result pattern in function", () => {
     assert(r2.isErr, "div by zero is Err");
 });
 
+test("Ok.toString", () => {
+    assert(ok(42).toString() == "Ok(42)",      "Ok(42)");
+    assert(ok("hello").toString() == "Ok(hello)", "Ok(hello)");
+});
+
+test("Err.toString", () => {
+    assert(err("timeout").toString() == "Err(timeout)", "Err(timeout)");
+});
+
+test("Option.toString", () => {
+    assert(some(7).toString()  == "Some(7)", "Some(7)");
+    assert(none().toString()   == "None",    "None");
+});
+
+test("Option direct construction", () => {
+    let s = new Option(99);
+    assert(s.isSome() && s.unwrap() == 99, "Option(99) is Some");
+    let n = new Option(null);
+    assert(n.isNone(), "Option(null) is None");
+});
+
+test("unwrapOr preserves falsy values", () => {
+    assert(ok(0).unwrapOr(99)        == 0,     "ok(0) not replaced by default");
+    assert(err("x").unwrapOr(99)     == 99,    "err uses default");
+    assert(some(false).unwrapOr(true) == false, "some(false) preserved");
+    assert(none().unwrapOr(true)      == true,  "none uses default");
+});
+
 summary();
