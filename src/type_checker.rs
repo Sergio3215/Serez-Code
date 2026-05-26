@@ -1,14 +1,14 @@
 use crate::ast::{self, Expression, Program, Statement};
 use std::collections::HashMap;
 
-pub struct TypeChecker {
-    program: Program,
+pub struct TypeChecker<'a> {
+    program: &'a Program,
     functions: HashMap<String, ast::FunctionLiteral>,
     var_types: HashMap<String, String>,
 }
 
-impl TypeChecker {
-    pub fn new(program: Program) -> Self {
+impl<'a> TypeChecker<'a> {
+    pub fn new(program: &'a Program) -> Self {
         TypeChecker {
             program,
             functions: HashMap::new(),
@@ -17,18 +17,17 @@ impl TypeChecker {
     }
 
     pub fn check(&mut self) {
-        // Clone once so we can mutate self.functions/var_types while iterating
-        let stmts: Vec<Statement> = self.program.statements.clone();
+        let stmts = &self.program.statements;
 
-        // Pass 1: collect all function declarations into the lookup table
-        for stmt in &stmts {
+        // Pass 1: collect all function declarations
+        for stmt in stmts {
             if let Statement::FunctionDeclaration(f) = stmt {
                 self.functions.insert(f.name.clone(), f.function.clone());
             }
         }
 
-        // Pass 2: infer types for all top-level let bindings
-        for stmt in &stmts {
+        // Pass 2: infer types for top-level let bindings
+        for stmt in stmts {
             if let Statement::Let(l) = stmt {
                 if let Some(t) = self.infer_type(&l.value) {
                     self.var_types.insert(l.name.clone(), t);
@@ -36,8 +35,8 @@ impl TypeChecker {
             }
         }
 
-        // Pass 3: full type checking (check_statement is &self — no extra clone needed)
-        for stmt in &stmts {
+        // Pass 3: full type checking
+        for stmt in stmts {
             self.check_statement(stmt, None);
         }
     }

@@ -65,6 +65,10 @@ pub struct Evaluator {
     global_bindings: HashMap<String, ObjectRef>,
     scopes: ScopeStack,
     null_ref: ObjectRef,
+    true_ref: ObjectRef,
+    false_ref: ObjectRef,
+    // Cache for small integers [0..256] — index i maps to integer i
+    int_cache: [ObjectRef; 257],
     call_stack: Vec<CallFrame>,
     interface_registry: HashMap<String, Vec<ast::InterfaceField>>,
     class_registry: HashMap<String, StoredClass>,
@@ -111,10 +115,19 @@ impl Evaluator {
     pub fn new() -> Self {
         let mut global_arena = Arena::new();
         let null_idx = global_arena.alloc(ObjectData::Null);
-        let null_ref = ObjectRef {
-            region: RegionId::Global,
-            index: null_idx,
-        };
+        let null_ref = ObjectRef { region: RegionId::Global, index: null_idx };
+
+        let true_idx  = global_arena.alloc(ObjectData::Boolean(true));
+        let true_ref  = ObjectRef { region: RegionId::Global, index: true_idx };
+        let false_idx = global_arena.alloc(ObjectData::Boolean(false));
+        let false_ref = ObjectRef { region: RegionId::Global, index: false_idx };
+
+        // Pre-allocate integers 0..=256 in the global arena
+        let mut int_cache = [null_ref; 257];
+        for i in 0usize..=256 {
+            let idx = global_arena.alloc(ObjectData::Integer(i as i64));
+            int_cache[i] = ObjectRef { region: RegionId::Global, index: idx };
+        }
 
         // Seed LCG with current time
         let seed = std::time::SystemTime::now()
@@ -127,6 +140,9 @@ impl Evaluator {
             global_bindings: HashMap::new(),
             scopes: ScopeStack::new(),
             null_ref,
+            true_ref,
+            false_ref,
+            int_cache,
             call_stack: Vec::new(),
             interface_registry: HashMap::new(),
             class_registry: HashMap::new(),
@@ -164,6 +180,20 @@ impl Evaluator {
         }
         if let Ok(canonical) = path.canonicalize() {
             self.imported_files.insert(canonical);
+        }
+    }
+
+    #[inline(always)]
+    fn bool_ref(&self, b: bool) -> ObjectRef {
+        if b { self.true_ref } else { self.false_ref }
+    }
+
+    #[inline(always)]
+    fn int_ref(&mut self, i: i64) -> ObjectRef {
+        if i >= 0 && i <= 256 {
+            self.int_cache[i as usize]
+        } else {
+            self.alloc(ObjectData::Integer(i))
         }
     }
 

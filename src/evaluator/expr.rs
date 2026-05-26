@@ -12,7 +12,7 @@ use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_st
 impl super::Evaluator {
     pub(super) fn eval_expression(&mut self, expr: &Expression) -> EvalResult {
         match expr {
-            Expression::Integer(i) => EvalResult::Value(self.alloc(ObjectData::Integer(*i))),
+            Expression::Integer(i) => EvalResult::Value(self.int_ref(*i)),
             Expression::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(*d))),
             Expression::String(s) => EvalResult::Value(self.alloc(ObjectData::Str(s.clone()))),
             Expression::Boolean(b) => EvalResult::Value(self.alloc(ObjectData::Boolean(*b))),
@@ -906,7 +906,7 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
                 let result = type_matches(type_name, &left_data);
-                EvalResult::Value(self.alloc(ObjectData::Boolean(result)))
+                EvalResult::Value(self.bool_ref(result))
             }
 
             // Null coalescing: left ?? right — returns left if not null, else right

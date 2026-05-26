@@ -251,7 +251,7 @@ $ErrorActionPreference = "Stop"
 $root       = $PSScriptRoot
 $testsDir   = Join-Path $root "tests"
 $framework  = Join-Path $testsDir "framework.sz"
-$binary     = Join-Path $root "target\debug\sz.exe"
+$binary     = Join-Path $root "target\release\sz.exe"
 $tempFile   = Join-Path $testsDir "~unit_temp.sz"
 
 # Expose project root as SEREZ_HOME so `import "std/..."` resolves correctly
@@ -262,7 +262,7 @@ $env:SEREZ_PACKAGES = Join-Path $root "tests\packages"
 # ── Build first ───────────────────────────────────────────────────────────────
 Write-Host "Building..." -ForegroundColor Cyan
 Push-Location $root
-$buildOut = cargo build 2>&1
+$buildOut = cargo build --release 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "BUILD FAILED:" -ForegroundColor Red
     $buildOut | Write-Host

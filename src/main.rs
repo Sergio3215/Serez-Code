@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 mod ast;
 mod compiler;
 mod evaluator;
@@ -29,7 +30,7 @@ fn run_file(file_path: &str, is_check: bool) {
     parser.set_source(source_lines.clone());
     let program = parser.parse_program();
 
-    let mut checker = type_checker::TypeChecker::new(program.clone());
+    let mut checker = type_checker::TypeChecker::new(&program);
     checker.check();
 
     let mut evaluator = evaluator::Evaluator::new();
