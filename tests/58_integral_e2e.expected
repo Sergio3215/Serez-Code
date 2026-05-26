@@ -1,0 +1,61 @@
+=== CORE ===
+circle:28.27
+1
+2
+3
+zero
+positive
+negative
+0,1,1,2,3,5,8
+10
+20
+3
+=== CRYPTO ===
+true
+ef317831
+true
+aGVsbG8=
+=== BINARY ===
+deadbeef
+222
+239
+305419896
+65
+66
+=== MEMORY ===
+true
+111
+222
+333
+111
+4
+=== GPU ===
+2.0
+4.0
+6.0
+8.0
+36.0
+=== TENSOR ===
+1.0
+0.0
+3.0
+0.0
+true
+true
+true
+true
+0.0
+5.0
+10.0
+1.0
+4.0
+11.0
+24.0
+=== BUILTINS ===
+true
+true
+=== PACKAGES ===
+5
+0
+true
+=== DONE ===

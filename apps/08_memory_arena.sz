@@ -1,0 +1,148 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// MEMORY ARENA — Serez-Code demo app
+// Exercises: Memory namespace (sizeof, alloc, free, read, write, copy, fill),
+//            unsafe blocks as expressions, classes, arrays, closures, for loops
+//
+// Implements a simple slab allocator on top of Memory.alloc:
+//   - One big "slab" of raw bytes
+//   - Fixed-size records written at computed offsets
+//   - Records read back and validated
+//   - Copy and fill operations demonstrated
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RECORD_SIZE = 16;   // 8 bytes id + 8 bytes value
+const SLAB_COUNT  = 8;
+
+fn int slotOffset(int slot) {
+    return slot * RECORD_SIZE;
+}
+
+// ── Slab allocator ────────────────────────────────────────────────────────────
+
+class Slab {
+    public Slab(int capacity) {
+        this.capacity = capacity;
+        this.handle   = unsafe { Memory.alloc(capacity * RECORD_SIZE) };
+        this.used     = 0;
+    }
+
+    public void writeRecord(int slot, int id, decimal value) {
+        if (slot >= this.capacity) { throw "Slab slot out of bounds"; }
+        let off = slotOffset(slot);
+        unsafe { Memory.write(this.handle, off,     "int64",   id)    };
+        unsafe { Memory.write(this.handle, off + 8, "float64", value) };
+        if (slot >= this.used) { this.used = slot + 1; }
+    }
+
+    public [any] readRecord(int slot) {
+        if (slot >= this.used) { throw "Slot {slot} not written"; }
+        let off = slotOffset(slot);
+        let id  = unsafe { Memory.read(this.handle, off,     "int64")   };
+        let val = unsafe { Memory.read(this.handle, off + 8, "float64") };
+        return [id, val];
+    }
+
+    public void zero(int slot) {
+        let off = slotOffset(slot);
+        unsafe { Memory.write(this.handle, off,     "int64",   0) };
+        unsafe { Memory.write(this.handle, off + 8, "float64", 0.0) };
+    }
+
+    public void dispose() {
+        unsafe { Memory.free(this.handle) };
+    }
+}
+
+// ── Demo ──────────────────────────────────────────────────────────────────────
+
+out "╔══════════════════════════════════════════╗";
+out "║         MEMORY ARENA DEMO               ║";
+out "║  Slab allocator over raw byte heap      ║";
+out "╚══════════════════════════════════════════╝";
+out "";
+out "Record layout: [8 bytes: id (int64)] [8 bytes: value (float64)]";
+out "Slab capacity: " + SLAB_COUNT + " records = " + (SLAB_COUNT * RECORD_SIZE) + " bytes";
+out "";
+
+let slab = new Slab(SLAB_COUNT);
+
+// Write sensor readings
+let sensors = [
+    [1001, 23.5],
+    [1002, 18.2],
+    [1003, 31.7],
+    [1004, 25.0],
+    [1005, 19.8]
+];
+
+out "Writing sensor records...";
+let i = 0;
+for (let s in sensors) {
+    slab.writeRecord(i, s[0], s[1]);
+    i = i + 1;
+}
+out "Written: " + slab.used + " records";
+out "";
+
+// Read back
+out "Reading records:";
+out "Slot  ID     Value";
+out "──────────────────";
+for (let slot = 0; slot < slab.used; slot++) {
+    let rec = slab.readRecord(slot);
+    out "{slot}     {rec[0]}   {rec[1]}";
+}
+out "";
+
+// Zero a slot and re-read
+out "Zeroing slot 2...";
+slab.zero(2);
+let rec2 = slab.readRecord(2);
+out "Slot 2 after zero: id=" + rec2[0] + " value=" + rec2[1];
+out "";
+
+// sizeof reference
+out "=== sizeof reference ===";
+out "int64:   " + Memory.sizeof("int64");
+out "float64: " + Memory.sizeof("float64");
+out "int32:   " + Memory.sizeof("int32");
+out "bool:    " + Memory.sizeof("bool");
+out "record size (2 fields): " + RECORD_SIZE;
+out "";
+
+// Low-level copy: duplicate slab A to slab B
+out "=== Slab copy ===";
+let slabB = new Slab(SLAB_COUNT);
+let bytes_to_copy = slab.used * RECORD_SIZE;
+unsafe { Memory.copy(slab.handle, slabB.handle, bytes_to_copy) };
+slabB.used = slab.used;
+out "Copied " + bytes_to_copy + " bytes";
+
+let copied_rec = slabB.readRecord(0);
+out "SlabB slot 0: id=" + copied_rec[0] + " value=" + copied_rec[1];
+
+let copied_rec3 = slabB.readRecord(1);
+out "SlabB slot 1: id=" + copied_rec3[0] + " value=" + copied_rec3[1];
+
+// Cleanup
+slab.dispose();
+slabB.dispose();
+out "";
+out "Slabs freed. Done.";
+
+// ── Unsafe-expression showcase ────────────────────────────────────────────────
+out "";
+out "=== unsafe-expression patterns ===";
+
+let h = unsafe { Memory.alloc(8) };
+unsafe { Memory.write(h, 0, "int64", 42) };
+let v = unsafe { Memory.read(h, 0, "int64") };
+out "write 42 → read back: " + v;
+
+// Conditional unsafe: allocate only if needed
+let threshold = 10;
+let big_h = threshold > 5 ? unsafe { Memory.alloc(1024) } : -1;
+out "alloc 1KB: handle > 0 = " + (big_h > 0);
+unsafe { Memory.free(big_h) };
+unsafe { Memory.free(h) };
+out "All freed.";

@@ -1,0 +1,123 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// NEURAL NETWORK — Serez-Code demo app
+// Exercises: Tensor.from, matmul, broadcastAdd, relu, sigmoid, softmax,
+//            abs, clamp, norm, classes, closures, arrays
+//
+// A 2-layer MLP classifies synthetic patient health data.
+// Input features: [age_norm, bmi_norm, glucose_norm] (3 features)
+// Hidden layer:   4 neurons, ReLU activation
+// Output layer:   2 classes (healthy / at-risk), Softmax
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Model weights (pre-trained, fixed for demo) ───────────────────────────────
+
+// W1: [3, 4]  — 3 inputs → 4 hidden neurons
+let W1 = Tensor.from([
+    [ 0.52, -0.31,  0.74,  0.18],
+    [-0.48,  0.62,  0.11, -0.55],
+    [ 0.33,  0.27, -0.63,  0.41]
+]);
+
+// b1: [4]
+let b1 = Tensor.from([0.10, -0.05, 0.20, 0.08]);
+
+// W2: [4, 2]  — 4 hidden → 2 output classes
+let W2 = Tensor.from([
+    [ 0.65, -0.72],
+    [-0.38,  0.51],
+    [ 0.44, -0.30],
+    [-0.51,  0.67]
+]);
+
+// b2: [2]
+let b2 = Tensor.from([-0.10, 0.15]);
+
+// ── Forward pass ─────────────────────────────────────────────────────────────
+
+fn [decimal] forward(decimal age_n, decimal bmi_n, decimal gluc_n) {
+    // Input as row vector: [1, 3]
+    let x = Tensor.from([[age_n, bmi_n, gluc_n]]);
+
+    // Hidden layer: h = relu(x @ W1 + b1)
+    let h = x.matmul(W1).broadcastAdd(b1).relu();
+
+    // Output layer: probs = softmax(h @ W2 + b2)
+    let logits = h.matmul(W2).broadcastAdd(b2);
+    let probs = logits.softmax();
+
+    // Return [p_healthy, p_at_risk]
+    return [probs.get(0, 0), probs.get(0, 1)];
+}
+
+fn string verdict(decimal p_healthy, decimal p_risk) {
+    if (p_healthy > p_risk) {
+        return "HEALTHY";
+    }
+    return "AT-RISK";
+}
+
+fn decimal round2(decimal x) {
+    return Math.round(x * 100.0) / 100.0;
+}
+
+// ── Patients ─────────────────────────────────────────────────────────────────
+
+let patients = [
+    ["Alice",   0.30,  0.25, 0.20],   // young, normal bmi, low glucose
+    ["Bob",     0.65,  0.70, 0.75],   // older, high bmi, high glucose
+    ["Carol",   0.45,  0.40, 0.35],   // middle age, moderate
+    ["Dave",    0.80,  0.85, 0.90],   // elderly, obese, diabetic range
+    ["Eve",     0.20,  0.30, 0.15]    // young, fit, low glucose
+];
+
+out "╔══════════════════════════════════════════╗";
+out "║      PATIENT HEALTH CLASSIFIER           ║";
+out "║  Neural Network  (2-layer MLP, ReLU)     ║";
+out "╚══════════════════════════════════════════╝";
+out "";
+out "Name       Healthy  At-Risk  Verdict";
+out "─────────────────────────────────────────";
+
+for (let row in patients) {
+    let name  = row[0];
+    let age_n = row[1];
+    let bmi_n = row[2];
+    let gluc  = row[3];
+
+    let probs    = forward(age_n, bmi_n, gluc);
+    let p_healthy = round2(probs[0]);
+    let p_risk    = round2(probs[1]);
+    let label     = verdict(probs[0], probs[1]);
+
+    out "{name}      {p_healthy}    {p_risk}    {label}";
+}
+
+out "";
+out "─────────────────────────────────────────";
+
+// ── Model diagnostics ─────────────────────────────────────────────────────────
+
+out "";
+out "=== Model diagnostics ===";
+
+// L2 norm of weight matrices (measures total weight magnitude)
+out "||W1|| L2: " + Math.round(W1.norm() * 100.0) / 100.0;
+out "||W2|| L2: " + Math.round(W2.norm() * 100.0) / 100.0;
+
+// Activation range check via sigmoid of W1 values
+let w1_flat = W1.flatten();
+let saturated = w1_flat.sigmoid();
+let min_act = saturated.min();
+let max_act = saturated.max();
+out "sigmoid(W1) range: [" + round2(min_act) + ", " + round2(max_act) + "]";
+
+// Gradient sanity: abs(W2) clamped to [0, 1]
+let w2_clamped = W2.abs().clamp(0, 1);
+out "||clamp(|W2|,0,1)|| L2: " + Math.round(w2_clamped.norm() * 100.0) / 100.0;
+
+out "";
+out "=== exp/log round-trip on activations ===";
+let test_vec = Tensor.from([0.5, 1.0, 2.0]);
+let trip = test_vec.exp().log();
+out "log(exp([0.5,1,2]))[0] ≈ 0.5: " + (trip.get(0) > 0.49 && trip.get(0) < 0.51);
+out "log(exp([0.5,1,2]))[1] ≈ 1.0: " + (trip.get(1) > 0.99 && trip.get(1) < 1.01);

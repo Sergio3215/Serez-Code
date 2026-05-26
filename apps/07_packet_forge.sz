@@ -1,0 +1,120 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// PACKET FORGE — Serez-Code demo app
+// Exercises: Binary namespace (fromUtf8, toHex, fromHex, packInt32Le,
+//            packInt32Be, unpackInt32Le, concat), Crypto (sha256, hexEncode),
+//            arrays, closures, classes, string methods
+//
+// Implements a toy binary protocol:
+//   [4 bytes: magic]  [1 byte: version]  [4 bytes: payload_len LE]
+//   [N bytes: payload]  [4 bytes: checksum (first 4 bytes of SHA-256)]
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAGIC   = 0x5A455201;   // "ZER\x01"
+const VERSION = 1;
+
+// ── Packet builder ────────────────────────────────────────────────────────────
+
+fn [int] buildPacket(string payload_str) {
+    let payload = Binary.fromUtf8(payload_str);
+    let payload_len = payload.length();
+
+    // Header fields
+    let magic_bytes   = Binary.packInt32Be(MAGIC);
+    let version_byte  = [VERSION];
+    let len_bytes     = Binary.packInt32Le(payload_len);
+
+    // Checksum: first 4 bytes of SHA-256 of the payload
+    let hash_hex  = Crypto.sha256(payload_str);
+    let hash_full = Binary.fromHex(hash_hex);
+    let checksum  = [hash_full[0], hash_full[1], hash_full[2], hash_full[3]];
+
+    // Assemble
+    return Binary.concat(Binary.concat(
+        Binary.concat(Binary.concat(magic_bytes, version_byte), len_bytes),
+        payload),
+        checksum
+    );
+}
+
+// ── Packet parser ─────────────────────────────────────────────────────────────
+
+// Returns [version, payload_len, payload_str, checksum_hex, valid]
+fn [any] parsePacket(any raw) {
+    if (raw.length() < 13) {
+        throw "Packet too short";
+    }
+
+    // Version
+    let version = raw[4];
+
+    // Payload length (bytes 5-8, little-endian)
+    let payload_len = Binary.unpackInt32Le([raw[5], raw[6], raw[7], raw[8]]);
+
+    // Payload (bytes 9..9+payload_len)
+    let payload_bytes = [];
+    let idx = 9;
+    while (idx < 9 + payload_len) {
+        payload_bytes.push(raw[idx]);
+        idx = idx + 1;
+    }
+    let payload_str = Binary.toUtf8(payload_bytes);
+
+    // Checksum (last 4 bytes)
+    let cs_start = 9 + payload_len;
+    let stored_cs = [raw[cs_start], raw[cs_start+1], raw[cs_start+2], raw[cs_start+3]];
+
+    // Verify checksum
+    let expected_hash = Binary.fromHex(Crypto.sha256(payload_str));
+    let expected_cs   = [expected_hash[0], expected_hash[1], expected_hash[2], expected_hash[3]];
+    let valid = (stored_cs[0] == expected_cs[0] && stored_cs[1] == expected_cs[1] &&
+                 stored_cs[2] == expected_cs[2] && stored_cs[3] == expected_cs[3]);
+
+    return [version, payload_len, payload_str, Binary.toHex(stored_cs), valid];
+}
+
+// ── Demo ──────────────────────────────────────────────────────────────────────
+
+let messages = [
+    "hello serez",
+    "PING",
+    "The quick brown fox"
+];
+
+out "╔══════════════════════════════════════════╗";
+out "║         PACKET FORGE DEMO               ║";
+out "║  Binary protocol builder & inspector    ║";
+out "╚══════════════════════════════════════════╝";
+out "";
+
+for (let msg in messages) {
+    out "──────────────────────────────────────────";
+    out "Payload: \"" + msg + "\"";
+
+    let packet = buildPacket(msg);
+    out "Total bytes: " + packet.length();
+    out "Header hex: " + Binary.toHex([packet[0], packet[1], packet[2], packet[3]]);
+
+    let parsed = parsePacket(packet);
+    out "Version: " + parsed[0];
+    out "Payload len: " + parsed[1];
+    out "Decoded: \"" + parsed[2] + "\"";
+    out "Checksum: " + parsed[3];
+    out "Valid: " + parsed[4];
+}
+
+out "";
+out "──────────────────────────────────────────";
+out "=== Binary utilities showcase ===";
+
+// Pack/unpack round-trip for various integer types
+let vals = [0, 127, 255, 1000, 2147483647];
+for (let v in vals) {
+    let packed = Binary.packInt32Le(v);
+    let back   = Binary.unpackInt32Le(packed);
+    out "packInt32Le(" + v + ") → unpack → " + back + " (match: " + (v == back) + ")";
+}
+
+// Hex encoding of Crypto hashes
+out "";
+out "SHA-256 prefix of 'serez': " + Crypto.sha256("serez").substring(0, 16) + "...";
+out "MD5 of 'serez':            " + Crypto.md5("serez");

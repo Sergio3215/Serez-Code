@@ -10,7 +10,7 @@ implementacion_clases.md
 *.vsix
 /.claude/
 !tests/*.sz
-#/apps/
+!apps/*.sz
 tests/_*.sz
 merge.ps1
 mergeFromMain.ps1
