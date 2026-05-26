@@ -1,0 +1,56 @@
+// Unit tests: Memory.offsetOf — field byte offsets in classes
+
+class Vec3 {
+    x: decimal = 0.0;
+    y: decimal = 0.0;
+    z: decimal = 0.0;
+}
+
+class Particle {
+    x:    decimal = 0.0;
+    y:    decimal = 0.0;
+    z:    decimal = 0.0;
+    mass: decimal = 1.0;
+}
+
+class Pair {
+    first:  int = 0;
+    second: int = 0;
+}
+
+class Single {
+    value: decimal = 0.0;
+}
+
+test("offsetOf — Vec3 fields", () => {
+    assert(Memory.offsetOf("Vec3", "x") == 0,  "x at 0");
+    assert(Memory.offsetOf("Vec3", "y") == 8,  "y at 8");
+    assert(Memory.offsetOf("Vec3", "z") == 16, "z at 16");
+});
+
+test("offsetOf — Particle fields", () => {
+    assert(Memory.offsetOf("Particle", "x")    == 0,  "x at 0");
+    assert(Memory.offsetOf("Particle", "y")    == 8,  "y at 8");
+    assert(Memory.offsetOf("Particle", "z")    == 16, "z at 16");
+    assert(Memory.offsetOf("Particle", "mass") == 24, "mass at 24");
+});
+
+test("offsetOf — Pair fields", () => {
+    assert(Memory.offsetOf("Pair", "first")  == 0, "first at 0");
+    assert(Memory.offsetOf("Pair", "second") == 8, "second at 8");
+});
+
+test("offsetOf — Single field", () => {
+    assert(Memory.offsetOf("Single", "value") == 0, "value at 0");
+});
+
+test("offsetOf — stride = 8 bytes per field", () => {
+    // Each field is stored at index * 8
+    let off0 = Memory.offsetOf("Vec3", "x");
+    let off1 = Memory.offsetOf("Vec3", "y");
+    let off2 = Memory.offsetOf("Vec3", "z");
+    assert(off1 - off0 == 8, "stride x→y = 8");
+    assert(off2 - off1 == 8, "stride y→z = 8");
+});
+
+summary();

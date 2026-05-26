@@ -1,0 +1,2 @@
+// Security test: JSON.parse with malformed input must produce an error, not panic
+out JSON.parse("not valid json @@##");

@@ -1,5 +1,5 @@
 // Set data structure: comprehensive operations
-// Covers: add, has/contains, remove, size, clear, iteration, uniqueness
+// Covers: add, has/contains, remove, size, clear, union, intersection, iteration, uniqueness
 
 test("new Set starts empty", () => {
     let s = new Set();
@@ -126,6 +126,48 @@ test("Set size matches manual add count", () => {
         s.add(i);
     }
     assert(s.size() == target, "20 unique elements added");
+});
+
+test("Set.union — combines two sets without duplicates", () => {
+    let a = new Set([1, 2, 3]);
+    let b = new Set([3, 4, 5]);
+    let u = a.union(b);
+    assert(u.size() == 5,       "union has 5 elements");
+    assert(u.has(1) == true,    "has 1");
+    assert(u.has(3) == true,    "has 3 (in both)");
+    assert(u.has(5) == true,    "has 5");
+    assert(u.has(6) == false,   "does not have 6");
+});
+
+test("Set.union — with empty set", () => {
+    let a = new Set([1, 2]);
+    let b = new Set();
+    let u = a.union(b);
+    assert(u.size() == 2, "union with empty = original");
+});
+
+test("Set.intersection — common elements", () => {
+    let a = new Set([1, 2, 3, 4]);
+    let b = new Set([3, 4, 5, 6]);
+    let i = a.intersection(b);
+    assert(i.size() == 2,     "intersection has 2 elements");
+    assert(i.has(3) == true,  "has 3");
+    assert(i.has(4) == true,  "has 4");
+    assert(i.has(1) == false, "1 not in intersection");
+    assert(i.has(5) == false, "5 not in intersection");
+});
+
+test("Set.intersection — no common elements", () => {
+    let a = new Set([1, 2]);
+    let b = new Set([3, 4]);
+    let i = a.intersection(b);
+    assert(i.size() == 0, "empty intersection");
+});
+
+test("Set.contains — alias for has", () => {
+    let s = new Set([10, 20, 30]);
+    assert(s.contains(10) == true,  "contains 10");
+    assert(s.contains(99) == false, "does not contain 99");
 });
 
 summary();

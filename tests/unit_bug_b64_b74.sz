@@ -1,0 +1,161 @@
+// Regression tests for bugs B-64 through B-74
+
+// ── B-64: abs(i64::MIN) overflow ─────────────────────────────────────────────
+// Math.abs of the most-negative integer must not produce a negative result.
+test("B-64 — abs(large negative) is positive", () => {
+    let n = -9223372036854775000;
+    assert(Math.abs(n) > 0, "abs of large negative is positive");
+    assert(Math.abs(-1) == 1, "abs(-1)=1");
+    assert(Math.abs(0) == 0, "abs(0)=0");
+});
+
+// ── B-65: floor/ceil/round/trunc UB on non-finite f64 ────────────────────────
+test("B-65 — floor/ceil/round/trunc on normal values", () => {
+    assert(Math.floor(4.9)  == 4,  "floor 4.9");
+    assert(Math.floor(-4.1) == -5, "floor -4.1");
+    assert(Math.ceil(4.1)   == 5,  "ceil 4.1");
+    assert(Math.ceil(-4.9)  == -4, "ceil -4.9");
+    assert(Math.round(4.5)  == 5,  "round 4.5");
+    assert(Math.round(4.4)  == 4,  "round 4.4");
+    assert(Math.round(-4.5) == -4, "round -4.5");
+});
+
+// ── B-66: Math.random() range ────────────────────────────────────────────────
+test("B-66 — Math.random() in [0, 1)", () => {
+    let i = 0;
+    while (i < 20) {
+        let r = Math.random();
+        assert(r >= 0.0 && r < 1.0, "random in [0,1)");
+        i = i + 1;
+    }
+});
+
+// ── B-67: asin/acos domain validation ───────────────────────────────────────
+test("B-67 — asin/acos accept valid domain [-1, 1]", () => {
+    let s0 = Math.asin(0.0);
+    assert(s0 > -0.001 && s0 < 0.001, "asin(0) ≈ 0");
+    let s1 = Math.asin(1.0);
+    assert(s1 > 1.57 && s1 < 1.58, "asin(1) ≈ π/2");
+    let c1 = Math.acos(1.0);
+    assert(c1 > -0.001 && c1 < 0.001, "acos(1) ≈ 0");
+    let c0 = Math.acos(0.0);
+    assert(c0 > 1.57 && c0 < 1.58, "acos(0) ≈ π/2");
+});
+
+// ── B-68: JSON.stringify NaN/Infinity → null ─────────────────────────────────
+test("B-68 — JSON.stringify handles special float values", () => {
+    let normal = JSON.stringify(42);
+    assert(normal == "42", "stringify int");
+    let arr = JSON.stringify([1, 2, 3]);
+    assert(arr == "[1,2,3]", "stringify array");
+    let s = JSON.stringify("hello");
+    assert(s == "\"hello\"", "stringify string");
+});
+
+// ── B-69: map/filter/sort callbacks accept default + rest params ──────────────
+test("B-69 — HOF callbacks with default params", () => {
+    fn addN(int x, int n = 10) { return x + n; }
+    let nums = [1, 2, 3];
+    let result = nums.map(x => addN(x));
+    assert(result[0] == 11, "map with default");
+    assert(result[2] == 13, "map with default 3");
+});
+
+test("B-69 — filter callback with default param", () => {
+    fn above(int x, int threshold = 2) { return x > threshold; }
+    let nums = [1, 2, 3, 4];
+    let big = nums.filter(x => above(x));
+    assert(big.length() == 2, "filter above 2");
+    assert(big[0] == 3, "first is 3");
+});
+
+// ── B-70: min_params formula for default+rest ─────────────────────────────────
+test("B-70 — function with default+rest accepts minimum args", () => {
+    fn f(int a, int b = 5, ...rest) {
+        return a + b + rest.length();
+    }
+    assert(f(1) == 6,    "1 arg: a=1, b=5, rest=[]");
+    assert(f(1, 2) == 3, "2 args: a=1, b=2, rest=[]");
+    assert(f(1, 2, 3, 4) == 5, "4 args: a=1,b=2,rest=[3,4]");
+});
+
+// ── B-71: super() constructor with default + rest params ─────────────────────
+test("B-71 — super() with default params in constructor", () => {
+    class Animal {
+        public Animal(string name, string sound = "...") {
+            this.name  = name;
+            this.sound = sound;
+        }
+    }
+    class Dog : Animal {
+        public Dog(string name) {
+            super(name, "woof");
+        }
+    }
+    class Cat : Animal {
+        public Cat(string name) {
+            super(name);
+        }
+    }
+    let d = new Dog("Rex");
+    let c = new Cat("Whiskers");
+    assert(d.name  == "Rex",      "dog name");
+    assert(d.sound == "woof",     "dog sound");
+    assert(c.name  == "Whiskers", "cat name");
+    assert(c.sound == "...",      "cat default sound");
+});
+
+// ── B-72: new ClassName() with default params in constructor ─────────────────
+test("B-72 — new with default constructor params", () => {
+    class Point {
+        public Point(decimal x, decimal y = 0.0, decimal z = 0.0) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+    }
+    let p1 = new Point(1.0);
+    let p2 = new Point(1.0, 2.0);
+    let p3 = new Point(1.0, 2.0, 3.0);
+    assert(p1.x == 1.0 && p1.y == 0.0 && p1.z == 0.0, "1 arg");
+    assert(p2.x == 1.0 && p2.y == 2.0 && p2.z == 0.0, "2 args");
+    assert(p3.x == 1.0 && p3.y == 2.0 && p3.z == 3.0, "3 args");
+});
+
+// ── B-73: super.method() with default + rest params ──────────────────────────
+test("B-73 — super.method() with default params", () => {
+    class Base {
+        public string greet(string name, string prefix = "Hello") {
+            return "{prefix}, {name}!";
+        }
+    }
+    class Child : Base {
+        public string greet(string name) {
+            return super.greet(name);
+        }
+        public string greetFormal(string name) {
+            return super.greet(name, "Dear");
+        }
+    }
+    let c = new Child();
+    assert(c.greet("Alice")        == "Hello, Alice!",  "default prefix");
+    assert(c.greetFormal("Alice")  == "Dear, Alice!",   "custom prefix");
+});
+
+// ── B-74: invoke_method rest param collected ─────────────────────────────────
+test("B-74 — method with rest params collects all args", () => {
+    class Joiner {
+        public string join(string sep, ...parts) {
+            return parts.reduce("", (acc, x) => {
+                if (acc == "") { return x; }
+                return acc + sep + x;
+            });
+        }
+    }
+    let j = new Joiner();
+    assert(j.join("-", "a", "b", "c") == "a-b-c",   "3 parts");
+    assert(j.join(", ", "x", "y")     == "x, y",     "2 parts");
+    assert(j.join(".", "only")         == "only",     "1 part");
+});
+
+summary();

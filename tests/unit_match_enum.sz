@@ -1,0 +1,101 @@
+// Unit tests: match expression with Enum.Variant patterns
+
+enum Direction { North, South, East, West }
+enum Color     { Red, Green, Blue }
+enum Priority  { Low, Medium, High, Critical }
+
+test("match — single enum variant", () => {
+    let d = Direction.North;
+    let r = match d {
+        Direction.North => "north",
+        Direction.South => "south",
+        _ => "other",
+    };
+    assert(r == "north", "matched North");
+});
+
+test("match — all enum variants exhaustive", () => {
+    fn name(any d) {
+        return match d {
+            Direction.North => "N"
+            Direction.South => "S"
+            Direction.East  => "E"
+            Direction.West  => "W"
+            _ => "?"
+        };
+    }
+    assert(name(Direction.North) == "N", "N");
+    assert(name(Direction.South) == "S", "S");
+    assert(name(Direction.East)  == "E", "E");
+    assert(name(Direction.West)  == "W", "W");
+});
+
+test("match — enum variant wildcard fallback", () => {
+    let r = match Direction.East {
+        Direction.North => 1,
+        Direction.South => 2,
+        _ => 99,
+    };
+    assert(r == 99, "wildcard fallback");
+});
+
+test("match — enum OR pattern", () => {
+    fn is_ns(any d) {
+        return match d {
+            Direction.North | Direction.South => true,
+            _ => false,
+        };
+    }
+    assert(is_ns(Direction.North) == true,  "North is NS");
+    assert(is_ns(Direction.South) == true,  "South is NS");
+    assert(is_ns(Direction.East)  == false, "East is not NS");
+});
+
+test("match — multiple enums in same function", () => {
+    fn score(any p) {
+        return match p {
+            Priority.Low      => 1
+            Priority.Medium   => 2
+            Priority.High     => 3
+            Priority.Critical => 4
+            _ => 0
+        };
+    }
+    assert(score(Priority.Low)      == 1, "low");
+    assert(score(Priority.Medium)   == 2, "medium");
+    assert(score(Priority.High)     == 3, "high");
+    assert(score(Priority.Critical) == 4, "critical");
+});
+
+test("match — enum as expression result", () => {
+    let p = Priority.High;
+    let label = match p { Priority.Critical => "URGENT", Priority.High => "HIGH", _ => "LOW" };
+    assert(label == "HIGH", "label");
+});
+
+test("match — enum in array via map", () => {
+    let dirs = [Direction.North, Direction.South, Direction.East, Direction.West];
+    let codes = dirs.map(d => match d {
+        Direction.North => "N"
+        Direction.South => "S"
+        Direction.East  => "E"
+        Direction.West  => "W"
+        _ => "?"
+    });
+    assert(codes[0] == "N", "N");
+    assert(codes[2] == "E", "E");
+    assert(codes.join("") == "NSEW", "joined");
+});
+
+test("match — enum with guard", () => {
+    fn label(any p) {
+        return match p {
+            x if x == Priority.Critical => "crit"
+            _ => "other"
+        };
+    }
+    assert(label(Priority.Critical) == "crit",  "crit");
+    assert(label(Priority.High)     == "other", "other");
+});
+
+summary();

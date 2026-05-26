@@ -1,0 +1,3 @@
+// Security test: Memory.write outside unsafe must be rejected
+let h = 1;
+Memory.write(h, 0, "int64", 42);

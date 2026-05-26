@@ -1,0 +1,179 @@
+// Unit tests: Tensor element-wise ops, shape ops, aggregations, matmul
+
+// ── Element-wise arithmetic ───────────────────────────────────────────────────
+
+test("Tensor.add — element-wise", () => {
+    let a = Tensor.from([1.0, 2.0, 3.0]);
+    let b = Tensor.from([10.0, 20.0, 30.0]);
+    let c = a.add(b);
+    assert(c.get(0) == 11.0, "0: 1+10");
+    assert(c.get(1) == 22.0, "1: 2+20");
+    assert(c.get(2) == 33.0, "2: 3+30");
+});
+
+test("Tensor.sub — element-wise", () => {
+    let a = Tensor.from([10.0, 20.0, 30.0]);
+    let b = Tensor.from([1.0, 2.0, 3.0]);
+    let c = a.sub(b);
+    assert(c.get(0) == 9.0,  "0: 10-1");
+    assert(c.get(1) == 18.0, "1: 20-2");
+    assert(c.get(2) == 27.0, "2: 30-3");
+});
+
+test("Tensor.mul — element-wise", () => {
+    let a = Tensor.from([2.0, 3.0, 4.0]);
+    let b = Tensor.from([5.0, 6.0, 7.0]);
+    let c = a.mul(b);
+    assert(c.get(0) == 10.0, "0: 2*5");
+    assert(c.get(1) == 18.0, "1: 3*6");
+    assert(c.get(2) == 28.0, "2: 4*7");
+});
+
+test("Tensor.div — element-wise", () => {
+    let a = Tensor.from([10.0, 20.0, 30.0]);
+    let b = Tensor.from([2.0, 4.0, 5.0]);
+    let c = a.div(b);
+    assert(c.get(0) == 5.0, "0: 10/2");
+    assert(c.get(1) == 5.0, "1: 20/4");
+    assert(c.get(2) == 6.0, "2: 30/5");
+});
+
+// ── Dot product ───────────────────────────────────────────────────────────────
+
+test("Tensor.dot — 1D vectors", () => {
+    let u = Tensor.from([1.0, 2.0, 3.0]);
+    let v = Tensor.from([4.0, 5.0, 6.0]);
+    let d = u.dot(v);
+    // 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
+    assert(d > 31.9 && d < 32.1, "dot = 32");
+});
+
+test("Tensor.dot — unit vectors", () => {
+    let u = Tensor.from([1.0, 0.0, 0.0]);
+    let v = Tensor.from([0.0, 1.0, 0.0]);
+    let d = u.dot(v);
+    assert(d > -0.001 && d < 0.001, "orthogonal dot = 0");
+    let w = Tensor.from([1.0, 0.0, 0.0]);
+    let self_dot = u.dot(w);
+    assert(self_dot > 0.999 && self_dot < 1.001, "self dot = 1");
+});
+
+// ── Matrix operations ─────────────────────────────────────────────────────────
+
+test("Tensor.transpose — 2x3 → 3x2", () => {
+    let m = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+    let mt = m.transpose();
+    // Original [0,0]=1 → transposed [0,0]=1
+    assert(mt.get(0, 0) == 1.0, "[0,0]");
+    // Original [0,1]=2 → transposed [1,0]=2
+    assert(mt.get(1, 0) == 2.0, "[1,0]");
+    // Original [0,2]=3 → transposed [2,0]=3
+    assert(mt.get(2, 0) == 3.0, "[2,0]");
+    // Original [1,0]=4 → transposed [0,1]=4
+    assert(mt.get(0, 1) == 4.0, "[0,1]");
+    // Original [1,2]=6 → transposed [2,1]=6
+    assert(mt.get(2, 1) == 6.0, "[2,1]");
+});
+
+test("Tensor.matmul — 2x2 @ 2x2", () => {
+    // [1,2; 3,4] @ [5,6; 7,8]
+    let a = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let b = Tensor.from([[5.0, 6.0], [7.0, 8.0]]);
+    let c = a.matmul(b);
+    // c[0,0] = 1*5 + 2*7 = 19
+    assert(c.get(0, 0) == 19.0, "[0,0]=19");
+    // c[0,1] = 1*6 + 2*8 = 22
+    assert(c.get(0, 1) == 22.0, "[0,1]=22");
+    // c[1,0] = 3*5 + 4*7 = 43
+    assert(c.get(1, 0) == 43.0, "[1,0]=43");
+    // c[1,1] = 3*6 + 4*8 = 50
+    assert(c.get(1, 1) == 50.0, "[1,1]=50");
+});
+
+test("Tensor.eye — identity matmul", () => {
+    let m  = Tensor.from([[2.0, 3.0], [4.0, 5.0]]);
+    let I  = Tensor.eye(2);
+    let mi = m.matmul(I);
+    assert(mi.get(0, 0) == 2.0, "[0,0] preserved");
+    assert(mi.get(0, 1) == 3.0, "[0,1] preserved");
+    assert(mi.get(1, 0) == 4.0, "[1,0] preserved");
+    assert(mi.get(1, 1) == 5.0, "[1,1] preserved");
+});
+
+// ── Shape / metadata ──────────────────────────────────────────────────────────
+
+test("Tensor.shape and size", () => {
+    let t1 = Tensor.from([1.0, 2.0, 3.0]);
+    let s1 = t1.shape();
+    assert(s1[0] == 3, "1D shape[0]=3");
+    assert(t1.size() == 3, "1D size=3");
+
+    let t2 = Tensor.from([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]);
+    let s2 = t2.shape();
+    assert(s2[0] == 3, "2D rows=3");
+    assert(s2[1] == 2, "2D cols=2");
+    assert(t2.size() == 6, "2D size=6");
+});
+
+test("Tensor.ndim", () => {
+    let t1 = Tensor.from([1.0, 2.0]);
+    assert(t1.ndim() == 1, "1D ndim=1");
+    let t2 = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    assert(t2.ndim() == 2, "2D ndim=2");
+});
+
+test("Tensor.flatten", () => {
+    let m = Tensor.from([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]);
+    let f = m.flatten();
+    assert(f.size() == 6,   "size=6");
+    assert(f.ndim() == 1,   "ndim=1");
+    assert(f.get(0) == 1.0, "[0]=1");
+    assert(f.get(5) == 6.0, "[5]=6");
+});
+
+test("Tensor.reshape", () => {
+    let t = Tensor.from([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let m = t.reshape([2, 3]);
+    assert(m.ndim() == 2,     "2D after reshape");
+    assert(m.get(0, 0) == 1.0, "[0,0]=1");
+    assert(m.get(0, 2) == 3.0, "[0,2]=3");
+    assert(m.get(1, 0) == 4.0, "[1,0]=4");
+    assert(m.get(1, 2) == 6.0, "[1,2]=6");
+});
+
+// ── Aggregations ──────────────────────────────────────────────────────────────
+
+test("Tensor sum/mean/max/min", () => {
+    let t = Tensor.from([1.0, 2.0, 3.0, 4.0, 5.0]);
+    assert(t.sum()  == 15.0, "sum=15");
+    assert(t.mean() == 3.0,  "mean=3");
+    assert(t.max()  == 5.0,  "max=5");
+    assert(t.min()  == 1.0,  "min=1");
+});
+
+test("Tensor.fill factory", () => {
+    let t = Tensor.fill([4], 7.0);
+    assert(t.size() == 4,   "size=4");
+    assert(t.get(0) == 7.0, "[0]=7");
+    assert(t.get(3) == 7.0, "[3]=7");
+});
+
+test("Tensor.toArray — round-trip", () => {
+    let original = [1.0, 2.0, 3.0];
+    let t = Tensor.from(original);
+    let back = t.toArray();
+    assert(back[0] == 1.0, "[0]");
+    assert(back[1] == 2.0, "[1]");
+    assert(back[2] == 3.0, "[2]");
+    assert(back.length() == 3, "length");
+});
+
+test("Tensor.set — mutate element", () => {
+    let t = Tensor.from([1.0, 2.0, 3.0]);
+    t.set(1, 99.0);
+    assert(t.get(0) == 1.0,  "[0] unchanged");
+    assert(t.get(1) == 99.0, "[1] mutated");
+    assert(t.get(2) == 3.0,  "[2] unchanged");
+});
+
+summary();
