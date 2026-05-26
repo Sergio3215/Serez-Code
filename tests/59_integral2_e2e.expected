@@ -1,0 +1,161 @@
+=== ENUM ===
+true
+E
+W
+N,S,E,W
+4
+true
+=== INTERFACE & ABSTRACT ===
+temp: 36.6 C
+pressure: 1013.25 hPa
+temp
+pressure
+=== SEALED + STATIC ===
+5.0
+0
+10
+true
+=== GETTERS & SETTERS ===
+100.0
+212.0
+0.0
+32.0
+=== SWITCH ===
+A+
+A
+B
+C
+F
+URGENT
+MED
+=== SET ===
+3
+4
+true
+false
+false
+3
+5
+=== DICT ===
+90
+75
+88
+95
+4
+3
+=== ARRAY HOF ===
+2
+20
+5
+2
+55
+8
+true
+true
+false
+1
+9
+5
+3
+=== STRING METHODS ===
+Hello, Serez World!
+HELLO, SEREZ WORLD!
+hello, serez world!
+4
+one
+one | two | three | four
+true
+true
+true
+2
+herlo
+00042
+hi....
+=== MATH NAMESPACE ===
+4
+5
+7
+true
+true
+3.0
+2.0
+true
+true
+1024.0
+9
+1
+=== JSON ===
+42
+42
+[1,2,3]
+10
+20
+=== PIPE OPERATOR ===
+6
+7
+36
+HELLO
+20
+=== CONTROL FLOW ===
+23
+128
+1
+2
+3
+null
+default
+42
+=== BITWISE ===
+15
+255
+240
+16
+32
+255
+=== SPREAD & REST ===
+15
+10
+3
+8
+4
+=== DEFAULT PARAMS ===
+Hello, Alice!
+Hi, Bob!
+9.0
+1024.0
+=== RECURSION ===
+1
+1
+120
+3628800
+0
+1
+13
+55
+=== TENSOR (eye/dot/transpose) ===
+1.0
+1.0
+0.0
+1.0
+4.0
+3.0
+6.0
+32.0
+8.0
+80.0
+6.0
+15.0
+3.0
+5.0
+1.0
+=== GPU (dot/axpy) ===
+20.0
+12.0
+24.0
+36.0
+=== MEMORY.offsetOf ===
+0
+8
+16
+24
+=== DONE ===

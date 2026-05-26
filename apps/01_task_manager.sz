@@ -1,0 +1,184 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK MANAGER — Serez-Code demo app
+// Exercises: enum, class, inheritance, arrays, HOF, try/catch/throw,
+//            closures, static methods, switch, string methods, for loops
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum Priority { Low, Medium, High, Critical }
+enum Status   { Todo, InProgress, Done }
+
+// ── Data model ────────────────────────────────────────────────────────────────
+
+class Task {
+    public Task(int id, string title, string priority) {
+        this.id       = id;
+        this.title    = title;
+        this.priority = priority;
+        this.status   = Status.Todo;
+        this.tags     = [];
+    }
+
+    public void addTag(string tag) {
+        if (!this.tags.includes(tag)) { this.tags.push(tag); }
+    }
+
+    public void markDone()       { this.status = Status.Done; }
+    public void markInProgress() { this.status = Status.InProgress; }
+
+    public bool isDone()    { return this.status == Status.Done; }
+    public bool isPending() { return this.status != Status.Done; }
+    public bool isHot() {
+        return this.priority == Priority.High || this.priority == Priority.Critical;
+    }
+
+    public string display() {
+        let tag_str = this.tags.length > 0 ? " [" + this.tags.join(", ") + "]" : "";
+        return "[{this.status}] #{this.id} {this.title} ({this.priority}){tag_str}";
+    }
+}
+
+class UrgentTask : Task {
+    public UrgentTask(int id, string title, string deadline) {
+        super(id, title, Priority.Critical);
+        this.deadline = deadline;
+    }
+
+    public string display() {
+        return "⚡ [URGENT/{this.status}] #{this.id} {this.title} — deadline: {this.deadline}";
+    }
+}
+
+// ── Priority utilities (static methods) ───────────────────────────────────────
+
+class PriorityUtil {
+    public static int weight(string p) {
+        if (p == Priority.Critical) { return 4; }
+        if (p == Priority.High)     { return 3; }
+        if (p == Priority.Medium)   { return 2; }
+        return 1;
+    }
+
+    public static string badge(p) {
+        switch (p) {
+            case Priority.Critical: { return "🔴"; }
+            case Priority.High:     { return "🟠"; }
+            case Priority.Medium:   { return "🟡"; }
+            default:                { return "🟢"; }
+        }
+    }
+}
+
+// ── Global task store + CRUD functions ───────────────────────────────────────
+// (Global arrays are mutated correctly from functions via index access)
+
+let tasks  = [];
+let seq    = 0;
+
+fn add(string title, priority) {
+    seq++;
+    let t = new Task(seq, title, priority);
+    tasks.push(t);
+    return t;
+}
+
+fn addUrgent(string title, string deadline) {
+    seq++;
+    let t = new UrgentTask(seq, title, deadline);
+    tasks.push(t);
+    return t;
+}
+
+fn void complete(int id) {
+    let n = tasks.length;
+    for (let i = 0; i < n; i++) {
+        if (tasks[i].id == id) { tasks[i].markDone(); }
+    }
+}
+
+fn void start(int id) {
+    let n = tasks.length;
+    for (let i = 0; i < n; i++) {
+        if (tasks[i].id == id) { tasks[i].markInProgress(); }
+    }
+}
+
+fn findById(int id) {
+    let n = tasks.length;
+    for (let i = 0; i < n; i++) {
+        if (tasks[i].id == id) { return tasks[i]; }
+    }
+    throw "Task #{id} not found";
+}
+
+fn void printAll(string project) {
+    out "═══ {project} ═══════════════════════════════════════";
+    for (let t in tasks) {
+        out "  {PriorityUtil.badge(t.priority)} " + t.display();
+    }
+    let done    = tasks.filter(t => t.isDone()).length;
+    let pending = tasks.filter(t => t.isPending()).length;
+    out "──────────────────────────────────────────────────────";
+    out "  {tasks.length} tasks | {done} done | {pending} pending";
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+let t1 = add("Design new syntax",     Priority.High);
+let t2 = add("Write parser tests",    Priority.Medium);
+let t3 = add("Fix arena leak",        Priority.Critical);
+let t4 = add("Update README",         Priority.Low);
+let t5 = add("Performance profiling", Priority.Medium);
+let u1 = addUrgent("Ship beta release", "2026-06-01");
+
+t1.addTag("language");
+t1.addTag("parser");
+t3.addTag("memory");
+t3.addTag("bug");
+
+start(1);
+start(3);
+complete(4);
+complete(2);
+
+printAll("Serez-Code v2.0");
+
+// ── HOF: hot pending tasks ─────────────────────────────────────────────────
+out "";
+out "── Hot unfinished tasks ──────────────────────────────────";
+let hot = tasks.filter(t => t.isHot() && t.isPending());
+if (hot.length == 0) {
+    out "  (none)";
+} else {
+    for (let t in hot) { out "  " + t.display(); }
+}
+
+// ── Reduce: done summary ──────────────────────────────────────────────────
+let done_list = tasks
+    .filter(t => t.isDone())
+    .map(t => t.title)
+    .reduce("Completed: ", (acc, s) => acc + s + "; ");
+out "";
+out done_list;
+
+// ── try/catch ─────────────────────────────────────────────────────────────
+out "";
+out "── Error handling ────────────────────────────────────────";
+try {
+    let bad = findById(999);
+} catch (e) {
+    out "  Caught: {e}";
+}
+
+try {
+    let bad2 = findById(-1);
+} catch (e) {
+    out "  Caught: {e}";
+}
+
+// ── Priority weight report ────────────────────────────────────────────────
+out "";
+out "── Priority weights ──────────────────────────────────────";
+let total_weight = tasks.reduce(0, (acc, t) => acc + PriorityUtil.weight(t.priority));
+out "  Total priority weight: {total_weight}";
+let avg = parseDecimal(total_weight) / parseDecimal(tasks.length);
+out "  Average weight: {avg}";

@@ -1,0 +1,186 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA PIPELINE — Serez-Code demo app
+// Exercises: JSON, File, arrays, dicts, Set, HOF chain, closures,
+//            power/bitwise ops, labeled loops, do-while, spread/rest,
+//            Math, string formatting, nested data structures
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Data generation ───────────────────────────────────────────────────────────
+
+fn [decimal] generateSeries(int n, decimal seed) {
+    let result = [];
+    let x = seed;
+    for (let i = 0; i < n; i++) {
+        // LCG-style pseudo-random sequence
+        x = (x * 1664525.0 + 1013904223.0) % (2.0 ** 31.0);
+        let normalized = (x / (2.0 ** 31.0)) * 100.0;
+        result.push(Math.round(normalized * 10.0) / 10.0);
+    }
+    return result;
+}
+
+let x = "1";
+x=2;
+out x;
+
+fn [any] buildRecords(int n) {
+    let names  = ["Alice", "Bob", "Carol", "Dave", "Eve",
+                  "Frank", "Grace", "Hank", "Iris", "Jack"];
+    let depts  = ["Eng", "Sales", "HR", "Finance", "Ops"];
+    let scores = generateSeries(n, 42.0);
+    let records = [];
+    for (let i = 0; i < n; i++) {
+        let name  = names[i % names.length];
+        let dept  = depts[i % depts.length];
+        let score = scores[i];
+        let active = (i % 3) != 0;
+        records.push([name, dept, score, active]);
+    }
+    return records;
+}
+
+// ── Pipeline stages ───────────────────────────────────────────────────────────
+
+fn [any] filterActive([any] records) {
+    return records.filter(r => r[3] == true);
+}
+
+fn [any] filterScore([any] records, decimal threshold) {
+    return records.filter(r => r[2] >= threshold);
+}
+
+fn [any] sortByScore([any] records) {
+    let copy = records.slice(0, records.length);
+    copy.sort((a, b) => b[2] - a[2]);
+    return copy;
+}
+
+fn [string] extractNames([any] records) {
+    return records.map(r => r[0]);
+}
+
+fn void groupByDept([any] records) {
+    let groups <string, int> = ();
+    for (let r in records) {
+        let dept  = r[1];
+        let count = groups[dept] ?? 0;
+        groups[dept] = count + 1;
+    }
+    out "  Department counts:";
+    let keys = groups.toList();
+    for (let k in keys) {
+        out "    {k}: {groups[k]}";
+    }
+}
+
+fn decimal avgScore([any] records) {
+    if (records.length == 0) { return 0.0; }
+    let total = records.reduce(0.0, (acc, r) => acc + r[2]);
+    return total / parseDecimal(records.length);
+}
+
+// ── Bit manipulation: encode flags ────────────────────────────────────────────
+
+const FLAG_ACTIVE   = 1;    // bit 0
+const FLAG_VERIFIED = 2;    // bit 1
+const FLAG_PREMIUM  = 4;    // bit 2
+const FLAG_ADMIN    = 8;    // bit 3
+
+fn int encodeFlags(bool active, bool verified, bool premium, bool admin) {
+    let flags = 0;
+    if (active)   { flags = flags | FLAG_ACTIVE;   }
+    if (verified) { flags = flags | FLAG_VERIFIED; }
+    if (premium)  { flags = flags | FLAG_PREMIUM;  }
+    if (admin)    { flags = flags | FLAG_ADMIN;    }
+    return flags;
+}
+
+fn string decodeFlags(int flags) {
+    let parts = [];
+    if ((flags & FLAG_ACTIVE)   != 0) { parts.push("active");   }
+    if ((flags & FLAG_VERIFIED) != 0) { parts.push("verified"); }
+    if ((flags & FLAG_PREMIUM)  != 0) { parts.push("premium");  }
+    if ((flags & FLAG_ADMIN)    != 0) { parts.push("admin");    }
+    return parts.length > 0 ? parts.join("|") : "none";
+}
+
+// ── JSON serialization ────────────────────────────────────────────────────────
+
+fn void saveTopN([any] records, int n, string path) {
+    let top     = sortByScore(records).slice(0, n);
+    let payload = top.map(r => "[\"" + r[0] + "\",\"" + r[1] + "\"," + r[2] + "]");
+    let json    = "[" + payload.join(",") + "]";
+    File.write(path, json);
+    out "  Wrote {top.length} records to {path}";
+
+    let raw    = File.read(path);
+    let parsed = JSON.parse(raw);
+    out "  Top record from file: {parsed[0][0]} ({parsed[0][1]}) — score {parsed[0][2]}";
+}
+
+// ── Deduplication via Set ─────────────────────────────────────────────────────
+
+fn void uniqueNames([any] records) {
+    let all   = extractNames(records);
+    let uniq  = new Set(all);
+    out "  Total names: {all.length}  |  Unique: {uniq.size}";
+    let sep = ", ";
+    out "  Names: {uniq.toArray().sort().join(sep)}";
+}
+
+// ── Main pipeline ─────────────────────────────────────────────────────────────
+
+out "═══ Data Pipeline ═══════════════════════════════════";
+let raw = buildRecords(20);
+out "  Generated {raw.length} raw records";
+
+out "";
+out "── Stage 1: active filter ───────────────────────────";
+let active = filterActive(raw);
+out "  Active records: {active.length}";
+
+out "";
+out "── Stage 2: score >= 40 ─────────────────────────────";
+let qualified = filterScore(active, 40.0);
+out "  Qualified: {qualified.length}";
+out "  Avg score: {avgScore(qualified)}";
+
+out "";
+out "── Stage 3: group by dept ───────────────────────────";
+groupByDept(qualified);
+
+out "";
+out "── Stage 4: top 5 by score ──────────────────────────";
+let top5 = sortByScore(qualified).slice(0, 5);
+for (let r in top5) {
+    let name  = r[0].padEnd(8, " ");
+    let dept  = r[1].padEnd(8, " ");
+    let score = r[2];
+    out "  {name} {dept} {score}";
+}
+
+out "";
+out "── Stage 5: unique names ────────────────────────────";
+uniqueNames(raw);
+
+out "";
+out "── Stage 6: JSON save/load ──────────────────────────";
+saveTopN(qualified, 3, "pipeline_output.json");
+
+out "";
+out "── Bitwise flag encoding ────────────────────────────";
+let f1 = encodeFlags(true, true, false, false);
+let f2 = encodeFlags(true, false, true, true);
+let f3 = encodeFlags(false, false, false, false);
+out "  User A flags: {f1} (0b{f1}) → {decodeFlags(f1)}";
+out "  User B flags: {f2}          → {decodeFlags(f2)}";
+out "  User C flags: {f3}          → {decodeFlags(f3)}";
+out "  A & B = {f1 & f2} → {decodeFlags(f1 & f2)}";
+out "  A | B = {f1 | f2} → {decodeFlags(f1 | f2)}";
+out "  A ^ B = {f1 ^ f2} → {decodeFlags(f1 ^ f2)}";
+
+out "";
+out "── Power ops ────────────────────────────────────────";
+out "  2^10 = {2 ** 10}";
+out "  Hash-bucket for id 137 (size 16): {137 & 15}";
+out "  Page of record 500 (page-size 64): {500 >> 6}";

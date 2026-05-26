@@ -1,0 +1,156 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// STATISTICS — Serez-Code demo app
+// Exercises: arrays, Math namespace, HOF (map/filter/reduce), closures,
+//            default params, named functions, decimal arithmetic, sort
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Core statistical functions ────────────────────────────────────────────────
+
+fn decimal sum([decimal] data) {
+    return data.reduce(0.0, (acc, x) => acc + x);
+}
+
+fn decimal mean([decimal] data) {
+    return sum(data) / parseDecimal(data.length);
+}
+
+fn decimal variance([decimal] data) {
+    let m = mean(data);
+    let sq = data.map(x => (x - m) * (x - m));
+    return sum(sq) / parseDecimal(data.length);
+}
+
+fn decimal stddev([decimal] data) {
+    return Math.sqrt(variance(data));
+}
+
+fn decimal median([decimal] data) {
+    let sorted = data.slice(0, data.length);
+    sorted.sort();
+    let n = sorted.length;
+    if (n % 2 == 0) {
+        return (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0;
+    }
+    return sorted[n / 2];
+}
+
+fn decimal arr_min([decimal] data) {
+    return data.reduce(data[0], (acc, x) => x < acc ? x : acc);
+}
+
+fn decimal arr_max([decimal] data) {
+    return data.reduce(data[0], (acc, x) => x > acc ? x : acc);
+}
+
+fn decimal percentile([decimal] data, decimal p) {
+    let sorted = data.slice(0, data.length);
+    sorted.sort();
+    let idx = Math.floor(p / 100.0 * parseDecimal(sorted.length - 1));
+    return sorted[idx];
+}
+
+fn void report(string label, [decimal] data) {
+    let n    = data.length;
+    let m    = mean(data);
+    let s    = stddev(data);
+    let lo   = arr_min(data);
+    let hi   = arr_max(data);
+    let med  = median(data);
+    let p25  = percentile(data, 25.0);
+    let p75  = percentile(data, 75.0);
+    let iqr  = p75 - p25;
+
+    out "═══ {label} ══════════════════════";
+    out "  N:        {n}";
+    out "  Sum:      {sum(data)}";
+    out "  Mean:     {m}";
+    out "  Median:   {med}";
+    out "  StdDev:   {s}";
+    out "  Min/Max:  {lo} / {hi}";
+    out "  Range:    {hi - lo}";
+    out "  P25/P75:  {p25} / {p75}";
+    out "  IQR:      {iqr}";
+
+    let outliers = data.filter(x => x < m - 2.0 * s || x > m + 2.0 * s);
+    out "  Outliers: {outliers}";
+}
+
+// ── Histogram ─────────────────────────────────────────────────────────────────
+
+fn void histogram([decimal] data, int bins) {
+    let lo    = arr_min(data);
+    let hi    = arr_max(data);
+    let width = (hi - lo) / parseDecimal(bins);
+
+    out "── Histogram ({bins} bins) ──────────────────────────";
+    for (let i = 0; i < bins; i++) {
+        let from  = lo + parseDecimal(i) * width;
+        let to    = from + width;
+        let count = data.filter(x => x >= from && x < to).length;
+        let bar   = "█" * count;
+        let from_s = from.toString().substring(0, 5);
+        let to_s   = to.toString().substring(0, 5);
+        out "  [{from_s}-{to_s}] {bar} {count}";
+    }
+}
+
+// ── Moving average ────────────────────────────────────────────────────────────
+
+fn [decimal] movingAvg([decimal] data, int window) {
+    let result = [];
+    let n = data.length;
+    for (let i = 0; i <= n - window; i++) {
+        let slice = data.slice(i, i + window);
+        result.push(mean(slice));
+    }
+    return result;
+}
+
+// ── Datasets ──────────────────────────────────────────────────────────────────
+
+let temps = [22.5, 18.0, 25.3, 30.1, 19.8, 23.7, 28.4, 21.0, 24.6, 17.2,
+             26.1, 29.5, 16.8, 23.3, 31.2, 20.7, 24.9, 18.5, 27.6, 22.0];
+
+let scores = [85.0, 92.0, 78.0, 95.0, 88.0, 72.0, 91.0, 83.0, 89.0, 76.0,
+              94.0, 68.0, 87.0, 90.0, 74.0, 93.0, 81.0, 77.0, 96.0, 82.0];
+
+report("Daily Temperatures (°C)", temps);
+out "";
+report("Student Scores", scores);
+out "";
+
+histogram(temps, 5);
+out "";
+
+// ── Moving average of temperatures ────────────────────────────────────────────
+out "── 3-day moving average (temperatures) ─────────────";
+let ma3 = movingAvg(temps, 3);
+for (let i = 0; i < ma3.length; i++) {
+    let val = ma3[i].toString().substring(0, 6);
+    out "  day {i + 3}: {val}";
+}
+
+// ── Normalisation (z-scores) ──────────────────────────────────────────────────
+out "";
+out "── Z-scores for scores (first 5) ───────────────────";
+let m  = mean(scores);
+let sd = stddev(scores);
+let zscores = scores.map(x => (x - m) / sd);
+for (let i = 0; i < 5; i++) {
+    let z = zscores[i].toString().substring(0, 6);
+    out "  score={scores[i]}  z={z}";
+}
+
+// ── Correlation (Pearson, simplified) ────────────────────────────────────────
+out "";
+out "── Pearson r: scores vs index ───────────────────────";
+let n   = parseDecimal(scores.length);
+let idx = [];
+for (let i = 0; i < scores.length; i++) { idx.push(parseDecimal(i)); }
+let mi  = mean(idx);
+let ms  = mean(scores);
+let num = idx.map((x, i) => (x - mi) * (scores[i] - ms)).reduce(0.0, (a, v) => a + v);
+let di  = Math.sqrt(idx.map(x => (x - mi) ** 2.0).reduce(0.0, (a, v) => a + v));
+let ds  = Math.sqrt(scores.map(x => (x - ms) ** 2.0).reduce(0.0, (a, v) => a + v));
+let r   = num / (di * ds);
+out "  r = {r}";

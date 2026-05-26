@@ -1,0 +1,469 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST INTEGRAL 2 — Serez-Code v2.1.0
+// Covers features NOT exercised in 58_integral_e2e.sz:
+//   enum, interface, abstract/sealed classes, static methods, getters/setters,
+//   switch, Set, Dict, array HOF, string methods, Math, JSON, pipe |>,
+//   labeled loops, do-while, optional chaining ?., null coalescing ??,
+//   bitwise ops, spread/rest, default params, recursion,
+//   Tensor (eye/dot/transpose), GPU (dot/axpy), Memory.offsetOf
+// ─────────────────────────────────────────────────────────────────────────────
+
+out "=== ENUM ===";
+
+enum Direction { North, South, East, West }
+enum Priority  { Low, Medium, High, Critical }
+
+let dir = Direction.North;
+out (dir == Direction.North);
+
+fn string dirName(any d) {
+    return match d {
+        Direction.North => "N"
+        Direction.South => "S"
+        Direction.East  => "E"
+        Direction.West  => "W"
+        _ => "?"
+    };
+}
+out dirName(Direction.East);
+out dirName(Direction.West);
+
+let dirs = [Direction.North, Direction.South, Direction.East, Direction.West];
+let names = dirs.map(d => dirName(d));
+out names.join(",");
+
+// Priority ranking
+fn int priorityScore(any p) {
+    return match p {
+        Priority.Low      => 1
+        Priority.Medium   => 2
+        Priority.High     => 3
+        Priority.Critical => 4
+        _ => 0
+    };
+}
+out priorityScore(Priority.Critical);
+out (priorityScore(Priority.High) > priorityScore(Priority.Low));
+
+out "=== INTERFACE & ABSTRACT ===";
+
+interface Measurable {
+    value: decimal;
+    unit:  string;
+}
+
+abstract class Sensor {
+    public string label() {
+        return "sensor";
+    }
+    public string format() {
+        return "{this.label()}: {this.value} {this.unit}";
+    }
+}
+
+class TempSensor : Sensor {
+    public TempSensor(decimal val) {
+        this.value = val;
+        this.unit  = "C";
+    }
+    public string label() { return "temp"; }
+}
+
+class PressureSensor : Sensor {
+    public PressureSensor(decimal val) {
+        this.value = val;
+        this.unit  = "hPa";
+    }
+    public string label() { return "pressure"; }
+}
+
+let ts = new TempSensor(36.6);
+let ps = new PressureSensor(1013.25);
+out ts.format();
+out ps.format();
+out ts.label();
+out ps.label();
+
+out "=== SEALED + STATIC ===";
+
+sealed class MathUtils {
+    public static decimal lerp(decimal a, decimal b, decimal t) {
+        return a + (b - a) * t;
+    }
+    public static int clampInt(int v, int lo, int hi) {
+        if (v < lo) { return lo; }
+        if (v > hi) { return hi; }
+        return v;
+    }
+    public static decimal hypot(decimal x, decimal y) {
+        return Math.sqrt(x * x + y * y);
+    }
+}
+
+out MathUtils.lerp(0.0, 10.0, 0.5);
+out MathUtils.clampInt(-5, 0, 10);
+out MathUtils.clampInt(15, 0, 10);
+out (MathUtils.hypot(3.0, 4.0) > 4.99 && MathUtils.hypot(3.0, 4.0) < 5.01);
+
+out "=== GETTERS & SETTERS ===";
+
+class Temperature {
+    public Temperature(decimal celsius) {
+        this._c = celsius;
+    }
+    public get decimal celsius()    { return this._c; }
+    public get decimal fahrenheit() { return this._c * 9.0 / 5.0 + 32.0; }
+    public set celsius(decimal v)   { this._c = v; }
+}
+
+let t = new Temperature(100.0);
+out t.celsius;
+out t.fahrenheit;
+t.celsius = 0.0;
+out t.celsius;
+out t.fahrenheit;
+
+out "=== SWITCH ===";
+
+fn string grade(int score) {
+    switch (score / 10) {
+        case 10: { return "A+"; }
+        case 9:  { return "A"; }
+        case 8:  { return "B"; }
+        case 7:  { return "C"; }
+        default: { return "F"; }
+    }
+}
+out grade(100);
+out grade(95);
+out grade(83);
+out grade(71);
+out grade(50);
+
+// Switch on enum
+fn string urgency(any p) {
+    switch (p) {
+        case Priority.Critical: { return "URGENT"; }
+        case Priority.High:     { return "HIGH"; }
+        case Priority.Medium:   { return "MED"; }
+        default:                { return "LOW"; }
+    }
+}
+out urgency(Priority.Critical);
+out urgency(Priority.Medium);
+
+out "=== SET ===";
+
+let s = new Set([1, 2, 3, 2, 1]);
+out s.size();
+s.add(4);
+s.add(2);
+out s.size();
+out s.has(3);
+out s.has(99);
+s.remove(1);
+out s.has(1);
+out s.size();
+
+// Union pattern: merge two sets
+let s2 = new Set([3, 4, 5, 6]);
+for (let v in s2.toArray()) {
+    s.add(v);
+}
+out s.size();
+
+out "=== DICT ===";
+
+let scores <string, int> = ({"Alice", 90}, {"Bob", 75}, {"Carol", 88});
+out scores["Alice"];
+out scores["Bob"];
+out scores["Carol"];
+scores.Add({"Dave", 95});
+out scores["Dave"];
+out scores.length();
+scores.Remove("Bob");
+out scores.length();
+
+out "=== ARRAY HOF ===";
+
+let nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+// map
+let doubled = nums.map(x => x * 2);
+out doubled[0];
+out doubled[9];
+
+// filter
+let evens = nums.filter(x => x % 2 == 0);
+out evens.length();
+out evens[0];
+
+// reduce
+let total = nums.reduce(0, (acc, x) => acc + x);
+out total;
+
+// find / findIndex
+let first_big = nums.find(x => x > 7);
+out first_big;
+
+// some / every
+out nums.some(x => x > 9);
+out nums.every(x => x > 0);
+out nums.every(x => x > 5);
+
+// sort
+let unsorted = [5, 3, 8, 1, 9, 2];
+let sorted = unsorted.sort((a, b) => a - b);
+out sorted[0];
+out sorted[5];
+
+// flat / flatMap
+let nested = [[1, 2], [3, 4], [5]];
+let flat = nested.flat();
+out flat.length();
+out flat[2];
+
+out "=== STRING METHODS ===";
+
+let s3 = "  Hello, Serez World!  ";
+out s3.trim();
+out s3.trim().toUpperCase();
+out s3.trim().toLowerCase();
+
+let csv = "one,two,three,four";
+let parts = csv.split(",");
+out parts.length();
+out parts[0];
+out parts.join(" | ");
+
+out "hello".includes("ell");
+out "hello".startsWith("hel");
+out "hello".endsWith("llo");
+out "hello".indexOf("ll");
+out "hello".replace("l", "r");
+out "42".padStart(5, "0");
+out "hi".padEnd(6, ".");
+
+out "=== MATH NAMESPACE ===";
+
+out Math.floor(4.9);
+out Math.ceil(4.1);
+out Math.abs(-7);
+out (Math.sin(0.0) > -0.001 && Math.sin(0.0) < 0.001);
+out (Math.cos(0.0) > 0.999 && Math.cos(0.0) < 1.001);
+out Math.log2(8.0);
+out Math.log10(100.0);
+out (Math.PI > 3.14 && Math.PI < 3.15);
+out (Math.E > 2.71 && Math.E < 2.72);
+out Math.pow(2.0, 10.0);
+out Math.max(3, 7, 1, 9, 2);
+out Math.min(3, 7, 1, 9, 2);
+
+out "=== JSON ===";
+
+let obj_str = JSON.stringify(42);
+out obj_str;
+out JSON.parse("42");
+
+let arr_str = JSON.stringify([1, 2, 3]);
+out arr_str;
+
+let parsed = JSON.parse("[10, 20]");
+out parsed[0];
+out parsed[1];
+
+out "=== PIPE OPERATOR ===";
+
+fn double(int n) { return n * 2; }
+fn inc(int n)    { return n + 1; }
+fn square(int n) { return n * n; }
+
+out 3 |> double;
+out 3 |> double |> inc;
+out 5 |> inc |> square;
+out "hello" |> s => s.toUpperCase();
+
+let pipeline = [1, 2, 3, 4, 5]
+    |> arr => arr.filter(x => x % 2 == 0)
+    |> arr => arr.map(x => x * x)
+    |> arr => arr.reduce(0, (a, x) => a + x);
+out pipeline;
+
+out "=== CONTROL FLOW ===";
+
+// Labeled loops
+let found = -1;
+outer: for (let i = 0; i < 5; i++) {
+    for (let j = 0; j < 5; j++) {
+        if (i * j == 6) {
+            found = i * 10 + j;
+            break outer;
+        }
+    }
+}
+out found;
+
+// Do-while
+let n = 1;
+do {
+    n = n * 2;
+} while (n < 100);
+out n;
+
+// Optional chaining ?.
+class Node {
+    public Node(int v, any next) {
+        this.v    = v;
+        this.next = next;
+    }
+}
+let head = new Node(1, new Node(2, new Node(3, null)));
+out head?.v;
+out head?.next?.v;
+out head?.next?.next?.v;
+out head?.next?.next?.next?.v;
+
+// Null coalescing ??
+let maybe = null;
+out (maybe ?? "default");
+let real = 42;
+out (real ?? 0);
+
+out "=== BITWISE ===";
+
+out (0xFF & 0x0F);
+out (0xF0 | 0x0F);
+out (0xFF ^ 0x0F);
+out (1 << 4);
+out (256 >> 3);
+out (~0 & 0xFF);
+
+out "=== SPREAD & REST ===";
+
+fn int sumAll(...nums) {
+    return nums.reduce(0, (acc, x) => acc + x);
+}
+out sumAll(1, 2, 3, 4, 5);
+
+fn any headTail(int first, ...rest) {
+    return [first, rest.length()];
+}
+let ht = headTail(10, 20, 30, 40);
+out ht[0];
+out ht[1];
+
+let base = [1, 2, 3];
+let extended = [...base, 4, 5, ...base];
+out extended.length();
+out extended[3];
+
+out "=== DEFAULT PARAMS ===";
+
+fn string greet(string name, string greeting = "Hello") {
+    return "{greeting}, {name}!";
+}
+out greet("Alice");
+out greet("Bob", "Hi");
+
+fn decimal power(decimal base, decimal exp = 2.0) {
+    return Math.pow(base, exp);
+}
+out power(3.0);
+out power(2.0, 10.0);
+
+out "=== RECURSION ===";
+
+fn int factorial(int n) {
+    if (n <= 1) { return 1; }
+    return n * factorial(n - 1);
+}
+out factorial(0);
+out factorial(1);
+out factorial(5);
+out factorial(10);
+
+fn int fib(int n) {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+out fib(0);
+out fib(1);
+out fib(7);
+out fib(10);
+
+out "=== TENSOR (eye/dot/transpose) ===";
+
+// Identity matrix
+let eye3 = Tensor.eye(3);
+out eye3.get(0, 0);
+out eye3.get(1, 1);
+out eye3.get(0, 1);
+
+// Transpose
+let m = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+let mt = m.transpose();
+out mt.get(0, 0);
+out mt.get(0, 1);
+out mt.get(2, 0);
+out mt.get(2, 1);
+
+// Dot product (1D)
+let u = Tensor.from([1.0, 2.0, 3.0]);
+let v = Tensor.from([4.0, 5.0, 6.0]);
+out u.dot(v);
+
+// element-wise sub, mul, div
+let a2 = Tensor.from([10.0, 20.0, 30.0]);
+let b2 = Tensor.from([2.0, 4.0, 5.0]);
+let sub_t = a2.sub(b2);
+let mul_t = a2.mul(b2);
+let div_t = a2.div(b2);
+out sub_t.get(0);
+out mul_t.get(1);
+out div_t.get(2);
+
+// sum / mean / max / min
+let t2 = Tensor.from([1.0, 2.0, 3.0, 4.0, 5.0]);
+out t2.sum();
+out t2.mean();
+out t2.max();
+out t2.min();
+
+out "=== GPU (dot/axpy) ===";
+
+// GPU dot product
+let ga = GPU.createBufferFromArray([1.0, 2.0, 3.0, 4.0]);
+let gb = GPU.createBufferFromArray([4.0, 3.0, 2.0, 1.0]);
+let dot_result = GPU.dot(ga, gb);
+out dot_result;
+
+// GPU axpy: y = a*x + y
+let gx = GPU.createBufferFromArray([1.0, 2.0, 3.0]);
+let gy = GPU.createBufferFromArray([10.0, 20.0, 30.0]);
+let axpy_out = GPU.axpy(2.0, gx, gy);
+let axpy_data = GPU.readBuffer(axpy_out);
+out axpy_data[0];
+out axpy_data[1];
+out axpy_data[2];
+
+GPU.freeBuffer(ga);
+GPU.freeBuffer(gb);
+GPU.freeBuffer(gx);
+GPU.freeBuffer(gy);
+GPU.freeBuffer(axpy_out);
+
+out "=== MEMORY.offsetOf ===";
+
+class Particle {
+    x: decimal = 0.0;
+    y: decimal = 0.0;
+    z: decimal = 0.0;
+    mass: decimal = 1.0;
+}
+
+out Memory.offsetOf("Particle", "x");
+out Memory.offsetOf("Particle", "y");
+out Memory.offsetOf("Particle", "z");
+out Memory.offsetOf("Particle", "mass");
+
+out "=== DONE ===";

@@ -1,0 +1,166 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// TEXT ANALYZER — Serez-Code demo app
+// Exercises: string methods (split/trim/upper/lower/replace/padStart/indexOf),
+//            dicts, for-in over strings and arrays, HOF, closures,
+//            optional chaining, File namespace, JSON
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Token counting ────────────────────────────────────────────────────────────
+
+fn [string] tokenize(string text) {
+    let cleaned = text.toLowerCase().replace(",", "").replace(".", "")
+                      .replace("!", "").replace("?", "").replace(";", "")
+                      .replace(":", "").replace("(", "").replace(")", "");
+    let words = cleaned.split(" ");
+    return words.filter(w => w.trim() != "");
+}
+
+fn void wordFrequency(string text) {
+    let words = tokenize(text);
+    let freq <string, int> = ();
+    for (let w in words) {
+        let cur = freq[w] ?? 0;
+        freq[w] = cur + 1;
+    }
+
+    out "── Word frequencies ─────────────────────────────────";
+    let pairs = freq.toArray();
+    pairs.sort((a, b) => b[1] - a[1]);
+    let top = pairs.slice(0, 10);
+    for (let pair in top) {
+        let word  = pair[0].padEnd(20, " ");
+        let count = pair[1];
+        let bar   = "▪" * count;
+        out "  {word} {bar} {count}";
+    }
+}
+
+// ── Text statistics ───────────────────────────────────────────────────────────
+
+fn void textStats(string text) {
+    let words     = tokenize(text);
+    let sentences = text.split(".").filter(s => s.trim() != "");
+    let chars     = text.replace(" ", "");
+
+    let total_chars    = text.length;
+    let total_words    = words.length;
+    let total_sents    = sentences.length;
+    let unique_words   = new Set(words).size;
+    let avg_word_len   = words.reduce(0, (acc, w) => acc + w.length) / total_words;
+    let avg_sent_words = total_sents > 0 ? total_words / total_sents : 0;
+
+    out "── Text statistics ──────────────────────────────────";
+    out "  Characters (total):   {total_chars}";
+    out "  Characters (no sp):   {chars.length}";
+    out "  Words:                {total_words}";
+    out "  Unique words:         {unique_words}";
+    out "  Sentences:            {total_sents}";
+    out "  Avg word length:      {avg_word_len}";
+    out "  Avg words/sentence:   {avg_sent_words}";
+
+    // Lexical diversity
+    let diversity = parseDecimal(unique_words) / parseDecimal(total_words);
+    out "  Lexical diversity:    {diversity}";
+}
+
+// ── Caesar cipher ────────────────────────────────────────────────────────────
+
+fn string caesar(string text, int shift) {
+    let alphabet = "abcdefghijklmnopqrstuvwxyz";
+    let result   = "";
+    for (let c in text.toLowerCase()) {
+        let idx = alphabet.indexOf(c);
+        if (idx >= 0) {
+            let new_idx = (idx + shift) % 26;
+            result = result + alphabet.charAt(new_idx);
+        } else {
+            result = result + c;
+        }
+    }
+    return result;
+}
+
+// ── Palindrome check ──────────────────────────────────────────────────────────
+
+fn bool isPalindrome(string s) {
+    let clean = s.toLowerCase().replace(" ", "").replace(",", "").replace(".", "");
+    let n     = clean.length;
+    for (let i = 0; i < n / 2; i++) {
+        if (clean.charAt(i) != clean.charAt(n - 1 - i)) { return false; }
+    }
+    return true;
+}
+
+// ── Sentence builder ──────────────────────────────────────────────────────────
+
+fn string titleCase(string text) {
+    let words = text.split(" ");
+    let result = words.map(w => {
+        if (w.length == 0) { return w; }
+        return w.charAt(0).toUpperCase() + w.substring(1);
+    });
+    return result.join(" ");
+}
+
+fn string truncate(string text, int max_len) {
+    if (text.length <= max_len) { return text; }
+    return text.substring(0, max_len - 3) + "...";
+}
+
+// ── File + JSON round-trip ────────────────────────────────────────────────────
+
+fn void saveAnalysis(string path, string text) {
+    let words      = tokenize(text);
+    let word_count = words.length;
+    let char_count = text.length;
+    let stats      = "words:" + word_count + " chars:" + char_count;
+    File.write(path, stats);
+    out "  Saved to {path}";
+    let loaded = File.read(path);
+    out "  Read back: {loaded}";
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+let sample = "The quick brown fox jumps over the lazy dog. The dog barked loudly. The fox ran away quickly. A quick brown dog outpaced the lazy fox.";
+
+textStats(sample);
+out "";
+wordFrequency(sample);
+
+// ── Caesar cipher ─────────────────────────────────────────────────────────────
+out "";
+out "── Caesar cipher (shift=3) ──────────────────────────";
+let msg       = "hello world";
+let encrypted = caesar(msg, 3);
+let decrypted = caesar(encrypted, 23);
+out "  Original:  {msg}";
+out "  Encrypted: {encrypted}";
+out "  Decrypted: {decrypted}";
+
+// ── Palindromes ───────────────────────────────────────────────────────────────
+out "";
+out "── Palindrome check ─────────────────────────────────";
+let words_to_check = ["racecar", "hello", "level", "world", "madam", "serez"];
+for (let w in words_to_check) {
+    let result = isPalindrome(w) ? "✓ palindrome" : "✗ not palindrome";
+    let padded = w.padEnd(10);
+    out "  {padded} → {result}";
+}
+
+// ── Title case + truncate ─────────────────────────────────────────────────────
+out "";
+out "── Text transformations ─────────────────────────────";
+let titles = ["the art of computer programming",
+              "a brief history of time",
+              "serez-code: a hand-crafted language"];
+for (let t in titles) {
+    let tc  = titleCase(t);
+    let tr  = truncate(tc, 30);
+    out "  {tr}";
+}
+
+// ── File I/O ──────────────────────────────────────────────────────────────────
+out "";
+out "── File I/O ─────────────────────────────────────────";
+saveAnalysis("analysis_output.txt", sample);

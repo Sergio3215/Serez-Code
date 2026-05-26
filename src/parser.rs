@@ -2760,6 +2760,27 @@ impl Parser {
     fn parse_single_match_pattern(&mut self) -> Option<MatchPattern> {
         match self.current_token.token_type {
             TokenType::Ident if self.current_token.literal == "_" => Some(MatchPattern::Wildcard),
+            TokenType::Ident if self.peek_token.token_type == TokenType::Dot => {
+                // Enum.Variant pattern — e.g. Direction.North
+                let name = self.current_token.literal.clone();
+                self.next_token(); // consume '.'
+                if !self.peek_token_is_name() {
+                    self.parser_error("Expected variant name after '.' in match pattern");
+                    return None;
+                }
+                self.next_token(); // advance to variant name
+                let variant = self.current_token.literal.clone();
+                let expr = Expression::DotCall(DotCallExpression {
+                    object: Box::new(Expression::Identifier(name)),
+                    method: variant,
+                    arguments: vec![],
+                    has_parens: false,
+                    is_optional: false,
+                    line: 0,
+                    column: 0,
+                });
+                Some(MatchPattern::Literal(expr))
+            }
             TokenType::Ident => Some(MatchPattern::Binding(self.current_token.literal.clone())),
             TokenType::Int => {
                 let n: i64 = self.current_token.literal.parse().ok()?;
