@@ -11,6 +11,7 @@ implementacion_clases.md
 /.claude/
 !tests/*.sz
 !apps/*.sz
+!benchmarks/*.sz
 tests/_*.sz
 merge.ps1
 mergeFromMain.ps1

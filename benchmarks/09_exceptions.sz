@@ -1,0 +1,19 @@
+// BENCH 09: Exception Handling
+// 4 000 iterations; every 7th throws a string exception (~571 exceptions total).
+// Exercises: try/catch dispatch ratio, stack unwind cost vs. normal path.
+fn int process(int n) {
+    if (n % 7 == 0) { throw "divisible by 7: " + n; }
+    return n * n + n * 3 + 1;
+}
+
+let sum    = 0;
+let thrown = 0;
+for (let i = 1; i <= 4000; i = i + 1) {
+    try {
+        sum = sum + process(i);
+    } catch (e) {
+        thrown = thrown + 1;
+    }
+}
+out sum % 1000003;
+out thrown;   // floor(4000/7) = 571

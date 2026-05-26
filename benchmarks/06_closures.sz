@@ -1,0 +1,21 @@
+// BENCH 06: Closures
+// 80 distinct closures, each called 100 times via a composed pipeline.
+// Exercises: closure creation, captured-variable reads, compose overhead.
+fn any make_linear(int base, int step) {
+    return x => x * step + base;
+}
+
+fn any compose(any f, any g) {
+    return x => f(g(x));
+}
+
+let total = 0;
+for (let i = 1; i <= 80; i = i + 1) {
+    let f = make_linear(i,     2);
+    let g = make_linear(i * 3, 1);
+    let h = compose(f, g);   // h(x) = (x*1 + i*3)*2 + i = 2x + 7i
+    for (let j = 1; j <= 100; j = j + 1) {
+        total = total + h(j);
+    }
+}
+out total % 1000003;

@@ -1,0 +1,31 @@
+// BENCH 10: Higher-Order Function Pipelines
+// Four chained map/filter/reduce/sort pipelines on an 800-element array.
+// Exercises: HOF call overhead, lambda allocation, chained intermediate arrays.
+let data = [];
+for (let i = 1; i <= 800; i = i + 1) {
+    data.push(i);
+}
+
+// Pipeline 1: square → keep odd squares → sum
+let p1 = data
+    .map(x => x * x)
+    .filter(x => x % 2 == 1)
+    .reduce(0, (acc, x) => acc + x);
+out p1 % 1000003;
+
+// Pipeline 2: ×3 → keep multiples of 5 → sum
+let p2 = data.map(x => x * 3).filter(x => x % 5 == 0);
+let p2_sum = p2.reduce(0, (acc, x) => acc + x);
+out p2_sum % 1000003;
+
+// Pipeline 3: sort descending → sum top 20
+let desc  = data.sort((a, b) => b - a);
+let top20 = 0;
+for (let i = 0; i < 20; i = i + 1) {
+    top20 = top20 + desc[i];
+}
+out top20;   // 800+799+...+781 = 15810
+
+// Pipeline 4: +100 → ×2 → keep divisible by 3
+let p4 = data.map(x => x + 100).map(x => x * 2).filter(x => x % 3 == 0);
+out p4.length();

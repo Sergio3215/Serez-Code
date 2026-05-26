@@ -1,0 +1,53 @@
+// BENCH 07: OOP — Classes, Inheritance, Polymorphism
+// 1 200 objects across 3 concrete subclasses.
+// Exercises: new, field access, method override dispatch, array of base-type.
+class Animal {
+    public Animal(string name, int weight) {
+        this.name   = name;
+        this.weight = weight;
+    }
+    public string sound() { return "..."; }
+    public int calories_per_day() { return this.weight * 2; }
+    public string describe() {
+        return this.name + " [" + this.sound() + "] " + this.calories_per_day() + " cal";
+    }
+}
+
+class Dog : Animal {
+    public Dog(string name, int weight) {
+        super(name, weight);
+    }
+    public string sound() { return "Woof"; }
+    public int calories_per_day() { return this.weight * 3; }
+}
+
+class Cat : Animal {
+    public Cat(string name, int weight) {
+        super(name, weight);
+    }
+    public string sound() { return "Meow"; }
+    public int calories_per_day() { return this.weight * 2 + 50; }
+}
+
+class Bird : Animal {
+    public Bird(string name, int weight) {
+        super(name, weight);
+    }
+    public string sound() { return "Tweet"; }
+    public int calories_per_day() { return this.weight * 4; }
+}
+
+let animals = [];
+for (let i = 0; i < 1200; i = i + 1) {
+    let r = i % 3;
+    if (r == 0) { animals.push(new Dog("Dog"   + i, 20 + i % 30)); }
+    if (r == 1) { animals.push(new Cat("Cat"   + i,  5 + i % 10)); }
+    if (r == 2) { animals.push(new Bird("Bird" + i,  1 + i %  5)); }
+}
+
+let total_cal = 0;
+for (let i = 0; i < animals.length(); i = i + 1) {
+    total_cal = total_cal + animals[i].calories_per_day();
+}
+out animals.length();       // 1200
+out total_cal % 1000003;

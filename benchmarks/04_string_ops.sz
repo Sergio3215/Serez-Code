@@ -1,0 +1,28 @@
+// BENCH 04: String Operations
+// Exercises: concatenation (O(n²) growth pattern), all major string methods,
+// string interpolation with expressions inside a loop.
+
+// Build a 700-char string one character at a time
+let s = "";
+for (let i = 0; i < 700; i = i + 1) {
+    s = s + "x";
+}
+out s.length();   // 700
+
+// Static-string method calls
+let base = "Hello World Benchmark 1234567890 abcdefghijklmn";
+out base.toUpperCase().length();         // 47
+out base.toLowerCase().contains("hello"); // true
+out base.indexOf("World");               // 6
+out base.slice(0, 5);                    // Hello
+out base.startsWith("Hello");            // true
+out base.endsWith("klmn");               // true
+out base.replace("Hello", "Hi").length(); // 45
+
+// Interpolation with arithmetic inside loop (500 iterations)
+let total_len = 0;
+for (let i = 0; i < 500; i = i + 1) {
+    let line = "row={i} val={i * i}";
+    total_len = total_len + line.length();
+}
+out total_len;   // sum of lengths for i=0..499

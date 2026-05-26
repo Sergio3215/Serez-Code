@@ -1,0 +1,2 @@
+// BENCH 00: Startup — baseline process launch + trivial interpreter overhead
+out "ok";

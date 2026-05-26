@@ -1,0 +1,9 @@
+// BENCH 02: Fibonacci — Recursive
+// fib(30) via naive double-recursion.  ~1.3 M recursive calls.
+// Exercises: function call stack, parameter binding, early-return,
+// small-integer arithmetic on the cached range (0–256).
+fn int fib(int n) {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+out fib(30);   // 832040

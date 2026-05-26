@@ -1,0 +1,25 @@
+// BENCH 08: Dictionary Operations
+// 10-key string dict with 3 000 hash lookups + updates.
+// Exercises: dict read (O(1)), dict write, toArray, filter on pairs.
+let counts <string, int> = (
+    {"alpha",0}, {"beta",0}, {"gamma",0}, {"delta",0}, {"epsilon",0},
+    {"zeta",0},  {"eta",0},  {"theta",0}, {"iota",0},  {"kappa",0}
+);
+let keys = ["alpha","beta","gamma","delta","epsilon","zeta","eta","theta","iota","kappa"];
+
+for (let i = 0; i < 3000; i = i + 1) {
+    let k = keys[i % 10];
+    counts[k] = counts[k] + 1;
+}
+
+let pairs = counts.toArray();
+out pairs.length();   // 10
+
+let total = 0;
+for (let i = 0; i < pairs.length(); i = i + 1) {
+    total = total + pairs[i][1];
+}
+out total;   // 3000
+
+let top = pairs.filter(p => p[1] >= 300);
+out top.length();   // 10 (each key gets exactly 300)

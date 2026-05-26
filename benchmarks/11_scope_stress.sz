@@ -1,0 +1,35 @@
+// BENCH 11: Scope and Closure Stress
+// 60 stateful closures × 150 calls = 9 000 closure invocations with mutable
+// captured state.  Plus a 500-level recursive function to stress scope push/pop.
+// Exercises: arena watermark management, captured-variable mutation, deep stack.
+fn any make_counter(int start, int step) {
+    let n = start;
+    return () => {
+        n = n + step;
+        return n;
+    };
+}
+
+let counters = [];
+for (let i = 0; i < 60; i = i + 1) {
+    counters.push(make_counter(i * 5, i + 1));
+}
+
+let total = 0;
+for (let i = 0; i < 60; i = i + 1) {
+    for (let j = 0; j < 150; j = j + 1) {
+        total = total + counters[i]();
+    }
+}
+out total % 1000003;
+
+// Deep recursion: each frame allocates 4 locals
+fn int deep(int n, int acc) {
+    if (n == 0) { return acc; }
+    let a = n + 1;
+    let b = a * 2;
+    let c = b - n;
+    let d = c + acc;
+    return deep(n - 1, d);
+}
+out deep(500, 0) % 1000003;   // 126250

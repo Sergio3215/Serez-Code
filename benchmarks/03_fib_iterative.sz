@@ -1,0 +1,12 @@
+// BENCH 03: Fibonacci — Iterative
+// 300 000-step iterative loop with three variable reassignments per tick.
+// Exercises: tight loop throughput, `let` inside loop body (scope alloc),
+// large-integer arithmetic past the int_cache range.
+let a = 0;
+let b = 1;
+for (let i = 2; i <= 300000; i = i + 1) {
+    let c = a + b;
+    a = b;
+    b = c;
+}
+out b % 1000003;

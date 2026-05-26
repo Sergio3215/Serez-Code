@@ -1,0 +1,12 @@
+// BENCH 01: Arithmetic Loop
+// 200 000 iterations of mixed integer arithmetic.
+// Exercises: loop control, variable reassignment, int_cache hits/misses,
+// modular reduction (keeps values bounded to avoid big-int paths).
+let sum = 0;
+let x   = 1;
+for (let i = 1; i <= 200000; i = i + 1) {
+    sum = sum + i;
+    x   = (x * 3 + i) % 1000003;
+}
+out sum;   // 20000100000
+out x;
