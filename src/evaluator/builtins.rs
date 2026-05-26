@@ -464,4 +464,48 @@ impl super::Evaluator {
         }
     }
 
+    // ── time() — milliseconds since UNIX epoch ─────────────────────────────────
+    pub(super) fn eval_builtin_time(&mut self) -> EvalResult {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        EvalResult::Value(self.alloc(ObjectData::Integer(ms)))
+    }
+
+    // ── env(name) — read environment variable ─────────────────────────────────
+    pub(super) fn eval_builtin_env(&mut self, args: &[ast::Expression]) -> EvalResult {
+        if args.len() != 1 {
+            eprintln!("❌ ERROR: env(name) requires exactly 1 argument");
+            return EvalResult::Error;
+        }
+        let name = match self.eval_expression(&args[0]) {
+            EvalResult::Value(r) => match self.resolve(r).cloned() {
+                Some(ObjectData::Str(s)) => s,
+                _ => { eprintln!("❌ ERROR: env() argument must be a string"); return EvalResult::Error; }
+            },
+            EvalResult::Throw(v) => return EvalResult::Throw(v),
+            _ => return EvalResult::Error,
+        };
+        let val = std::env::var(&name).unwrap_or_default();
+        EvalResult::Value(self.alloc(ObjectData::Str(val)))
+    }
+
+    // ── exit(code) — terminate the process ────────────────────────────────────
+    pub(super) fn eval_builtin_exit(&mut self, args: &[ast::Expression]) -> EvalResult {
+        let code = if args.is_empty() {
+            0i32
+        } else {
+            match self.eval_expression(&args[0]) {
+                EvalResult::Value(r) => match self.resolve(r).cloned() {
+                    Some(ObjectData::Integer(n)) => n as i32,
+                    _ => { eprintln!("❌ ERROR: exit() argument must be an integer"); return EvalResult::Error; }
+                },
+                EvalResult::Throw(v) => return EvalResult::Throw(v),
+                _ => return EvalResult::Error,
+            }
+        };
+        std::process::exit(code);
+    }
+
 }

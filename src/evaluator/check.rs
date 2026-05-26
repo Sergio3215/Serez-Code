@@ -226,6 +226,7 @@ impl super::Evaluator {
                 }).max().unwrap_or(0);
                 subject_cost + arms_cost
             }
+            ast::Expression::UnsafeBlock(_) => 32,
         }
     }
 

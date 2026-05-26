@@ -1891,6 +1891,21 @@ impl Parser {
 
             TokenType::KwMatch => self.parse_match_expression(),
 
+            // unsafe { ... } as an expression (returns last value of block)
+            TokenType::KwUnsafe => {
+                self.next_token(); // consume 'unsafe'
+                if self.current_token.token_type != TokenType::LBrace {
+                    eprintln!("❌ PARSE ERROR: expected '{{' after 'unsafe'");
+                    return None;
+                }
+                let block_stmt = self.parse_block_statement()?;
+                let block = match block_stmt {
+                    Statement::Block(b) => b,
+                    _ => return None,
+                };
+                Some(Expression::UnsafeBlock(block))
+            }
+
             _ => None,
         };
 

@@ -5,6 +5,74 @@ Order: most recent to oldest.
 
 ---
 
+## [2.1.0] — branch `improve`
+
+### New features
+
+**Fase 1 — Memory namespace: raw byte heap**
+
+- `Memory` namespace: `sizeof`, `alloc`, `free`, `size`, `read`, `write`, `copy`, `fill`, `offsetOf`.
+- `Memory.sizeof(type)` — returns byte-size of a primitive type name (`"int"`, `"bool"`, `"float32"`, etc.).
+- `Memory.alloc(n)` → int handle — allocates `n` bytes of zeroed memory in a `HashMap<i64, Vec<u8>>` heap stored on the evaluator; requires `unsafe {}` block.
+- `Memory.read(handle, offset, type)` / `Memory.write(handle, offset, type, value)` — typed read/write at a byte offset; require `unsafe {}`.
+- `Memory.copy(src, dst, n)` — copies `n` bytes between two allocations; requires `unsafe {}`.
+- `Memory.fill(handle, byte)` — fills an entire allocation with a byte value; requires `unsafe {}`.
+- `Memory.offsetOf(class_name, field_name)` — returns word-aligned field offset (8-byte stride) by looking up the class registry.
+- New evaluator fields: `memory_heap: HashMap<i64, Vec<u8>>`, `memory_heap_next_id: i64`.
+- New source file: `src/evaluator/namespaces_memory.rs`.
+
+**Fase 1.5 — unsafe as expression + new built-in globals**
+
+- `unsafe { ... }` can now be used as an expression, enabling patterns like `let h = unsafe { Memory.alloc(64) }`. AST: `Expression::UnsafeBlock(BlockStatement)`. Parser: expression-level dispatch in `parse_expression`. Evaluator: delegates to `eval_unsafe_block`.
+- `time()` built-in — returns current Unix timestamp in milliseconds as `int`.
+- `env(name)` built-in — reads an environment variable by name; returns empty string if not set.
+- `exit(code)` built-in — terminates the process with the given exit code (`std::process::exit`).
+- `native fn` dispatch: when a declared native function is called but has no Rust implementation registered, a clear error is now printed.
+
+**Fase 2 — Extended Tensor math**
+
+- **Activation functions** (element-wise, return new Tensor): `relu`, `sigmoid`, `tanh`, `softmax`.
+- **Element-wise math**: `abs`, `sqrt`, `exp`, `log`, `pow(exp)`.
+- **Norms**: `norm()` (L2, default) / `norm(1)` (L1) — returns a Decimal.
+- **Clamp**: `clamp(min, max)` — clips all elements to `[min, max]`.
+- **Broadcast add**: `broadcastAdd(bias)` — adds a 1D tensor to each row of a 2D tensor `(m, n) + (n,)`.
+
+### Test count
+
+- 249 passing (0 failing) — added: `unit_memory`, `unit_native`, `unit_tensor_math`, `56_memory_e2e`, `57_tensor_math_e2e`.
+
+---
+
+## [2.0.2] — branch `improve`
+
+### New features
+
+**Fase 2.5 — serez-sec: Socket and Binary namespaces**
+
+- `Socket` namespace: `connect`, `send`, `recv`, `close`, `listen`, `accept` — raw TCP over `std::net::TcpStream` / `TcpListener`. Socket IDs (int) stored in the evaluator's registry; usable from Serez code as `Socket.connect("host", port)`.
+- `Binary` namespace: byte-array utilities — `fromHex`, `toHex`, `fromUtf8`, `toUtf8`, `packInt32Le`, `packInt32Be`, `unpackInt32Le`, `unpackInt32Be`, `packInt64Le`, `unpackInt64Le`, `concat`. All operate on Serez integer arrays (values 0–255).
+- Tests: `tests/53_socket_e2e.sz`, `tests/unit_binary.sz`, `tests/unit_socket.sz` (42 new test cases).
+
+**Fase 4 — GPU compute (CPU-backed)**
+
+- `GPU` namespace: `createBuffer`, `createBufferFromArray`, `readBuffer`, `freeBuffer`, `fill`, `size`, `map`, `reduce`, `dot`, `axpy`, `matmul`. Buffers are flat `Vec<f64>` stored in the evaluator. API mirrors GPU compute patterns (create/upload/dispatch/readback/free) so a future backend can swap to real GPU calls with no language changes.
+- Tests: `tests/54_gpu_e2e.sz`, `tests/unit_gpu.sz` (13 new test cases).
+
+**Fase 6 — Package manager**
+
+- `src/package_manager.rs`: `SerezManifest` JSON parser (hand-rolled, no external crate), `install_package(spec)`, `install_all()`, `packages_dir()` / `registry_dir()` (support `SEREZ_PACKAGES` / `SEREZ_REGISTRY` env vars for testing).
+- `sz install [pkg@version]` CLI subcommand: without argument reads `serez.json` and installs all dependencies; with argument installs a specific package from the registry.
+- Import resolution now searches `packages_dir()` (and falls back to `~/.serez/packages/`) after all existing search paths. Also supports `<pkg>/index.sz` layout so `import "pkg-name"` resolves to `packages/pkg-name/index.sz`.
+- `run_tests.ps1` / `run_tests.sh`: set `SEREZ_PACKAGES=tests/packages` so package tests run correctly against local test packages.
+- Tests: `tests/55_packages_e2e.sz`, `tests/unit_packages.sz` (13 new test cases). Test packages: `tests/packages/math-helpers/`, `tests/packages/string-tools/`.
+- Rust unit tests in `package_manager.rs` verify manifest parsing and pkg-spec parsing.
+
+### Test count
+
+- 214 → 256 passing (0 failing).
+
+---
+
 ## [2.0.1] — branch `improve`
 
 ### Bug fixes

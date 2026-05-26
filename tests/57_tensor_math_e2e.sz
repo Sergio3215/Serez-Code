@@ -1,0 +1,71 @@
+// E2E: Tensor math operations (Fase 2)
+
+// relu
+let t1 = Tensor.from([-2.0, -1.0, 0.0, 1.0, 2.0]);
+let relu = t1.relu();
+out relu.get(0);
+out relu.get(1);
+out relu.get(2);
+out relu.get(3);
+out relu.get(4);
+
+// sigmoid of 0 → 0.5
+let t2 = Tensor.zeros([1]);
+let sig = t2.sigmoid();
+out (sig.get(0) > 0.49 && sig.get(0) < 0.51);
+
+// tanh of 0 → 0
+let t3 = Tensor.zeros([1]);
+let tanhv = t3.tanh();
+out (tanhv.get(0) > -0.001 && tanhv.get(0) < 0.001);
+
+// softmax sums to 1
+let t4 = Tensor.from([1.0, 2.0, 3.0]);
+let sm = t4.softmax();
+let smsum = sm.get(0) + sm.get(1) + sm.get(2);
+out (smsum > 0.999 && smsum < 1.001);
+
+// abs
+let t5 = Tensor.from([-3.0, 0.0, 4.0]);
+let absv = t5.abs();
+out absv.get(0);
+out absv.get(1);
+out absv.get(2);
+
+// sqrt of 4 → 2
+let t6 = Tensor.from([4.0, 9.0]);
+let sqrtv = t6.sqrt();
+out (sqrtv.get(0) > 1.99 && sqrtv.get(0) < 2.01);
+out (sqrtv.get(1) > 2.99 && sqrtv.get(1) < 3.01);
+
+// exp and log round-trip
+let t7 = Tensor.from([1.0, 2.0]);
+let expv = t7.exp();
+let logback = expv.log();
+out (logback.get(0) > 0.999 && logback.get(0) < 1.001);
+
+// pow
+let t8 = Tensor.from([2.0, 3.0]);
+let powv = t8.pow(3);
+out (powv.get(0) > 7.99 && powv.get(0) < 8.01);
+out (powv.get(1) > 26.99 && powv.get(1) < 27.01);
+
+// norm L2: [3,4] → 5
+let t9 = Tensor.from([3.0, 4.0]);
+out (t9.norm() > 4.99 && t9.norm() < 5.01);
+
+// clamp
+let t10 = Tensor.from([-5.0, 2.0, 10.0]);
+let clamped = t10.clamp(0, 5);
+out clamped.get(0);
+out clamped.get(1);
+out clamped.get(2);
+
+// broadcastAdd
+let mat = Tensor.from([[0.0, 0.0], [0.0, 0.0]]);
+let bias = Tensor.from([1.0, 2.0]);
+let bcast = mat.broadcastAdd(bias);
+out bcast.get(0, 0);
+out bcast.get(0, 1);
+out bcast.get(1, 0);
+out bcast.get(1, 1);

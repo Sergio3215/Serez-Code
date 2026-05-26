@@ -11,6 +11,10 @@ mod namespaces;
 mod methods_set;
 mod methods_tensor;
 mod namespaces_crypto;
+mod namespaces_socket;
+mod namespaces_binary;
+mod namespaces_gpu;
+mod namespaces_memory;
 
 use crate::ast::{self, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
@@ -87,6 +91,20 @@ pub struct Evaluator {
     // Collects yielded values while executing a generator function body.
     // None = not inside a generator; Some(vec) = collecting yields.
     yield_collector: Option<Vec<OwnedValue>>,
+    // Socket registry: maps socket IDs to live TCP streams
+    socket_registry: HashMap<i64, std::net::TcpStream>,
+    // Listener registry: maps listener IDs to bound TCP listeners
+    listener_registry: HashMap<i64, std::net::TcpListener>,
+    // Monotonically increasing ID counter for sockets and listeners
+    socket_next_id: i64,
+    // GPU buffer registry: maps buffer IDs to flat f64 data (CPU-backed)
+    gpu_buffers: HashMap<i64, Vec<f64>>,
+    // Monotonically increasing ID counter for GPU buffers
+    gpu_next_id: i64,
+    // Raw memory heap: maps allocation IDs to byte arrays
+    memory_heap: HashMap<i64, Vec<u8>>,
+    // Monotonically increasing ID counter for memory allocations
+    memory_heap_next_id: i64,
 }
 
 impl Evaluator {
@@ -126,6 +144,13 @@ impl Evaluator {
             current_dir: None,
             current_module_exports: None,
             yield_collector: None,
+            socket_registry: HashMap::new(),
+            listener_registry: HashMap::new(),
+            socket_next_id: 1,
+            gpu_buffers: HashMap::new(),
+            gpu_next_id: 1,
+            memory_heap: HashMap::new(),
+            memory_heap_next_id: 1,
         }
     }
 

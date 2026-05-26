@@ -1,0 +1,132 @@
+// Unit tests for extended Tensor math operations (Fase 2)
+
+// relu
+test("relu zeros out negatives", () => {
+    let t = Tensor.from([-1.0, 2.0, -3.0, 4.0]);
+    let r = t.relu();
+    assert(r.get(0) == 0.0, "relu(-1) = 0");
+    assert(r.get(1) == 2.0, "relu(2) = 2");
+    assert(r.get(2) == 0.0, "relu(-3) = 0");
+    assert(r.get(3) == 4.0, "relu(4) = 4");
+});
+
+// sigmoid
+test("sigmoid of 0 is 0.5", () => {
+    let t = Tensor.zeros([1]);
+    let r = t.sigmoid();
+    let v = r.get(0);
+    assert(v > 0.49 && v < 0.51, "sigmoid(0) ≈ 0.5");
+});
+
+test("sigmoid output in (0,1)", () => {
+    let t = Tensor.from([-10.0, 0.0, 10.0]);
+    let r = t.sigmoid();
+    assert(r.get(0) > 0.0 && r.get(0) < 0.01, "sigmoid(-10) near 0");
+    assert(r.get(2) > 0.99, "sigmoid(10) near 1");
+});
+
+// tanh
+test("tanh of 0 is 0", () => {
+    let t = Tensor.zeros([1]);
+    let r = t.tanh();
+    let v = r.get(0);
+    assert(v > -0.001 && v < 0.001, "tanh(0) ≈ 0");
+});
+
+// softmax
+test("softmax sums to 1", () => {
+    let t = Tensor.from([1.0, 2.0, 3.0]);
+    let r = t.softmax();
+    let s = r.get(0) + r.get(1) + r.get(2);
+    assert(s > 0.999 && s < 1.001, "sum ≈ 1");
+});
+
+test("softmax all positive", () => {
+    let t = Tensor.from([-5.0, 0.0, 5.0]);
+    let r = t.softmax();
+    assert(r.get(0) > 0.0 && r.get(1) > 0.0 && r.get(2) > 0.0, "all positive");
+});
+
+// abs
+test("abs removes sign", () => {
+    let t = Tensor.from([-3.0, 0.0, 4.0]);
+    let r = t.abs();
+    assert(r.get(0) == 3.0, "abs(-3) = 3");
+    assert(r.get(1) == 0.0, "abs(0) = 0");
+    assert(r.get(2) == 4.0, "abs(4) = 4");
+});
+
+// sqrt
+test("sqrt correctness", () => {
+    let t = Tensor.from([4.0, 9.0, 16.0]);
+    let r = t.sqrt();
+    assert(r.get(0) > 1.99 && r.get(0) < 2.01, "sqrt(4) ≈ 2");
+    assert(r.get(1) > 2.99 && r.get(1) < 3.01, "sqrt(9) ≈ 3");
+    assert(r.get(2) > 3.99 && r.get(2) < 4.01, "sqrt(16) ≈ 4");
+});
+
+// exp
+test("exp of 0 is 1", () => {
+    let t = Tensor.zeros([1]);
+    let r = t.exp();
+    let v = r.get(0);
+    assert(v > 0.99 && v < 1.01, "exp(0) ≈ 1");
+});
+
+// log
+test("log of 1 is 0", () => {
+    let t = Tensor.from([1.0]);
+    let r = t.log();
+    let v = r.get(0);
+    assert(v > -0.001 && v < 0.001, "log(1) ≈ 0");
+});
+
+test("log and exp are inverses", () => {
+    let t = Tensor.from([1.0, 2.0, 3.0]);
+    let back = t.exp().log();
+    assert(back.get(0) > 0.999 && back.get(0) < 1.001, "log(exp(1)) ≈ 1");
+    assert(back.get(1) > 1.999 && back.get(1) < 2.001, "log(exp(2)) ≈ 2");
+});
+
+// pow
+test("pow squares values", () => {
+    let t = Tensor.from([2.0, 3.0, 4.0]);
+    let r = t.pow(2);
+    assert(r.get(0) > 3.99 && r.get(0) < 4.01, "2^2 = 4");
+    assert(r.get(1) > 8.99 && r.get(1) < 9.01, "3^2 = 9");
+    assert(r.get(2) > 15.99 && r.get(2) < 16.01, "4^2 = 16");
+});
+
+// norm
+test("L2 norm of [3,4] is 5", () => {
+    let t = Tensor.from([3.0, 4.0]);
+    let n = t.norm();
+    assert(n > 4.99 && n < 5.01, "norm([3,4]) ≈ 5");
+});
+
+test("L1 norm of [-1,2,-3] is 6", () => {
+    let t = Tensor.from([-1.0, 2.0, -3.0]);
+    let n = t.norm(1);
+    assert(n > 5.99 && n < 6.01, "L1 norm ≈ 6");
+});
+
+// clamp
+test("clamp clips values to [0,3]", () => {
+    let t = Tensor.from([-5.0, 0.0, 5.0, 10.0]);
+    let r = t.clamp(0, 3);
+    assert(r.get(0) == 0.0, "clamp(-5, 0, 3) = 0");
+    assert(r.get(1) == 0.0, "clamp(0, 0, 3) = 0");
+    assert(r.get(2) == 3.0, "clamp(5, 0, 3) = 3");
+    assert(r.get(3) == 3.0, "clamp(10, 0, 3) = 3");
+});
+
+// broadcastAdd
+test("broadcastAdd bias to 2D tensor", () => {
+    let mat = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let bias = Tensor.from([10.0, 20.0]);
+    let r = mat.broadcastAdd(bias);
+    assert(r.get(0, 0) == 11.0, "row0,col0");
+    assert(r.get(0, 1) == 22.0, "row0,col1");
+    assert(r.get(1, 0) == 13.0, "row1,col0");
+    assert(r.get(1, 1) == 24.0, "row1,col1");
+});

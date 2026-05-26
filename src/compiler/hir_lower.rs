@@ -555,7 +555,7 @@ impl HirLowerer {
             Expression::FunctionLiteral(_) | Expression::Lambda(_)
             | Expression::DictLiteral(_)  | Expression::EntryLiteral(_, _)
             | Expression::ObjectPatch(_)  | Expression::Spread(_)
-            | Expression::Match(_) => HirExpr::Null,
+            | Expression::Match(_) | Expression::UnsafeBlock(_) => HirExpr::Null,
         }
     }
 

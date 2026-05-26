@@ -1,0 +1,91 @@
+// Unit tests for Memory namespace (Fase 1)
+
+// sizeof tests
+test("sizeof int",     () => { assert(Memory.sizeof("int") == 8, "int = 8"); });
+test("sizeof decimal", () => { assert(Memory.sizeof("decimal") == 8, "decimal = 8"); });
+test("sizeof bool",    () => { assert(Memory.sizeof("bool") == 1, "bool = 1"); });
+test("sizeof byte",    () => { assert(Memory.sizeof("byte") == 1, "byte = 1"); });
+test("sizeof int32",   () => { assert(Memory.sizeof("int32") == 4, "int32 = 4"); });
+test("sizeof int16",   () => { assert(Memory.sizeof("int16") == 2, "int16 = 2"); });
+test("sizeof float32", () => { assert(Memory.sizeof("float32") == 4, "float32 = 4"); });
+test("sizeof float64", () => { assert(Memory.sizeof("float64") == 8, "float64 = 8"); });
+test("sizeof ptr",     () => { assert(Memory.sizeof("ptr") == 8, "ptr = 8"); });
+
+// alloc / size
+test("alloc returns positive handle", () => {
+    let h = unsafe { Memory.alloc(64) };
+    assert(h > 0, "handle > 0");
+    unsafe { Memory.free(h) };
+});
+
+test("size after alloc", () => {
+    let h = unsafe { Memory.alloc(32) };
+    assert(Memory.size(h) == 32, "size = 32");
+    unsafe { Memory.free(h) };
+});
+
+// write / read round-trip
+test("write/read int64", () => {
+    let h = unsafe { Memory.alloc(8) };
+    unsafe { Memory.write(h, 0, "int64", 42) };
+    let v = unsafe { Memory.read(h, 0, "int64") };
+    unsafe { Memory.free(h) };
+    assert(v == 42, "round-trip 42");
+});
+
+test("write/read int32", () => {
+    let h = unsafe { Memory.alloc(8) };
+    unsafe { Memory.write(h, 0, "int32", 1234) };
+    let v = unsafe { Memory.read(h, 0, "int32") };
+    unsafe { Memory.free(h) };
+    assert(v == 1234, "round-trip 1234");
+});
+
+test("write/read float64", () => {
+    let h = unsafe { Memory.alloc(8) };
+    unsafe { Memory.write(h, 0, "float64", 3.14) };
+    let v = unsafe { Memory.read(h, 0, "float64") };
+    unsafe { Memory.free(h) };
+    assert(v > 3.13 && v < 3.15, "float64 round-trip");
+});
+
+test("write/read byte", () => {
+    let h = unsafe { Memory.alloc(4) };
+    unsafe { Memory.write(h, 0, "byte", 255) };
+    let v = unsafe { Memory.read(h, 0, "byte") };
+    unsafe { Memory.free(h) };
+    assert(v == 255, "byte = 255");
+});
+
+test("multiple offsets", () => {
+    let h = unsafe { Memory.alloc(16) };
+    unsafe { Memory.write(h, 0, "int64", 100) };
+    unsafe { Memory.write(h, 8, "int64", 200) };
+    let a = unsafe { Memory.read(h, 0, "int64") };
+    let b = unsafe { Memory.read(h, 8, "int64") };
+    unsafe { Memory.free(h) };
+    assert(a == 100, "offset 0 = 100");
+    assert(b == 200, "offset 8 = 200");
+});
+
+// fill
+test("fill zeros out buffer", () => {
+    let h = unsafe { Memory.alloc(8) };
+    unsafe { Memory.write(h, 0, "int64", 9999) };
+    unsafe { Memory.fill(h, 0) };
+    let v = unsafe { Memory.read(h, 0, "int64") };
+    unsafe { Memory.free(h) };
+    assert(v == 0, "after fill(0) value is 0");
+});
+
+// copy
+test("copy between allocations", () => {
+    let src = unsafe { Memory.alloc(8) };
+    let dst = unsafe { Memory.alloc(8) };
+    unsafe { Memory.write(src, 0, "int64", 777) };
+    unsafe { Memory.copy(src, dst, 8) };
+    let v = unsafe { Memory.read(dst, 0, "int64") };
+    unsafe { Memory.free(src) };
+    unsafe { Memory.free(dst) };
+    assert(v == 777, "copied value = 777");
+});

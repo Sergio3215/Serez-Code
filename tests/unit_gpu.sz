@@ -1,0 +1,109 @@
+// Unit tests: GPU namespace
+
+test("createBuffer creates zero-filled buffer", () => {
+    let buf = GPU.createBuffer(8);
+    assert(GPU.size(buf) == 8, "size 8");
+    let arr = GPU.readBuffer(buf);
+    assert(arr[0] == 0.0, "zero-filled first");
+    assert(arr[7] == 0.0, "zero-filled last");
+    GPU.freeBuffer(buf);
+});
+
+test("fill changes all elements", () => {
+    let buf = GPU.createBuffer(4);
+    GPU.fill(buf, 7.0);
+    let arr = GPU.readBuffer(buf);
+    assert(arr[0] == 7.0, "elem 0");
+    assert(arr[3] == 7.0, "elem 3");
+    GPU.freeBuffer(buf);
+});
+
+test("createBufferFromArray round-trips", () => {
+    let buf = GPU.createBufferFromArray([1.0, 2.0, 3.0]);
+    assert(GPU.size(buf) == 3, "size 3");
+    let arr = GPU.readBuffer(buf);
+    assert(arr[0] == 1.0, "elem 0");
+    assert(arr[1] == 2.0, "elem 1");
+    assert(arr[2] == 3.0, "elem 2");
+    GPU.freeBuffer(buf);
+});
+
+test("map element-wise transform", () => {
+    let src = GPU.createBufferFromArray([1.0, 2.0, 3.0, 4.0]);
+    let sq = GPU.map(src, x => x * x);
+    let arr = GPU.readBuffer(sq);
+    assert(arr[0] == 1.0,  "1²=1");
+    assert(arr[1] == 4.0,  "2²=4");
+    assert(arr[2] == 9.0,  "3²=9");
+    assert(arr[3] == 16.0, "4²=16");
+    GPU.freeBuffer(src);
+    GPU.freeBuffer(sq);
+});
+
+test("reduce sum", () => {
+    let buf = GPU.createBufferFromArray([1.0, 2.0, 3.0, 4.0, 5.0]);
+    let sum = GPU.reduce(buf, (acc, x) => acc + x, 0.0);
+    assert(sum == 15.0, "sum 1..5 = 15");
+    GPU.freeBuffer(buf);
+});
+
+test("reduce max", () => {
+    let buf = GPU.createBufferFromArray([3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0]);
+    let mx = GPU.reduce(buf, (acc, x) => { if (x > acc) { return x; } return acc; }, -999.0);
+    assert(mx == 9.0, "max = 9");
+    GPU.freeBuffer(buf);
+});
+
+test("dot product", () => {
+    let a = GPU.createBufferFromArray([1.0, 0.0, 0.0]);
+    let b = GPU.createBufferFromArray([5.0, 6.0, 7.0]);
+    assert(GPU.dot(a, b) == 5.0, "unit vector dot");
+    GPU.freeBuffer(a);
+    GPU.freeBuffer(b);
+});
+
+test("axpy: 2*[1,2,3] + [1,1,1] = [3,5,7]", () => {
+    let x = GPU.createBufferFromArray([1.0, 2.0, 3.0]);
+    let y = GPU.createBufferFromArray([1.0, 1.0, 1.0]);
+    let z = GPU.axpy(2.0, x, y);
+    let arr = GPU.readBuffer(z);
+    assert(arr[0] == 3.0, "2*1+1=3");
+    assert(arr[1] == 5.0, "2*2+1=5");
+    assert(arr[2] == 7.0, "2*3+1=7");
+    GPU.freeBuffer(x);
+    GPU.freeBuffer(y);
+    GPU.freeBuffer(z);
+});
+
+test("matmul 2×2 identity preserves matrix", () => {
+    let I = GPU.createBufferFromArray([1.0, 0.0, 0.0, 1.0]);
+    let M = GPU.createBufferFromArray([3.0, 4.0, 5.0, 6.0]);
+    let C = GPU.matmul(I, 2, 2, M, 2, 2);
+    let arr = GPU.readBuffer(C);
+    assert(arr[0] == 3.0, "C[0][0]");
+    assert(arr[1] == 4.0, "C[0][1]");
+    assert(arr[2] == 5.0, "C[1][0]");
+    assert(arr[3] == 6.0, "C[1][1]");
+    GPU.freeBuffer(I);
+    GPU.freeBuffer(M);
+    GPU.freeBuffer(C);
+});
+
+test("matmul non-square: 1×3 · 3×1 = 1×1 (dot product as matmul)", () => {
+    let row = GPU.createBufferFromArray([1.0, 2.0, 3.0]);
+    let col = GPU.createBufferFromArray([4.0, 5.0, 6.0]);
+    let res = GPU.matmul(row, 1, 3, col, 3, 1);
+    let arr = GPU.readBuffer(res);
+    assert(arr[0] == 32.0, "1*4+2*5+3*6=32");
+    GPU.freeBuffer(row);
+    GPU.freeBuffer(col);
+    GPU.freeBuffer(res);
+});
+
+test("freeBuffer is safe to call", () => {
+    let buf = GPU.createBuffer(10);
+    GPU.freeBuffer(buf);
+    assert(true, "no crash");
+});
+
+summary();

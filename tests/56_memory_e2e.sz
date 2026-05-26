@@ -1,0 +1,41 @@
+// E2E: Memory namespace — raw byte heap allocation
+
+// sizeof
+out Memory.sizeof("int");
+out Memory.sizeof("bool");
+out Memory.sizeof("int32");
+out Memory.sizeof("float64");
+
+// alloc / write / read / free
+let h = unsafe { Memory.alloc(24) }
+out (Memory.size(h) == 24);
+
+unsafe { Memory.write(h, 0, "int64", 1000) }
+unsafe { Memory.write(h, 8, "int64", 2000) }
+unsafe { Memory.write(h, 16, "int64", 3000) }
+
+let a = unsafe { Memory.read(h, 0, "int64") }
+let b = unsafe { Memory.read(h, 8, "int64") }
+let c = unsafe { Memory.read(h, 16, "int64") }
+out a;
+out b;
+out c;
+
+// fill + read
+unsafe { Memory.fill(h, 0) }
+let z = unsafe { Memory.read(h, 0, "int64") }
+out z;
+
+unsafe { Memory.free(h) }
+out "freed";
+
+// copy
+let src = unsafe { Memory.alloc(8) }
+let dst = unsafe { Memory.alloc(8) }
+unsafe { Memory.write(src, 0, "int32", 999) }
+unsafe { Memory.copy(src, dst, 4) }
+let copied = unsafe { Memory.read(dst, 0, "int32") }
+out copied;
+unsafe { Memory.free(src) }
+unsafe { Memory.free(dst) }
+out "done";

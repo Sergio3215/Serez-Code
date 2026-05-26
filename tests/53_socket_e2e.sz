@@ -1,0 +1,69 @@
+// E2E: Binary namespace — byte-array utilities
+
+// ── fromHex / toHex ───────────────────────────────────────────────────────────
+let hex_str = Binary.toHex([0xDE, 0xAD, 0xBE, 0xEF]);
+out hex_str;                // deadbeef
+
+let bytes = Binary.fromHex("deadbeef");
+out bytes[0];               // 222
+out bytes[1];               // 173
+out bytes[2];               // 190
+out bytes[3];               // 239
+
+// ── fromUtf8 / toUtf8 ────────────────────────────────────────────────────────
+let hello_bytes = Binary.fromUtf8("hello");
+out hello_bytes[0];         // 104
+out hello_bytes[4];         // 111
+
+let restored = Binary.toUtf8([104, 101, 108, 108, 111]);
+out restored;               // hello
+
+// ── packInt32Le / unpackInt32Le ───────────────────────────────────────────────
+let p32le = Binary.packInt32Le(0x12345678);
+out p32le[0];               // 120  (0x78)
+out p32le[1];               // 86   (0x56)
+out p32le[2];               // 52   (0x34)
+out p32le[3];               // 18   (0x12)
+
+let u32le = Binary.unpackInt32Le([0x78, 0x56, 0x34, 0x12]);
+out u32le;                  // 305419896
+
+// ── packInt32Be / unpackInt32Be ───────────────────────────────────────────────
+let p32be = Binary.packInt32Be(0x12345678);
+out p32be[0];               // 18   (0x12)
+out p32be[1];               // 52   (0x34)
+out p32be[2];               // 86   (0x56)
+out p32be[3];               // 120  (0x78)
+
+let u32be = Binary.unpackInt32Be([0x12, 0x34, 0x56, 0x78]);
+out u32be;                  // 305419896
+
+// ── packInt64Le / unpackInt64Le ───────────────────────────────────────────────
+let p64le = Binary.packInt64Le(1);
+out p64le[0];               // 1
+out p64le[1];               // 0
+out p64le[7];               // 0
+
+let u64le = Binary.unpackInt64Le([255, 0, 0, 0, 0, 0, 0, 0]);
+out u64le;                  // 255
+
+// ── concat ────────────────────────────────────────────────────────────────────
+let a = [1, 2, 3];
+let b = [4, 5, 6];
+let c = Binary.concat(a, b);
+out c.length();             // 6
+out c[0];                   // 1
+out c[3];                   // 4
+out c[5];                   // 6
+
+// ── Socket loopback ───────────────────────────────────────────────────────────
+let server = Socket.listen(19912);
+let client = Socket.connect("127.0.0.1", 19912);
+let conn   = Socket.accept(server);
+Socket.send(client, "hello serez");
+let msg = Socket.recv(conn, 64);
+out msg;                    // hello serez
+Socket.close(client);
+Socket.close(conn);
+Socket.close(server);
+out "done";

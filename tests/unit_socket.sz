@@ -1,0 +1,51 @@
+// Unit tests: Socket namespace
+
+test("Socket.listen binds a port", () => {
+    let srv = Socket.listen(19920);
+    assert(srv > 0, "returns valid id");
+    Socket.close(srv);
+});
+
+test("Socket loopback — connect, send, recv, close", () => {
+    let srv  = Socket.listen(19921);
+    let cli  = Socket.connect("127.0.0.1", 19921);
+    let conn = Socket.accept(srv);
+    assert(cli  > 0, "client id > 0");
+    assert(conn > 0, "conn id > 0");
+    assert(cli != conn, "distinct ids");
+
+    let sent = Socket.send(cli, "ping");
+    assert(sent == 4, "sent 4 bytes");
+
+    let msg = Socket.recv(conn, 64);
+    assert(msg == "ping", "received ping");
+
+    Socket.close(cli);
+    Socket.close(conn);
+    Socket.close(srv);
+});
+
+test("Socket.close is idempotent", () => {
+    let srv = Socket.listen(19922);
+    Socket.close(srv);
+    // second close should not crash — just a no-op
+    Socket.close(srv);
+    assert(true, "no crash");
+});
+
+test("Socket send/recv larger payload", () => {
+    let srv  = Socket.listen(19923);
+    let cli  = Socket.connect("127.0.0.1", 19923);
+    let conn = Socket.accept(srv);
+
+    let payload = "hello serez binary world!";
+    Socket.send(cli, payload);
+    let got = Socket.recv(conn, 256);
+    assert(got == payload, "large payload roundtrip");
+
+    Socket.close(cli);
+    Socket.close(conn);
+    Socket.close(srv);
+});
+
+summary();

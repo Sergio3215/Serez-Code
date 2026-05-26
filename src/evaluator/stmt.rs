@@ -1032,6 +1032,8 @@ impl super::Evaluator {
         //  2. Process working directory (project root when running via cargo or the sz binary)
         //  3. SEREZ_HOME env var (installed stdlib / workspace root)
         //  4. Executable's directory (bundled stdlib)
+        //  5. SEREZ_PACKAGES env var (test override for package directory)
+        //  6. ~/.serez/packages/ (user-installed packages)
         let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
 
         if let Some(ref d) = self.current_dir {
@@ -1046,11 +1048,18 @@ impl super::Evaluator {
                 search_dirs.push(exe_dir.to_path_buf());
             }
         }
+        // Package directories (SEREZ_PACKAGES overrides default ~/.serez/packages/)
+        search_dirs.push(crate::package_manager::packages_dir());
 
-        // Try each candidate directory
+        // Try each candidate directory. For each base, also try <base>/<pkg>/index.sz
+        // so that `import "pkg-name"` resolves to `<packages>/pkg-name/index.sz`.
         let canonical = search_dirs.iter()
-            .map(|base| base.join(&path_with_ext))
-            .find_map(|p| p.canonicalize().ok());
+            .flat_map(|base| {
+                let direct  = base.join(&path_with_ext);
+                let pkg_dir = base.join(path.trim_end_matches(".sz")).join("index.sz");
+                vec![direct, pkg_dir]
+            })
+            .find_map(|p| if p.exists() { p.canonicalize().ok() } else { None });
 
         let canonical = match canonical {
             Some(c) => c,

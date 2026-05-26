@@ -1,0 +1,109 @@
+// Unit tests: Binary namespace
+
+test("fromHex — basic decode", () => {
+    let b = Binary.fromHex("deadbeef");
+    assert(b.length() == 4, "length 4");
+    assert(b[0] == 222, "byte 0 = 0xDE");
+    assert(b[1] == 173, "byte 1 = 0xAD");
+    assert(b[2] == 190, "byte 2 = 0xBE");
+    assert(b[3] == 239, "byte 3 = 0xEF");
+});
+
+test("fromHex — uppercase and zero bytes", () => {
+    let b = Binary.fromHex("00FF");
+    assert(b[0] == 0,   "zero byte");
+    assert(b[1] == 255, "0xFF byte");
+});
+
+test("toHex — basic encode", () => {
+    assert(Binary.toHex([0, 255, 16, 171]) == "00ff10ab", "hex encode");
+});
+
+test("fromHex / toHex roundtrip", () => {
+    let original = "cafebabe";
+    let bytes = Binary.fromHex(original);
+    let back = Binary.toHex(bytes);
+    assert(back == original, "roundtrip");
+});
+
+test("fromUtf8 — ASCII", () => {
+    let b = Binary.fromUtf8("AB");
+    assert(b[0] == 65, "A = 65");
+    assert(b[1] == 66, "B = 66");
+});
+
+test("toUtf8 — decode", () => {
+    let s = Binary.toUtf8([72, 105, 33]);
+    assert(s == "Hi!", "Hi!");
+});
+
+test("fromUtf8 / toUtf8 roundtrip", () => {
+    let s = "hello world";
+    let bytes = Binary.fromUtf8(s);
+    assert(Binary.toUtf8(bytes) == s, "roundtrip");
+});
+
+test("packInt32Le — little-endian layout", () => {
+    let p = Binary.packInt32Le(0x12345678);
+    assert(p.length() == 4, "4 bytes");
+    assert(p[0] == 0x78, "byte 0 = LSB");
+    assert(p[1] == 0x56, "byte 1");
+    assert(p[2] == 0x34, "byte 2");
+    assert(p[3] == 0x12, "byte 3 = MSB");
+});
+
+test("packInt32Be — big-endian layout", () => {
+    let p = Binary.packInt32Be(0x12345678);
+    assert(p.length() == 4, "4 bytes");
+    assert(p[0] == 0x12, "byte 0 = MSB");
+    assert(p[1] == 0x34, "byte 1");
+    assert(p[2] == 0x56, "byte 2");
+    assert(p[3] == 0x78, "byte 3 = LSB");
+});
+
+test("unpackInt32Le — roundtrip", () => {
+    let n = 305419896;
+    let packed = Binary.packInt32Le(n);
+    assert(Binary.unpackInt32Le(packed) == n, "roundtrip");
+});
+
+test("unpackInt32Be — roundtrip", () => {
+    let n = 305419896;
+    let packed = Binary.packInt32Be(n);
+    assert(Binary.unpackInt32Be(packed) == n, "roundtrip");
+});
+
+test("packInt64Le — small value", () => {
+    let p = Binary.packInt64Le(1);
+    assert(p.length() == 8, "8 bytes");
+    assert(p[0] == 1, "LSB = 1");
+    assert(p[1] == 0, "rest zero");
+    assert(p[7] == 0, "MSB = 0");
+});
+
+test("unpackInt64Le — roundtrip", () => {
+    let n = 9999999999;
+    let packed = Binary.packInt64Le(n);
+    assert(Binary.unpackInt64Le(packed) == n, "roundtrip");
+});
+
+test("concat — joins two arrays", () => {
+    let c = Binary.concat([1, 2, 3], [4, 5, 6]);
+    assert(c.length() == 6, "length");
+    assert(c[0] == 1, "first element");
+    assert(c[5] == 6, "last element");
+});
+
+test("concat — empty arrays", () => {
+    let c = Binary.concat([], [1, 2]);
+    assert(c.length() == 2, "empty + [1,2]");
+    let d = Binary.concat([7, 8], []);
+    assert(d.length() == 2, "[7,8] + empty");
+});
+
+test("fromHex empty string", () => {
+    let b = Binary.fromHex("");
+    assert(b.length() == 0, "empty hex gives empty array");
+});
+
+summary();

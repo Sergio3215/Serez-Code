@@ -123,7 +123,7 @@ impl super::Evaluator {
 
     // ── Shared eval helpers ───────────────────────────────────────────────────
 
-    fn require_one_string(&mut self, args: &[ast::Expression], ctx: &str) -> Result<String, EvalResult> {
+    pub(super) fn require_one_string(&mut self, args: &[ast::Expression], ctx: &str) -> Result<String, EvalResult> {
         if args.len() != 1 {
             eprintln!("❌ ERROR: {}(string) requires 1 argument", ctx);
             return Err(EvalResult::Error);
@@ -131,7 +131,7 @@ impl super::Evaluator {
         self.eval_to_string(&args[0], ctx)
     }
 
-    fn eval_to_string(&mut self, expr: &ast::Expression, ctx: &str) -> Result<String, EvalResult> {
+    pub(super) fn eval_to_string(&mut self, expr: &ast::Expression, ctx: &str) -> Result<String, EvalResult> {
         let r = match self.eval_expression(expr) {
             EvalResult::Value(r) => r,
             EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),

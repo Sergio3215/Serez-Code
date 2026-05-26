@@ -2,6 +2,7 @@ mod ast;
 mod compiler;
 mod evaluator;
 mod lexer;
+mod package_manager;
 mod parser;
 mod region;
 mod repl;
@@ -45,6 +46,21 @@ fn run() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() > 1 {
+        // ── `sz install [pkg@version]` subcommand ─────────────────────────────
+        if args[1] == "install" {
+            if args.len() >= 3 {
+                let spec = &args[2];
+                if let Err(e) = package_manager::install_package(spec) {
+                    eprintln!("❌ ERROR: {}", e);
+                }
+            } else {
+                if let Err(e) = package_manager::install_all() {
+                    eprintln!("❌ ERROR: {}", e);
+                }
+            }
+            return;
+        }
+
         let mut is_check = false;
         let mut is_watch = false;
         let mut file_path = String::new();

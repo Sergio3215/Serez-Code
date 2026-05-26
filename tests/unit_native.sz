@@ -1,0 +1,26 @@
+// Unit tests for native built-in functions (Fase 1.5)
+
+// time() returns a positive integer
+test("time returns positive int", () => {
+    let t = time();
+    assert(t > 0, "time() > 0");
+});
+
+// time() is monotonic
+test("time is monotonic", () => {
+    let a = time();
+    let b = time();
+    assert(b >= a, "b >= a");
+});
+
+// env() returns a string
+test("env returns string for PATH", () => {
+    let v = env("PATH");
+    assert(type_of(v) == "string", "type is string");
+});
+
+// env() for missing var returns empty string
+test("env missing var returns empty", () => {
+    let v = env("__SEREZ_NOT_A_REAL_VAR_XYZ__");
+    assert(v == "", "empty for unknown var");
+});

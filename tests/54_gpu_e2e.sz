@@ -1,0 +1,57 @@
+// E2E: GPU namespace — CPU-backed compute buffers
+
+// ── Buffer lifecycle ──────────────────────────────────────────────────────────
+let buf = GPU.createBuffer(4);
+out GPU.size(buf);              // 4
+
+// ── fill + readBuffer ─────────────────────────────────────────────────────────
+GPU.fill(buf, 3.0);
+let arr = GPU.readBuffer(buf);
+out arr[0];                     // 3.0
+out arr[3];                     // 3.0
+
+// ── createBufferFromArray ─────────────────────────────────────────────────────
+let src = GPU.createBufferFromArray([1.0, 2.0, 3.0, 4.0]);
+let back = GPU.readBuffer(src);
+out back[0];                    // 1.0
+out back[3];                    // 4.0
+
+// ── map ───────────────────────────────────────────────────────────────────────
+let doubled = GPU.map(src, x => x * 2.0);
+let darr = GPU.readBuffer(doubled);
+out darr[0];                    // 2.0
+out darr[3];                    // 8.0
+
+// ── reduce ────────────────────────────────────────────────────────────────────
+let sum = GPU.reduce(src, (acc, x) => acc + x, 0.0);
+out sum;                        // 10.0
+
+let product = GPU.reduce(src, (acc, x) => acc * x, 1.0);
+out product;                    // 24.0
+
+// ── dot product ───────────────────────────────────────────────────────────────
+// [1,2,3,4] · [2,4,6,8] = 2+8+18+32 = 60
+let d = GPU.dot(src, doubled);
+out d;                          // 60.0
+
+// ── axpy: alpha*x + y ─────────────────────────────────────────────────────────
+// 2.0 * [1,2,3,4] + [2,4,6,8] = [4,8,12,16]
+let r = GPU.axpy(2.0, src, doubled);
+let rarr = GPU.readBuffer(r);
+out rarr[0];                    // 4.0
+out rarr[3];                    // 16.0
+
+// ── matmul 2×2 identity × matrix ─────────────────────────────────────────────
+// I = [[1,0],[0,1]]   M = [[5,6],[7,8]]   I×M = M
+let I = GPU.createBufferFromArray([1.0, 0.0, 0.0, 1.0]);
+let M = GPU.createBufferFromArray([5.0, 6.0, 7.0, 8.0]);
+let C = GPU.matmul(I, 2, 2, M, 2, 2);
+let carr = GPU.readBuffer(C);
+out carr[0];                    // 5.0
+out carr[1];                    // 6.0
+out carr[2];                    // 7.0
+out carr[3];                    // 8.0
+
+// ── freeBuffer then size check ────────────────────────────────────────────────
+GPU.freeBuffer(buf);
+out "done";

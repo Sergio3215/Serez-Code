@@ -96,7 +96,17 @@ impl super::Evaluator {
                         "abs" | "sqrt" | "floor" | "ceil" | "round"
                         | "min" | "max" | "pow" | "log" | "log2" | "log10"
                             => return self.eval_math_builtin(name, &call_expr.arguments),
+                        "time"  => return self.eval_builtin_time(),
+                        "env"   => return self.eval_builtin_env(&call_expr.arguments),
+                        "exit"  => return self.eval_builtin_exit(&call_expr.arguments),
                         _ => {}
+                    }
+                    // native fn dispatch: if name is registered as a native function but has no
+                    // variable binding, it must be one of the built-in natives listed above; if it
+                    // reached here there is no Rust implementation for it.
+                    if self.native_fns.contains(name) && self.lookup_var(name).is_none() {
+                        eprintln!("❌ ERROR: native function '{}' has no Rust implementation registered", name);
+                        return EvalResult::Error;
                     }
                 }
 
@@ -527,6 +537,18 @@ impl super::Evaluator {
                     }
                     if name == "Crypto" {
                         return self.eval_crypto_namespace(dot_call);
+                    }
+                    if name == "Socket" {
+                        return self.eval_socket_namespace(dot_call);
+                    }
+                    if name == "Binary" {
+                        return self.eval_binary_namespace(dot_call);
+                    }
+                    if name == "GPU" {
+                        return self.eval_gpu_namespace(dot_call);
+                    }
+                    if name == "Memory" {
+                        return self.eval_memory_namespace(dot_call);
                     }
                     // ── Enum variant access: Color.Red ────────────────────────
                     if let Some(variants) = self.enum_registry.get(name).cloned() {
@@ -1095,6 +1117,11 @@ impl super::Evaluator {
 
                 // No arm matched — null
                 EvalResult::Value(self.null_ref)
+            }
+
+            Expression::UnsafeBlock(block) => {
+                let block = block.clone();
+                self.eval_unsafe_block(&block)
             }
         }
     }

@@ -27,11 +27,11 @@ Documentación completa del proyecto: arquitectura, decisiones técnicas, toolin
 
 | Métrica | Valor |
 |---|---|
-| Versión | 2.0.1 |
-| Tests pasando | 214 (0 fallando) |
-| Archivos Rust | 22 (`src/`) |
+| Versión | 2.1.0 |
+| Tests pasando | 249 (0 fallando) |
+| Archivos Rust | 28 (`src/`) |
 | Tamaño del parser | ~100 KB |
-| Tamaño del evaluador (total submodulos) | ~258 KB |
+| Tamaño del evaluador (total submodulos) | ~320 KB |
 | Extensión VS Code | v0.2.0 |
 | Plataformas de release | Windows (MSI), Linux (shell), macOS (shell/PS) |
 
@@ -42,7 +42,7 @@ Documentación completa del proyecto: arquitectura, decisiones técnicas, toolin
 ```
 serez-code/
 ├── src/                        — Código fuente Rust
-│   ├── main.rs                 — CLI: file run, REPL, --check, --watch, --version
+│   ├── main.rs                 — CLI: file run, REPL, --check, --watch, --version, install
 │   ├── token.rs                — Enum Token + lookup_ident() para keywords
 │   ├── lexer.rs                — Scanner byte-indexed sobre la String fuente
 │   ├── ast.rs                  — Nodos del AST: Statement, Expression, BlockStatement
@@ -51,27 +51,38 @@ serez-code/
 │   ├── region.rs               — Arena allocator, ObjectRef, ObjectData, OwnedValue
 │   ├── scope.rs                — ScopeStack: push/pop/lookup con watermarks
 │   ├── repl.rs                 — Read-eval-print loop
+│   ├── package_manager.rs      — serez.json, install_package, install_all, packages_dir
 │   ├── test_run.rs             — Helper interno para tests
-│   └── evaluator/              — Intérprete tree-walking (12 submódulos)
+│   └── evaluator/              — Intérprete tree-walking (18 submódulos)
 │       ├── mod.rs
 │       ├── stmt.rs
 │       ├── expr.rs
 │       ├── ops.rs
 │       ├── check.rs
-│       ├── builtins.rs
+│       ├── builtins.rs             — assert, type_of, parseInt, fetch, time, env, exit
 │       ├── classes.rs
 │       ├── methods_array.rs
 │       ├── methods_string.rs
 │       ├── methods_set.rs
-│       ├── namespaces.rs
+│       ├── methods_tensor.rs       — relu, sigmoid, tanh, softmax, abs, pow, sqrt, exp, log, norm, clamp, broadcastAdd
+│       ├── namespaces.rs           — Math, File, JSON
+│       ├── namespaces_crypto.rs    — sha256, md5, hmacSha256, base64, hex
+│       ├── namespaces_socket.rs    — Socket.connect/send/recv/close/listen/accept
+│       ├── namespaces_binary.rs    — Binary.fromHex/toHex/fromUtf8/packInt32Le…
+│       ├── namespaces_gpu.rs       — GPU.createBuffer/map/reduce/dot/matmul…
+│       ├── namespaces_memory.rs    — Memory.sizeof/alloc/free/read/write/copy/fill/offsetOf
 │       └── control.rs
 │
 ├── tests/                      — Suite de tests (.sz)
 │   ├── framework.sz            — Framework de unit testing
-│   ├── unit_*.sz               — 66 tests unitarios
-│   ├── sec_*.sz + err_*.sz     — 46 tests de seguridad y error
+│   ├── packages/               — Paquetes locales para tests (SEREZ_PACKAGES)
+│   │   ├── math-helpers/index.sz
+│   │   ├── string-tools/index.sz
+│   │   └── serez.json
+│   ├── unit_*.sz               — 95 tests unitarios
+│   ├── sec_*.sz + err_*.sz     — 70 tests de seguridad y error
 │   ├── demo_*.sz               — 3 demos
-│   └── NN_*.sz + *.expected    — 51 tests E2E con golden files
+│   └── NN_*.sz + *.expected    — 68 tests E2E con golden files
 │
 ├── apps/                       — 5 apps demo (ejercitan todo el lenguaje)
 │
@@ -128,7 +139,7 @@ TypeChecker (type_checker.rs)
     — Reporta a stderr; NO detiene la ejecución
     │
     ▼
-Evaluator (evaluator/ — 12 módulos)
+Evaluator (evaluator/ — 17 módulos)
     — Tree-walking interpreter
     — Flash Scope protocol en cada bloque { }
     — Scratch watermark para temporales de out en top-level
@@ -161,6 +172,8 @@ Evaluator (evaluator/ — 12 módulos)
 | `sz --check archivo.sz` | Profiler estático (estimación de bytes por función) |
 | `sz --watch archivo.sz` | Re-ejecuta automáticamente al guardar |
 | `sz --version` | Imprime la versión |
+| `sz install` | Instala dependencias de `serez.json` desde el registry |
+| `sz install pkg@version` | Instala un paquete específico desde el registry |
 
 ### Flujo de `sz archivo.sz`
 
@@ -232,22 +245,27 @@ Todo bloque `{ }` sigue esta secuencia en TODOS los code paths incluyendo errore
 
 ## 6. Evaluador — submódulos
 
-El evaluador original era un solo archivo de 5300+ líneas. Fue dividido en 12 módulos cohesivos:
+El evaluador original era un solo archivo de 5300+ líneas. Fue dividido en 17 módulos cohesivos:
 
-| Módulo | Tamaño | Responsabilidad principal |
-|---|---|---|
-| `mod.rs` | 39.5 KB | Entrada, Flash Scope protocol, StoredClass (4 HashMaps O(1)), profiler |
-| `expr.rs` | 45.9 KB | Todas las expresiones: calls, index, dot, ternary, interpolation |
-| `stmt.rs` | 32.3 KB | Todos los statements: let, assign, for, while, if, class, enum… |
-| `classes.rs` | 24.8 KB | Instanciación, dispatch, herencia, super, getters/setters |
-| `methods_array.rs` | 25.6 KB | 20+ métodos de array |
-| `ops.rs` | 21.6 KB | Infix (aritmética, bitwise, power, comparación) y prefix |
-| `namespaces.rs` | 13.5 KB | Math, File, JSON |
-| `builtins.rs` | 17.2 KB | parseInt, parseDecimal, readLine, y otros globals |
-| `methods_string.rs` | 12.1 KB | 20+ métodos de string |
-| `check.rs` | 9.2 KB | Type-check de parámetros, return, typed arrays |
-| `control.rs` | 7.3 KB | Break, continue, labeled loops, do-while |
-| `methods_set.rs` | 7.2 KB | add, has, delete, clear, toArray, union, intersection |
+| Módulo | Responsabilidad principal |
+|---|---|
+| `mod.rs` | Entrada, Flash Scope protocol, StoredClass (4 HashMaps O(1)), profiler |
+| `expr.rs` | Todas las expresiones: calls, index, dot, ternary, interpolation, namespaces |
+| `stmt.rs` | Todos los statements: let, assign, for, while, if, class, enum, import… |
+| `classes.rs` | Instanciación, dispatch, herencia, super, getters/setters |
+| `methods_array.rs` | 20+ métodos de array |
+| `ops.rs` | Infix (aritmética, bitwise, power, comparación) y prefix |
+| `namespaces.rs` | Math, File, JSON namespaces |
+| `namespaces_crypto.rs` | Crypto: sha256, md5, hmacSha256, base64, hex |
+| `namespaces_socket.rs` | Socket: connect, send, recv, close, listen, accept |
+| `namespaces_binary.rs` | Binary: fromHex, toHex, fromUtf8, packInt32Le/Be, matmul… |
+| `namespaces_gpu.rs` | GPU: createBuffer, map, reduce, dot, axpy, matmul (CPU-backed) |
+| `builtins.rs` | parseInt, parseDecimal, readLine, y otros globals |
+| `methods_string.rs` | 20+ métodos de string |
+| `methods_set.rs` | add, has, delete, clear, toArray, union, intersection |
+| `methods_tensor.rs` | Operaciones tensoriales (Tensor namespace) |
+| `check.rs` | Type-check de parámetros, return, typed arrays |
+| `control.rs` | Break, continue, labeled loops, do-while |
 
 ### Helpers estructurales (reducen duplicación)
 
@@ -265,14 +283,14 @@ El evaluador original era un solo archivo de 5300+ líneas. Fue dividido en 12 m
 
 | Categoría | Cantidad | Descripción |
 |---|---|---|
-| `unit_*.sz` (no sec) | 71 | Tests unitarios usando `framework.sz` (assert, expect) |
-| `NN_*.sz` + `.expected` | 53 | Tests E2E con golden files — diff exacto de stdout |
+| `unit_*.sz` (no sec) | 73 | Tests unitarios usando `framework.sz` (assert, expect) |
+| `NN_*.sz` + `.expected` | 55 | Tests E2E con golden files — diff exacto de stdout |
 | `err_*.sz` | 27 | Verifican que ciertos inputs producen error de runtime |
 | `sec_*.sz` | 36 | Suite de seguridad: overflow, OOB, null safety, stack overflow |
 | `unit_sec_*.sz` | 15 | Tests unitarios de seguridad (con framework.sz) |
-| CLI / REPL / --check | 12 | Tests de modo de ejecución del CLI |
+| CLI / REPL / --check | 13 | Tests de modo de ejecución del CLI |
 | `framework.sz` | 1 | Framework compartido por todos los unit tests |
-| **Total** | **214** | **0 fallando** |
+| **Total** | **256** | **0 fallando** |
 
 ### Test runners
 

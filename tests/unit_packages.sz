@@ -1,0 +1,61 @@
+// Unit tests: package imports (requires SEREZ_PACKAGES=tests/packages)
+
+import "math-helpers";
+import "string-tools";
+
+test("math-helpers: clamp in range", () => {
+    assert(clamp(5, 0, 10) == 5, "in range");
+});
+
+test("math-helpers: clamp below min", () => {
+    assert(clamp(-5, 0, 10) == 0, "below min");
+});
+
+test("math-helpers: clamp above max", () => {
+    assert(clamp(15, 0, 10) == 10, "above max");
+});
+
+test("math-helpers: lerp midpoint", () => {
+    assert(lerp(0.0, 10.0, 0.5) == 5.0, "midpoint");
+});
+
+test("math-helpers: lerp endpoints", () => {
+    assert(lerp(3.0, 7.0, 0.0) == 3.0, "start");
+    assert(lerp(3.0, 7.0, 1.0) == 7.0, "end");
+});
+
+test("math-helpers: factorial", () => {
+    assert(factorial(0) == 1 || factorial(1) == 1, "base case");
+    assert(factorial(5) == 120, "5! = 120");
+    assert(factorial(6) == 720, "6! = 720");
+});
+
+test("math-helpers: PI_APPROX is a decimal", () => {
+    assert(PI_APPROX > 3.0, "PI > 3");
+    assert(PI_APPROX < 4.0, "PI < 4");
+});
+
+test("string-tools: repeat basic", () => {
+    assert(repeat("ab", 3) == "ababab", "3 times");
+    assert(repeat("x", 1) == "x", "1 time");
+    assert(repeat("z", 0) == "", "0 times");
+});
+
+test("string-tools: isPalindrome true cases", () => {
+    assert(isPalindrome("racecar") == true, "racecar");
+    assert(isPalindrome("a") == true, "single char");
+    assert(isPalindrome("") == true, "empty");
+});
+
+test("string-tools: isPalindrome false cases", () => {
+    assert(isPalindrome("hello") == false, "hello");
+    assert(isPalindrome("world") == false, "world");
+});
+
+test("string-tools: capitalize", () => {
+    assert(capitalize("hello") == "Hello", "lowercase start");
+    assert(capitalize("World") == "World", "already capital");
+    assert(capitalize("a") == "A", "single char");
+});
+
+summary();

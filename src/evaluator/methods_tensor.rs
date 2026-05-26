@@ -343,6 +343,159 @@ impl super::Evaluator {
                 let s = self.display(tensor_ref);
                 EvalResult::Value(self.alloc(ObjectData::Str(s)))
             }
+
+            // ── Activation functions ─────────────────────────────────────────
+            "relu" => {
+                let new_data: Vec<f64> = data.iter().map(|&x| if x > 0.0 { x } else { 0.0 }).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+            "sigmoid" => {
+                let new_data: Vec<f64> = data.iter().map(|&x| 1.0 / (1.0 + (-x).exp())).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+            "tanh" => {
+                let new_data: Vec<f64> = data.iter().map(|&x| x.tanh()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+            "softmax" => {
+                if data.is_empty() {
+                    return EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data }));
+                }
+                let max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let exps: Vec<f64> = data.iter().map(|&x| (x - max).exp()).collect();
+                let sum: f64 = exps.iter().sum();
+                let new_data: Vec<f64> = exps.iter().map(|&e| e / sum).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+
+            // ── Element-wise math ────────────────────────────────────────────
+            "abs" => {
+                let new_data: Vec<f64> = data.iter().map(|&x| x.abs()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+            "sqrt" => {
+                for &x in &data {
+                    if x < 0.0 { eprintln!("❌ ERROR: Tensor.sqrt() — negative value {}", x); return EvalResult::Error; }
+                }
+                let new_data: Vec<f64> = data.iter().map(|&x| x.sqrt()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+            "exp" => {
+                let new_data: Vec<f64> = data.iter().map(|&x| x.exp()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+            "log" => {
+                for &x in &data {
+                    if x <= 0.0 { eprintln!("❌ ERROR: Tensor.log() — non-positive value {}", x); return EvalResult::Error; }
+                }
+                let new_data: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+            "pow" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.pow(exponent) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let exp = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => match self.resolve(r) {
+                        Some(ObjectData::Integer(n)) => *n as f64,
+                        Some(ObjectData::Decimal(d)) => *d,
+                        _ => { eprintln!("❌ ERROR: Tensor.pow() exponent must be a number"); return EvalResult::Error; }
+                    },
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let new_data: Vec<f64> = data.iter().map(|&x| x.powf(exp)).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+
+            // ── Norms ────────────────────────────────────────────────────────
+            "norm" => {
+                // norm(order=2) — L1 (order=1) or L2 (order=2, default)
+                let order = if dot_call.arguments.is_empty() {
+                    2i64
+                } else {
+                    match self.eval_expression(&dot_call.arguments[0]) {
+                        EvalResult::Value(r) => match self.resolve(r) {
+                            Some(ObjectData::Integer(n)) => *n,
+                            _ => { eprintln!("❌ ERROR: Tensor.norm() order must be an integer"); return EvalResult::Error; }
+                        },
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
+                        _ => return EvalResult::Error,
+                    }
+                };
+                let result = match order {
+                    1 => data.iter().map(|&x| x.abs()).sum::<f64>(),
+                    2 => data.iter().map(|&x| x * x).sum::<f64>().sqrt(),
+                    _ => { eprintln!("❌ ERROR: Tensor.norm() supports order 1 or 2, got {}", order); return EvalResult::Error; }
+                };
+                EvalResult::Value(self.alloc(ObjectData::Decimal(result)))
+            }
+
+            // ── Clamp ────────────────────────────────────────────────────────
+            "clamp" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.clamp(min, max) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let lo = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => match self.resolve(r) {
+                        Some(ObjectData::Integer(n)) => *n as f64,
+                        Some(ObjectData::Decimal(d)) => *d,
+                        _ => { eprintln!("❌ ERROR: Tensor.clamp() min must be a number"); return EvalResult::Error; }
+                    },
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let hi = match self.eval_expression(&dot_call.arguments[1]) {
+                    EvalResult::Value(r) => match self.resolve(r) {
+                        Some(ObjectData::Integer(n)) => *n as f64,
+                        Some(ObjectData::Decimal(d)) => *d,
+                        _ => { eprintln!("❌ ERROR: Tensor.clamp() max must be a number"); return EvalResult::Error; }
+                    },
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                if lo > hi { eprintln!("❌ ERROR: Tensor.clamp() min > max"); return EvalResult::Error; }
+                let new_data: Vec<f64> = data.iter().map(|&x| x.clamp(lo, hi)).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+
+            // ── Broadcast add: (m,n) + (n,) ─────────────────────────────────
+            "broadcastAdd" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.broadcastAdd(bias) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.broadcastAdd() only supported for 2D tensors");
+                    return EvalResult::Error;
+                }
+                let (rows, cols) = (shape[0], shape[1]);
+                let bias_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let bias_data = match self.resolve(bias_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: bs, data: bd }) => {
+                        if bs != vec![cols] {
+                            eprintln!("❌ ERROR: Tensor.broadcastAdd() bias shape {:?} must match last dim {}", bs, cols);
+                            return EvalResult::Error;
+                        }
+                        bd
+                    }
+                    _ => { eprintln!("❌ ERROR: Tensor.broadcastAdd() argument must be a 1D Tensor"); return EvalResult::Error; }
+                };
+                let mut new_data = data.clone();
+                for r in 0..rows {
+                    for c in 0..cols {
+                        new_data[r * cols + c] += bias_data[c];
+                    }
+                }
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+            }
+
             _ => {
                 eprintln!("❌ ERROR: Unknown Tensor method '{}'", dot_call.method);
                 EvalResult::Error

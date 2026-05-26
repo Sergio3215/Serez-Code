@@ -256,6 +256,8 @@ $tempFile   = Join-Path $testsDir "~unit_temp.sz"
 
 # Expose project root as SEREZ_HOME so `import "std/..."` resolves correctly
 $env:SEREZ_HOME = $root
+# Expose tests/packages as SEREZ_PACKAGES so package tests can import local packages
+$env:SEREZ_PACKAGES = Join-Path $root "tests\packages"
 
 # ── Build first ───────────────────────────────────────────────────────────────
 Write-Host "Building..." -ForegroundColor Cyan

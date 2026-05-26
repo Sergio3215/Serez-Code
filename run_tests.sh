@@ -42,6 +42,7 @@ BINARY="$ROOT/target/debug/sz"
 TEMP_SZ="$TESTS_DIR/~unit_temp_$$.sz"
 TEMP_ERR="/tmp/sz_test_$$_err.txt"
 export SEREZ_HOME="$ROOT"
+export SEREZ_PACKAGES="$ROOT/tests/packages"
 
 # Colors — disabled if stdout is not a terminal
 if [[ -t 1 ]]; then

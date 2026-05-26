@@ -1,0 +1,28 @@
+// E2E: package manager — import packages from SEREZ_PACKAGES directory
+
+import "math-helpers";
+import "string-tools";
+
+// ── math-helpers ──────────────────────────────────────────────────────────────
+out clamp(5, 0, 10);        // 5  (in range)
+out clamp(-3, 0, 10);       // 0  (below min)
+out clamp(15, 0, 10);       // 10 (above max)
+
+out lerp(0.0, 100.0, 0.5);  // 50.0
+out lerp(0.0, 100.0, 0.0);  // 0.0
+out lerp(0.0, 100.0, 1.0);  // 100.0
+
+out factorial(5);            // 120
+out factorial(1);            // 1
+
+out PI_APPROX;               // 3.14159
+
+// ── string-tools ─────────────────────────────────────────────────────────────
+out repeat("ab", 3);        // ababab
+out repeat("x", 0);         // (empty string)
+
+out isPalindrome("racecar"); // true
+out isPalindrome("hello");   // false
+
+out capitalize("hello");     // Hello
+out capitalize("world");     // World

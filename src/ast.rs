@@ -292,6 +292,7 @@ pub enum Expression {
     AddressOf(Box<Expression>),                      // &varname
     Deref(Box<Expression>),                          // *ptr
     Match(Box<MatchExpression>),                     // match expr { pat => body, ... }
+    UnsafeBlock(BlockStatement),                     // unsafe { ... } as expression
 }
 
 #[derive(Debug, Clone)]
