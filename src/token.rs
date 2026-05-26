@@ -123,6 +123,12 @@ pub enum TokenType {
     KwDo,        // do
     KwStatic,    // static
     KwIs,        // is
+    KwUnsafe,    // unsafe
+    KwSizeof,    // sizeof
+    KwNative,    // native
+    KwImport,    // import
+    KwExport,    // export
+    KwYield,     // yield
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -187,6 +193,12 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "do"       => TokenType::KwDo,
         "static"   => TokenType::KwStatic,
         "is"       => TokenType::KwIs,
+        "unsafe"   => TokenType::KwUnsafe,
+        "sizeof"   => TokenType::KwSizeof,
+        "native"   => TokenType::KwNative,
+        "import"   => TokenType::KwImport,
+        "export"   => TokenType::KwExport,
+        "yield"    => TokenType::KwYield,
         _ => TokenType::Ident,
     }
 }

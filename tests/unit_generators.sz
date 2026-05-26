@@ -1,0 +1,112 @@
+// Unit tests: generator functions (fn*)
+
+import "std/iter";
+
+test("basic generator — collect to array", () => {
+    fn* count(int n) {
+        let i = 0;
+        while (i < n) {
+            yield i;
+            i = i + 1;
+        }
+    }
+    let arr = count(4);
+    assert(arr.length() == 4, "length");
+    assert(arr[0] == 0, "first");
+    assert(arr[3] == 3, "last");
+});
+
+test("generator — for-in iteration", () => {
+    fn* evens(int n) {
+        let i = 0;
+        while (i < n) {
+            yield i * 2;
+            i = i + 1;
+        }
+    }
+    let sum = 0;
+    for (let x in evens(4)) {
+        sum = sum + x;
+    }
+    // 0+2+4+6 = 12
+    assert(sum == 12, "sum of evens");
+});
+
+test("generator — string yields", () => {
+    fn* letters() {
+        yield "a";
+        yield "b";
+        yield "c";
+    }
+    let arr = letters();
+    assert(arr.length() == 3, "length");
+    assert(arr[0] == "a", "a");
+    assert(arr[2] == "c", "c");
+});
+
+test("generator — early return stops yield", () => {
+    fn* upTo(int n) {
+        let i = 0;
+        while (i < 100) {
+            if (i >= n) { return; }
+            yield i;
+            i = i + 1;
+        }
+    }
+    let r = upTo(3);
+    assert(r.length() == 3, "length is 3 not 100");
+    assert(r[0] == 0, "r[0]");
+    assert(r[2] == 2, "r[2]");
+});
+
+test("generator — empty (no yield)", () => {
+    fn* nothing() {
+        let x = 1;
+    }
+    let r = nothing();
+    assert(r.length() == 0, "empty generator yields empty array");
+});
+
+test("generator — conditional yields", () => {
+    fn* odds(int max) {
+        let i = 0;
+        while (i < max) {
+            if (i % 2 != 0) { yield i; }
+            i = i + 1;
+        }
+    }
+    let r = odds(8);
+    assert(r.length() == 4, "four odd numbers under 8");
+    assert(r[0] == 1, "first odd");
+    assert(r[3] == 7, "last odd");
+});
+
+test("generator — iterable over string generator", () => {
+    fn* greet([string] names) {
+        for (let name in names) {
+            yield "Hi " + name;
+        }
+    }
+    let g = greet(["Ana", "Ben"]);
+    assert(g.length() == 2, "two greetings");
+    assert(g[0] == "Hi Ana", "first");
+    assert(g[1] == "Hi Ben", "second");
+});
+
+test("generator — with enumerate", () => {
+    fn* squares(int n) {
+        let i = 1;
+        while (i <= n) {
+            yield i * i;
+            i = i + 1;
+        }
+    }
+    let sq = squares(4);
+    let indexed = enumerate(sq);
+    assert(indexed.length() == 4, "length");
+    let [idx, val] = indexed[2];
+    assert(idx == 2, "index");
+    assert(val == 9, "3^2");
+});
+
+summary();

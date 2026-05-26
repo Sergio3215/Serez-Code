@@ -116,7 +116,7 @@ impl HirLowerer {
                 vec![HirStmt::Assign(HirLValue::Var(a.name.clone()), value)]
             }
 
-            Statement::Block(b) => {
+            Statement::Block(b) | Statement::Unsafe(b) => {
                 let stmts = b.statements.iter().flat_map(|s| self.lower_stmt(s)).collect();
                 vec![HirStmt::Block(stmts)]
             }
@@ -178,10 +178,15 @@ impl HirLowerer {
                     _ => SzType::Unknown,
                 };
 
+                let var_name = match &fe.var {
+                    ast::ForEachVar::Name(n) => n.clone(),
+                    ast::ForEachVar::Array(_, _) => self.fresh("item"),
+                };
+
                 self.type_env.insert(iter_name.clone(), iter_ty.clone());
                 self.type_env.insert(idx_name.clone(), SzType::Int);
                 self.type_env.insert(len_name.clone(), SzType::Int);
-                self.type_env.insert(fe.var_name.clone(), elem_ty.clone());
+                self.type_env.insert(var_name.clone(), elem_ty.clone());
 
                 let let_iter = HirStmt::Let {
                     name: iter_name.clone(), ty: iter_ty.clone(),
@@ -217,7 +222,7 @@ impl HirLowerer {
                 );
 
                 let let_elem = HirStmt::Let {
-                    name: fe.var_name.clone(), ty: elem_ty.clone(),
+                    name: var_name.clone(), ty: elem_ty.clone(),
                     value: HirExpr::Index {
                         array: Box::new(HirExpr::Var(iter_name, iter_ty)),
                         index: Box::new(HirExpr::Var(idx_name, SzType::Int)),
@@ -234,6 +239,9 @@ impl HirLowerer {
                     HirStmt::For { init: Box::new(init), cond, update: Box::new(update), body },
                 ])]
             }
+
+            Statement::LetDestructureArray(_) | Statement::LetDestructureDict(_) => vec![],
+            Statement::Yield(_) => vec![],
 
             Statement::Out(o) => vec![HirStmt::Out(self.lower_expr(&o.value))],
 
@@ -313,6 +321,16 @@ impl HirLowerer {
 
             // Throw: phase 1 — no-op; full exception support comes later
             Statement::Throw(_) => vec![],
+
+            // Pointer write — stub (native pointer support in Phase 1.5+)
+            Statement::DerefAssign { .. } => vec![],
+
+            // Native function declaration — no HIR; dispatch is at runtime
+            Statement::NativeDeclaration(_) => vec![],
+
+            // Import/Export — resolved at eval time, not compile time
+            Statement::Import(_) => vec![],
+            Statement::Export(inner) => self.lower_stmt(inner),
 
             // Already handled at program level
             Statement::FunctionDeclaration(_)
@@ -515,6 +533,24 @@ impl HirLowerer {
                 }).unwrap_or(HirExpr::LitStr(String::new()))
             }
 
+            // sizeof → constant integer at HIR level
+            Expression::SizeOf(target) => {
+                use crate::ast::SizeOfTarget;
+                let size: i64 = match target {
+                    SizeOfTarget::Type(name) => match name.as_str() {
+                        "int" | "decimal" | "string" | "any" => 8,
+                        "bool"                               => 1,
+                        "null" | "void"                      => 0,
+                        _                                    => 8,
+                    },
+                    SizeOfTarget::Expr(_) => 8, // conservative: pointer-sized at HIR
+                };
+                HirExpr::LitInt(size)
+            }
+
+            // Pointer expressions — stub as Null until native pointer support lands
+            Expression::AddressOf(_) | Expression::Deref(_) => HirExpr::Null,
+
             // Phase 1: lambdas, dicts, spread, object-patch are unsupported
             Expression::FunctionLiteral(_) | Expression::Lambda(_)
             | Expression::DictLiteral(_)  | Expression::EntryLiteral(_, _)
@@ -614,6 +650,7 @@ mod tests {
                     default_value: None,
                 }).collect(),
                 body: block(body),
+                is_generator: false,
             },
         })
     }
@@ -859,7 +896,7 @@ mod tests {
     #[test]
     fn foreach_desugars_to_block_with_for_loop() {
         let fe = ast::Statement::ForEach(ast::ForEachStatement {
-            var_name: "n".to_string(),
+            var: ast::ForEachVar::Name("n".to_string()),
             iterable: ident("items"),
             body: block(vec![out(ident("n"))]),
             label: None,

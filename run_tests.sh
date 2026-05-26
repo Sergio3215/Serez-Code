@@ -39,8 +39,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTS_DIR="$ROOT/tests"
 FRAMEWORK="$TESTS_DIR/framework.sz"
 BINARY="$ROOT/target/debug/sz"
-TEMP_SZ="/tmp/sz_test_$$_run.sz"
+TEMP_SZ="$TESTS_DIR/~unit_temp_$$.sz"
 TEMP_ERR="/tmp/sz_test_$$_err.txt"
+export SEREZ_HOME="$ROOT"
 
 # Colors — disabled if stdout is not a terminal
 if [[ -t 1 ]]; then

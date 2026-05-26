@@ -33,6 +33,7 @@ fn run_file(file_path: &str, is_check: bool) {
 
     let mut evaluator = evaluator::Evaluator::new();
     evaluator.set_source(source_lines);
+    evaluator.set_current_file(std::path::Path::new(file_path));
     if is_check {
         evaluator.check_program(&program);
     } else {

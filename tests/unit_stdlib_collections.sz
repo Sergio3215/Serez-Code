@@ -1,0 +1,57 @@
+// Unit tests: std/collections
+
+import "std/collections";
+
+test("Stack push/pop/peek", () => {
+    let s = new Stack();
+    s.push(1); s.push(2); s.push(3);
+    assert(s.peek() == 3,  "peek is 3");
+    assert(s.pop() == 3,   "pop returns 3");
+    assert(s.size() == 2,  "size is 2 after pop");
+    assert(!s.isEmpty(),   "not empty");
+});
+
+test("Stack underflow throws", () => {
+    let s = new Stack();
+    let caught = false;
+    try { s.pop(); } catch (e) { caught = true; }
+    assert(caught, "pop on empty throws");
+});
+
+test("Stack isEmpty and clear", () => {
+    let s = new Stack();
+    assert(s.isEmpty(), "new stack is empty");
+    s.push(99);
+    assert(!s.isEmpty(), "not empty after push");
+    s.clear();
+    assert(s.isEmpty(), "empty after clear");
+});
+
+test("Queue enqueue/dequeue/front", () => {
+    let q = new Queue();
+    q.enqueue("a"); q.enqueue("b"); q.enqueue("c");
+    assert(q.front() == "a", "front is a");
+    assert(q.dequeue() == "a", "dequeue returns a");
+    assert(q.size() == 2, "size 2 after dequeue");
+});
+
+test("Queue underflow throws", () => {
+    let q = new Queue();
+    let caught = false;
+    try { q.dequeue(); } catch (e) { caught = true; }
+    assert(caught, "dequeue on empty throws");
+});
+
+test("Deque pushFront and pushBack", () => {
+    let d = new Deque();
+    d.pushBack(2);
+    d.pushFront(1);
+    d.pushBack(3);
+    assert(d.front() == 1, "front is 1");
+    assert(d.back() == 3,  "back is 3");
+    assert(d.popFront() == 1, "popFront is 1");
+    assert(d.popBack() == 3,  "popBack is 3");
+    assert(d.size() == 1, "size 1 remaining");
+});
+
+summary();

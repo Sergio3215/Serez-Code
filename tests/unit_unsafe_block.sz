@@ -1,0 +1,79 @@
+// Unit tests for unsafe { } block — Phase 1
+
+test("unsafe block executes body", () => {
+    let x = 0;
+    unsafe {
+        x = 42;
+    }
+    assert(x == 42, "unsafe block should execute body");
+});
+
+test("unsafe block creates its own scope", () => {
+    let outer = 1;
+    unsafe {
+        let inner = 99;
+        outer = inner;
+    }
+    assert(outer == 99, "unsafe block can read outer scope");
+});
+
+test("unsafe block with arithmetic", () => {
+    let result = 0;
+    unsafe {
+        let a = 10;
+        let b = 20;
+        result = a + b;
+    }
+    assert(result == 30, "unsafe block should compute arithmetic");
+});
+
+test("unsafe block return value propagates", () => {
+    let val = 0;
+    unsafe {
+        val = 7;
+    }
+    assert(val == 7, "value set in unsafe block should be visible outside");
+});
+
+test("nested unsafe blocks", () => {
+    let x = 0;
+    unsafe {
+        x = 1;
+        unsafe {
+            x = 2;
+        }
+        assert(x == 2, "inner unsafe should execute");
+    }
+    assert(x == 2, "outer should see inner unsafe result");
+});
+
+test("unsafe block with function call", () => {
+    fn int double(int n) { return n * 2; }
+    let r = 0;
+    unsafe {
+        r = double(21);
+    }
+    assert(r == 42, "function calls work inside unsafe");
+});
+
+test("unsafe block with string", () => {
+    let s = "";
+    unsafe {
+        s = "hello from unsafe";
+    }
+    assert(s == "hello from unsafe", "string assignment in unsafe");
+});
+
+test("unsafe block does not suppress errors", () => {
+    let caught = false;
+    try {
+        unsafe {
+            throw "error inside unsafe";
+        }
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught == true, "throw inside unsafe should be catchable");
+});
+
+summary();

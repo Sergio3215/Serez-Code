@@ -33,6 +33,7 @@ impl super::Evaluator {
                     parameters: func_lit.parameters.clone(),
                     body: Rc::new(func_lit.body.clone()),
                     captured,
+                    is_generator: func_lit.is_generator,
                 };
                 EvalResult::Value(self.alloc(func_data))
             }
@@ -56,6 +57,7 @@ impl super::Evaluator {
                     parameters: params,
                     body: Rc::new(body),
                     captured,
+                    is_generator: false,
                 }))
             }
 
@@ -87,6 +89,7 @@ impl super::Evaluator {
                         "parseInt"    => return self.eval_parse_int(&call_expr.arguments),
                         "parseDecimal"=> return self.eval_parse_decimal(&call_expr.arguments),
                         "readLine"    => return self.eval_read_line(&call_expr.arguments),
+                        "fetch" if self.lookup_var("fetch").is_none() => return self.eval_fetch(&call_expr.arguments),
                         "super"       => return self.eval_super_call(&call_expr.arguments),
                         "assert"      => return self.eval_assert(&call_expr.arguments),
                         "type_of"     => return self.eval_type_of(&call_expr.arguments),
@@ -124,13 +127,14 @@ impl super::Evaluator {
                 self.scopes.push();
 
                 let func_data = self.resolve(func_ref).cloned();
-                let (return_type, parameters, body, captured) = match func_data {
+                let (return_type, parameters, body, captured, is_generator) = match func_data {
                     Some(ObjectData::Function {
                         return_type,
                         parameters,
                         body,
                         captured,
-                    }) => (return_type, parameters, body, captured),
+                        is_generator,
+                    }) => (return_type, parameters, body, captured, is_generator),
                     _ => {
                         eprintln!("❌ ERROR: Attempt to call a non-function");
                         self.scopes.pop();
@@ -247,33 +251,61 @@ impl super::Evaluator {
                     self.scopes.declare(param.name.clone(), local_ref);
                 }
 
+                // Generator: save outer collector, install a fresh one
+                let prev_collector = if is_generator {
+                    let prev = self.yield_collector.take();
+                    self.yield_collector = Some(Vec::new());
+                    prev
+                } else {
+                    None
+                };
+
                 let mut result_ref = self.null_ref;
+                let mut early_throw: Option<OwnedValue> = None;
+                let mut early_error = false;
                 for s in &body.statements {
                     match self.eval_statement(s) {
                         EvalResult::Value(_) => {} // implicit — function result is null unless explicit return
                         EvalResult::Return(v) => { result_ref = v; break; }
                         EvalResult::Throw(v) => {
-                            let owned = self.extract(v);
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
-                            return EvalResult::Throw(self.plant(owned));
+                            early_throw = Some(self.extract(v));
+                            break;
                         }
                         EvalResult::Error => {
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
-                            return EvalResult::Error;
+                            early_error = true;
+                            break;
                         }
                         EvalResult::Break | EvalResult::Continue
                         | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
                             eprintln!("❌ ERROR: 'break'/'continue' cannot be used outside of a loop");
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
-                            return EvalResult::Error;
+                            early_error = true;
+                            break;
                         }
                     }
+                }
+
+                // Generator: collect yielded values before popping scope
+                if is_generator {
+                    let collected = self.yield_collector.take().unwrap_or_default();
+                    self.yield_collector = prev_collector;
+                    self.scopes.pop();
+                    self.call_depth -= 1;
+                    self.call_stack.pop();
+                    if early_error { return EvalResult::Error; }
+                    if let Some(thrown) = early_throw { return EvalResult::Throw(self.plant(thrown)); }
+                    let arr_refs: Vec<ObjectRef> = collected.into_iter()
+                        .map(|v| self.plant(v)).collect();
+                    let arr_ref = self.alloc(ObjectData::Array { element_type: None, elements: arr_refs });
+                    return EvalResult::Value(arr_ref);
+                }
+
+                if early_error {
+                    self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
+                    return EvalResult::Error;
+                }
+                if let Some(thrown) = early_throw {
+                    self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
+                    return EvalResult::Throw(self.plant(thrown));
                 }
 
                 // Deep-extract ANTES del pop — preserva elementos de arrays anidados
@@ -490,6 +522,12 @@ impl super::Evaluator {
                     if name == "JSON" {
                         return self.eval_json_namespace(dot_call);
                     }
+                    if name == "Tensor" {
+                        return self.eval_tensor_static(dot_call);
+                    }
+                    if name == "Crypto" {
+                        return self.eval_crypto_namespace(dot_call);
+                    }
                     // ── Enum variant access: Color.Red ────────────────────────
                     if let Some(variants) = self.enum_registry.get(name).cloned() {
                         let variant = dot_call.method.clone();
@@ -570,7 +608,8 @@ impl super::Evaluator {
                     }
 
                     // ── Dict methods ──────────────────────────────────────────
-                    ObjectData::Dict { key_type, value_type, mut entries } => {
+                    ObjectData::Dict { key_type, value_type, entries } => {
+                        let mut entries = entries;
                         match dot_call.method.as_str() {
                             "Add" => {
                                 if dot_call.arguments.len() != 1 {
@@ -737,6 +776,11 @@ impl super::Evaluator {
                         self.eval_set_method(obj_ref, elements, dot_call)
                     }
 
+                    // ── Tensor methods ────────────────────────────────────────
+                    ObjectData::Tensor { shape, data } => {
+                        self.eval_tensor_method(obj_ref, shape, data, dot_call)
+                    }
+
                     // ── EnumVariant: no field access, just toString ────────────
                     ObjectData::EnumVariant { enum_name, variant } => {
                         if dot_call.method == "toString" {
@@ -780,6 +824,10 @@ impl super::Evaluator {
             }
 
             Expression::New(new_expr) => {
+                // ── Built-in Tensor type ──────────────────────────────────────
+                if new_expr.class_name == "Tensor" {
+                    return self.eval_new_tensor(new_expr);
+                }
                 // ── Built-in Set type ─────────────────────────────────────────
                 if new_expr.class_name == "Set" {
                     return self.eval_new_set(new_expr);
@@ -918,6 +966,74 @@ impl super::Evaluator {
             // Spread used as a standalone expression — evaluate the inner value.
             // Actual spreading (into arrays/calls) is handled at the call/array site.
             Expression::Spread(inner) => self.eval_expression(inner),
+
+            Expression::SizeOf(target) => {
+                use crate::ast::SizeOfTarget;
+                let size: i64 = match target {
+                    SizeOfTarget::Type(name) => match name.as_str() {
+                        "int"     => 8,
+                        "decimal" => 8,
+                        "bool"    => 1,
+                        "string"  => 8,
+                        "null"    => 0,
+                        "void"    => 0,
+                        "any"     => 8,
+                        _         => 8, // unknown type: pointer-sized
+                    },
+                    SizeOfTarget::Expr(inner) => {
+                        let val_ref = match self.eval_expression(inner) {
+                            EvalResult::Value(r) => r,
+                            other => return other,
+                        };
+                        match self.resolve(val_ref) {
+                            Some(ObjectData::Integer(_))    => 8,
+                            Some(ObjectData::Decimal(_))    => 8,
+                            Some(ObjectData::Boolean(_))    => 1,
+                            Some(ObjectData::Str(_))        => 8,
+                            Some(ObjectData::Null)          => 0,
+                            Some(ObjectData::Ptr(_))        => 8,
+                            _                               => 8,
+                        }
+                    }
+                };
+                EvalResult::Value(self.alloc(ObjectData::Integer(size)))
+            }
+
+            Expression::AddressOf(inner) => {
+                if let Expression::Identifier(name) = inner.as_ref() {
+                    if self.lookup_var(name).is_none() {
+                        eprintln!("❌ ERROR: Cannot take address of undeclared variable '{}'", name);
+                        return EvalResult::Error;
+                    }
+                    let ptr = ObjectData::Ptr(name.clone());
+                    EvalResult::Value(self.alloc(ptr))
+                } else {
+                    eprintln!("❌ ERROR: '&' can only be applied to a named variable");
+                    EvalResult::Error
+                }
+            }
+
+            Expression::Deref(ptr_expr) => {
+                let ptr_ref = match self.eval_expression(ptr_expr) {
+                    EvalResult::Value(r) => r,
+                    other => return other,
+                };
+                match self.resolve(ptr_ref).cloned() {
+                    Some(ObjectData::Ptr(name)) => {
+                        match self.lookup_var(&name) {
+                            Some(r) => EvalResult::Value(r),
+                            None => {
+                                eprintln!("❌ ERROR: Dangling pointer to '{}'", name);
+                                EvalResult::Error
+                            }
+                        }
+                    }
+                    _ => {
+                        eprintln!("❌ ERROR: Cannot dereference a non-pointer value");
+                        EvalResult::Error
+                    }
+                }
+            }
         }
     }
 

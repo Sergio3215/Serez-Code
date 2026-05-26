@@ -37,6 +37,7 @@ pub enum OwnedValue {
         parameters: Vec<Parameter>,
         body: Rc<BlockStatement>, // Rc: cloning a function is O(1), not O(body_size)
         captured: Vec<(String, ObjectRef)>,
+        is_generator: bool,
     },
     Instance {
         class_name: String,
@@ -49,6 +50,11 @@ pub enum OwnedValue {
     Set {
         elements: Vec<OwnedValue>,
     },
+    Tensor {
+        shape: Vec<usize>,
+        data: Vec<f64>,
+    },
+    Ptr(String), // pointer to a named variable
     Null,
 }
 
@@ -87,6 +93,8 @@ impl OwnedValue {
                 let inner: Vec<String> = elements.iter().map(|v| v.display_str()).collect();
                 format!("Set[{}]", inner.join(", "))
             }
+            OwnedValue::Tensor { shape, data } => format_tensor(shape, data),
+            OwnedValue::Ptr(name) => format!("&{}", name),
             OwnedValue::Null => "null".to_string(),
         }
     }
@@ -112,6 +120,7 @@ pub enum ObjectData {
         parameters: Vec<Parameter>,
         body: Rc<BlockStatement>, // Rc: cloning a function is O(1), not O(body_size)
         captured: Vec<(String, ObjectRef)>,
+        is_generator: bool,
     },
     // Fields stored as OwnedValues (embedded, arena-independent) to avoid cross-scope refs.
     Instance {
@@ -125,6 +134,11 @@ pub enum ObjectData {
     Set {
         elements: Vec<ObjectRef>,
     },
+    Tensor {
+        shape: Vec<usize>,
+        data: Vec<f64>,
+    },
+    Ptr(String), // pointer to a named variable
     Null,
 }
 
@@ -144,6 +158,8 @@ impl std::fmt::Display for ObjectData {
             ObjectData::Instance { class_name, .. } => write!(f, "{}{{...}}", class_name),
             ObjectData::EnumVariant { enum_name, variant } => write!(f, "{}.{}", enum_name, variant),
             ObjectData::Set { .. } => write!(f, "Set{{...}}"),
+            ObjectData::Tensor { shape, data } => write!(f, "{}", format_tensor(shape, data)),
+            ObjectData::Ptr(name) => write!(f, "Ptr(&{})", name),
             ObjectData::Null => write!(f, "Null"),
         }
     }
@@ -183,6 +199,33 @@ impl Arena {
     }
 }
 
+pub fn format_tensor(shape: &[usize], data: &[f64]) -> String {
+    fn fmt_val(v: f64) -> String {
+        if v.fract() == 0.0 {
+            format!("{:.1}", v)
+        } else {
+            let s = format!("{:.6}", v);
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        }
+    }
+    fn nest(shape: &[usize], data: &[f64], off: usize) -> String {
+        if shape.len() == 1 {
+            let vs: Vec<String> = (0..shape[0]).map(|i| fmt_val(data[off + i])).collect();
+            format!("[{}]", vs.join(", "))
+        } else {
+            let stride: usize = shape[1..].iter().product();
+            let rows: Vec<String> = (0..shape[0])
+                .map(|i| nest(&shape[1..], data, off + i * stride))
+                .collect();
+            format!("[{}]", rows.join(", "))
+        }
+    }
+    if shape.is_empty() {
+        return "Tensor([])".to_string();
+    }
+    format!("Tensor({})", nest(shape, data, 0))
+}
+
 impl ObjectData {
     pub fn type_name(&self) -> &str {
         match self {
@@ -196,6 +239,8 @@ impl ObjectData {
             ObjectData::Instance { class_name, .. } => class_name.as_str(),
             ObjectData::EnumVariant { enum_name, .. } => enum_name.as_str(),
             ObjectData::Set { .. } => "Set",
+            ObjectData::Tensor { .. } => "Tensor",
+            ObjectData::Ptr(_) => "ptr",
             ObjectData::Null => "null",
         }
     }

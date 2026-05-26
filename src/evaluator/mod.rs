@@ -9,11 +9,14 @@ mod methods_string;
 mod control;
 mod namespaces;
 mod methods_set;
+mod methods_tensor;
+mod namespaces_crypto;
 
 use crate::ast::{self, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 #[derive(Clone)]
 struct StoredClass {
@@ -70,6 +73,20 @@ pub struct Evaluator {
     // LCG state for Math.random()
     lcg_state: u64,
     source_lines: Vec<String>,
+    // true while executing inside an unsafe { } block
+    in_unsafe_block: bool,
+    // registered native function names
+    native_fns: HashSet<String>,
+    // set of already-imported canonical paths (prevents re-import and cycles)
+    imported_files: HashSet<PathBuf>,
+    // the directory of the currently executing file (for relative import resolution)
+    current_dir: Option<PathBuf>,
+    // Some(set) while executing an imported module — tracks exported names.
+    // None at top level (main file) or when no export statements were used yet.
+    current_module_exports: Option<HashSet<String>>,
+    // Collects yielded values while executing a generator function body.
+    // None = not inside a generator; Some(vec) = collecting yields.
+    yield_collector: Option<Vec<OwnedValue>>,
 }
 
 impl Evaluator {
@@ -103,11 +120,26 @@ impl Evaluator {
             sealed_classes: HashSet::new(),
             lcg_state: seed,
             source_lines: Vec::new(),
+            in_unsafe_block: false,
+            native_fns: HashSet::new(),
+            imported_files: HashSet::new(),
+            current_dir: None,
+            current_module_exports: None,
+            yield_collector: None,
         }
     }
 
     pub fn set_source(&mut self, lines: Vec<String>) {
         self.source_lines = lines;
+    }
+
+    pub fn set_current_file(&mut self, path: &std::path::Path) {
+        if let Some(dir) = path.parent() {
+            self.current_dir = Some(dir.to_path_buf());
+        }
+        if let Ok(canonical) = path.canonicalize() {
+            self.imported_files.insert(canonical);
+        }
     }
 
     fn print_call_stack(&self) {
@@ -223,6 +255,8 @@ impl Evaluator {
                 let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
                 format!("[{}]", elems.join(", "))
             }
+            Some(ObjectData::Tensor { shape, data }) => crate::region::format_tensor(shape, data),
+            Some(ObjectData::Ptr(name)) => format!("&{}", name),
             Some(ObjectData::Null) => "null".to_string(),
             None => "❌ Referencia inválida".to_string(),
         }
@@ -261,11 +295,13 @@ impl Evaluator {
                 parameters,
                 body,
                 captured,
+                is_generator,
             }) => OwnedValue::Function {
                 return_type: return_type.clone(),
                 parameters: parameters.clone(),
                 body: body.clone(),
                 captured: captured.clone(),
+                is_generator: *is_generator,
             },
             Some(ObjectData::Instance { class_name, fields }) => OwnedValue::Instance {
                 class_name: class_name.clone(),
@@ -278,6 +314,11 @@ impl Evaluator {
             Some(ObjectData::Set { elements: refs }) => OwnedValue::Set {
                 elements: refs.iter().map(|&r| self.extract_inner(r, depth + 1)).collect(),
             },
+            Some(ObjectData::Tensor { shape, data }) => OwnedValue::Tensor {
+                shape: shape.clone(),
+                data: data.clone(),
+            },
+            Some(ObjectData::Ptr(name)) => OwnedValue::Ptr(name.clone()),
             Some(ObjectData::Null) | None => OwnedValue::Null,
         }
     }
@@ -306,11 +347,13 @@ impl Evaluator {
                 parameters,
                 body,
                 captured,
+                is_generator,
             } => self.alloc(ObjectData::Function {
                 return_type,
                 parameters,
                 body,
                 captured,
+                is_generator,
             }),
             OwnedValue::Instance { class_name, fields } => {
                 self.alloc(ObjectData::Instance { class_name, fields })
@@ -322,6 +365,8 @@ impl Evaluator {
                 let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant(v)).collect();
                 self.alloc(ObjectData::Set { elements: refs })
             }
+            OwnedValue::Tensor { shape, data } => self.alloc(ObjectData::Tensor { shape, data }),
+            OwnedValue::Ptr(name) => self.alloc(ObjectData::Ptr(name)),
             OwnedValue::Null => self.null_ref,
         }
     }
@@ -365,12 +410,13 @@ impl Evaluator {
                 });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
-            OwnedValue::Function { return_type, parameters, body, captured } => {
+            OwnedValue::Function { return_type, parameters, body, captured, is_generator } => {
                 let idx = self.global_arena.alloc(ObjectData::Function {
                     return_type,
                     parameters,
                     body,
                     captured,
+                    is_generator,
                 });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
@@ -385,6 +431,14 @@ impl Evaluator {
             OwnedValue::Set { elements: items } => {
                 let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant_global(v)).collect();
                 let idx = self.global_arena.alloc(ObjectData::Set { elements: refs });
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Tensor { shape, data } => {
+                let idx = self.global_arena.alloc(ObjectData::Tensor { shape, data });
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Ptr(name) => {
+                let idx = self.global_arena.alloc(ObjectData::Ptr(name));
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Null => self.null_ref,
@@ -814,10 +868,28 @@ fn json_stringify_owned(val: &OwnedValue) -> String {
             let parts: Vec<String> = elements.iter().map(json_stringify_owned).collect();
             format!("[{}]", parts.join(","))
         }
+        OwnedValue::Tensor { shape, data } => {
+            fn nest_json(shape: &[usize], data: &[f64], off: usize) -> String {
+                if shape.len() == 1 {
+                    let vs: Vec<String> = (0..shape[0]).map(|i| {
+                        let v = data[off + i];
+                        if v.fract() == 0.0 { format!("{:.1}", v) }
+                        else { format!("{:.10}", v).trim_end_matches('0').trim_end_matches('.').to_string() }
+                    }).collect();
+                    format!("[{}]", vs.join(","))
+                } else {
+                    let stride: usize = shape[1..].iter().product();
+                    let rows: Vec<String> = (0..shape[0]).map(|i| nest_json(&shape[1..], data, off + i * stride)).collect();
+                    format!("[{}]", rows.join(","))
+                }
+            }
+            nest_json(shape, data, 0)
+        }
         OwnedValue::EnumVariant { enum_name, variant } => {
             format!("\"{}\"", format!("{}.{}", enum_name, variant).replace('"', "\\\""))
         }
         OwnedValue::Function { .. } => "null".to_string(),
+        OwnedValue::Ptr(name) => format!("\"&{}\"", name),
     }
 }
 

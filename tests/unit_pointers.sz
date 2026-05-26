@@ -1,0 +1,71 @@
+// Unit tests for pointers — Phase 1
+
+test("address-of creates a pointer", () => {
+    let x = 10;
+    let p = &x;
+    assert(p != null, "pointer should not be null");
+});
+
+test("dereference reads through pointer", () => {
+    let x = 99;
+    let p = &x;
+    assert(*p == 99, "deref should return value of pointed variable");
+});
+
+test("pointer after mutation reflects new value", () => {
+    let x = 1;
+    let p = &x;
+    x = 42;
+    assert(*p == 42, "deref after mutation should see new value");
+});
+
+test("pointer write through deref requires unsafe", () => {
+    let x = 0;
+    let p = &x;
+    unsafe {
+        *p = 55;
+    }
+    assert(x == 55, "deref-write in unsafe should update the variable");
+});
+
+test("multiple pointers to same variable", () => {
+    let val = 7;
+    let p1 = &val;
+    let p2 = &val;
+    assert(*p1 == 7, "first pointer should deref correctly");
+    assert(*p2 == 7, "second pointer should deref correctly");
+    unsafe {
+        *p1 = 99;
+    }
+    assert(*p2 == 99, "second pointer should see update via first");
+    assert(val == 99, "original variable should be updated too");
+});
+
+test("pointer to string variable", () => {
+    let s = "hello";
+    let p = &s;
+    assert(*p == "hello", "pointer to string should deref correctly");
+    unsafe {
+        *p = "world";
+    }
+    assert(s == "world", "string deref-write should update variable");
+});
+
+test("pointer to bool variable", () => {
+    let b = false;
+    let p = &b;
+    assert(*p == false, "deref bool should be false");
+    unsafe {
+        *p = true;
+    }
+    assert(b == true, "bool deref-write should update variable");
+});
+
+test("pointer passed to function — read through deref", () => {
+    fn int read_ptr(any p) { return *p; }
+    let x = 123;
+    let p = &x;
+    assert(read_ptr(p) == 123, "function should be able to read through pointer");
+});
+
+summary();

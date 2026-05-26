@@ -1,0 +1,60 @@
+// Unit tests: std/result
+
+import "std/result";
+
+test("Ok wraps value", () => {
+    let r = ok(42);
+    assert(r.isOk == true,  "isOk");
+    assert(r.isErr == false, "isErr");
+    assert(r.unwrap() == 42, "unwrap");
+    assert(r.unwrapOr(0) == 42, "unwrapOr returns value");
+});
+
+test("Err wraps error", () => {
+    let e = err("bad input");
+    assert(e.isOk == false,  "isOk false");
+    assert(e.isErr == true,  "isErr");
+    assert(e.unwrapOr(-1) == -1, "unwrapOr returns default");
+});
+
+test("Err.unwrap throws", () => {
+    let e = err("problem");
+    let caught = false;
+    try { e.unwrap(); } catch (ex) { caught = true; }
+    assert(caught, "unwrap on Err throws");
+});
+
+test("Option some", () => {
+    let s = some(99);
+    assert(s.isSome(), "isSome");
+    assert(!s.isNone(), "not isNone");
+    assert(s.unwrap() == 99, "unwrap");
+    assert(s.unwrapOr(0) == 99, "unwrapOr returns value");
+});
+
+test("Option none", () => {
+    let n = none();
+    assert(!n.isSome(), "not isSome");
+    assert(n.isNone(),  "isNone");
+    assert(n.unwrapOr(-1) == -1, "unwrapOr returns default");
+});
+
+test("Option.unwrap on none throws", () => {
+    let n = none();
+    let caught = false;
+    try { n.unwrap(); } catch (e) { caught = true; }
+    assert(caught, "unwrap on None throws");
+});
+
+test("Result pattern in function", () => {
+    fn any safeDivide(int a, int b) {
+        if (b == 0) { return err("division by zero"); }
+        return ok(a / b);
+    }
+    let r1 = safeDivide(10, 2);
+    assert(r1.isOk && r1.unwrap() == 5, "10/2 = 5");
+    let r2 = safeDivide(10, 0);
+    assert(r2.isErr, "div by zero is Err");
+});
+
+summary();

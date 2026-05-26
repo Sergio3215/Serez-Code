@@ -1,0 +1,25 @@
+// E2E: import system — use functions, constants and classes from a module
+
+import "lib/math_utils";
+
+// Use imported constant
+let area = circle_area(5.0);
+// PI * 25 ≈ 78.539...
+let area_ok = (area > 78.0 && area < 79.0);
+
+// Use imported function
+let c = clamp(150.0, 0.0, 100.0);
+let clamp_ok = (c == 100.0);
+
+// Use imported recursive function
+let f = factorial(5);
+let fact_ok = (f == 120);
+
+// Use imported class
+let counter = new Counter();
+counter.inc();
+counter.inc();
+counter.inc();
+let counter_ok = (counter.value() == 3);
+
+out (area_ok && clamp_ok && fact_ok && counter_ok);

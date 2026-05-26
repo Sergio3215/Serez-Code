@@ -1,0 +1,2 @@
+// Security: import non-existent file must produce an error (not hang or crash)
+import "absolutely_nonexistent_module_xyz_does_not_exist";

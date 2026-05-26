@@ -252,7 +252,10 @@ $root       = $PSScriptRoot
 $testsDir   = Join-Path $root "tests"
 $framework  = Join-Path $testsDir "framework.sz"
 $binary     = Join-Path $root "target\debug\sz.exe"
-$tempFile   = Join-Path $env:TEMP "sz_test_temp.sz"
+$tempFile   = Join-Path $testsDir "~unit_temp.sz"
+
+# Expose project root as SEREZ_HOME so `import "std/..."` resolves correctly
+$env:SEREZ_HOME = $root
 
 # ── Build first ───────────────────────────────────────────────────────────────
 Write-Host "Building..." -ForegroundColor Cyan

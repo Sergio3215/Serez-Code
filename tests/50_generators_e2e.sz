@@ -1,0 +1,61 @@
+// E2E: generator functions (fn*) with yield
+
+// ── Basic generator ────────────────────────────────────────────────────────────
+fn* counter(int start, int stop) {
+    let i = start;
+    while (i < stop) {
+        yield i;
+        i = i + 1;
+    }
+}
+
+let nums = counter(0, 5);
+out nums.length();     // 5
+out nums[0];           // 0
+out nums[4];           // 4
+
+// ── Generator with for-in ──────────────────────────────────────────────────────
+let sum = 0;
+for (let n in counter(1, 6)) {
+    sum = sum + n;
+}
+out sum;               // 1+2+3+4+5 = 15
+
+// ── Generator collecting strings ───────────────────────────────────────────────
+fn* greetAll([string] names) {
+    for (let name in names) {
+        yield "Hello " + name;
+    }
+}
+
+let greetings = greetAll(["Alice", "Bob", "Carol"]);
+out greetings.length();    // 3
+out greetings[0];          // Hello Alice
+out greetings[2];          // Hello Carol
+
+// ── Early return from generator ────────────────────────────────────────────────
+fn* upTo(int n) {
+    let i = 0;
+    while (i < 10) {
+        if (i >= n) { return; }
+        yield i;
+        i = i + 1;
+    }
+}
+
+let r = upTo(3);
+out r.length();    // 3
+out r[0];          // 0
+out r[2];          // 2
+
+// ── Generator with destructuring ──────────────────────────────────────────────
+import "std/iter";
+let pairs = zip([1, 2, 3], ["a", "b", "c"]);
+fn* indexedPairs(any arr) {
+    for (let [i, pair] in enumerate(arr)) {
+        yield i;
+    }
+}
+let indices = indexedPairs(pairs);
+out indices.length();    // 3
+out indices[1];          // 1

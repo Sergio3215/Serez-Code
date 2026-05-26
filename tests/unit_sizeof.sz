@@ -1,0 +1,57 @@
+// Unit tests for sizeof — Phase 1
+
+test("sizeof(int) returns 8", () => {
+    let s = sizeof(int);
+    assert(s == 8, "int should be 8 bytes");
+});
+
+test("sizeof(decimal) returns 8", () => {
+    assert(sizeof(decimal) == 8, "decimal should be 8 bytes");
+});
+
+test("sizeof(bool) returns 1", () => {
+    assert(sizeof(bool) == 1, "bool should be 1 byte");
+});
+
+test("sizeof(string) returns 8", () => {
+    assert(sizeof(string) == 8, "string is pointer-sized");
+});
+
+test("sizeof(null) returns 0", () => {
+    assert(sizeof(null) == 0, "null has no size");
+});
+
+test("sizeof(void) returns 0", () => {
+    assert(sizeof(void) == 0, "void has no size");
+});
+
+test("sizeof(any) returns 8", () => {
+    assert(sizeof(any) == 8, "any is pointer-sized");
+});
+
+test("sizeof expression — integer", () => {
+    let x = 42;
+    assert(sizeof(x) == 8, "int variable should be 8 bytes");
+});
+
+test("sizeof expression — bool", () => {
+    let b = true;
+    assert(sizeof(b) == 1, "bool variable should be 1 byte");
+});
+
+test("sizeof expression — string", () => {
+    let s = "hello";
+    assert(sizeof(s) == 8, "string variable is pointer-sized");
+});
+
+test("sizeof expression — decimal", () => {
+    let d = 3.14;
+    assert(sizeof(d) == 8, "decimal variable should be 8 bytes");
+});
+
+test("sizeof result is an int", () => {
+    let s = sizeof(int);
+    assert(s + 0 == 8, "sizeof result participates in arithmetic");
+});
+
+summary();

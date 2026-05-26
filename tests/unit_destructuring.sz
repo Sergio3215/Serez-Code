@@ -1,0 +1,92 @@
+// Unit tests: destructuring
+
+import "std/iter";
+
+test("array destructuring — basic", () => {
+    let [a, b, c] = [1, 2, 3];
+    assert(a == 1, "a");
+    assert(b == 2, "b");
+    assert(c == 3, "c");
+});
+
+test("array destructuring — hole", () => {
+    let [x, _, z] = [10, 99, 30];
+    assert(x == 10, "x");
+    assert(z == 30, "z");
+});
+
+test("array destructuring — rest", () => {
+    let [head, ...tail] = [1, 2, 3, 4, 5];
+    assert(head == 1, "head");
+    assert(tail.length() == 4, "tail length");
+    assert(tail[0] == 2, "tail[0]");
+    assert(tail[3] == 5, "tail[3]");
+});
+
+test("array destructuring — rest empty", () => {
+    let [only, ...rest] = [42];
+    assert(only == 42, "only");
+    assert(rest.length() == 0, "rest empty");
+});
+
+test("array destructuring — shorter source gives null", () => {
+    let [p, q, r] = [7, 8];
+    assert(p == 7, "p");
+    assert(q == 8, "q");
+    assert(r == null, "r is null");
+});
+
+test("dict destructuring — shorthand", () => {
+    let d <string, any> = ({"name", "Alice"}, {"age", 30});
+    let {name, age} = d;
+    assert(name == "Alice", "name");
+    assert(age == 30, "age");
+});
+
+test("dict destructuring — alias", () => {
+    let d <string, any> = ({"name", "Bob"}, {"score", 95});
+    let {name: who, score: pts} = d;
+    assert(who == "Bob", "who");
+    assert(pts == 95, "pts");
+});
+
+test("dict destructuring — missing key gives null", () => {
+    let d <string, any> = ({"x", 1});
+    let {x, y} = d;
+    assert(x == 1, "x");
+    assert(y == null, "missing key is null");
+});
+
+test("for-in array destructuring — zip", () => {
+    let pairs = zip([10, 20, 30], ["a", "b", "c"]);
+    let nums = [];
+    let strs = [];
+    for (let [n, s] in pairs) {
+        nums.push(n);
+        strs.push(s);
+    }
+    assert(nums[0] == 10 && nums[2] == 30, "nums");
+    assert(strs[1] == "b", "strs");
+});
+
+test("for-in array destructuring — enumerate", () => {
+    let e = enumerate(["x", "y", "z"]);
+    let indices = [];
+    for (let [i, _] in e) {
+        indices.push(i);
+    }
+    assert(indices.length() == 3, "length");
+    assert(indices[0] == 0 && indices[2] == 2, "index values");
+});
+
+test("for-in array destructuring — rest in item", () => {
+    let grid = [[1, 2, 3], [4, 5, 6]];
+    let first_cols = [];
+    for (let [col, ...rest] in grid) {
+        first_cols.push(col);
+    }
+    assert(first_cols[0] == 1, "row0 col0");
+    assert(first_cols[1] == 4, "row1 col0");
+});
+
+summary();

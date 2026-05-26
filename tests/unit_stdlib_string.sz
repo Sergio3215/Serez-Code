@@ -1,0 +1,57 @@
+// Unit tests: std/string
+
+import "std/string";
+
+test("padStart", () => {
+    assert(padStart("7", 3, "0") == "007",   "pad single digit");
+    assert(padStart("42", 5, "0") == "00042","pad two digits");
+    assert(padStart("hello", 3, "0") == "hello", "no pad needed");
+});
+
+test("padEnd", () => {
+    assert(padEnd("hi", 5, ".") == "hi...", "pad end");
+    assert(padEnd("hello", 3, ".") == "hello", "no pad needed");
+});
+
+test("strRepeat", () => {
+    assert(strRepeat("ab", 3) == "ababab", "repeat 3");
+    assert(strRepeat("x", 0) == "", "repeat 0");
+});
+
+test("capitalize", () => {
+    assert(capitalize("hello") == "Hello", "capitalize");
+    assert(capitalize("WORLD") == "World", "capitalize lowercases rest");
+    assert(capitalize("") == "", "empty string");
+});
+
+test("isPalindrome", () => {
+    assert(isPalindrome("racecar"),  "racecar");
+    assert(isPalindrome("madam"),    "madam");
+    assert(!isPalindrome("hello"),   "hello is not");
+    assert(isPalindrome("A"),        "single char");
+});
+
+test("reverseStr", () => {
+    assert(reverseStr("abc") == "cba",   "abc reversed");
+    assert(reverseStr("") == "",         "empty");
+    assert(reverseStr("a") == "a",       "single char");
+});
+
+test("words", () => {
+    let w = words("  hello   world  ");
+    assert(w.length() == 2, "two words");
+    assert(w[0] == "hello", "first word");
+    assert(w[1] == "world", "second word");
+});
+
+test("isDigit and isAlpha", () => {
+    assert(isDigit("5"),    "5 is digit");
+    assert(!isDigit("a"),   "a is not digit");
+    assert(isAlpha("z"),    "z is alpha");
+    assert(!isAlpha("3"),   "3 is not alpha");
+    assert(isAlphaNumeric("a"), "a is alphanumeric");
+    assert(isAlphaNumeric("3"), "3 is alphanumeric");
+    assert(!isAlphaNumeric("!"), "! is not alphanumeric");
+});
+
+summary();

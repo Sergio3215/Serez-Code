@@ -1,0 +1,19 @@
+// E2E: fetch integration
+// Tests that fetch either works or fails gracefully (network may be unavailable)
+
+native fn string fetch(string url);
+
+let status = "unknown";
+
+try {
+    let body = fetch("https://httpbin.org/get");
+    if (body.length() > 0) {
+        status = "ok";
+    }
+} catch (e) {
+    // Network unavailable or service down — acceptable
+    status = "network_error";
+}
+
+// Either we got a response or failed gracefully
+out status == "ok" || status == "network_error";

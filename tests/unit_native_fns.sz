@@ -1,0 +1,104 @@
+// Unit tests for native fn declaration — Phase 1.5
+
+// Declare a native function (fetch is implemented in Rust)
+native fn string fetch(string url);
+
+test("native fn declaration compiles and registers", () => {
+    // Just declaring native fn should not throw
+    assert(true, "native fn declaration is valid syntax");
+});
+
+test("fetch rejects file:// protocol", () => {
+    let caught = false;
+    let msg = "";
+    try {
+        fetch("file:///etc/passwd");
+    } catch (e) {
+        caught = true;
+        msg = e;
+    }
+    assert(caught == true, "file:// should throw");
+    assert(msg.includes("http"), "error should mention allowed protocols");
+});
+
+test("fetch rejects ftp:// protocol", () => {
+    let caught = false;
+    try {
+        fetch("ftp://example.com/file");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught == true, "ftp:// should throw");
+});
+
+test("fetch rejects javascript: protocol", () => {
+    let caught = false;
+    try {
+        fetch("javascript:alert(1)");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught == true, "javascript: should throw");
+});
+
+test("fetch rejects URL with newline injection", () => {
+    let caught = false;
+    try {
+        fetch("http://example.com/\r\nX-Injected: yes");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught == true, "newline injection should throw");
+});
+
+test("fetch rejects URL longer than 2048 chars", () => {
+    let long_url = "http://example.com/";
+    let i = 0;
+    while (i < 2050) {
+        long_url += "a";
+        i += 1;
+    }
+    let caught = false;
+    try {
+        fetch(long_url);
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught == true, "too-long URL should throw");
+});
+
+test("fetch requires string argument", () => {
+    let caught = false;
+    try {
+        fetch(42);
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught == true, "non-string URL should throw");
+});
+
+test("fetch with valid https URL either returns string or throws gracefully", () => {
+    let ok = false;
+    try {
+        let body = fetch("https://httpbin.org/get");
+        // If network available, should return a non-empty string
+        ok = body.length() > 0;
+    } catch (e) {
+        // Network unavailable — that's also acceptable
+        ok = true;
+    }
+    assert(ok, "fetch should either succeed or throw gracefully on network error");
+});
+
+test("fetch POST either returns string or throws gracefully", () => {
+    let ok = false;
+    try {
+        let body = fetch("https://httpbin.org/post", "POST", "{\"key\":\"value\"}");
+        ok = body.length() > 0;
+    } catch (e) {
+        ok = true;
+    }
+    assert(ok, "fetch POST should either succeed or throw gracefully");
+});
+
+summary();

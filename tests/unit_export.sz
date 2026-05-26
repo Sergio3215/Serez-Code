@@ -1,0 +1,47 @@
+// Unit tests: export system
+
+import "lib/math_utils";
+import "lib/greet";
+
+test("exported constant PI is accessible", () => {
+    assert(PI > 3.14 && PI < 3.15, "PI exported and accessible");
+});
+
+test("exported fn circle_area works", () => {
+    let a = circle_area(2.0);
+    assert(a > 12.0 && a < 13.0, "circle_area accessible");
+});
+
+test("exported fn clamp works", () => {
+    assert(clamp(-5.0, 0.0, 10.0) == 0.0, "clamp lower bound");
+    assert(clamp(15.0, 0.0, 10.0) == 10.0, "clamp upper bound");
+    assert(clamp(5.0,  0.0, 10.0) == 5.0,  "clamp in range");
+});
+
+test("exported fn factorial works", () => {
+    assert(factorial(6) == 720, "factorial(6)");
+});
+
+test("exported class Counter is accessible", () => {
+    let c = new Counter();
+    c.inc();
+    c.inc();
+    assert(c.value() == 2, "Counter exported and usable");
+});
+
+test("exported let greet_calls is accessible", () => {
+    assert(greet_calls == 0, "greet_calls starts at 0");
+});
+
+test("exported fn greet works", () => {
+    let msg = greet("World");
+    assert(msg == "Hello, World!", "greet returns correct string");
+});
+
+test("module without export exposes all symbols (backwards compat)", () => {
+    import "lib/greet_noexport";
+    assert(pub_fn_result() == 42, "pub function accessible without export");
+    assert(priv_fn_result() == 99, "priv function also accessible (no export in module)");
+});
+
+summary();

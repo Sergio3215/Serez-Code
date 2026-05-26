@@ -31,6 +31,21 @@ pub enum Statement {
     Try(TryStatement),                            // try {} catch (e) {} finally {}
     Throw(Expression),                            // throw expr;
     DoWhile(WhileStatement),                      // do { ... } while (cond);
+    Unsafe(BlockStatement),                        // unsafe { ... }
+    DerefAssign { ptr: Box<Expression>, value: Expression }, // *ptr = val
+    NativeDeclaration(NativeFnDeclaration),                 // native fn type name(params);
+    Import(String),                                          // import "path/to/module";
+    Export(Box<Statement>),                                  // export fn/class/let/const/enum/interface
+    LetDestructureArray(LetDestructureArray),                // let [a, b, ...rest] = expr;
+    LetDestructureDict(LetDestructureDict),                  // let {key, key: alias} = expr;
+    Yield(Expression),                                       // yield expr;  (inside fn*)
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeFnDeclaration {
+    pub name: String,
+    pub return_type: Option<String>,
+    pub parameters: Vec<Parameter>,
 }
 
 // Estructura específica para "let nombre = valor;"
@@ -83,6 +98,7 @@ pub struct FunctionLiteral {
     pub return_type: Option<String>,
     pub parameters: Vec<Parameter>,
     pub body: BlockStatement,
+    pub is_generator: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -115,11 +131,34 @@ pub struct ForStatement {
 }
 
 #[derive(Debug, Clone)]
+pub enum ForEachVar {
+    Name(String),
+    Array(Vec<Option<String>>, Option<String>),  // (slots — None=hole, rest_name)
+}
+
+#[derive(Debug, Clone)]
 pub struct ForEachStatement {
-    pub var_name: String,
+    pub var: ForEachVar,
     pub iterable: Expression,
     pub body: BlockStatement,
     pub label: Option<String>,
+}
+
+// let [a, b, ...rest] = expr;
+#[derive(Debug, Clone)]
+pub struct LetDestructureArray {
+    pub names: Vec<Option<String>>,  // None = hole (skip that position)
+    pub rest: Option<String>,        // ...rest_name (captures remaining elements)
+    pub value: Expression,
+    pub is_const: bool,
+}
+
+// let {key, key: alias} = expr;
+#[derive(Debug, Clone)]
+pub struct LetDestructureDict {
+    pub fields: Vec<(String, Option<String>)>,  // (key, local_alias) — None = use key as name
+    pub value: Expression,
+    pub is_const: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -249,6 +288,15 @@ pub enum Expression {
     ObjectPatch(Vec<(String, Expression)>),          // { field: val, ... } for interface update
     Ternary(TernaryExpression),                      // cond ? then : else
     Spread(Box<Expression>),                         // ...expr (spread operator)
+    SizeOf(SizeOfTarget),                            // sizeof(int)  /  sizeof(expr)
+    AddressOf(Box<Expression>),                      // &varname
+    Deref(Box<Expression>),                          // *ptr
+}
+
+#[derive(Debug, Clone)]
+pub enum SizeOfTarget {
+    Type(String),           // sizeof(int), sizeof(bool), ...
+    Expr(Box<Expression>),  // sizeof(someVar)
 }
 
 #[derive(Debug, Clone)]

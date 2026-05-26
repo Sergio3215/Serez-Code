@@ -1,0 +1,2 @@
+// Security: fetch must reject non-http(s) protocols
+fetch("file:///etc/passwd");

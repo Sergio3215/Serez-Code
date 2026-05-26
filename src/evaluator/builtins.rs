@@ -61,6 +61,7 @@ impl super::Evaluator {
                 let s = self.alloc(ObjectData::Str(name));
                 return EvalResult::Value(s);
             }
+            Some(ObjectData::Ptr(_)) => "ptr",
             Some(ObjectData::Null) | None => "null",
             Some(ObjectData::EnumVariant { enum_name, .. }) => {
                 let name = enum_name.clone();
@@ -68,6 +69,7 @@ impl super::Evaluator {
                 return EvalResult::Value(s);
             }
             Some(ObjectData::Set { .. }) => "Set",
+            Some(ObjectData::Tensor { .. }) => "Tensor",
         };
         EvalResult::Value(self.alloc(ObjectData::Str(type_name.to_string())))
     }
@@ -331,5 +333,135 @@ impl super::Evaluator {
     }
 
     // ── Interface / Class instantiation ──────────────────────────────────────
+
+    // ── Native: fetch ─────────────────────────────────────────────────────────
+
+    pub(super) fn eval_fetch(&mut self, args: &[ast::Expression]) -> EvalResult {
+        if args.is_empty() || args.len() > 3 {
+            eprintln!("❌ ERROR: fetch(url) or fetch(url, method) or fetch(url, method, body)");
+            return EvalResult::Error;
+        }
+
+        let url = match self.eval_expression(&args[0]) {
+            EvalResult::Value(r) => match self.resolve(r).cloned() {
+                Some(ObjectData::Str(s)) => s,
+                _ => {
+                    let msg = self.alloc(ObjectData::Str("fetch: url must be a string".to_string()));
+                    return EvalResult::Throw(msg);
+                }
+            },
+            EvalResult::Throw(v) => return EvalResult::Throw(v),
+            _ => return EvalResult::Error,
+        };
+
+        let method = if args.len() >= 2 {
+            match self.eval_expression(&args[1]) {
+                EvalResult::Value(r) => match self.resolve(r).cloned() {
+                    Some(ObjectData::Str(s)) => s.to_uppercase(),
+                    _ => "GET".to_string(),
+                },
+                EvalResult::Throw(v) => return EvalResult::Throw(v),
+                _ => return EvalResult::Error,
+            }
+        } else {
+            "GET".to_string()
+        };
+
+        let body_str = if args.len() >= 3 {
+            match self.eval_expression(&args[2]) {
+                EvalResult::Value(r) => match self.resolve(r).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => String::new(),
+                },
+                EvalResult::Throw(v) => return EvalResult::Throw(v),
+                _ => return EvalResult::Error,
+            }
+        } else {
+            String::new()
+        };
+
+        // ── Security validation ───────────────────────────────────────────────
+        let lower = url.to_lowercase();
+        if !lower.starts_with("http://") && !lower.starts_with("https://") {
+            let msg = self.alloc(ObjectData::Str(
+                format!("❌ fetch: only http:// and https:// URLs are allowed (got: {})", url)
+            ));
+            return EvalResult::Throw(msg);
+        }
+
+        // Reject control characters (header injection, etc.)
+        if url.chars().any(|c| matches!(c, '\n' | '\r' | '\0' | '\x08')) {
+            let msg = self.alloc(ObjectData::Str(
+                "❌ fetch: URL contains illegal control characters".to_string()
+            ));
+            return EvalResult::Throw(msg);
+        }
+
+        // Reject suspiciously long URLs
+        if url.len() > 2048 {
+            let msg = self.alloc(ObjectData::Str(
+                "❌ fetch: URL exceeds maximum length (2048)".to_string()
+            ));
+            return EvalResult::Throw(msg);
+        }
+
+        // ── HTTP request ──────────────────────────────────────────────────────
+        let timeout = std::time::Duration::from_secs(10);
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(timeout)
+            .timeout(timeout)
+            .build();
+
+        let response_result = match method.as_str() {
+            "GET"    => agent.get(&url).call(),
+            "DELETE" => agent.delete(&url).call(),
+            "POST"   => agent.post(&url)
+                .set("Content-Type", "application/json")
+                .send_string(&body_str),
+            "PUT"    => agent.put(&url)
+                .set("Content-Type", "application/json")
+                .send_string(&body_str),
+            "PATCH"  => agent.request("PATCH", &url)
+                .set("Content-Type", "application/json")
+                .send_string(&body_str),
+            other => {
+                let msg = self.alloc(ObjectData::Str(
+                    format!("❌ fetch: unsupported HTTP method '{}'", other)
+                ));
+                return EvalResult::Throw(msg);
+            }
+        };
+
+        match response_result {
+            Ok(resp) => {
+                let status = resp.status();
+                match resp.into_string() {
+                    Ok(body) => {
+                        // Return body as string; status >= 400 throws
+                        if status >= 400 {
+                            let msg = self.alloc(ObjectData::Str(
+                                format!("❌ fetch: HTTP error {}", status)
+                            ));
+                            EvalResult::Throw(msg)
+                        } else {
+                            EvalResult::Value(self.alloc(ObjectData::Str(body)))
+                        }
+                    }
+                    Err(e) => {
+                        let msg = self.alloc(ObjectData::Str(
+                            format!("❌ fetch: failed to read response body: {}", e)
+                        ));
+                        EvalResult::Throw(msg)
+                    }
+                }
+            }
+            Err(e) => {
+                let msg = self.alloc(ObjectData::Str(
+                    format!("❌ fetch: request failed: {}", e)
+                ));
+                EvalResult::Throw(msg)
+            }
+        }
+    }
 
 }

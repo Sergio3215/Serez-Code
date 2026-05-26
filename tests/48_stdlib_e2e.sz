@@ -1,0 +1,47 @@
+// E2E: standard library — math, collections, iter, string, result
+
+import "std/math";
+import "std/collections";
+import "std/iter";
+import "std/string";
+import "std/result";
+
+// math
+let math_ok = gcd(48, 18) == 6
+    && lcm(4, 6) == 12
+    && isPrime(17) == true
+    && isPrime(15) == false
+    && fibonacci(10) == 55
+    && combinations(5, 2) == 10;
+
+// collections
+let s = new Stack();
+s.push(10); s.push(20); s.push(30);
+let stack_ok = s.pop() == 30 && s.size() == 2 && !s.isEmpty();
+
+let q = new Queue();
+q.enqueue("x"); q.enqueue("y");
+let queue_ok = q.dequeue() == "x" && q.size() == 1;
+
+// iter
+let r = range(1, 6, 1);
+let iter_ok = r.length() == 5
+    && zip([1,2], ["a","b"]).length() == 2
+    && flatten([[1,2],[3]]).length() == 3
+    && chunk([1,2,3,4], 2).length() == 2;
+
+// string
+let str_ok = padStart("7", 3, "0") == "007"
+    && capitalize("hello") == "Hello"
+    && isPalindrome("madam") == true
+    && reverseStr("abc") == "cba";
+
+// result
+let res_ok_val = ok(42);
+let res_err_val = err("oops");
+let result_ok = res_ok_val.isOk == true
+    && res_ok_val.unwrap() == 42
+    && res_err_val.isErr == true
+    && res_err_val.unwrapOr(-1) == -1;
+
+out (math_ok && stack_ok && queue_ok && iter_ok && str_ok && result_ok);

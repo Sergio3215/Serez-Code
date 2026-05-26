@@ -115,7 +115,7 @@ impl TypeChecker {
                     self.check_statement(s, expected_return);
                 }
             }
-            Statement::Block(b) => {
+            Statement::Block(b) | Statement::Unsafe(b) => {
                 for s in &b.statements {
                     self.check_statement(s, expected_return);
                 }
@@ -154,6 +154,16 @@ impl TypeChecker {
                     }
                 }
             }
+            Statement::DerefAssign { ptr, value } => {
+                self.check_expression(ptr, expected_return);
+                self.check_expression(value, expected_return);
+            }
+            Statement::NativeDeclaration(_) => {}
+            Statement::Import(_) => {}
+            Statement::Export(inner) => self.check_statement(inner, expected_return),
+            Statement::LetDestructureArray(d) => self.check_expression(&d.value, expected_return),
+            Statement::LetDestructureDict(d) => self.check_expression(&d.value, expected_return),
+            Statement::Yield(expr) => self.check_expression(expr, expected_return),
             Statement::Try(t) => {
                 for s in &t.body.statements {
                     self.check_statement(s, expected_return);

@@ -1,0 +1,68 @@
+// Security: Crypto input validation
+
+test("sha256 requires a string argument", () => {
+    let caught = false;
+    try {
+        let h = Crypto.sha256(42);
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "sha256(int) should throw");
+});
+
+test("md5 requires a string argument", () => {
+    let caught = false;
+    try {
+        let h = Crypto.md5(null);
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "md5(null) should throw");
+});
+
+test("base64decode invalid chars throws", () => {
+    let caught = false;
+    try {
+        let d = Crypto.base64decode("@@@");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "invalid base64 chars should throw");
+});
+
+test("hexDecode odd-length string throws", () => {
+    let caught = false;
+    try {
+        let b = Crypto.hexDecode("abc");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "odd-length hex should throw");
+});
+
+test("hexEncode rejects out-of-range bytes", () => {
+    let caught = false;
+    try {
+        let h = Crypto.hexEncode([256]);
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "byte value > 255 should throw");
+});
+
+test("hmacSha256 requires 2 string arguments", () => {
+    let caught = false;
+    try {
+        let h = Crypto.hmacSha256("key");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "hmacSha256 with 1 arg should throw");
+});
+
+test("sha256 empty string produces known hash", () => {
+    let h = Crypto.sha256("");
+    assert(h.length() == 64, "empty string hash has correct length");
+});
+
+summary();

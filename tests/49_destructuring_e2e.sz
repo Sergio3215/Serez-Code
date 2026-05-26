@@ -1,0 +1,46 @@
+// E2E: destructuring — array and dict, let and for-in
+
+// ── Array destructuring: basic ─────────────────────────────────────────────────
+let [a, b, c] = [10, 20, 30];
+out a + b + c;    // 60
+
+let [x, _, z] = [1, 999, 3];
+out x + z;        // 4
+
+// ── Array destructuring: rest ──────────────────────────────────────────────────
+let [head, ...tail] = [100, 200, 300, 400];
+out head;             // 100
+out tail.length();    // 3
+out tail[0];          // 200
+
+// ── Dict destructuring ────────────────────────────────────────────────────────
+let person <string, any> = ({"name", "Alice"}, {"age", 30}, {"city", "Lima"});
+let {name, age} = person;
+out name;    // Alice
+out age;     // 30
+
+let {city} = person;
+out city;    // Lima
+
+// Dict destructuring with alias
+let {name: who, age: years} = person;
+out who;     // Alice
+out years;   // 30
+
+// ── For-in with array destructuring ───────────────────────────────────────────
+import "std/iter";
+
+let pairs = zip([1, 2, 3], ["a", "b", "c"]);
+let result = "";
+for (let [n, s] in pairs) {
+    result = result + n + s + " ";
+}
+out result.trim();    // 1a 2b 3c
+
+// enumerate with destructuring
+let indexed = enumerate(["x", "y", "z"]);
+let total = 0;
+for (let [i, _] in indexed) {
+    total = total + i;
+}
+out total;            // 3

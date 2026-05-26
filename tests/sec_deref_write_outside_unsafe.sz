@@ -1,0 +1,4 @@
+// Security test: *ptr = val outside unsafe must be rejected
+let x = 0;
+let p = &x;
+*p = 42;

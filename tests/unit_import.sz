@@ -1,0 +1,53 @@
+// Unit tests: import system
+
+import "lib/math_utils";
+import "lib/greet";
+
+test("imported constant PI is accessible", () => {
+    assert(PI > 3.14 && PI < 3.15, "PI is approximately 3.14159");
+});
+
+test("imported function circle_area works", () => {
+    let a = circle_area(1.0);
+    assert(a > 3.14 && a < 3.15, "circle_area(1.0) ≈ PI");
+});
+
+test("imported function clamp works", () => {
+    assert(clamp(5.0, 0.0, 10.0) == 5.0, "clamp(5, 0, 10) == 5");
+    assert(clamp(-1.0, 0.0, 10.0) == 0.0, "clamp(-1, 0, 10) == 0");
+    assert(clamp(20.0, 0.0, 10.0) == 10.0, "clamp(20, 0, 10) == 10");
+});
+
+test("imported recursive function factorial works", () => {
+    assert(factorial(0) == 1, "factorial(0) == 1");
+    assert(factorial(1) == 1, "factorial(1) == 1");
+    assert(factorial(5) == 120, "factorial(5) == 120");
+    assert(factorial(10) == 3628800, "factorial(10) == 3628800");
+});
+
+test("imported class Counter can be instantiated", () => {
+    let c = new Counter();
+    assert(c.value() == 0, "initial count is 0");
+    c.inc();
+    assert(c.value() == 1, "after inc, count is 1");
+});
+
+test("double import is a no-op (greet_calls not doubled)", () => {
+    import "lib/greet";
+    // greet_calls should still be 0 — module not re-executed
+    assert(greet_calls == 0, "greet module not re-executed on double import");
+});
+
+test("imported greet function works", () => {
+    let msg = greet("World");
+    assert(msg == "Hello, World!", "greet returns correct string");
+});
+
+test("imported module globals are mutable from caller", () => {
+    // greet() increments greet_calls each call
+    let before = greet_calls;
+    let _ = greet("Test");
+    assert(greet_calls == before + 1, "greet_calls incremented after call");
+});
+
+summary();

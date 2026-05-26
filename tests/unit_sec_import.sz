@@ -1,0 +1,31 @@
+// Security unit tests: import system
+
+test("import non-existent module is catchable", () => {
+    let caught = false;
+    try {
+        import "absolutely_nonexistent_xyz_module";
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "missing module import should throw catchable error");
+});
+
+test("import non-existent module error message is informative", () => {
+    let msg = "";
+    try {
+        import "no_such_module";
+    } catch (e) {
+        msg = e;
+    }
+    assert(msg.includes("ModuleNotFound") || msg.includes("no_such_module"),
+           "error message should reference the module name");
+});
+
+test("double import does not re-execute module code", () => {
+    import "lib/greet";
+    let before = greet_calls;
+    import "lib/greet";
+    assert(greet_calls == before, "second import is a no-op");
+});
+
+summary();

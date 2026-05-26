@@ -80,6 +80,7 @@ impl super::Evaluator {
                     parameters: func_decl.function.parameters.clone(),
                     body: Rc::new(func_decl.function.body.clone()),
                     captured,
+                    is_generator: func_decl.function.is_generator,
                 };
                 let func_ref = self.alloc(func_data);
 
@@ -92,7 +93,78 @@ impl super::Evaluator {
                 EvalResult::Value(self.null_ref)
             }
 
+            Statement::NativeDeclaration(decl) => {
+                self.native_fns.insert(decl.name.clone());
+                EvalResult::Value(self.null_ref)
+            }
+
+            Statement::Import(path) => {
+                self.eval_import(path)
+            }
+
+            Statement::Export(inner) => {
+                self.eval_export(inner)
+            }
+
+            Statement::LetDestructureArray(d) => self.eval_let_destructure_array(d),
+            Statement::LetDestructureDict(d)  => self.eval_let_destructure_dict(d),
+
+            Statement::Yield(expr) => {
+                let val_ref = match self.eval_expression(expr) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                if self.yield_collector.is_some() {
+                    let owned = self.extract(val_ref);
+                    self.yield_collector.as_mut().unwrap().push(owned);
+                    EvalResult::Value(self.null_ref)
+                } else {
+                    eprintln!("❌ ERROR: 'yield' used outside of a generator function (fn*)");
+                    EvalResult::Error
+                }
+            }
+
             Statement::Block(block_stmt) => self.eval_block(block_stmt),
+
+            Statement::Unsafe(block_stmt) => self.eval_unsafe_block(block_stmt),
+
+            Statement::DerefAssign { ptr, value } => {
+                if !self.in_unsafe_block {
+                    eprintln!("❌ ERROR: Pointer write through '*ptr = val' requires an unsafe {{ }} block");
+                    return EvalResult::Error;
+                }
+                let ptr_ref = match self.eval_expression(ptr) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let var_name = match self.resolve(ptr_ref).cloned() {
+                    Some(ObjectData::Ptr(name)) => name,
+                    _ => {
+                        eprintln!("❌ ERROR: Left side of '*ptr = val' is not a pointer");
+                        return EvalResult::Error;
+                    }
+                };
+                let val_ref = match self.eval_expression(value) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let new_data = self.resolve(val_ref).unwrap().clone();
+                if let Some(r) = self.scopes.assign(&var_name, new_data.clone()) {
+                    if r.region == RegionId::Global {
+                        self.global_arena.update(r.index, new_data);
+                    }
+                    return EvalResult::Value(r);
+                }
+                if let Some(&existing_ref) = self.global_bindings.get(&var_name) {
+                    self.global_arena.update(existing_ref.index, new_data);
+                    return EvalResult::Value(existing_ref);
+                }
+                eprintln!("❌ ERROR: Pointer target '{}' not found in scope", var_name);
+                EvalResult::Error
+            }
 
             Statement::While(while_stmt) => {
                 loop {
@@ -623,7 +695,15 @@ impl super::Evaluator {
         };
 
         self.scopes.push();
-        self.scopes.declare(stmt.var_name.clone(), self.null_ref);
+
+        // Pre-declare bindings
+        match &stmt.var {
+            ast::ForEachVar::Name(n) => { self.scopes.declare(n.clone(), self.null_ref); }
+            ast::ForEachVar::Array(slots, rest) => {
+                for s in slots { if let Some(n) = s { self.scopes.declare(n.clone(), self.null_ref); } }
+                if let Some(r) = rest { self.scopes.declare(r.clone(), self.null_ref); }
+            }
+        }
 
         let mut loop_return: Option<OwnedValue> = None;
         let mut loop_throw:  Option<OwnedValue> = None;
@@ -631,7 +711,39 @@ impl super::Evaluator {
 
         for item in items {
             let item_ref = self.plant(item);
-            self.scopes.declare(stmt.var_name.clone(), item_ref);
+
+            match &stmt.var.clone() {
+                ast::ForEachVar::Name(n) => {
+                    self.scopes.declare(n.clone(), item_ref);
+                }
+                ast::ForEachVar::Array(slots, rest) => {
+                    // item must be an array; destructure it
+                    let elems: Vec<OwnedValue> = match self.resolve(item_ref).cloned() {
+                        Some(ObjectData::Array { elements, .. }) => {
+                            elements.iter().map(|&r| self.extract(r)).collect()
+                        }
+                        _ => {
+                            eprintln!("❌ ERROR: for-in destructure expects each item to be an array");
+                            loop_error = true;
+                            break;
+                        }
+                    };
+                    for (i, slot) in slots.iter().enumerate() {
+                        if let Some(name) = slot {
+                            let v = elems.get(i).cloned().unwrap_or(OwnedValue::Null);
+                            let r = self.plant(v);
+                            self.scopes.declare(name.clone(), r);
+                        }
+                    }
+                    if let Some(rest_name) = rest {
+                        let start = slots.len();
+                        let rest_items: Vec<OwnedValue> = elems.into_iter().skip(start).collect();
+                        let rest_refs: Vec<ObjectRef> = rest_items.into_iter().map(|v| self.plant(v)).collect();
+                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+                        self.scopes.declare(rest_name.clone(), rest_ref);
+                    }
+                }
+            }
 
             match self.eval_block(&stmt.body) {
                 EvalResult::Value(_) => {}
@@ -652,6 +764,104 @@ impl super::Evaluator {
         if let Some(owned) = loop_return { return EvalResult::Return(self.plant(owned)); }
         if loop_error { return EvalResult::Error; }
         EvalResult::Value(self.null_ref)
+    }
+
+    fn eval_let_destructure_array(&mut self, d: &ast::LetDestructureArray) -> EvalResult {
+        let val_ref = match self.eval_expression(&d.value) {
+            EvalResult::Value(r) => r,
+            EvalResult::Throw(v) => return EvalResult::Throw(v),
+            _ => return EvalResult::Error,
+        };
+
+        let elems: Vec<OwnedValue> = match self.resolve(val_ref).cloned() {
+            Some(ObjectData::Array { elements, .. }) => {
+                elements.iter().map(|&r| self.extract(r)).collect()
+            }
+            _ => {
+                eprintln!("❌ ERROR: Array destructure requires an array on the right side");
+                return EvalResult::Error;
+            }
+        };
+
+        for (i, slot) in d.names.iter().enumerate() {
+            if let Some(name) = slot {
+                let v = elems.get(i).cloned().unwrap_or(OwnedValue::Null);
+                let r = self.plant(v);
+                if self.scopes.is_empty() {
+                    self.global_bindings.insert(name.clone(), r);
+                } else {
+                    self.scopes.declare(name.clone(), r);
+                }
+                if d.is_const {
+                    self.const_names.insert(name.clone());
+                }
+            }
+        }
+
+        if let Some(ref rest_name) = d.rest {
+            let start = d.names.len();
+            let rest_items: Vec<OwnedValue> = elems.into_iter().skip(start).collect();
+            let rest_refs: Vec<ObjectRef> = rest_items.into_iter().map(|v| self.plant(v)).collect();
+            let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+            if self.scopes.is_empty() {
+                self.global_bindings.insert(rest_name.clone(), rest_ref);
+            } else {
+                self.scopes.declare(rest_name.clone(), rest_ref);
+            }
+            if d.is_const {
+                self.const_names.insert(rest_name.clone());
+            }
+        }
+
+        EvalResult::Value(self.null_ref)
+    }
+
+    fn eval_let_destructure_dict(&mut self, d: &ast::LetDestructureDict) -> EvalResult {
+        let val_ref = match self.eval_expression(&d.value) {
+            EvalResult::Value(r) => r,
+            EvalResult::Throw(v) => return EvalResult::Throw(v),
+            _ => return EvalResult::Error,
+        };
+
+        let entries: Vec<(OwnedValue, OwnedValue)> = match self.resolve(val_ref).cloned() {
+            Some(ObjectData::Dict { entries, .. }) => {
+                entries.iter().map(|&(k, v)| (self.extract(k), self.extract(v))).collect()
+            }
+            Some(ObjectData::Instance { fields, .. }) => {
+                fields.iter().map(|(k, v)| (OwnedValue::Str(k.clone()), v.clone())).collect()
+            }
+            _ => {
+                eprintln!("❌ ERROR: Dict destructure requires a dict or object on the right side");
+                return EvalResult::Error;
+            }
+        };
+
+        for (key, alias) in &d.fields {
+            let local_name = alias.as_deref().unwrap_or(key.as_str());
+            let value = entries.iter()
+                .find(|(k, _)| matches!(k, OwnedValue::Str(s) if s == key))
+                .map(|(_, v)| v.clone())
+                .unwrap_or(OwnedValue::Null);
+            let r = self.plant(value);
+            if self.scopes.is_empty() {
+                self.global_bindings.insert(local_name.to_string(), r);
+            } else {
+                self.scopes.declare(local_name.to_string(), r);
+            }
+            if d.is_const {
+                self.const_names.insert(local_name.to_string());
+            }
+        }
+
+        EvalResult::Value(self.null_ref)
+    }
+
+    pub(super) fn eval_unsafe_block(&mut self, block: &ast::BlockStatement) -> EvalResult {
+        let prev = self.in_unsafe_block;
+        self.in_unsafe_block = true;
+        let result = self.eval_block(block);
+        self.in_unsafe_block = prev;
+        result
     }
 
     pub(super) fn eval_block(&mut self, block: &ast::BlockStatement) -> EvalResult {
@@ -694,4 +904,243 @@ impl super::Evaluator {
         }
     }
 
+    fn eval_import_url(&mut self, url: &str) -> EvalResult {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Cache directory: ~/.serez/packages/
+        let cache_dir = dirs_or_temp().join("packages");
+        let _ = std::fs::create_dir_all(&cache_dir);
+
+        // Use a hash of the URL as the cache filename
+        let mut hasher = DefaultHasher::new();
+        url.hash(&mut hasher);
+        let hash = hasher.finish();
+        let cache_file = cache_dir.join(format!("{:016x}.sz", hash));
+
+        // Check if we have a cached copy
+        let source = if cache_file.exists() {
+            match std::fs::read_to_string(&cache_file) {
+                Ok(s) => s,
+                Err(e) => {
+                    let msg = format!("ModuleNotFound: Cannot read cached module '{}': {}", url, e);
+                    eprintln!("❌ ERROR: {}", msg);
+                    let msg_ref = self.alloc(ObjectData::Str(msg));
+                    return EvalResult::Throw(msg_ref);
+                }
+            }
+        } else {
+            // Download the module
+            let agent = ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(15))
+                .build();
+            match agent.get(url).call() {
+                Ok(resp) => {
+                    match resp.into_string() {
+                        Ok(s) => {
+                            let _ = std::fs::write(&cache_file, &s);
+                            s
+                        }
+                        Err(e) => {
+                            let msg = format!("ModuleNotFound: Cannot read response from '{}': {}", url, e);
+                            eprintln!("❌ ERROR: {}", msg);
+                            let msg_ref = self.alloc(ObjectData::Str(msg));
+                            return EvalResult::Throw(msg_ref);
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("ModuleNotFound: Cannot fetch '{}': {}", url, e);
+                    eprintln!("❌ ERROR: {}", msg);
+                    let msg_ref = self.alloc(ObjectData::Str(msg));
+                    return EvalResult::Throw(msg_ref);
+                }
+            }
+        };
+
+        // Use the cache_file path as canonical ID to prevent re-imports
+        if self.imported_files.contains(&cache_file) {
+            return EvalResult::Value(self.null_ref);
+        }
+        self.imported_files.insert(cache_file.clone());
+
+        let prev_dir = self.current_dir.clone();
+        self.current_dir = Some(cache_file.parent().unwrap_or(std::path::Path::new(".")).to_path_buf());
+
+        let before_globals:    HashSet<String> = self.global_bindings.keys().cloned().collect();
+        let before_classes:    HashSet<String> = self.class_registry.keys().cloned().collect();
+        let before_interfaces: HashSet<String> = self.interface_registry.keys().cloned().collect();
+        let before_enums:      HashSet<String> = self.enum_registry.keys().cloned().collect();
+
+        let prev_exports = self.current_module_exports.take();
+        self.current_module_exports = Some(HashSet::new());
+
+        let lexer = crate::lexer::Lexer::new(source.clone());
+        let mut parser = crate::parser::Parser::new(lexer);
+        let source_lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
+        parser.set_source(source_lines);
+        let program = parser.parse_program();
+        let result = self.eval_program(&program);
+
+        let exports = self.current_module_exports.take().unwrap_or_default();
+        self.current_module_exports = prev_exports;
+        self.current_dir = prev_dir;
+
+        if result.is_none() { return EvalResult::Error; }
+
+        if !exports.is_empty() {
+            self.global_bindings.retain(|k, _| before_globals.contains(k) || exports.contains(k));
+            self.class_registry.retain(|k, _| before_classes.contains(k) || exports.contains(k));
+            self.interface_registry.retain(|k, _| before_interfaces.contains(k) || exports.contains(k));
+            self.enum_registry.retain(|k, _| before_enums.contains(k) || exports.contains(k));
+        }
+
+        EvalResult::Value(self.null_ref)
+    }
+
+    fn eval_export(&mut self, inner: &crate::ast::Statement) -> EvalResult {
+        // Evaluate the inner declaration normally
+        let result = self.eval_statement(inner);
+
+        // If we're inside a module being imported, register the exported name
+        if self.current_module_exports.is_some() {
+            if let Some(name) = declaration_name(inner) {
+                if let Some(ref mut exports) = self.current_module_exports {
+                    exports.insert(name);
+                }
+            }
+        }
+
+        result
+    }
+
+    fn eval_import(&mut self, path: &str) -> EvalResult {
+        // URL imports — delegate to the package manager
+        if path.starts_with("https://") || path.starts_with("http://") {
+            return self.eval_import_url(path);
+        }
+
+        // Resolve .sz extension once
+        let path_with_ext = if path.ends_with(".sz") {
+            path.to_string()
+        } else {
+            format!("{}.sz", path)
+        };
+
+        // Candidate directories to search, in priority order:
+        //  1. Current file's directory (relative import)
+        //  2. Process working directory (project root when running via cargo or the sz binary)
+        //  3. SEREZ_HOME env var (installed stdlib / workspace root)
+        //  4. Executable's directory (bundled stdlib)
+        let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
+
+        if let Some(ref d) = self.current_dir {
+            search_dirs.push(d.clone());
+        }
+        search_dirs.push(std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+        if let Ok(home) = std::env::var("SEREZ_HOME") {
+            search_dirs.push(std::path::PathBuf::from(home));
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                search_dirs.push(exe_dir.to_path_buf());
+            }
+        }
+
+        // Try each candidate directory
+        let canonical = search_dirs.iter()
+            .map(|base| base.join(&path_with_ext))
+            .find_map(|p| p.canonicalize().ok());
+
+        let canonical = match canonical {
+            Some(c) => c,
+            None => {
+                let msg = format!("ModuleNotFound: Cannot find module '{}'", path);
+                eprintln!("❌ ERROR: {}", msg);
+                let msg_ref = self.alloc(ObjectData::Str(msg));
+                return EvalResult::Throw(msg_ref);
+            }
+        };
+
+        if self.imported_files.contains(&canonical) {
+            return EvalResult::Value(self.null_ref); // already imported — skip
+        }
+        self.imported_files.insert(canonical.clone());
+
+        let source = match std::fs::read_to_string(&canonical) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("❌ ERROR: Cannot read module '{}': {}", canonical.display(), e);
+                return EvalResult::Error;
+            }
+        };
+
+        // Save and update current_dir for nested imports
+        let prev_dir = self.current_dir.clone();
+        if let Some(parent) = canonical.parent() {
+            self.current_dir = Some(parent.to_path_buf());
+        }
+
+        // Snapshot existing names before loading the module
+        let before_globals:    HashSet<String> = self.global_bindings.keys().cloned().collect();
+        let before_classes:    HashSet<String> = self.class_registry.keys().cloned().collect();
+        let before_interfaces: HashSet<String> = self.interface_registry.keys().cloned().collect();
+        let before_enums:      HashSet<String> = self.enum_registry.keys().cloned().collect();
+
+        // Activate export tracking for this module
+        let prev_exports = self.current_module_exports.take();
+        self.current_module_exports = Some(HashSet::new());
+
+        let lexer = crate::lexer::Lexer::new(source.clone());
+        let mut parser = crate::parser::Parser::new(lexer);
+        let source_lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
+        parser.set_source(source_lines);
+        let program = parser.parse_program();
+
+        let result = self.eval_program(&program);
+
+        // Collect the exports declared by this module
+        let exports = self.current_module_exports.take().unwrap_or_default();
+        self.current_module_exports = prev_exports;
+        self.current_dir = prev_dir;
+
+        if result.is_none() {
+            return EvalResult::Error;
+        }
+
+        // If the module used `export`, enforce visibility: remove everything
+        // that was added but NOT exported.
+        if !exports.is_empty() {
+            self.global_bindings.retain(|k, _| before_globals.contains(k) || exports.contains(k));
+            self.class_registry.retain(|k, _| before_classes.contains(k) || exports.contains(k));
+            self.interface_registry.retain(|k, _| before_interfaces.contains(k) || exports.contains(k));
+            self.enum_registry.retain(|k, _| before_enums.contains(k) || exports.contains(k));
+        }
+        // If no `export` was used, everything the module defined stays (backwards compat)
+
+        EvalResult::Value(self.null_ref)
+    }
+
+}
+
+// Returns ~/.serez or a system temp fallback for package caching.
+fn dirs_or_temp() -> std::path::PathBuf {
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        std::path::PathBuf::from(home).join(".serez")
+    } else {
+        std::env::temp_dir().join("serez")
+    }
+}
+
+// Returns the declared name of a statement, if it has one.
+fn declaration_name(stmt: &Statement) -> Option<String> {
+    match stmt {
+        Statement::Let(l)                   => Some(l.name.clone()),
+        Statement::FunctionDeclaration(f)   => Some(f.name.clone()),
+        Statement::ClassDeclaration(c)      => Some(c.name.clone()),
+        Statement::InterfaceDeclaration(i)  => Some(i.name.clone()),
+        Statement::EnumDeclaration(e)       => Some(e.name.clone()),
+        Statement::NativeDeclaration(n)     => Some(n.name.clone()),
+        _ => None,
+    }
 }

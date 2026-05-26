@@ -89,6 +89,30 @@ impl Parser {
         token_precedence(&self.peek_token.token_type)
     }
 
+    /// Returns true if the peek token is a valid method name (identifier or keyword).
+    /// After '.', keywords like 'get', 'set', 'in', etc. are valid method names.
+    fn peek_token_is_name(&self) -> bool {
+        !matches!(
+            self.peek_token.token_type,
+            TokenType::Illegal | TokenType::Eof
+            | TokenType::Int | TokenType::Decimal | TokenType::String
+            | TokenType::Assign | TokenType::Plus | TokenType::Minus | TokenType::Bang
+            | TokenType::Asterisk | TokenType::Slash | TokenType::Percent
+            | TokenType::Lt | TokenType::Gt | TokenType::LtEq | TokenType::GtEq
+            | TokenType::Eq | TokenType::NotEq | TokenType::And | TokenType::Or
+            | TokenType::Arrow | TokenType::NullCoalesce
+            | TokenType::PlusEq | TokenType::MinusEq | TokenType::StarEq
+            | TokenType::SlashEq | TokenType::PercentEq
+            | TokenType::Comma | TokenType::Semicolon
+            | TokenType::LParen | TokenType::RParen | TokenType::LBrace
+            | TokenType::RBrace | TokenType::LBracket | TokenType::RBracket
+            | TokenType::Dot | TokenType::Colon | TokenType::Question
+            | TokenType::PlusPlus | TokenType::MinusMinus | TokenType::DotDotDot
+            | TokenType::Power | TokenType::BitAnd | TokenType::BitOr | TokenType::BitXor
+            | TokenType::BitNot | TokenType::Shl | TokenType::Shr | TokenType::QuestionDot
+        )
+    }
+
     fn current_precedence(&self) -> Precedence {
         token_precedence(&self.current_token.token_type)
     }
@@ -182,6 +206,16 @@ impl Parser {
             TokenType::KwSwitch => self.parse_switch_statement(),
             TokenType::KwTry => self.parse_try_statement(),
             TokenType::KwThrow => self.parse_throw_statement(),
+            TokenType::KwUnsafe => self.parse_unsafe_statement(),
+            TokenType::KwNative => self.parse_native_declaration(),
+            TokenType::KwImport => self.parse_import_statement(),
+            TokenType::KwExport => self.parse_export_statement(),
+            TokenType::KwYield => {
+                self.next_token(); // consume 'yield', current = first token of expr
+                let expr = self.parse_expression(Precedence::Lowest)?;
+                if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                Some(Statement::Yield(expr))
+            }
             // Labeled loop: label: while/for { ... }
             TokenType::Ident if self.peek_token.token_type == TokenType::Colon => {
                 self.parse_labeled_statement()
@@ -318,6 +352,236 @@ impl Parser {
         Some(Statement::Block(BlockStatement { statements }))
     }
 
+    fn parse_native_declaration(&mut self) -> Option<Statement> {
+        use crate::ast::NativeFnDeclaration;
+        // native fn [return_type] name(params);
+        if self.peek_token.token_type != TokenType::Function {
+            eprintln!("❌ PARSE ERROR: expected 'fn' after 'native'");
+            return None;
+        }
+        self.next_token(); // consume 'fn'
+
+        // optional return type
+        let mut return_type = None;
+        if is_type_keyword(&self.peek_token.token_type) {
+            self.next_token();
+            return_type = self.parse_type_string();
+        }
+
+        // Disambiguate: native fn ClassName funcName  vs  native fn funcName
+        if self.peek_token.token_type != TokenType::Ident {
+            eprintln!("❌ PARSE ERROR: expected function name after 'native fn'");
+            return None;
+        }
+        self.next_token();
+        let first = self.current_token.literal.clone();
+        let name = if self.peek_token.token_type == TokenType::Ident {
+            return_type = Some(first);
+            self.next_token();
+            self.current_token.literal.clone()
+        } else {
+            first
+        };
+
+        if self.peek_token.token_type != TokenType::LParen {
+            eprintln!("❌ PARSE ERROR: expected '(' after native function name");
+            return None;
+        }
+        self.next_token();
+        let parameters = self.parse_function_parameters()?;
+
+        // allow trailing {} (empty body) or just ;
+        if self.peek_token.token_type == TokenType::LBrace {
+            self.next_token();
+            self.next_token(); // skip '{'
+            // consume until '}'
+            while self.current_token.token_type != TokenType::RBrace
+                && self.current_token.token_type != TokenType::Eof
+            {
+                self.next_token();
+            }
+        } else if self.peek_token.token_type == TokenType::Semicolon {
+            self.next_token();
+        }
+
+        Some(Statement::NativeDeclaration(NativeFnDeclaration { name, return_type, parameters }))
+    }
+
+    fn parse_export_statement(&mut self) -> Option<Statement> {
+        // export <declaration>  —  wraps any top-level declaration
+        self.next_token(); // consume 'export', move to the inner keyword
+        let inner = self.parse_statement()?;
+        Some(Statement::Export(Box::new(inner)))
+    }
+
+    fn parse_import_statement(&mut self) -> Option<Statement> {
+        // import "path/to/module";
+        if self.peek_token.token_type != TokenType::String {
+            self.parser_error("expected string path after 'import'");
+            return None;
+        }
+        self.next_token(); // current = string literal
+        let path = self.current_token.literal.clone();
+        if self.peek_token.token_type == TokenType::Semicolon {
+            self.next_token();
+        }
+        Some(Statement::Import(path))
+    }
+
+    // Parse `[a, _, b, ...rest]` — caller must be positioned at `[`.
+    // Returns (slots, rest_name). Leaves current_token at `]`.
+    fn parse_array_destructure_pattern(&mut self) -> Option<(Vec<Option<String>>, Option<String>)> {
+        // current = '['
+        let mut slots: Vec<Option<String>> = Vec::new();
+        let mut rest: Option<String> = None;
+
+        // empty pattern []
+        if self.peek_token.token_type == TokenType::RBracket {
+            self.next_token(); // current = ']'
+            return Some((slots, rest));
+        }
+
+        loop {
+            self.next_token(); // current = name | _ | ... | ]
+            match self.current_token.token_type.clone() {
+                TokenType::RBracket => break,
+                TokenType::Ident => {
+                    let name = self.current_token.literal.clone();
+                    slots.push(if name == "_" { None } else { Some(name) });
+                }
+                TokenType::DotDotDot => {
+                    // rest element
+                    if self.peek_token.token_type != TokenType::Ident {
+                        self.parser_error("Expected identifier after '...' in destructure");
+                        return None;
+                    }
+                    self.next_token();
+                    rest = Some(self.current_token.literal.clone());
+                    // must be followed by ']'
+                    if self.peek_token.token_type != TokenType::RBracket {
+                        self.parser_error("Rest element must be last in array destructure");
+                        return None;
+                    }
+                    self.next_token(); // current = ']'
+                    break;
+                }
+                _ => {
+                    self.parser_error("Expected identifier or '...' in array destructure pattern");
+                    return None;
+                }
+            }
+            // after a slot: expect ',' or ']'
+            match self.peek_token.token_type {
+                TokenType::Comma      => { self.next_token(); } // consume ','
+                TokenType::RBracket   => { self.next_token(); break; } // consume ']'
+                _ => {
+                    self.parser_error("Expected ',' or ']' in array destructure pattern");
+                    return None;
+                }
+            }
+        }
+        Some((slots, rest))
+    }
+
+    // Parse `{key, key: alias}` — caller must be positioned at `{`.
+    // Returns Vec<(key, local_alias)>. Leaves current_token at `}`.
+    fn parse_dict_destructure_pattern(&mut self) -> Option<Vec<(String, Option<String>)>> {
+        // current = '{'
+        let mut fields: Vec<(String, Option<String>)> = Vec::new();
+
+        if self.peek_token.token_type == TokenType::RBrace {
+            self.next_token(); // current = '}'
+            return Some(fields);
+        }
+
+        loop {
+            self.next_token(); // current = key name
+            if self.current_token.token_type != TokenType::Ident {
+                self.parser_error("Expected property name in dict destructure pattern");
+                return None;
+            }
+            let key = self.current_token.literal.clone();
+
+            // optional rename: {key: alias}
+            let alias = if self.peek_token.token_type == TokenType::Colon {
+                self.next_token(); // consume ':'
+                if self.peek_token.token_type != TokenType::Ident {
+                    self.parser_error("Expected identifier after ':' in dict destructure");
+                    return None;
+                }
+                self.next_token();
+                Some(self.current_token.literal.clone())
+            } else {
+                None
+            };
+            fields.push((key, alias));
+
+            match self.peek_token.token_type {
+                TokenType::Comma    => { self.next_token(); }
+                TokenType::RBrace   => { self.next_token(); break; }
+                _ => {
+                    self.parser_error("Expected ',' or '}}' in dict destructure pattern");
+                    return None;
+                }
+            }
+        }
+        Some(fields)
+    }
+
+    fn parse_sizeof_expression(&mut self) -> Option<Expression> {
+        use crate::ast::{SizeOfTarget};
+        if self.peek_token.token_type != TokenType::LParen {
+            eprintln!("❌ PARSE ERROR: expected '(' after 'sizeof'");
+            return None;
+        }
+        self.next_token(); // consume '('
+        self.next_token(); // move to the argument
+
+        let type_names = ["int", "decimal", "bool", "string", "null", "void", "any"];
+        let target = if matches!(self.current_token.token_type,
+            TokenType::KwInt | TokenType::KwDecimal | TokenType::KwBool |
+            TokenType::KwString | TokenType::KwNull | TokenType::KwVoid | TokenType::KwAny)
+        {
+            let name = self.current_token.literal.clone();
+            self.next_token(); // consume type keyword
+            SizeOfTarget::Type(name)
+        } else if self.current_token.token_type == TokenType::Ident
+            && type_names.contains(&self.current_token.literal.as_str())
+        {
+            let name = self.current_token.literal.clone();
+            self.next_token();
+            SizeOfTarget::Type(name)
+        } else {
+            let expr = self.parse_expression(Precedence::Lowest)?;
+            SizeOfTarget::Expr(Box::new(expr))
+        };
+
+        if self.current_token.token_type != TokenType::RParen {
+            eprintln!("❌ PARSE ERROR: expected ')' to close sizeof");
+            return None;
+        }
+        Some(Expression::SizeOf(target))
+    }
+
+    fn parse_unsafe_statement(&mut self) -> Option<Statement> {
+        if self.peek_token.token_type != TokenType::LBrace {
+            eprintln!("❌ PARSE ERROR: expected '{{' after 'unsafe'");
+            return None;
+        }
+        self.next_token(); // current = '{'
+        self.next_token(); // skip '{'
+        let mut statements = Vec::new();
+        while self.current_token.token_type != TokenType::RBrace
+            && self.current_token.token_type != TokenType::Eof
+        {
+            if let Some(stmt) = self.parse_statement() {
+                statements.push(stmt);
+            }
+            self.next_token();
+        }
+        Some(Statement::Unsafe(BlockStatement { statements }))
+    }
+
     fn parse_expression_statement(&mut self) -> Option<Statement> {
         let expr = self.parse_expression(Precedence::Lowest)?;
 
@@ -325,6 +589,18 @@ impl Parser {
         let is_compound = self.is_compound_assign(&self.peek_token.token_type);
 
         if is_assign || is_compound {
+            // *ptr = val
+            if is_assign {
+                if let Expression::Deref(ref ptr_expr) = expr {
+                    let ptr_clone = ptr_expr.clone();
+                    self.next_token(); // consume '='
+                    self.next_token(); // first token of rhs
+                    let value = self.parse_expression(Precedence::Lowest)?;
+                    if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+                    return Some(Statement::DerefAssign { ptr: ptr_clone, value });
+                }
+            }
+
             // obj.field = val  or  obj.field += val
             if let Expression::DotCall(ref dot) = expr {
                 if dot.arguments.is_empty() {
@@ -444,6 +720,11 @@ impl Parser {
 
     fn parse_return_statement(&mut self) -> Option<Statement> {
         self.next_token();
+
+        // Bare `return;` — no expression, return null
+        if self.current_token.token_type == TokenType::Semicolon {
+            return Some(Statement::Return(ReturnStatement { return_value: Expression::Null }));
+        }
 
         let return_value = self.parse_expression(Precedence::Lowest)?;
 
@@ -622,6 +903,39 @@ impl Parser {
             self.parser_error("Expected 'let' as for-loop initializer");
             return None;
         }
+
+        // ── ForEach with array destructuring: for (let [a, b] in ...) ─────────
+        if self.peek_token.token_type == TokenType::LBracket {
+            self.next_token(); // current = '['
+            let (slots, rest) = self.parse_array_destructure_pattern()?;
+            // current is now ']'
+            if self.peek_token.token_type != TokenType::KwIn {
+                self.parser_error("Expected 'in' after destructure pattern in for");
+                return None;
+            }
+            self.next_token(); // current = 'in'
+            self.next_token(); // current = first token of iterable
+            let iterable = self.parse_expression(Precedence::Lowest)?;
+            if self.peek_token.token_type != TokenType::RParen {
+                self.parser_error("Expected ')' after for-in iterable");
+                return None;
+            }
+            self.next_token(); // current = ')'
+            if self.peek_token.token_type != TokenType::LBrace {
+                self.parser_error("Expected '{{' to start for-in body");
+                return None;
+            }
+            self.next_token();
+            let body = match self.parse_block_statement()? {
+                Statement::Block(b) => b,
+                _ => return None,
+            };
+            return Some(Statement::ForEach(ForEachStatement {
+                var: ForEachVar::Array(slots, rest),
+                iterable, body, label: label.clone(),
+            }));
+        }
+
         if self.peek_token.token_type != TokenType::Ident {
             self.parser_error("Expected identifier after 'let' in for");
             return None;
@@ -652,7 +966,10 @@ impl Parser {
                 _ => return None,
             };
 
-            return Some(Statement::ForEach(ForEachStatement { var_name, iterable, body, label: label.clone() }));
+            return Some(Statement::ForEach(ForEachStatement {
+                var: ForEachVar::Name(var_name),
+                iterable, body, label: label.clone(),
+            }));
         }
 
         // ── Classic for: for (let i = 0; i < n; i = i + 1) { body } ─────────
@@ -802,6 +1119,39 @@ impl Parser {
 
     fn parse_let_statement(&mut self) -> Option<Statement> {
         let is_const = self.current_token.token_type == TokenType::KwConst;
+
+        // Array destructuring: let [a, b, ...rest] = expr;
+        if self.peek_token.token_type == TokenType::LBracket {
+            self.next_token(); // current = '['
+            let (names, rest) = self.parse_array_destructure_pattern()?;
+            // current is now ']'
+            if self.peek_token.token_type != TokenType::Assign {
+                self.parser_error("Expected '=' after array destructure pattern");
+                return None;
+            }
+            self.next_token(); // '='
+            self.next_token(); // first token of value
+            let value = self.parse_expression(Precedence::Lowest)?;
+            if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+            return Some(Statement::LetDestructureArray(LetDestructureArray { names, rest, value, is_const }));
+        }
+
+        // Dict destructuring: let {key, key: alias} = expr;
+        if self.peek_token.token_type == TokenType::LBrace {
+            self.next_token(); // current = '{'
+            let fields = self.parse_dict_destructure_pattern()?;
+            // current is now '}'
+            if self.peek_token.token_type != TokenType::Assign {
+                self.parser_error("Expected '=' after dict destructure pattern");
+                return None;
+            }
+            self.next_token(); // '='
+            self.next_token(); // first token of value
+            let value = self.parse_expression(Precedence::Lowest)?;
+            if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+            return Some(Statement::LetDestructureDict(LetDestructureDict { fields, value, is_const }));
+        }
+
         if self.peek_token.token_type != TokenType::Ident {
             return None;
         }
@@ -882,6 +1232,10 @@ impl Parser {
     }
 
     fn parse_function_statement(&mut self) -> Option<Statement> {
+        // fn* generator syntax: consume the '*'
+        let is_generator = self.peek_token.token_type == TokenType::Asterisk;
+        if is_generator { self.next_token(); } // consume '*'
+
         let mut return_type = None;
         if is_type_keyword(&self.peek_token.token_type) {
             self.next_token();
@@ -934,7 +1288,7 @@ impl Parser {
                 _ => return None,
             };
 
-            let function = FunctionLiteral { return_type, parameters, body };
+            let function = FunctionLiteral { return_type, parameters, body, is_generator };
 
             Some(Statement::FunctionDeclaration(FunctionDeclaration { name, function }))
         } else {
@@ -956,7 +1310,7 @@ impl Parser {
                 _ => return None,
             };
 
-            let function = FunctionLiteral { return_type, parameters, body };
+            let function = FunctionLiteral { return_type, parameters, body, is_generator };
 
             Some(Statement::Expression(Expression::FunctionLiteral(function)))
         }
@@ -1074,7 +1428,7 @@ impl Parser {
             _ => return None,
         };
 
-        Some(Expression::FunctionLiteral(FunctionLiteral { return_type, parameters, body }))
+        Some(Expression::FunctionLiteral(FunctionLiteral { return_type, parameters, body, is_generator: false }))
     }
 
     fn parse_call_arguments(&mut self) -> Option<Vec<Expression>> {
@@ -1264,7 +1618,9 @@ impl Parser {
                 let dot_line = self.current_token.line;
                 let dot_column = self.current_token.column;
 
-                if self.peek_token.token_type != TokenType::Ident {
+                // After '.', accept identifiers AND keyword tokens as method names
+                // (e.g. tensor.get(), dict.set(), obj.new() should work)
+                if !self.peek_token_is_name() {
                     self.parser_error("Expected method name after '.'");
                     return left_exp;
                 }
@@ -1368,6 +1724,23 @@ impl Parser {
                 let right = self.parse_expression(Precedence::Prefix)?;
                 Some(Expression::Prefix(operator, Box::new(right)))
             }
+
+            // &varname — address-of
+            TokenType::BitAnd => {
+                self.next_token();
+                let inner = self.parse_expression(Precedence::Prefix)?;
+                Some(Expression::AddressOf(Box::new(inner)))
+            }
+
+            // *ptr — dereference
+            TokenType::Asterisk => {
+                self.next_token();
+                let inner = self.parse_expression(Precedence::Prefix)?;
+                Some(Expression::Deref(Box::new(inner)))
+            }
+
+            // sizeof(type | expr)
+            TokenType::KwSizeof => self.parse_sizeof_expression(),
 
             // Zero-param lambda: () => body
             TokenType::LParen if self.peek_token.token_type == TokenType::RParen => {
@@ -1491,7 +1864,7 @@ impl Parser {
                     _ => return None,
                 };
 
-                Some(Expression::FunctionLiteral(FunctionLiteral { return_type, parameters, body }))
+                Some(Expression::FunctionLiteral(FunctionLiteral { return_type, parameters, body, is_generator: false }))
             }
 
             _ => None,

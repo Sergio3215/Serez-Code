@@ -1,0 +1,2 @@
+// Security: fetch must reject header injection via control chars in URL
+fetch("http://example.com/\r\nX-Evil: injected");

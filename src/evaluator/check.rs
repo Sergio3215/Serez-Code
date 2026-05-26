@@ -213,6 +213,9 @@ impl super::Evaluator {
                     )
             }
             ast::Expression::Spread(inner) => self.estimate_expression(inner),
+            ast::Expression::SizeOf(_)    => 8,
+            ast::Expression::AddressOf(inner) => 8 + self.estimate_expression(inner),
+            ast::Expression::Deref(inner)     => 8 + self.estimate_expression(inner),
         }
     }
 

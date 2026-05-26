@@ -1,0 +1,3 @@
+// Security: private (non-exported) symbol must not be accessible from importer
+import "lib/math_utils";
+let r = deg_to_rad(90.0);

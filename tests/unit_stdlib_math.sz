@@ -1,0 +1,63 @@
+// Unit tests: std/math
+
+import "std/math";
+
+test("gcd", () => {
+    assert(gcd(48, 18) == 6, "gcd(48,18)");
+    assert(gcd(0, 5) == 5, "gcd(0,5)");
+    assert(gcd(7, 7) == 7, "gcd(7,7)");
+    assert(gcd(-12, 8) == 4, "gcd negatives");
+});
+
+test("lcm", () => {
+    assert(lcm(4, 6) == 12, "lcm(4,6)");
+    assert(lcm(0, 5) == 0, "lcm(0,5)");
+    assert(lcm(7, 1) == 7, "lcm(7,1)");
+});
+
+test("isPrime", () => {
+    assert(isPrime(2) == true,  "2 is prime");
+    assert(isPrime(17) == true, "17 is prime");
+    assert(isPrime(1) == false, "1 not prime");
+    assert(isPrime(15) == false,"15 not prime");
+    assert(isPrime(0) == false, "0 not prime");
+});
+
+test("sign", () => {
+    assert(sign(5) == 1,   "sign(5)");
+    assert(sign(-3) == -1, "sign(-3)");
+    assert(sign(0) == 0,   "sign(0)");
+});
+
+test("clamp", () => {
+    assert(clamp(5, 0, 10) == 5,  "in range");
+    assert(clamp(-1, 0, 10) == 0, "below min");
+    assert(clamp(20, 0, 10) == 10,"above max");
+});
+
+test("factorial", () => {
+    assert(factorial(0) == 1,   "0!");
+    assert(factorial(5) == 120, "5!");
+    assert(factorial(10) == 3628800, "10!");
+});
+
+test("combinations and permutations", () => {
+    assert(combinations(5, 2) == 10, "C(5,2)");
+    assert(combinations(5, 0) == 1,  "C(5,0)");
+    assert(permutations(5, 2) == 20, "P(5,2)");
+});
+
+test("fibonacci", () => {
+    assert(fibonacci(0) == 0,  "fib(0)");
+    assert(fibonacci(1) == 1,  "fib(1)");
+    assert(fibonacci(10) == 55,"fib(10)");
+});
+
+test("primes sieve", () => {
+    let p = primes(20);
+    assert(p.length() == 8, "8 primes up to 20");
+    assert(p[0] == 2,  "first prime is 2");
+    assert(p[7] == 19, "last prime <= 20 is 19");
+});
+
+summary();

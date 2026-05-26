@@ -1,0 +1,21 @@
+// E2E: Crypto namespace — hash, base64, hex
+
+// Known SHA-256 of "abc"
+let sha = Crypto.sha256("abc");
+let sha_ok = (sha == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+// Base64 roundtrip
+let msg = "Serez-Code v2";
+let b64 = Crypto.base64encode(msg);
+let roundtrip = (Crypto.base64decode(b64) == msg);
+
+// Hex roundtrip
+let hex = Crypto.hexEncode([65, 66, 67]);
+let hex_ok = (hex == "414243");
+
+// HMAC determinism
+let h1 = Crypto.hmacSha256("k", "d");
+let h2 = Crypto.hmacSha256("k", "d");
+let hmac_ok = (h1 == h2);
+
+out sha_ok && roundtrip && hex_ok && hmac_ok;

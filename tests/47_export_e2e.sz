@@ -1,0 +1,19 @@
+// E2E: export system — exported symbols are accessible, module works correctly
+
+import "lib/math_utils";
+
+let area = circle_area(1.0);
+let area_ok = (area > 3.14 && area < 3.15);
+
+let f = factorial(5);
+let fact_ok = (f == 120);
+
+let clamped = clamp(150.0, 0.0, 100.0);
+let clamp_ok = (clamped == 100.0);
+
+let c = new Counter();
+c.inc();
+c.inc();
+let counter_ok = (c.value() == 2);
+
+out (area_ok && fact_ok && clamp_ok && counter_ok);

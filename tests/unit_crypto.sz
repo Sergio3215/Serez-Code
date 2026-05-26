@@ -1,0 +1,106 @@
+// Unit tests: Crypto namespace — Phase 2.5
+
+test("Crypto.sha256 known hash of empty string", () => {
+    let h = Crypto.sha256("");
+    assert(h == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+           "sha256('') should match known value");
+});
+
+test("Crypto.sha256 known hash of 'abc'", () => {
+    let h = Crypto.sha256("abc");
+    assert(h == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+           "sha256('abc') should match known value");
+});
+
+test("Crypto.sha256 returns 64-char hex string", () => {
+    let h = Crypto.sha256("hello world");
+    assert(h.length() == 64, "SHA-256 digest is 64 hex chars");
+});
+
+test("Crypto.md5 known hash of empty string", () => {
+    let h = Crypto.md5("");
+    assert(h == "d41d8cd98f00b204e9800998ecf8427e",
+           "md5('') should match known value");
+});
+
+test("Crypto.md5 known hash of 'abc'", () => {
+    let h = Crypto.md5("abc");
+    assert(h == "900150983cd24fb0d6963f7d28e17f72",
+           "md5('abc') should match known value");
+});
+
+test("Crypto.md5 returns 32-char hex string", () => {
+    let h = Crypto.md5("serez");
+    assert(h.length() == 32, "MD5 digest is 32 hex chars");
+});
+
+test("Crypto.base64encode roundtrip", () => {
+    let original = "Hello, Serez!";
+    let encoded = Crypto.base64encode(original);
+    let decoded = Crypto.base64decode(encoded);
+    assert(decoded == original, "base64 roundtrip should produce original string");
+});
+
+test("Crypto.base64encode known value", () => {
+    let enc = Crypto.base64encode("hello");
+    assert(enc == "aGVsbG8=", "base64('hello') should be 'aGVsbG8='");
+});
+
+test("Crypto.base64decode known value", () => {
+    let dec = Crypto.base64decode("aGVsbG8=");
+    assert(dec == "hello", "base64decode('aGVsbG8=') should be 'hello'");
+});
+
+test("Crypto.base64decode invalid input throws", () => {
+    let caught = false;
+    try {
+        let d = Crypto.base64decode("!!!invalid!!!");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "invalid base64 should throw");
+});
+
+test("Crypto.hmacSha256 returns 64-char hex string", () => {
+    let h = Crypto.hmacSha256("secret", "message");
+    assert(h.length() == 64, "HMAC-SHA256 digest is 64 hex chars");
+});
+
+test("Crypto.hmacSha256 is deterministic", () => {
+    let h1 = Crypto.hmacSha256("key", "data");
+    let h2 = Crypto.hmacSha256("key", "data");
+    assert(h1 == h2, "same key+data should produce same HMAC");
+});
+
+test("Crypto.hmacSha256 known value", () => {
+    // HMAC-SHA256("key", "The quick brown fox jumps over the lazy dog")
+    let h = Crypto.hmacSha256("key", "The quick brown fox jumps over the lazy dog");
+    assert(h == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
+           "hmacSha256 known value should match");
+});
+
+test("Crypto.hexEncode / hexDecode roundtrip", () => {
+    let bytes = [72, 101, 108, 108, 111];
+    let hex = Crypto.hexEncode(bytes);
+    assert(hex == "48656c6c6f", "hexEncode([72,101,...]) should give '48656c6c6f'");
+    let back = Crypto.hexDecode(hex);
+    assert(back[0] == 72 && back[4] == 111, "hexDecode roundtrip");
+});
+
+test("Crypto.hexDecode invalid hex throws", () => {
+    let caught = false;
+    try {
+        let b = Crypto.hexDecode("xyz");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "invalid hex should throw");
+});
+
+test("Crypto.sha256 different inputs produce different hashes", () => {
+    let h1 = Crypto.sha256("hello");
+    let h2 = Crypto.sha256("world");
+    assert(h1 != h2, "different inputs should give different SHA-256 hashes");
+});
+
+summary();
