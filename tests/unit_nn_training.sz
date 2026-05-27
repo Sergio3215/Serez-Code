@@ -1,0 +1,216 @@
+// Unit tests: neural network training behavior via autodiff SGD
+// Verifies gradient descent properties, convergence, and gradient direction.
+
+// ── Helper: single linear layer forward + MSE loss ────────────────────────────
+// Returns [pred_val, loss_val] given W, x, target
+
+// ── 1. One SGD step decreases MSE loss ───────────────────────────────────────
+
+test("1 SGD step decreases loss — linear model", () => {
+    // y = x @ W → t, shape: x[1,2], W[2,1], t[1,1]
+    Random.seed(7)
+    let W  = Random.normalTensor([2, 1], 0.0, 0.5)
+    let x  = Tensor.from([[1.0, 1.0]])
+    let t  = Tensor.from([[1.0]])
+    let lr = 0.1
+
+    // loss before step
+    let pred0 = x.matmul(W)
+    let diff0 = pred0.sub(t)
+    let l0    = diff0.mul(diff0).get(0, 0)
+
+    // gradient step
+    Autodiff.tape()
+    let pred = x.matmul(W)
+    let diff = pred.sub(t)
+    let lT   = diff.mul(diff)
+    Autodiff.backward(lT)
+    let dW = Autodiff.gradient(W)
+    let W2 = W.sub(dW.scale(lr))
+
+    // loss after step
+    let pred1 = x.matmul(W2)
+    let diff1 = pred1.sub(t)
+    let l1    = diff1.mul(diff1).get(0, 0)
+
+    assert(l1 < l0, "loss decreased after 1 step (l0=" + l0 + " l1=" + l1 + ")")
+});
+
+// ── 2. Loss monotonically decreases for 5 steps ───────────────────────────────
+
+test("5 SGD steps — loss monotonically non-increasing", () => {
+    Random.seed(13)
+    let W  = Random.normalTensor([3, 1], 0.0, 0.3)
+    let x  = Tensor.from([[1.0, 0.5, -1.0]])
+    let t  = Tensor.from([[0.8]])
+    let lr = 0.05
+    let prev_loss = 99999.0
+
+    let step = 0
+    while (step < 5) {
+        Autodiff.tape()
+        let pred = x.matmul(W)
+        let diff = pred.sub(t)
+        let lT   = diff.mul(diff)
+        Autodiff.backward(lT)
+        let dW = Autodiff.gradient(W)
+        W = W.sub(dW.scale(lr))
+        let cur_loss = x.matmul(W).sub(t).mul(x.matmul(W).sub(t)).get(0, 0)
+        assert(cur_loss <= prev_loss + 0.0001, "loss non-increasing at step " + step)
+        prev_loss = cur_loss
+        step = step + 1
+    }
+    assert(prev_loss < 99999.0, "training ran");
+});
+
+// ── 3. Gradient direction is correct (sign check) ─────────────────────────────
+
+test("MSE gradient sign is correct", () => {
+    // W = [[0.0]], x = [[1.0]], t = [[1.0]]
+    // pred = 0.0, diff = -1.0, dW = 2 * x^T * diff = 2 * [[1]] * [[-1]] = [[-2]]
+    // So dW < 0 → we subtract a negative → W increases → pred increases toward t
+    let W = Tensor.from([[0.0]])
+    let x = Tensor.from([[1.0]])
+    let t = Tensor.from([[1.0]])
+
+    Autodiff.tape()
+    let pred = x.matmul(W)
+    let diff = pred.sub(t)
+    let lT   = diff.mul(diff)
+    Autodiff.backward(lT)
+    let dW = Autodiff.gradient(W)
+
+    // dL/dW = 2*(Wx - t)*x = 2*(0-1)*1 = -2
+    assert(dW.get(0, 0) < 0.0, "gradient is negative when pred < target")
+    // After step, W should increase
+    let W2 = W.sub(dW.scale(0.1))
+    assert(W2.get(0, 0) > W.get(0, 0), "W increases toward target")
+});
+
+// ── 4. Layer norm doesn't block gradient flow ─────────────────────────────────
+
+test("layer_norm passes gradients to upstream", () => {
+    // NOTE: uniform upstream gradient (all-ones) gives zero dx through LN because
+    // the LN backward subtracts mean(dout) — must use a non-uniform loss instead.
+    Random.seed(21)
+    let W  = Random.normalTensor([4, 4], 0.0, 0.1)
+    let x  = Tensor.from([[1.0, 0.0, -1.0, 0.5]])
+    let g  = Tensor.ones([4])
+    let b  = Tensor.zeros([4])
+    let target = Tensor.from([[1.0, -1.0, 0.5, 0.0]])
+
+    Autodiff.tape()
+    let h    = x.matmul(W)
+    let ln   = h.layer_norm(g, b, 0.000001)
+    let diff = ln.sub(target)
+    let loss = diff.mul(diff)
+    Autodiff.backward(loss)
+    let dW = Autodiff.gradient(W)
+
+    assert(dW.norm() > 0.0, "gradient flows through layer_norm to W")
+});
+
+// ── 5. MHA doesn't block gradient flow ────────────────────────────────────────
+
+test("mha passes gradients upstream through weight matrices", () => {
+    Random.seed(33)
+    let d  = 8
+    let Wq = Random.normalTensor([d, d], 0.0, 0.05)
+    let Wk = Random.normalTensor([d, d], 0.0, 0.05)
+    let Wv = Random.normalTensor([d, d], 0.0, 0.05)
+    let Wo = Random.normalTensor([d, d], 0.0, 0.05)
+    let x  = Random.normalTensor([3, d], 0.0, 0.1)
+
+    Autodiff.tape()
+    let y = x.mha(Wq, Wk, Wv, Wo, 2)
+    Autodiff.backward(y)
+
+    assert(Autodiff.gradient(Wq).norm() > 0.0, "dWq non-zero")
+    assert(Autodiff.gradient(Wk).norm() > 0.0, "dWk non-zero")
+    assert(Autodiff.gradient(Wv).norm() > 0.0, "dWv non-zero")
+    assert(Autodiff.gradient(Wo).norm() > 0.0, "dWo non-zero")
+});
+
+// ── 6. Residual + LN chain trains end-to-end ─────────────────────────────────
+
+test("Transformer residual+LN chain: loss decreases in 1 step", () => {
+    Random.seed(55)
+    let d  = 8
+    let Wq = Random.normalTensor([d, d], 0.0, 0.05)
+    let Wk = Random.normalTensor([d, d], 0.0, 0.05)
+    let Wv = Random.normalTensor([d, d], 0.0, 0.05)
+    let Wo = Random.normalTensor([d, d], 0.0, 0.05)
+    let g  = Tensor.ones([d])
+    let b  = Tensor.zeros([d])
+    let Wout = Random.normalTensor([d, 1], 0.0, 0.1)
+    let x  = Random.normalTensor([4, d], 0.0, 0.1)
+    let target = Tensor.ones([4, 1])
+    let lr = 0.01
+
+    // loss before step
+    let h0    = x.mha(Wq, Wk, Wv, Wo, 2).add(x).layer_norm(g, b, 0.000001)
+    let pred0 = h0.matmul(Wout)
+    let diff0 = pred0.sub(target)
+    let l0    = diff0.mul(diff0).sum()
+
+    // gradient step on Wout only
+    Autodiff.tape()
+    let h    = x.mha(Wq, Wk, Wv, Wo, 2).add(x).layer_norm(g, b, 0.000001)
+    let pred = h.matmul(Wout)
+    let diff = pred.sub(target)
+    let lT   = diff.mul(diff)
+    Autodiff.backward(lT)
+    let dWout = Autodiff.gradient(Wout)
+    let Wout2 = Wout.sub(dWout.scale(lr))
+
+    // loss after step
+    let h1    = x.mha(Wq, Wk, Wv, Wo, 2).add(x).layer_norm(g, b, 0.000001)
+    let pred1 = h1.matmul(Wout2)
+    let diff1 = pred1.sub(target)
+    let l1    = diff1.mul(diff1).sum()
+
+    assert(l1 < l0, "loss decreased: " + l0 + " → " + l1)
+});
+
+// ── 7. Softmax 2D backward yields zero-sum rows ───────────────────────────────
+
+test("softmax 2D gradient: each input row sums to 0", () => {
+    // For softmax Jacobian: dx_r has sum 0 when upstream grad is constant
+    // Because sum(ds/dx) = 0 for each row (probability simplex constraint)
+    let m = Tensor.from([[2.0, 1.0, 0.5]])
+    Autodiff.tape()
+    let s = m.softmax()
+    Autodiff.backward(s)
+    let gm = Autodiff.gradient(m)
+    let row_sum = gm.get(0,0) + gm.get(0,1) + gm.get(0,2)
+    assert(row_sum > -0.001 && row_sum < 0.001, "gradient row sums to 0")
+});
+
+// ── 8. SGD converges: predict constant from noise ────────────────────────────
+
+test("SGD converges: predict 0.5 from 1D input in 50 steps", () => {
+    // Task: x=1 → y=0.5, simple linear model W*x
+    // With enough steps and small enough lr, should get close
+    Random.seed(77)
+    let W  = Random.normalTensor([1, 1], 0.0, 0.1)
+    let x  = Tensor.from([[1.0]])
+    let t  = Tensor.from([[0.5]])
+    let lr = 0.1
+
+    let step = 0
+    while (step < 50) {
+        Autodiff.tape()
+        let pred = x.matmul(W)
+        let diff = pred.sub(t)
+        let lT   = diff.mul(diff)
+        Autodiff.backward(lT)
+        let dW = Autodiff.gradient(W)
+        W = W.sub(dW.scale(lr))
+        step = step + 1
+    }
+
+    let final_pred = x.matmul(W).get(0, 0)
+    assert(final_pred > 0.45 && final_pred < 0.55, "converged to ~0.5 (got " + final_pred + ")")
+});
+
+summary()

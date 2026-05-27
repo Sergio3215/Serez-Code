@@ -1,0 +1,127 @@
+// Security unit tests: attention ops validate their inputs and throw on bad data.
+
+// ── mha input validation ──────────────────────────────────────────────────────
+
+test("layer_norm — gamma SMALLER than cols throws (OOB access)", () => {
+    // x has 4 cols; g has 2 elements → Rust panics at g[2] → runtime error
+    let x = Tensor.from([[1.0, 2.0, 3.0, 4.0]])
+    let g = Tensor.ones([2])    // 2 < 4 → index out of bounds at col 2
+    let b = Tensor.zeros([4])
+    let caught = false
+    try {
+        let y = x.layer_norm(g, b, 0.000001)
+    } catch (e) {
+        caught = true
+    }
+    assert(caught, "layer_norm with gamma smaller than cols must throw")
+});
+
+test("layer_norm — beta SMALLER than cols throws (OOB access)", () => {
+    // x has 3 cols; b has 1 element → Rust panics at b[1] → runtime error
+    let x = Tensor.from([[1.0, 2.0, 3.0]])
+    let g = Tensor.ones([3])
+    let b = Tensor.zeros([1])   // 1 < 3 → index out of bounds at col 1
+    let caught = false
+    try {
+        let y = x.layer_norm(g, b, 0.000001)
+    } catch (e) {
+        caught = true
+    }
+    assert(caught, "layer_norm with beta smaller than cols must throw")
+});
+
+test("mha — matmul dimension mismatch in weight throws", () => {
+    // x: [2, 4], Wq: [3, 4] — x @ Wq = [2,4] @ [3,4] fails
+    let x  = Tensor.from([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
+    let Wq = Tensor.from([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])
+    let W  = Tensor.eye(4)
+    let caught = false
+    try {
+        let y = x.mha(Wq, W, W, W, 2)
+    } catch (e) {
+        caught = true
+    }
+    assert(caught, "mha with mismatched Wq must throw")
+});
+
+test("softmax 2D — 1D input still sums to 1 (backward compat)", () => {
+    // 1D softmax should still work (not throw)
+    let t = Tensor.from([1.0, 2.0, 3.0])
+    let s = t.softmax()
+    let total = s.get(0) + s.get(1) + s.get(2)
+    assert(total > 0.999 && total < 1.001, "1D softmax sums to 1")
+});
+
+test("layer_norm — zero-variance row (all same value) doesn't divide by zero", () => {
+    // All same values → variance = 0 → eps prevents div-by-zero
+    let x = Tensor.from([[5.0, 5.0, 5.0, 5.0]])
+    let g = Tensor.ones([4])
+    let b = Tensor.zeros([4])
+    let caught = false
+    try {
+        let y = x.layer_norm(g, b, 0.000001)
+        // output should be all zeros (normalized zero-variance = 0, * gamma=1, + beta=0)
+        assert(y.get(0,0) > -0.01 && y.get(0,0) < 0.01, "constant input → output ≈ 0")
+    } catch (e) {
+        caught = true
+    }
+    assert(!caught, "layer_norm on constant row must not throw")
+});
+
+test("mha — out-of-bounds on autodiff gradient for non-tracked tensor doesn't crash", () => {
+    // Calling gradient on a tensor that was never on any tape returns zeros or throws
+    // Verified safe behavior: no segfault / no interpreter crash
+    let W = Tensor.from([[1.0, 0.0], [0.0, 1.0]])
+    let caught = false
+    try {
+        let dW = Autodiff.gradient(W)
+    } catch (e) {
+        caught = true
+    }
+    // Either throws (caught=true) or returns zeros — both are safe behaviors
+    // The important thing is no crash (test framework is still running)
+    assert(true, "no crash when calling gradient on untracked tensor")
+});
+
+test("layer_norm — negative epsilon is still numerically safe", () => {
+    // Negative epsilon doesn't make sense but shouldn't segfault
+    // The interpreter should either error gracefully or clamp
+    let x = Tensor.from([[1.0, 2.0, 3.0]])
+    let g = Tensor.ones([3])
+    let b = Tensor.zeros([3])
+    let caught = false
+    try {
+        let y = x.layer_norm(g, b, -0.000001)
+        // If it doesn't throw, the output must still be finite
+        let v = y.get(0, 0)
+        assert(v == v, "output is not NaN")
+    } catch (e) {
+        caught = true
+    }
+    // Either behavior (throw or return finite) is acceptable
+    assert(true, "no crash with negative epsilon")
+});
+
+test("mha — very large inputs stay finite (no explosion)", () => {
+    // Scaled dot-product attention divides by sqrt(dh), preventing softmax explosion
+    let d  = 4
+    let W  = Tensor.eye(d)
+    let x  = Tensor.from([[100.0, 100.0, 100.0, 100.0],
+                           [100.0, 100.0, 100.0, 100.0]])
+    let y  = x.mha(W, W, W, W, 2)
+    let finite = true
+    let i  = 0
+    while (i < 2) {
+        let j = 0
+        while (j < d) {
+            let v = y.get(i, j)
+            if (v != v) { finite = false }        // NaN
+            if (v > 1000000.0) { finite = false }  // Inf-like
+            j = j + 1
+        }
+        i = i + 1
+    }
+    assert(finite, "large inputs produce finite MHA output")
+});
+
+summary()

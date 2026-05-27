@@ -1,0 +1,184 @@
+// AI integration test: full attention training stack converges.
+// Embedding + MHA + LayerNorm + residual + Dense head → binary classification.
+//
+// Task: tokens from [8..11] → positive (target=1); tokens [0..3] → negative (target=0)
+// Architecture: one_hot → matmul(emb_W) → MHA → residual+LN → meanPool → Dense+sigmoid
+//
+// NOTE: all forward passes are INLINED in the training loop (no helper function)
+// because Serez-Code closures capture variables by value at definition time —
+// inlining ensures each step uses the CURRENT tensor bindings for correct autodiff.
+//
+// POOLING: meanAxis(0) is NOT tracked in the tape → breaks gradient chain.
+// Instead: h.transpose().matmul([[0.25],[0.25],[0.25],[0.25]]).transpose()
+// uses only tracked ops (Transpose + MatMul) so gradients flow to emb_W and g_ln.
+
+Random.seed(42)
+
+let vocab   = 12
+let d_model = 8
+let seq_len = 4
+let lr      = 0.05
+let epochs  = 60
+
+let std_emb = 0.2
+let std_w   = 0.1
+
+// ── Weights ───────────────────────────────────────────────────────────────────
+let emb_W = Random.normalTensor([vocab, d_model], 0.0, std_emb)
+let Wq    = Random.normalTensor([d_model, d_model], 0.0, std_w)
+let Wk    = Random.normalTensor([d_model, d_model], 0.0, std_w)
+let Wv    = Random.normalTensor([d_model, d_model], 0.0, std_w)
+let Wo    = Random.normalTensor([d_model, d_model], 0.0, std_w)
+let g_ln  = Tensor.ones([d_model])
+let b_ln  = Tensor.zeros([d_model])
+let Wout  = Random.normalTensor([d_model, 1], 0.0, std_w)
+let bout  = Tensor.zeros([1])
+
+// ── Dataset ───────────────────────────────────────────────────────────────────
+let pos_seqs = [
+    Tensor.from([8.0, 9.0, 10.0, 11.0]),
+    Tensor.from([9.0, 8.0, 11.0, 10.0]),
+    Tensor.from([10.0, 11.0, 8.0, 9.0])
+]
+let neg_seqs = [
+    Tensor.from([0.0, 1.0, 2.0, 3.0]),
+    Tensor.from([1.0, 0.0, 3.0, 2.0]),
+    Tensor.from([2.0, 3.0, 0.0, 1.0])
+]
+let t_pos = Tensor.ones([1, 1])
+let t_neg = Tensor.zeros([1, 1])
+
+// Pool vector: [seq_len, 1] of 1/seq_len — constant, not tracked
+let pool_w = Tensor.from([[0.25], [0.25], [0.25], [0.25]])
+
+// ── Pre-training gradient check (at root scope — no nested-block scope issue) ──
+// Run one forward+backward to verify gradients flow before training modifies weights.
+Autodiff.tape()
+let oh_pre   = pos_seqs[0].one_hot(vocab)
+let emb_pre  = oh_pre.matmul(emb_W)
+let attn_pre = emb_pre.mha(Wq, Wk, Wv, Wo, 2)
+let h_pre    = attn_pre.add(emb_pre).layer_norm(g_ln, b_ln, 0.000001)
+let pool_pre = h_pre.transpose().matmul(pool_w).transpose()
+let raw_pre  = pool_pre.matmul(Wout).broadcastAdd(bout)
+let pred_pre = raw_pre.sigmoid()
+let diff_pre = pred_pre.sub(t_pos)
+let lt_pre   = diff_pre.mul(diff_pre)
+Autodiff.backward(lt_pre)
+let emb_grad_norm = Autodiff.gradient(emb_W).norm()
+let gln_grad_norm = Autodiff.gradient(g_ln).norm()
+
+// ── Training loop (fully inlined forward) ─────────────────────────────────────
+let losses = []
+let epoch  = 0
+while (epoch < epochs) {
+    let total_loss = 0.0
+
+    // Positive examples
+    let k = 0
+    while (k < 3) {
+        Autodiff.tape()
+        let oh   = pos_seqs[k].one_hot(vocab)
+        let emb  = oh.matmul(emb_W)
+        let attn = emb.mha(Wq, Wk, Wv, Wo, 2)
+        let h    = attn.add(emb).layer_norm(g_ln, b_ln, 0.000001)
+        let pool = h.transpose().matmul(pool_w).transpose()
+        let raw  = pool.matmul(Wout).broadcastAdd(bout)
+        let pred = raw.sigmoid()
+        let diff = pred.sub(t_pos)
+        let lt   = diff.mul(diff)
+        Autodiff.backward(lt)
+        emb_W = emb_W.sub(Autodiff.gradient(emb_W).scale(lr))
+        Wq    = Wq.sub(Autodiff.gradient(Wq).scale(lr))
+        Wk    = Wk.sub(Autodiff.gradient(Wk).scale(lr))
+        Wv    = Wv.sub(Autodiff.gradient(Wv).scale(lr))
+        Wo    = Wo.sub(Autodiff.gradient(Wo).scale(lr))
+        g_ln  = g_ln.sub(Autodiff.gradient(g_ln).scale(lr))
+        b_ln  = b_ln.sub(Autodiff.gradient(b_ln).scale(lr))
+        Wout  = Wout.sub(Autodiff.gradient(Wout).scale(lr))
+        bout  = bout.sub(Autodiff.gradient(bout).scale(lr))
+        total_loss = total_loss + lt.get(0, 0)
+        k = k + 1
+    }
+
+    // Negative examples
+    k = 0
+    while (k < 3) {
+        Autodiff.tape()
+        let oh   = neg_seqs[k].one_hot(vocab)
+        let emb  = oh.matmul(emb_W)
+        let attn = emb.mha(Wq, Wk, Wv, Wo, 2)
+        let h    = attn.add(emb).layer_norm(g_ln, b_ln, 0.000001)
+        let pool = h.transpose().matmul(pool_w).transpose()
+        let raw  = pool.matmul(Wout).broadcastAdd(bout)
+        let pred = raw.sigmoid()
+        let diff = pred.sub(t_neg)
+        let lt   = diff.mul(diff)
+        Autodiff.backward(lt)
+        emb_W = emb_W.sub(Autodiff.gradient(emb_W).scale(lr))
+        Wq    = Wq.sub(Autodiff.gradient(Wq).scale(lr))
+        Wk    = Wk.sub(Autodiff.gradient(Wk).scale(lr))
+        Wv    = Wv.sub(Autodiff.gradient(Wv).scale(lr))
+        Wo    = Wo.sub(Autodiff.gradient(Wo).scale(lr))
+        g_ln  = g_ln.sub(Autodiff.gradient(g_ln).scale(lr))
+        b_ln  = b_ln.sub(Autodiff.gradient(b_ln).scale(lr))
+        Wout  = Wout.sub(Autodiff.gradient(Wout).scale(lr))
+        bout  = bout.sub(Autodiff.gradient(bout).scale(lr))
+        total_loss = total_loss + lt.get(0, 0)
+        k = k + 1
+    }
+
+    losses.push(total_loss)
+    epoch = epoch + 1
+}
+
+// ── Final inference (inlined, no tape) ───────────────────────────────────────
+let oh_p  = pos_seqs[0].one_hot(vocab)
+let emb_p = oh_p.matmul(emb_W)
+let att_p = emb_p.mha(Wq, Wk, Wv, Wo, 2)
+let h_p   = att_p.add(emb_p).layer_norm(g_ln, b_ln, 0.000001)
+let pool_p = h_p.transpose().matmul(pool_w).transpose()
+let pred_p = pool_p.matmul(Wout).broadcastAdd(bout).sigmoid().get(0, 0)
+
+let oh_n  = neg_seqs[0].one_hot(vocab)
+let emb_n = oh_n.matmul(emb_W)
+let att_n = emb_n.mha(Wq, Wk, Wv, Wo, 2)
+let h_n   = att_n.add(emb_n).layer_norm(g_ln, b_ln, 0.000001)
+let pool_n = h_n.transpose().matmul(pool_w).transpose()
+let pred_n = pool_n.matmul(Wout).broadcastAdd(bout).sigmoid().get(0, 0)
+
+// ── Assertions ────────────────────────────────────────────────────────────────
+let loss_first = losses[0]
+let loss_last  = losses[epochs - 1]
+
+test("loss decreased over training", () => {
+    assert(loss_last < loss_first, "loss: " + loss_first + " → " + loss_last)
+});
+
+test("loss decreased by at least 30%", () => {
+    let reduction = (loss_first - loss_last) / loss_first
+    assert(reduction > 0.30, "loss reduced by " + (reduction * 100.0) + "%")
+});
+
+test("positive example prediction > 0.5", () => {
+    assert(pred_p > 0.5, "positive pred = " + pred_p)
+});
+
+test("negative example prediction < 0.5", () => {
+    assert(pred_n < 0.5, "negative pred = " + pred_n)
+});
+
+test("pos pred > neg pred", () => {
+    assert(pred_p > pred_n, "pos(" + pred_p + ") > neg(" + pred_n + ")")
+});
+
+// emb_grad_norm and gln_grad_norm were captured during epoch 0, step 0
+// (right after backward, before any rebinding — so tids still match the tape)
+test("emb_W gradient non-zero (flows through one_hot → matmul → MHA → LN chain)", () => {
+    assert(emb_grad_norm > 0.0, "emb_W gradient norm = " + emb_grad_norm)
+});
+
+test("g_ln gradient non-zero (flows through layer_norm → pool → Dense → sigmoid)", () => {
+    assert(gln_grad_norm > 0.0, "g_ln gradient norm = " + gln_grad_norm)
+});
+
+summary()

@@ -729,6 +729,14 @@ impl Parser {
     }
 
     fn parse_return_statement(&mut self) -> Option<Statement> {
+        // Bare `return` followed by `}`, `;`, or EOF — return null without consuming the delimiter
+        if matches!(
+            self.peek_token.token_type,
+            TokenType::Semicolon | TokenType::RBrace | TokenType::Eof
+        ) {
+            return Some(Statement::Return(ReturnStatement { return_value: Expression::Null }));
+        }
+
         self.next_token();
 
         // Bare `return;` — no expression, return null

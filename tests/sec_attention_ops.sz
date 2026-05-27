@@ -1,0 +1,9 @@
+// SEC: mha requires d_model % n_heads == 0.
+// With d_model=8, n_heads=3 (8%3=2≠0), head-split produces [seq,6]
+// then concat @ Wo ([8,8]) dimension mismatch → runtime error.
+
+let x  = Tensor.from([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                       [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+let W  = Tensor.eye(8)
+let y  = x.mha(W, W, W, W, 3)
+out y

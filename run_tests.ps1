@@ -7,6 +7,7 @@
 #   .\run_tests.ps1 -e2e               # only run E2E tests (numbered NN_*.sz)
 #   .\run_tests.ps1 -security          # only run security tests (sec_*.sz + unit_sec_*.sz)
 #   .\run_tests.ps1 -cli               # only run CLI flag, REPL, and --check mode tests
+#   .\run_tests.ps1 -ai                # only run AI/ML training tests (ai_*.sz)
 #
 # ── Test types ────────────────────────────────────────────────────────────────
 #
@@ -189,6 +190,16 @@
 #                          factory pattern (Counter.zero/from), multiple instances,
 #                          StringUtils helpers
 #
+# ── AI / ML tests (tests/ai_*.sz) ─────────────────────────────────────────────
+#
+#   ai_*.sz              -> AI training integration tests (run with -ai or all)
+#                          Framework-based tests for: gradient descent convergence,
+#                          training loop behavior, autodiff through attention layers.
+#
+#   ai_attention_training  Full attention training: Embedding+MHA+LN+Dense,
+#                          binary classification, verifies loss decreases, predictions
+#                          correct, and gradients flow through all layers.
+#
 # ── Security tests ────────────────────────────────────────────────────────────
 #
 #   tests/sec_*.sz       -> Security error tests (run with -security or all)
@@ -244,7 +255,8 @@ param(
     [switch]$unit      = $false,
     [switch]$e2e       = $false,
     [switch]$security  = $false,
-    [switch]$cli       = $false
+    [switch]$cli       = $false,
+    [switch]$ai        = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -408,7 +420,7 @@ function Run-CLI-Test([string]$label, [string[]]$binArgs, [string]$expectOut = "
 }
 
 # ── Discover and run tests ────────────────────────────────────────────────────
-$runAll  = -not $unit -and -not $e2e -and -not $security -and -not $cli
+$runAll  = -not $unit -and -not $e2e -and -not $security -and -not $cli -and -not $ai
 
 Write-Host "═══ E2E Tests ════════════════════════════════" -ForegroundColor Cyan
 if ($runAll -or $e2e) {
@@ -451,6 +463,17 @@ if ($runAll -or $security) {
     }
     # unit_sec_*.sz — framework-based safety tests
     Get-ChildItem $testsDir -Filter "unit_sec_*.sz" | Sort-Object Name | ForEach-Object {
+        $label = $_.BaseName
+        Run-Test $label $_.FullName "" $true $false
+    }
+}
+
+# ── AI Tests ──────────────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "═══ AI Tests ═════════════════════════════════" -ForegroundColor Cyan
+if ($runAll -or $ai) {
+    # ai_*.sz — framework-based tests for AI/ML training loops and autodiff behavior
+    Get-ChildItem $testsDir -Filter "ai_*.sz" | Sort-Object Name | ForEach-Object {
         $label = $_.BaseName
         Run-Test $label $_.FullName "" $true $false
     }

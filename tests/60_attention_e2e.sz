@@ -1,0 +1,140 @@
+// E2E: Attention operations — softmax-2D, layer_norm, mha, autodiff backward
+// All outputs are boolean (true/false) or integers for determinism.
+// No Random — only fixed Tensor inputs.
+
+// ── softmax 2D ────────────────────────────────────────────────────────────────
+
+let m = Tensor.from([[1.0, 2.0, 3.0], [4.0, 1.0, 0.0]])
+let s = m.softmax()
+
+// Each row sums to 1
+let r0 = s.get(0,0) + s.get(0,1) + s.get(0,2)
+let r1 = s.get(1,0) + s.get(1,1) + s.get(1,2)
+out (r0 > 0.999 && r0 < 1.001)
+out (r1 > 0.999 && r1 < 1.001)
+
+// All values in (0,1)
+out (s.get(0,0) > 0.0 && s.get(0,0) < 1.0)
+out (s.get(1,0) > 0.0 && s.get(1,0) < 1.0)
+
+// Argmax preserved — row0: 3.0 was max → col2 is largest after softmax
+out (s.get(0,2) > s.get(0,1) && s.get(0,2) > s.get(0,0))
+// Argmax preserved — row1: 4.0 was max → col0 is largest after softmax
+out (s.get(1,0) > s.get(1,1) && s.get(1,0) > s.get(1,2))
+
+// Uniform input → equal probabilities ≈ 0.25
+let u = Tensor.from([[5.0, 5.0, 5.0, 5.0]])
+let su = u.softmax()
+out (su.get(0,0) > 0.249 && su.get(0,0) < 0.251)
+out (su.get(0,3) > 0.249 && su.get(0,3) < 0.251)
+
+// Shape preserved
+let sh_s = s.shape()
+out (sh_s[0] == 2)
+out (sh_s[1] == 3)
+
+// ── layer_norm ────────────────────────────────────────────────────────────────
+
+let x  = Tensor.from([[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]])
+let g1 = Tensor.ones([4])
+let b0 = Tensor.zeros([4])
+let y  = x.layer_norm(g1, b0, 0.000001)
+
+// Mean of each row ≈ 0
+let mean0 = (y.get(0,0) + y.get(0,1) + y.get(0,2) + y.get(0,3)) / 4.0
+let mean1 = (y.get(1,0) + y.get(1,1) + y.get(1,2) + y.get(1,3)) / 4.0
+out (mean0 > -0.01 && mean0 < 0.01)
+out (mean1 > -0.01 && mean1 < 0.01)
+
+// LN preserves relative order (monotone transform)
+out (y.get(0,0) < y.get(0,1))
+out (y.get(0,1) < y.get(0,2))
+out (y.get(0,2) < y.get(0,3))
+
+// gamma=2 → output doubles vs gamma=1
+let g2  = Tensor.from([2.0, 2.0, 2.0, 2.0])
+let y2  = x.layer_norm(g2, b0, 0.000001)
+let r2  = y2.get(0,1) / y.get(0,1)
+out (r2 > 1.99 && r2 < 2.01)
+
+// beta=5 → output shifts by 5
+let b5  = Tensor.from([5.0, 5.0, 5.0, 5.0])
+let y5  = x.layer_norm(g1, b5, 0.000001)
+let d5  = y5.get(0,0) - y.get(0,0)
+out (d5 > 4.99 && d5 < 5.01)
+
+// Shape preserved
+let sh_y = y.shape()
+out (sh_y[0] == 2)
+out (sh_y[1] == 4)
+
+// ── mha — shape + finiteness ──────────────────────────────────────────────────
+
+// Use identity weights: output should preserve input structure
+let I8 = Tensor.eye(8)
+let xi = Tensor.from([
+    [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+])
+let yo  = xi.mha(I8, I8, I8, I8, 2)
+let sh_y2 = yo.shape()
+out (sh_y2[0] == 4)
+out (sh_y2[1] == 8)
+out (yo.ndim() == 2)
+
+// All output values finite (no NaN): check v == v (NaN != NaN)
+let mha_ok = true
+let mi = 0
+while (mi < 4) {
+    let mj = 0
+    while (mj < 8) {
+        let v = yo.get(mi, mj)
+        if (v != v) { mha_ok = false }
+        mj = mj + 1
+    }
+    mi = mi + 1
+}
+out mha_ok
+
+// ── autodiff backward — gradient shapes ──────────────────────────────────────
+
+// softmax 2D: gradient of m has same shape as m
+let m2 = Tensor.from([[2.0, 1.0, 0.0], [0.0, 2.0, 1.0]])
+Autodiff.tape()
+let s2 = m2.softmax()
+Autodiff.backward(s2)
+let gm = Autodiff.gradient(m2)
+let sh_gm = gm.shape()
+out (sh_gm[0] == 2)
+out (sh_gm[1] == 3)
+
+// layer_norm: d_beta has same length as cols, sum over rows = num_rows
+let xln  = Tensor.from([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]])
+let gln  = Tensor.ones([3])
+let bln  = Tensor.zeros([3])
+Autodiff.tape()
+let yln  = xln.layer_norm(gln, bln, 0.000001)
+Autodiff.backward(yln)
+let db   = Autodiff.gradient(bln)
+out (db.get(0) > 1.99 && db.get(0) < 2.01)
+out (db.get(2) > 1.99 && db.get(2) < 2.01)
+
+// mha: all four weight gradients are non-zero
+// Use seeded random weights — identity weights cause degenerate zero gradients
+// for Wq/Wk due to fully concentrated softmax attention with orthogonal inputs.
+Random.seed(999)
+let d4  = 4
+let xm  = Random.normalTensor([3, d4], 0.0, 0.2)
+let Wq4 = Random.normalTensor([d4, d4], 0.0, 0.1)
+let Wk4 = Random.normalTensor([d4, d4], 0.0, 0.1)
+let Wv4 = Random.normalTensor([d4, d4], 0.0, 0.1)
+let Wo4 = Random.normalTensor([d4, d4], 0.0, 0.1)
+Autodiff.tape()
+let ym  = xm.mha(Wq4, Wk4, Wv4, Wo4, 2)
+Autodiff.backward(ym)
+out (Autodiff.gradient(Wq4).norm() > 0.0)
+out (Autodiff.gradient(Wk4).norm() > 0.0)
+out (Autodiff.gradient(Wv4).norm() > 0.0)
+out (Autodiff.gradient(Wo4).norm() > 0.0)
