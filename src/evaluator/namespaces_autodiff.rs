@@ -28,6 +28,21 @@ pub enum TapeOp {
     Tanh   { in_id: u64, cached_output: Vec<f64> },
     Sum    { in_id: u64, in_len: usize },
     Mean   { in_id: u64, in_len: usize },
+    Conv2d {
+        in_id: u64, w_id: u64, b_id: u64,
+        kernel: usize, stride: usize,
+        in_shape: Vec<usize>,
+        w_data: Vec<f64>,
+        col_mat: Vec<f64>,
+        col_rows: usize, col_cols: usize, c_out: usize,
+    },
+    MaxPool2d {
+        in_id: u64,
+        kernel: usize, stride: usize,
+        in_shape: Vec<usize>,
+        out_shape: Vec<usize>,
+        max_indices: Vec<usize>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -191,6 +206,72 @@ impl super::Evaluator {
                             let n = *in_len as f64;
                             let g_val = out_grad.iter().sum::<f64>() / n;
                             Self::accum_grad(&mut self.ad_grads, *in_id, vec![g_val; *in_len]);
+                        }
+                        TapeOp::Conv2d { in_id, w_id, b_id, kernel, stride, in_shape, w_data, col_mat, col_rows, col_cols, c_out } => {
+                            let (cr, cc, co) = (*col_rows, *col_cols, *c_out);
+                            // dWeights = col_mat^T @ grad_out  [cc x cr] @ [cr x co] → [cc x co]
+                            let mut dw = vec![0.0f64; cc * co];
+                            for l in 0..cc {
+                                for j in 0..co {
+                                    for i in 0..cr {
+                                        dw[l * co + j] += col_mat[i * cc + l] * out_grad[i * co + j];
+                                    }
+                                }
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *w_id, dw);
+                            // dBias = row-sum of grad_out → [co]
+                            let mut db = vec![0.0f64; co];
+                            for i in 0..cr {
+                                for j in 0..co {
+                                    db[j] += out_grad[i * co + j];
+                                }
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *b_id, db);
+                            // dCol = grad_out @ W^T  [cr x co] @ [co x cc] → [cr x cc]
+                            let mut dcol = vec![0.0f64; cr * cc];
+                            for i in 0..cr {
+                                for l in 0..cc {
+                                    for j in 0..co {
+                                        dcol[i * cc + l] += out_grad[i * co + j] * w_data[l * co + j];
+                                    }
+                                }
+                            }
+                            // col2im: scatter dcol back to dinput [N, H, W, C_in]
+                            let (n, h, w_in, c_in) = (in_shape[0], in_shape[1], in_shape[2], in_shape[3]);
+                            let ks = *kernel;
+                            let st = *stride;
+                            let out_h = (h - ks) / st + 1;
+                            let out_w = (w_in - ks) / st + 1;
+                            let mut dinput = vec![0.0f64; n * h * w_in * c_in];
+                            for nb in 0..n {
+                                for oh in 0..out_h {
+                                    for ow in 0..out_w {
+                                        let row = nb * out_h * out_w + oh * out_w + ow;
+                                        for kh in 0..ks {
+                                            for kw in 0..ks {
+                                                for ci in 0..c_in {
+                                                    let ih = oh * st + kh;
+                                                    let iw = ow * st + kw;
+                                                    let in_idx = nb*h*w_in*c_in + ih*w_in*c_in + iw*c_in + ci;
+                                                    let col_idx = row * cc + kh * ks * c_in + kw * c_in + ci;
+                                                    dinput[in_idx] += dcol[col_idx];
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *in_id, dinput);
+                        }
+                        TapeOp::MaxPool2d { in_id, in_shape, max_indices, .. } => {
+                            let in_total: usize = in_shape.iter().product();
+                            let mut dinput = vec![0.0f64; in_total];
+                            for (i, &idx) in max_indices.iter().enumerate() {
+                                if i < out_grad.len() {
+                                    dinput[idx] += out_grad[i];
+                                }
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *in_id, dinput);
                         }
                     }
                 }

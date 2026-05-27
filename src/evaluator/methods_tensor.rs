@@ -803,6 +803,166 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
 
+            // ── conv2d(weights, bias, kernel, stride) ─────────────────────────
+            "conv2d" => {
+                if dot_call.arguments.len() != 4 {
+                    eprintln!("❌ ERROR: Tensor.conv2d(weights, bias, kernel, stride) requires 4 arguments");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 4 {
+                    eprintln!("❌ ERROR: Tensor.conv2d() input must be 4D [N, H, W, C_in], got {}D", shape.len());
+                    return EvalResult::Error;
+                }
+                let w_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let b_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let k_ref = match self.eval_expression(&dot_call.arguments[2]) { EvalResult::Value(r) => r, other => return other };
+                let s_ref = match self.eval_expression(&dot_call.arguments[3]) { EvalResult::Value(r) => r, other => return other };
+                let kernel = match self.resolve(k_ref).cloned() {
+                    Some(ObjectData::Integer(n)) if n > 0 => n as usize,
+                    _ => { eprintln!("❌ ERROR: Tensor.conv2d() kernel must be a positive integer"); return EvalResult::Error; }
+                };
+                let stride = match self.resolve(s_ref).cloned() {
+                    Some(ObjectData::Integer(n)) if n > 0 => n as usize,
+                    _ => { eprintln!("❌ ERROR: Tensor.conv2d() stride must be a positive integer"); return EvalResult::Error; }
+                };
+                let (w_shape, w_data) = match self.resolve(w_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: ws, data: wd, .. }) => (ws, wd),
+                    _ => { eprintln!("❌ ERROR: Tensor.conv2d() weights must be a Tensor"); return EvalResult::Error; }
+                };
+                let b_data = match self.resolve(b_ref).cloned() {
+                    Some(ObjectData::Tensor { data: bd, .. }) => bd,
+                    _ => { eprintln!("❌ ERROR: Tensor.conv2d() bias must be a Tensor"); return EvalResult::Error; }
+                };
+                if w_shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.conv2d() weights must be 2D [kH*kW*C_in, C_out]");
+                    return EvalResult::Error;
+                }
+                let (n, h, w_in, c_in) = (shape[0], shape[1], shape[2], shape[3]);
+                let col_cols = w_shape[0];
+                let c_out = w_shape[1];
+                if col_cols != kernel * kernel * c_in {
+                    eprintln!("❌ ERROR: Tensor.conv2d() weights dim0={} != kernel*kernel*C_in={}", col_cols, kernel*kernel*c_in);
+                    return EvalResult::Error;
+                }
+                if h < kernel || w_in < kernel {
+                    eprintln!("❌ ERROR: Tensor.conv2d() spatial {}x{} < kernel {}", h, w_in, kernel);
+                    return EvalResult::Error;
+                }
+                let out_h = (h - kernel) / stride + 1;
+                let out_w = (w_in - kernel) / stride + 1;
+                let col_rows = n * out_h * out_w;
+                // im2col
+                let mut col_mat = vec![0.0f64; col_rows * col_cols];
+                for nb in 0..n {
+                    for oh in 0..out_h {
+                        for ow in 0..out_w {
+                            let row = nb * out_h * out_w + oh * out_w + ow;
+                            for kh in 0..kernel {
+                                for kw in 0..kernel {
+                                    for ci in 0..c_in {
+                                        let ih = oh * stride + kh;
+                                        let iw = ow * stride + kw;
+                                        let in_idx = nb*h*w_in*c_in + ih*w_in*c_in + iw*c_in + ci;
+                                        let col_idx = row*col_cols + kh*kernel*c_in + kw*c_in + ci;
+                                        col_mat[col_idx] = data[in_idx];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // matmul [col_rows, col_cols] @ [col_cols, c_out] → [col_rows, c_out]
+                let mut out_2d = vec![0.0f64; col_rows * c_out];
+                for i in 0..col_rows {
+                    for j in 0..c_out {
+                        for l in 0..col_cols {
+                            out_2d[i * c_out + j] += col_mat[i * col_cols + l] * w_data[l * c_out + j];
+                        }
+                    }
+                }
+                // broadcast add bias
+                for i in 0..col_rows {
+                    for j in 0..c_out { out_2d[i * c_out + j] += b_data[j]; }
+                }
+                let out_shape = vec![n, out_h, out_w, c_out];
+                let out_ref = self.alloc(ObjectData::Tensor { shape: out_shape.clone(), data: out_2d, tid: 0 });
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    let w_id = self.ad_tensor_id(w_ref);
+                    let b_id = self.ad_tensor_id(b_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Conv2d {
+                        in_id, w_id, b_id, kernel, stride,
+                        in_shape: shape, w_data, col_mat, col_rows, col_cols, c_out,
+                    });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── max_pool2d(kernel, stride) ────────────────────────────────────
+            "max_pool2d" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.max_pool2d(kernel, stride) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 4 {
+                    eprintln!("❌ ERROR: Tensor.max_pool2d() input must be 4D [N, H, W, C]");
+                    return EvalResult::Error;
+                }
+                let k_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let s_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let kernel = match self.resolve(k_ref).cloned() {
+                    Some(ObjectData::Integer(n)) if n > 0 => n as usize,
+                    _ => { eprintln!("❌ ERROR: Tensor.max_pool2d() kernel must be a positive integer"); return EvalResult::Error; }
+                };
+                let stride = match self.resolve(s_ref).cloned() {
+                    Some(ObjectData::Integer(n)) if n > 0 => n as usize,
+                    _ => { eprintln!("❌ ERROR: Tensor.max_pool2d() stride must be a positive integer"); return EvalResult::Error; }
+                };
+                let (n, h, w_in, c) = (shape[0], shape[1], shape[2], shape[3]);
+                if h < kernel || w_in < kernel {
+                    eprintln!("❌ ERROR: Tensor.max_pool2d() spatial {}x{} < kernel {}", h, w_in, kernel);
+                    return EvalResult::Error;
+                }
+                let out_h = (h - kernel) / stride + 1;
+                let out_w = (w_in - kernel) / stride + 1;
+                let out_total = n * out_h * out_w * c;
+                let mut out_data = vec![f64::NEG_INFINITY; out_total];
+                let mut max_indices = vec![0usize; out_total];
+                for nb in 0..n {
+                    for oh in 0..out_h {
+                        for ow in 0..out_w {
+                            for ci in 0..c {
+                                let out_idx = nb*out_h*out_w*c + oh*out_w*c + ow*c + ci;
+                                let mut max_val = f64::NEG_INFINITY;
+                                let mut max_idx = 0;
+                                for kh in 0..kernel {
+                                    for kw in 0..kernel {
+                                        let ih = oh * stride + kh;
+                                        let iw = ow * stride + kw;
+                                        let in_idx = nb*h*w_in*c + ih*w_in*c + iw*c + ci;
+                                        if data[in_idx] > max_val {
+                                            max_val = data[in_idx];
+                                            max_idx = in_idx;
+                                        }
+                                    }
+                                }
+                                out_data[out_idx] = max_val;
+                                max_indices[out_idx] = max_idx;
+                            }
+                        }
+                    }
+                }
+                let out_shape = vec![n, out_h, out_w, c];
+                let out_ref = self.alloc(ObjectData::Tensor { shape: out_shape.clone(), data: out_data, tid: 0 });
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::MaxPool2d {
+                        in_id, kernel, stride, in_shape: shape, out_shape, max_indices,
+                    });
+                }
+                EvalResult::Value(out_ref)
+            }
+
             // ── outer product ─────────────────────────────────────────────────
             "outer" => {
                 if dot_call.arguments.len() != 1 {
