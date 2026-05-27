@@ -571,6 +571,23 @@ if ($runAll -or $cli) {
 
     $env:SEREZ_REGISTRY = ""
     Remove-Item $tmpProject -Recurse -Force -ErrorAction SilentlyContinue
+
+    # local ./packages/ resolution — runs from temp dir so nothing lands in repo root
+    $tmpLP = Join-Path $env:TEMP "sz_lp_$(Get-Random)"
+    New-Item -ItemType Directory -Force (Join-Path $tmpLP "packages\local-only") | Out-Null
+    Set-Content (Join-Path $tmpLP "packages\local-only\index.sz") `
+        "fn int localAdd(int a, int b) { return a + b; }`nlet LOCAL_VERSION = `"local-only@1.0.0`";" -NoNewline
+    Set-Content (Join-Path $tmpLP "test.sz") `
+        "import `"local-only`"; out localAdd(3, 4); out localAdd(-1, 5); out LOCAL_VERSION;" -NoNewline
+    $lpResult = Invoke-Binary @("`"$(Join-Path $tmpLP 'test.sz')`"") "" $tmpLP
+    if ($lpResult.stdout -match "7" -and $lpResult.stdout -match "4" -and $lpResult.stdout -match "local-only") {
+        Write-Host "[PASS] pkg: import resolves from ./packages/ (not SEREZ_PACKAGES)" -ForegroundColor Green
+        $script:pass++
+    } else {
+        Write-Host "[FAIL] pkg: import resolves from ./packages/ — stdout: $($lpResult.stdout)" -ForegroundColor Red
+        $script:fail++
+    }
+    Remove-Item $tmpLP -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ── Summary ───────────────────────────────────────────────────────────────────

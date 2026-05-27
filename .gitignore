@@ -13,7 +13,6 @@ implementacion_clases.md
 !tests/registry/**
 !apps/*.sz
 !benchmarks/*.sz
-!packages/**
 tests/_*.sz
 merge.ps1
 mergeFromMain.ps1

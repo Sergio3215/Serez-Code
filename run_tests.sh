@@ -240,6 +240,23 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_UNIT" == "1" ]]; then
 
     unset SEREZ_REGISTRY
     rm -rf "$TMP_PROJECT"
+
+    # local ./packages/ resolution — temp dir so nothing lands in repo root
+    TMP_LP="$(mktemp -d)"
+    mkdir -p "$TMP_LP/packages/local-only"
+    printf 'fn int localAdd(int a, int b) { return a + b; }\nlet LOCAL_VERSION = "local-only@1.0.0";' \
+        > "$TMP_LP/packages/local-only/index.sz"
+    printf 'import "local-only"; out localAdd(3, 4); out localAdd(-1, 5); out LOCAL_VERSION;' \
+        > "$TMP_LP/test.sz"
+    out=$(cd "$TMP_LP" && "$BINARY" test.sz 2>"$TEMP_ERR" || true)
+    if [[ "$out" == *"7"* && "$out" == *"4"* && "$out" == *"local-only"* ]]; then
+        echo "${GREEN}[PASS]${RESET} pkg: import resolves from ./packages/ (not SEREZ_PACKAGES)"
+        PASS=$((PASS + 1))
+    else
+        echo "${RED}[FAIL]${RESET} pkg: import resolves from ./packages/ — out: $out"
+        FAIL=$((FAIL + 1))
+    fi
+    rm -rf "$TMP_LP"
 fi
 
 # ── Cleanup & Summary ─────────────────────────────────────────────────────────
