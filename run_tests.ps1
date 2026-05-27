@@ -241,6 +241,8 @@
 # ── CLI / REPL / --check Tests (-cli) ────────────────────────────────────────
 #
 #   CLI flag tests:  --version, unknown flags, non-.sz extension, missing file
+#   Package mgr:     sz install (serez.json), sz install pkg@ver, sz uninstall,
+#                    sz uninstall nonexistent (error)
 #   REPL tests:      piped stdin; arithmetic, strings, variable persistence,
 #                    function definition+call, error recovery across lines
 #   --check tests:   Flash Scope Criticality output, Estimated Global Memory,
@@ -380,13 +382,15 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
 }
 
 # ── CLI / REPL / check-mode test helper ──────────────────────────────────────
-function Invoke-Binary([string[]]$binArgs, [string]$stdinContent = "") {
+function Invoke-Binary([string[]]$binArgs, [string]$stdinContent = "", [string]$workDir = "") {
+    if ($workDir -eq "") { $workDir = $root }
     $outFile = [System.IO.Path]::GetTempFileName()
     $errFile = [System.IO.Path]::GetTempFileName()
     if ($stdinContent -ne "") {
         $inFile  = [System.IO.Path]::GetTempFileName()
         [System.IO.File]::WriteAllText($inFile, $stdinContent)
         Start-Process -FilePath $binary -ArgumentList $binArgs `
+            -WorkingDirectory $workDir `
             -NoNewWindow -Wait `
             -RedirectStandardInput  $inFile `
             -RedirectStandardOutput $outFile `
@@ -394,6 +398,7 @@ function Invoke-Binary([string[]]$binArgs, [string]$stdinContent = "") {
         Remove-Item $inFile -ErrorAction SilentlyContinue
     } else {
         Start-Process -FilePath $binary -ArgumentList $binArgs `
+            -WorkingDirectory $workDir `
             -NoNewWindow -Wait `
             -RedirectStandardOutput $outFile `
             -RedirectStandardError  $errFile
@@ -405,9 +410,10 @@ function Invoke-Binary([string[]]$binArgs, [string]$stdinContent = "") {
 }
 
 function Run-CLI-Test([string]$label, [string[]]$binArgs, [string]$expectOut = "",
-                      [string]$expectErr = "", [string]$stdinContent = "") {
+                      [string]$expectErr = "", [string]$stdinContent = "",
+                      [string]$workDir = "") {
     if ($filter -and $label -notlike "*$filter*") { return }
-    $r = Invoke-Binary $binArgs $stdinContent
+    $r = Invoke-Binary $binArgs $stdinContent $workDir
     $ok = $true; $reason = ""
     if ($expectOut -ne "" -and $r.stdout -notmatch [regex]::Escape($expectOut)) {
         $ok = $false; $reason = "stdout missing '$expectOut'"
@@ -479,6 +485,25 @@ if ($runAll -or $ai) {
     }
 }
 
+# ── Rust Unit Tests ───────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "═══ Rust Unit Tests ══════════════════════════" -ForegroundColor Cyan
+if ($runAll -or $unit) {
+    Push-Location $root
+    $cargoOut = cargo test "package_manager::tests" --quiet 2>&1
+    $cargoOk  = $LASTEXITCODE -eq 0
+    Pop-Location
+    if ($cargoOk) {
+        Write-Host "[PASS] package_manager unit tests" -ForegroundColor Green
+        $script:pass++
+    } else {
+        Write-Host "[FAIL] package_manager unit tests" -ForegroundColor Red
+        $cargoOut | Where-Object { $_ -match "FAILED|panicked|error" } |
+            ForEach-Object { Write-Host "       $_" -ForegroundColor Yellow }
+        $script:fail++
+    }
+}
+
 # ── CLI Tests ─────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "═══ CLI Tests ════════════════════════════════" -ForegroundColor Cyan
@@ -523,6 +548,29 @@ if ($runAll -or $cli) {
                  -expectOut "Estimated Global Memory"
     Run-CLI-Test "check: missing file reports error"     @("--check", $noChk) `
                  -expectErr "ERROR reading file"
+}
+
+# ── Package Manager CLI Tests ─────────────────────────────────────────────────
+Write-Host ""
+Write-Host "═══ Package Manager Tests ════════════════════" -ForegroundColor Cyan
+if ($runAll -or $cli) {
+    $tmpProject = Join-Path $env:TEMP "sz_pkg_test_$(Get-Random)"
+    New-Item -ItemType Directory -Force $tmpProject | Out-Null
+    Set-Content (Join-Path $tmpProject "serez.json") `
+        '{"name":"test-project","version":"1.0.0","dependencies":{"test-pkg":"1.0.0"}}' -NoNewline
+    $env:SEREZ_REGISTRY = Join-Path $root "tests\registry"
+
+    Run-CLI-Test "cli: sz install reads serez.json"     @("install") `
+                 -expectOut "Installed test-pkg"  -workDir $tmpProject
+    Run-CLI-Test "cli: sz install pkg@ver explicit"     @("install", "test-pkg@1.0.0") `
+                 -expectOut "Installed test-pkg"  -workDir $tmpProject
+    Run-CLI-Test "cli: sz uninstall removes package"    @("uninstall", "test-pkg") `
+                 -expectOut "Uninstalled test-pkg" -workDir $tmpProject
+    Run-CLI-Test "cli: sz uninstall nonexistent errors" @("uninstall", "test-pkg") `
+                 -expectErr "not installed"        -workDir $tmpProject
+
+    $env:SEREZ_REGISTRY = ""
+    Remove-Item $tmpProject -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ── Summary ───────────────────────────────────────────────────────────────────

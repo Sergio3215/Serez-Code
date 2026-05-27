@@ -196,6 +196,52 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_SECURITY" == "1" ]]; then
     done
 fi
 
+# ── Rust Unit Tests ───────────────────────────────────────────────────────────
+echo ""
+echo "${CYAN}═══ Rust Unit Tests ══════════════════════════${RESET}"
+if [[ "$RUN_ALL" == "1" || "$ONLY_UNIT" == "1" ]]; then
+    if cargo test "package_manager::tests" --quiet --manifest-path "$ROOT/Cargo.toml" 2>/dev/null; then
+        echo "${GREEN}[PASS]${RESET} package_manager unit tests"
+        PASS=$((PASS + 1))
+    else
+        echo "${RED}[FAIL]${RESET} package_manager unit tests"
+        FAIL=$((FAIL + 1))
+    fi
+fi
+
+# ── Package Manager CLI Tests ─────────────────────────────────────────────────
+echo ""
+echo "${CYAN}═══ Package Manager Tests ════════════════════${RESET}"
+if [[ "$RUN_ALL" == "1" || "$ONLY_UNIT" == "1" ]]; then
+    TMP_PROJECT="$(mktemp -d)"
+    echo '{"name":"test-project","version":"1.0.0","dependencies":{"test-pkg":"1.0.0"}}' \
+        > "$TMP_PROJECT/serez.json"
+    export SEREZ_REGISTRY="$ROOT/tests/registry"
+
+    _pkg_test() {
+        local label="$1" workdir="$2" expect_out="$3" expect_err="$4"
+        shift 4
+        local out err ok=1
+        out=$(cd "$workdir" && "$BINARY" "$@" 2>"$TEMP_ERR" || true)
+        err=$(cat "$TEMP_ERR")
+        [[ -n "$expect_out" && "$out" != *"$expect_out"* ]] && ok=0
+        [[ -n "$expect_err" && "$err" != *"$expect_err"* ]] && ok=0
+        if [[ "$ok" == "1" ]]; then
+            echo "${GREEN}[PASS]${RESET} $label"; PASS=$((PASS + 1))
+        else
+            echo "${RED}[FAIL]${RESET} $label"; FAIL=$((FAIL + 1))
+        fi
+    }
+
+    _pkg_test "cli: sz install reads serez.json"     "$TMP_PROJECT" "Installed test-pkg"  ""             install
+    _pkg_test "cli: sz install pkg@ver explicit"     "$TMP_PROJECT" "Installed test-pkg"  ""             install test-pkg@1.0.0
+    _pkg_test "cli: sz uninstall removes package"    "$TMP_PROJECT" "Uninstalled test-pkg" ""            uninstall test-pkg
+    _pkg_test "cli: sz uninstall nonexistent errors" "$TMP_PROJECT" ""                    "not installed" uninstall test-pkg
+
+    unset SEREZ_REGISTRY
+    rm -rf "$TMP_PROJECT"
+fi
+
 # ── Cleanup & Summary ─────────────────────────────────────────────────────────
 rm -f "$TEMP_SZ" "$TEMP_ERR"
 

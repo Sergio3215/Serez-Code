@@ -1,0 +1,17 @@
+// Unit tests: import resolution from ./packages/ (local project directory).
+// "local-only" is in <cwd>/packages/local-only/ and NOT in SEREZ_PACKAGES —
+// verifies the local packages search path added alongside sz install/uninstall.
+
+import "local-only";
+
+test("local packages: function resolves from ./packages/", () => {
+    assert(localAdd(3, 4) == 7, "3 + 4 = 7");
+    assert(localAdd(0, 0) == 0, "0 + 0 = 0");
+    assert(localAdd(-1, 5) == 4, "-1 + 5 = 4");
+});
+
+test("local packages: variable resolves from ./packages/", () => {
+    assert(LOCAL_VERSION == "local-only@1.0.0", "version string");
+});
+
+summary();
