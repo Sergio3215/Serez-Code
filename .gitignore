@@ -10,8 +10,10 @@ implementacion_clases.md
 *.vsix
 /.claude/
 !tests/*.sz
+!tests/registry/**
 !apps/*.sz
 !benchmarks/*.sz
+!packages/**
 tests/_*.sz
 merge.ps1
 mergeFromMain.ps1

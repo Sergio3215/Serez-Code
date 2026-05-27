@@ -1,0 +1,5 @@
+fn string testPkgGreet(string name) {
+    return "Hello from test-pkg, " + name + "!";
+}
+
+let TEST_PKG_VERSION = "1.0.0";
