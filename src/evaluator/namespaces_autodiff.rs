@@ -67,6 +67,26 @@ pub enum TapeOp {
         gates_n: Vec<f64>,  // [seq_len, hidden_size] — new gate output
         seq_len: usize, input_size: usize, hidden_size: usize,
     },
+    Transpose { in_id: u64, rows: usize, cols: usize },
+    Softmax { in_id: u64, rows: usize, cols: usize, cached_out: Vec<f64> },
+    LayerNorm {
+        in_id: u64, g_id: u64, b_id: u64,
+        eps: f64,
+        x_norm: Vec<f64>,      // [rows, cols] normalized x (before scale/shift)
+        stds: Vec<f64>,        // [rows] sqrt(var+eps) per row
+        x_mu: Vec<f64>,        // [rows, cols] x - mean per row
+        gamma_data: Vec<f64>,  // [cols]
+        rows: usize, cols: usize,
+    },
+    Mha {
+        x_id: u64, wq_id: u64, wk_id: u64, wv_id: u64, wo_id: u64,
+        x_data: Vec<f64>,
+        wq_data: Vec<f64>, wk_data: Vec<f64>, wv_data: Vec<f64>, wo_data: Vec<f64>,
+        q_proj: Vec<f64>, k_proj: Vec<f64>, v_proj: Vec<f64>,
+        attn_weights: Vec<f64>, // [n_heads * sl * sl]
+        concat_heads: Vec<f64>, // [sl, dm]
+        seq_len: usize, d_model: usize, n_heads: usize, dh: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -372,6 +392,144 @@ impl super::Evaluator {
                             Self::accum_grad(&mut self.ad_grads, *b_id,  db);
                             Self::accum_grad(&mut self.ad_grads, *h0_id, dh_next);
                             Self::accum_grad(&mut self.ad_grads, *c0_id, dc_next);
+                        }
+                        TapeOp::Transpose { in_id, rows, cols } => {
+                            // Gradient of transpose is transpose of gradient
+                            let (r, c) = (*rows, *cols);
+                            let mut din = vec![0.0f64; r * c];
+                            for i in 0..r { for j in 0..c { din[i * c + j] = out_grad[j * r + i]; } }
+                            Self::accum_grad(&mut self.ad_grads, *in_id, din);
+                        }
+                        TapeOp::Softmax { in_id, rows, cols, cached_out } => {
+                            let (r, c) = (*rows, *cols);
+                            let mut dx = vec![0.0f64; r * c];
+                            for row in 0..r {
+                                let s = &cached_out[row*c..(row+1)*c];
+                                let g = &out_grad[row*c..(row+1)*c];
+                                let dot: f64 = g.iter().zip(s.iter()).map(|(gi, si)| gi * si).sum();
+                                for col in 0..c { dx[row*c+col] = s[col] * (g[col] - dot); }
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *in_id, dx);
+                        }
+                        TapeOp::LayerNorm { in_id, g_id, b_id, eps, x_norm, stds, x_mu, gamma_data, rows, cols } => {
+                            let (r, c) = (*rows, *cols);
+                            // d_gamma = sum_rows(d_out * x_norm)
+                            let mut dgamma = vec![0.0f64; c];
+                            // d_beta = sum_rows(d_out)
+                            let mut dbeta = vec![0.0f64; c];
+                            let mut dx = vec![0.0f64; r * c];
+                            let n = c as f64;
+                            for row in 0..r {
+                                let std_i = stds[row];
+                                let xn = &x_norm[row*c..(row+1)*c];
+                                let xm = &x_mu[row*c..(row+1)*c];
+                                let g = &out_grad[row*c..(row+1)*c];
+                                for col in 0..c {
+                                    dgamma[col] += g[col] * xn[col];
+                                    dbeta[col]  += g[col];
+                                }
+                                // dx: standard layer norm backward
+                                let d_xnorm: Vec<f64> = (0..c).map(|j| g[j] * gamma_data[j]).collect();
+                                let sum_d_xnorm: f64 = d_xnorm.iter().sum();
+                                let sum_d_xnorm_xn: f64 = d_xnorm.iter().zip(xn.iter()).map(|(a, b)| a * b).sum();
+                                for col in 0..c {
+                                    dx[row*c+col] = (d_xnorm[col] - sum_d_xnorm / n
+                                        - xm[col] / (std_i * std_i) * sum_d_xnorm_xn / n) / std_i;
+                                }
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *in_id, dx);
+                            Self::accum_grad(&mut self.ad_grads, *g_id, dgamma);
+                            Self::accum_grad(&mut self.ad_grads, *b_id, dbeta);
+                        }
+                        TapeOp::Mha { x_id, wq_id, wk_id, wv_id, wo_id,
+                                      x_data, wq_data, wk_data, wv_data, wo_data,
+                                      q_proj, k_proj, v_proj,
+                                      attn_weights, concat_heads,
+                                      seq_len, d_model, n_heads, dh } => {
+                            let (sl, dm, nh, d) = (*seq_len, *d_model, *n_heads, *dh);
+                            // Helper: [m,k] @ [k,n] → [m,n]
+                            let mm = |a: &[f64], m: usize, k: usize, b: &[f64], n: usize| -> Vec<f64> {
+                                let mut c = vec![0.0f64; m * n];
+                                for i in 0..m { for l in 0..k { for j in 0..n { c[i*n+j] += a[i*k+l] * b[l*n+j]; } } }
+                                c
+                            };
+                            // dconcat = d_out @ Wo^T  [sl, dm]
+                            let d_concat = mm(&out_grad, sl, dm, wo_data, dm);   // out_grad@Wo not right — need Wo^T
+                            // d_out @ Wo^T: [sl,dm]@[dm,dm]^T — Wo is [dm,dm], Wo^T is [dm,dm]
+                            let mut d_concat2 = vec![0.0f64; sl * dm];
+                            for i in 0..sl { for k in 0..dm { for j in 0..dm { d_concat2[i*dm+k] += out_grad[i*dm+j] * wo_data[k*dm+j]; } } }
+                            // d_Wo = concat^T @ d_out  [dm,dm]
+                            let mut dwo = vec![0.0f64; dm * dm];
+                            for k in 0..dm { for j in 0..dm { for i in 0..sl { dwo[k*dm+j] += concat_heads[i*dm+k] * out_grad[i*dm+j]; } } }
+                            let _ = d_concat; // drop incorrect version
+                            // Per-head backward
+                            let mut dq_proj = vec![0.0f64; sl * dm];
+                            let mut dk_proj = vec![0.0f64; sl * dm];
+                            let mut dv_proj = vec![0.0f64; sl * dm];
+                            let scale = 1.0 / (d as f64).sqrt();
+                            for h in 0..nh {
+                                let attn_h = &attn_weights[h*sl*sl..(h+1)*sl*sl];
+                                // Kh [sl,dh], Qh [sl,dh], Vh [sl,dh]
+                                let mut kh = vec![0.0f64; sl * d];
+                                let mut qh = vec![0.0f64; sl * d];
+                                let mut vh = vec![0.0f64; sl * d];
+                                for row in 0..sl {
+                                    kh[row*d..row*d+d].copy_from_slice(&k_proj[row*dm+h*d..row*dm+h*d+d]);
+                                    qh[row*d..row*d+d].copy_from_slice(&q_proj[row*dm+h*d..row*dm+h*d+d]);
+                                    vh[row*d..row*d+d].copy_from_slice(&v_proj[row*dm+h*d..row*dm+h*d+d]);
+                                }
+                                // d_head_h = d_concat[:, h*d:(h+1)*d]  [sl, dh]
+                                let mut dhead = vec![0.0f64; sl * d];
+                                for row in 0..sl { dhead[row*d..row*d+d].copy_from_slice(&d_concat2[row*dm+h*d..row*dm+h*d+d]); }
+                                // d_attn_h = dhead @ Vh^T  [sl,sl]
+                                let mut dattn = vec![0.0f64; sl * sl];
+                                for i in 0..sl { for j in 0..sl { for k in 0..d { dattn[i*sl+j] += dhead[i*d+k] * vh[j*d+k]; } } }
+                                // d_Vh = attn_h^T @ dhead  [sl,dh]
+                                let mut dvh = vec![0.0f64; sl * d];
+                                for j in 0..sl { for k in 0..d { for i in 0..sl { dvh[j*d+k] += attn_h[i*sl+j] * dhead[i*d+k]; } } }
+                                // Softmax backward on dattn with attn_h → d_scores_h [sl,sl]
+                                let mut dscores = vec![0.0f64; sl * sl];
+                                for row in 0..sl {
+                                    let s = &attn_h[row*sl..(row+1)*sl];
+                                    let g = &dattn[row*sl..(row+1)*sl];
+                                    let dot: f64 = g.iter().zip(s.iter()).map(|(gi, si)| gi * si).sum();
+                                    for col in 0..sl { dscores[row*sl+col] = s[col] * (g[col] - dot) * scale; }
+                                }
+                                // d_Qh = d_scores @ Kh  [sl,dh]
+                                let dqh = mm(&dscores, sl, sl, &kh, d);
+                                // d_Kh = d_scores^T @ Qh  [sl,dh]
+                                let mut dkh = vec![0.0f64; sl * d];
+                                for j in 0..sl { for k in 0..d { for i in 0..sl { dkh[j*d+k] += dscores[i*sl+j] * qh[i*d+k]; } } }
+                                // Scatter back to full d_Q, d_K, d_V
+                                for row in 0..sl {
+                                    for col in 0..d {
+                                        dq_proj[row*dm+h*d+col] += dqh[row*d+col];
+                                        dk_proj[row*dm+h*d+col] += dkh[row*d+col];
+                                        dv_proj[row*dm+h*d+col] += dvh[row*d+col];
+                                    }
+                                }
+                            }
+                            // d_Wq = x^T @ d_Q_proj  [dm,dm]
+                            let mut dwq = vec![0.0f64; dm * dm];
+                            let mut dwk = vec![0.0f64; dm * dm];
+                            let mut dwv = vec![0.0f64; dm * dm];
+                            for k in 0..dm { for j in 0..dm { for i in 0..sl {
+                                dwq[k*dm+j] += x_data[i*dm+k] * dq_proj[i*dm+j];
+                                dwk[k*dm+j] += x_data[i*dm+k] * dk_proj[i*dm+j];
+                                dwv[k*dm+j] += x_data[i*dm+k] * dv_proj[i*dm+j];
+                            }}}
+                            // d_x = d_Q @ Wq^T + d_K @ Wk^T + d_V @ Wv^T  [sl,dm]
+                            let mut dxd = vec![0.0f64; sl * dm];
+                            for i in 0..sl { for k in 0..dm { for j in 0..dm {
+                                dxd[i*dm+k] += dq_proj[i*dm+j] * wq_data[k*dm+j]
+                                             + dk_proj[i*dm+j] * wk_data[k*dm+j]
+                                             + dv_proj[i*dm+j] * wv_data[k*dm+j];
+                            }}}
+                            Self::accum_grad(&mut self.ad_grads, *x_id,  dxd);
+                            Self::accum_grad(&mut self.ad_grads, *wq_id, dwq);
+                            Self::accum_grad(&mut self.ad_grads, *wk_id, dwk);
+                            Self::accum_grad(&mut self.ad_grads, *wv_id, dwv);
+                            Self::accum_grad(&mut self.ad_grads, *wo_id, dwo);
                         }
                         TapeOp::Gru { x_id, wx_id, wh_id, b_id, h0_id,
                                       x_data, wx_data, wh_data, h_all,

@@ -188,7 +188,12 @@ impl super::Evaluator {
                         new_data[c * rows + r] = data[r * cols + c];
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![cols, rows], data: new_data, tid: 0 }))
+                let out_ref = self.alloc(ObjectData::Tensor { shape: vec![cols, rows], data: new_data, tid: 0 });
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Transpose { in_id, rows, cols });
+                }
+                EvalResult::Value(out_ref)
             }
             "add" => self.tensor_elementwise(tensor_ref, shape, data, dot_call, "add"),
             "sub" => self.tensor_elementwise(tensor_ref, shape, data, dot_call, "sub"),
@@ -403,14 +408,27 @@ impl super::Evaluator {
                 EvalResult::Value(out_ref)
             }
             "softmax" => {
+                // Row-wise softmax for 2D, global for 1D — both tracked by autodiff
                 if data.is_empty() {
                     return EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data, tid: 0 }));
                 }
-                let max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                let exps: Vec<f64> = data.iter().map(|&x| (x - max).exp()).collect();
-                let sum: f64 = exps.iter().sum();
-                let new_data: Vec<f64> = exps.iter().map(|&e| e / sum).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
+                let (rows, cols) = if shape.len() >= 2 { (shape[0], shape[1..].iter().product()) } else { (1, data.len()) };
+                let mut new_data = vec![0.0f64; data.len()];
+                for r in 0..rows {
+                    let row = &data[r*cols..(r+1)*cols];
+                    let mx = row.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    let exps: Vec<f64> = row.iter().map(|&x| (x - mx).exp()).collect();
+                    let s: f64 = exps.iter().sum();
+                    for c in 0..cols { new_data[r*cols+c] = exps[c] / s; }
+                }
+                let out_ref = self.alloc(ObjectData::Tensor { shape: shape.clone(), data: new_data.clone(), tid: 0 });
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Softmax {
+                        in_id, rows, cols, cached_out: new_data,
+                    });
+                }
+                EvalResult::Value(out_ref)
             }
 
             // ── Element-wise math ────────────────────────────────────────────
@@ -958,6 +976,155 @@ impl super::Evaluator {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::MaxPool2d {
                         in_id, kernel, stride, in_shape: shape, out_shape, max_indices,
+                    });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── layer_norm(gamma, beta, eps) ─────────────────────────────────
+            "layer_norm" => {
+                if dot_call.arguments.len() != 3 {
+                    eprintln!("❌ ERROR: Tensor.layer_norm(gamma, beta, eps) requires 3 arguments");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.layer_norm() input must be 2D [rows, cols]");
+                    return EvalResult::Error;
+                }
+                let g_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let b_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let e_ref = match self.eval_expression(&dot_call.arguments[2]) { EvalResult::Value(r) => r, other => return other };
+                let gamma_data = match self.resolve(g_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, .. }) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.layer_norm() gamma must be a Tensor"); return EvalResult::Error; }
+                };
+                let beta_data = match self.resolve(b_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, .. }) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.layer_norm() beta must be a Tensor"); return EvalResult::Error; }
+                };
+                let eps = match self.resolve(e_ref).cloned() {
+                    Some(ObjectData::Decimal(d)) => d,
+                    Some(ObjectData::Integer(n)) => n as f64,
+                    _ => { eprintln!("❌ ERROR: Tensor.layer_norm() eps must be a number"); return EvalResult::Error; }
+                };
+                let (rows, cols) = (shape[0], shape[1]);
+                let mut out_data = vec![0.0f64; rows * cols];
+                let mut x_norm = vec![0.0f64; rows * cols];
+                let mut stds   = vec![0.0f64; rows];
+                let mut x_mu   = vec![0.0f64; rows * cols];
+                for r in 0..rows {
+                    let row = &data[r*cols..(r+1)*cols];
+                    let mu = row.iter().sum::<f64>() / cols as f64;
+                    let var = row.iter().map(|&x| (x-mu)*(x-mu)).sum::<f64>() / cols as f64;
+                    let std_v = (var + eps).sqrt();
+                    stds[r] = std_v;
+                    for c in 0..cols {
+                        let xm = row[c] - mu;
+                        x_mu[r*cols+c]   = xm;
+                        let xn = xm / std_v;
+                        x_norm[r*cols+c] = xn;
+                        out_data[r*cols+c] = gamma_data[c] * xn + beta_data[c];
+                    }
+                }
+                let out_ref = self.alloc(ObjectData::Tensor { shape: shape.clone(), data: out_data, tid: 0 });
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    let g_id  = self.ad_tensor_id(g_ref);
+                    let b_id  = self.ad_tensor_id(b_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::LayerNorm {
+                        in_id, g_id, b_id, eps, x_norm, stds, x_mu, gamma_data, rows, cols,
+                    });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── mha(Wq, Wk, Wv, Wo, n_heads) — multi-head self-attention ─────
+            "mha" => {
+                if dot_call.arguments.len() != 5 {
+                    eprintln!("❌ ERROR: Tensor.mha(Wq, Wk, Wv, Wo, n_heads) requires 5 arguments");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.mha() input must be 2D [seq_len, d_model]");
+                    return EvalResult::Error;
+                }
+                let (seq_len, d_model) = (shape[0], shape[1]);
+                let wq_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let wk_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let wv_ref = match self.eval_expression(&dot_call.arguments[2]) { EvalResult::Value(r) => r, other => return other };
+                let wo_ref = match self.eval_expression(&dot_call.arguments[3]) { EvalResult::Value(r) => r, other => return other };
+                let nh_ref = match self.eval_expression(&dot_call.arguments[4]) { EvalResult::Value(r) => r, other => return other };
+                let n_heads = match self.resolve(nh_ref).cloned() {
+                    Some(ObjectData::Integer(n)) if n > 0 => n as usize,
+                    _ => { eprintln!("❌ ERROR: Tensor.mha() n_heads must be a positive integer"); return EvalResult::Error; }
+                };
+                let (wq_shape, wq_data) = match self.resolve(wq_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
+                    _ => { eprintln!("❌ ERROR: Tensor.mha() Wq must be a Tensor"); return EvalResult::Error; }
+                };
+                let wk_data = match self.resolve(wk_ref).cloned() { Some(ObjectData::Tensor { data: d, .. }) => d, _ => return EvalResult::Error };
+                let wv_data = match self.resolve(wv_ref).cloned() { Some(ObjectData::Tensor { data: d, .. }) => d, _ => return EvalResult::Error };
+                let wo_data = match self.resolve(wo_ref).cloned() { Some(ObjectData::Tensor { data: d, .. }) => d, _ => return EvalResult::Error };
+                if wq_shape.len() != 2 || wq_shape[0] != d_model || wq_shape[1] != d_model || d_model % n_heads != 0 {
+                    eprintln!("❌ ERROR: Tensor.mha() Wq/Wk/Wv/Wo must be [d_model, d_model], d_model divisible by n_heads");
+                    return EvalResult::Error;
+                }
+                let dh = d_model / n_heads;
+                let sl = seq_len;
+                let dm = d_model;
+                // mm helper: [m,k] @ [k,n] → [m,n]
+                let mm = |a: &[f64], m: usize, k: usize, b: &[f64], n: usize| -> Vec<f64> {
+                    let mut c = vec![0.0f64; m * n];
+                    for i in 0..m { for l in 0..k { if a[i*k+l] == 0.0 { continue; } for j in 0..n { c[i*n+j] += a[i*k+l] * b[l*n+j]; } } }
+                    c
+                };
+                // Projections
+                let q_proj = mm(&data, sl, dm, &wq_data, dm);
+                let k_proj = mm(&data, sl, dm, &wk_data, dm);
+                let v_proj = mm(&data, sl, dm, &wv_data, dm);
+                let scale = 1.0 / (dh as f64).sqrt();
+                let mut attn_weights = vec![0.0f64; n_heads * sl * sl];
+                let mut concat_heads = vec![0.0f64; sl * dm];
+                for h in 0..n_heads {
+                    // Extract Qh, Kh, Vh [sl, dh]
+                    let mut qh = vec![0.0f64; sl * dh];
+                    let mut kh = vec![0.0f64; sl * dh];
+                    let mut vh = vec![0.0f64; sl * dh];
+                    for row in 0..sl {
+                        qh[row*dh..row*dh+dh].copy_from_slice(&q_proj[row*dm+h*dh..row*dm+h*dh+dh]);
+                        kh[row*dh..row*dh+dh].copy_from_slice(&k_proj[row*dm+h*dh..row*dm+h*dh+dh]);
+                        vh[row*dh..row*dh+dh].copy_from_slice(&v_proj[row*dm+h*dh..row*dm+h*dh+dh]);
+                    }
+                    // scores = Qh @ Kh^T * scale  [sl, sl]
+                    let mut scores = vec![0.0f64; sl * sl];
+                    for i in 0..sl { for j in 0..sl { for k in 0..dh { scores[i*sl+j] += qh[i*dh+k] * kh[j*dh+k]; } scores[i*sl+j] *= scale; } }
+                    // softmax rows
+                    let mut attn_h = scores.clone();
+                    for row in 0..sl {
+                        let mx = attn_h[row*sl..(row+1)*sl].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                        let mut s = 0.0f64;
+                        for c in 0..sl { attn_h[row*sl+c] = (attn_h[row*sl+c] - mx).exp(); s += attn_h[row*sl+c]; }
+                        for c in 0..sl { attn_h[row*sl+c] /= s; }
+                    }
+                    attn_weights[h*sl*sl..(h+1)*sl*sl].copy_from_slice(&attn_h);
+                    // head = attn_h @ Vh  [sl, dh]
+                    let head = mm(&attn_h, sl, sl, &vh, dh);
+                    for row in 0..sl { concat_heads[row*dm+h*dh..row*dm+h*dh+dh].copy_from_slice(&head[row*dh..row*dh+dh]); }
+                }
+                // output = concat @ Wo  [sl, dm]
+                let out_data = mm(&concat_heads, sl, dm, &wo_data, dm);
+                let out_ref = self.alloc(ObjectData::Tensor { shape: shape.clone(), data: out_data, tid: 0 });
+                if self.ad_recording {
+                    let x_id  = self.ad_tensor_id(tensor_ref);
+                    let wq_id = self.ad_tensor_id(wq_ref);
+                    let wk_id = self.ad_tensor_id(wk_ref);
+                    let wv_id = self.ad_tensor_id(wv_ref);
+                    let wo_id = self.ad_tensor_id(wo_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Mha {
+                        x_id, wq_id, wk_id, wv_id, wo_id,
+                        x_data: data, wq_data, wk_data, wv_data, wo_data,
+                        q_proj, k_proj, v_proj, attn_weights, concat_heads,
+                        seq_len, d_model, n_heads, dh,
                     });
                 }
                 EvalResult::Value(out_ref)
