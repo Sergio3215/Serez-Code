@@ -1,6 +1,6 @@
 [package]
 name = "serez-code"
-version = "2.2.1"
+version = "3.5.2"
 edition = "2024"
 description = "A hand-crafted interpreted programming language written in Rust"
 license = "MIT"
