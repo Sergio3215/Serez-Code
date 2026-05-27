@@ -1,0 +1,89 @@
+// BENCH 13: Attention Operations
+// Exercises: mha (multi-head self-attention), layer_norm, softmax-2D,
+//            tracked transpose, residual adds — the v0.4 Transformer stack.
+//
+// Workload:
+//   20 forward passes of a mini TransformerBlock (d=16, h=4, seq=8)
+//   Each pass: Embedding lookup → MHA → residual → LayerNorm → FFN → LN
+//   No autodiff tape — pure forward throughput.
+
+Random.seed(42)
+
+let seq    = 8
+let d      = 16
+let n_h    = 4
+let d_ff   = 32
+let vocab  = 32
+let passes = 20
+
+// ── Weight matrices (fixed, reused across passes) ────────────────────────────
+let std_w = 0.1
+
+// Embedding
+let emb_W = Random.normalTensor([vocab, d], 0.0, std_w)
+
+// MHA block 1
+let Wq1 = Random.normalTensor([d, d], 0.0, std_w)
+let Wk1 = Random.normalTensor([d, d], 0.0, std_w)
+let Wv1 = Random.normalTensor([d, d], 0.0, std_w)
+let Wo1 = Random.normalTensor([d, d], 0.0, std_w)
+let g1  = Tensor.ones([d])
+let b1  = Tensor.zeros([d])
+
+// FFN block 1: d → d_ff → d
+let Wf1 = Random.normalTensor([d,    d_ff], 0.0, std_w)
+let Wf2 = Random.normalTensor([d_ff, d],    0.0, std_w)
+let bf1 = Tensor.zeros([d_ff])
+let bf2 = Tensor.zeros([d])
+let g2  = Tensor.ones([d])
+let b2  = Tensor.zeros([d])
+
+// MHA block 2 (stacked layer)
+let Wq2 = Random.normalTensor([d, d], 0.0, std_w)
+let Wk2 = Random.normalTensor([d, d], 0.0, std_w)
+let Wv2 = Random.normalTensor([d, d], 0.0, std_w)
+let Wo2 = Random.normalTensor([d, d], 0.0, std_w)
+let g3  = Tensor.ones([d])
+let b3  = Tensor.zeros([d])
+let g4  = Tensor.ones([d])
+let b4  = Tensor.zeros([d])
+
+// ── Token sequences (one-hot lookup via matmul) ───────────────────────────────
+let tokens = Tensor.from([3.0, 7.0, 12.0, 1.0, 25.0, 9.0, 14.0, 6.0])
+
+// ── Forward pass helper: relu row-wise (Dense-like) ──────────────────────────
+// FFN: x @ Wf + bf → relu → @ Wf2 + bf2  (bias broadcast)
+// We approximate FFN as pure matmul (no activation tracking needed for bench)
+
+// ── Run passes ────────────────────────────────────────────────────────────────
+let check_sum = 0.0
+
+let p = 0
+while (p < passes) {
+    // 1. Embedding: one_hot → matmul  [seq, d]
+    let oh  = tokens.one_hot(vocab)
+    let x   = oh.matmul(emb_W)
+
+    // 2. TransformerBlock 1
+    //    MHA sublayer
+    let a1  = x.mha(Wq1, Wk1, Wv1, Wo1, n_h)
+    let h1  = a1.add(x).layer_norm(g1, b1, 0.000001)
+    //    FFN sublayer: [seq,d] @ [d,d_ff] = [seq,d_ff], then @ [d_ff,d] = [seq,d]
+    let ff1 = h1.matmul(Wf1).broadcastAdd(bf1)
+    let ff2 = ff1.relu().matmul(Wf2).broadcastAdd(bf2)
+    let h2  = ff2.add(h1).layer_norm(g2, b2, 0.000001)
+
+    // 3. TransformerBlock 2
+    let a2  = h2.mha(Wq2, Wk2, Wv2, Wo2, n_h)
+    let h3  = a2.add(h2).layer_norm(g3, b3, 0.000001)
+    let h4  = h3.layer_norm(g4, b4, 0.000001)
+
+    // 4. Mean pool + scalar accumulate (keeps result alive, prevents DCE)
+    let pooled = h4.meanAxis(0)
+    check_sum  = check_sum + pooled.sum()
+
+    p = p + 1
+}
+
+out passes
+out (check_sum > -1000000.0 && check_sum < 1000000.0)

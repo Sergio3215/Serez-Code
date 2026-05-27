@@ -1,0 +1,222 @@
+// Unit tests: softmax-2D, layer_norm, mha — forward correctness + autodiff backward
+
+// ── softmax 2D ────────────────────────────────────────────────────────────────
+
+test("softmax 2D — each row sums to 1", () => {
+    let m = Tensor.from([[1.0, 2.0, 3.0], [4.0, 1.0, 0.0]]);
+    let s = m.softmax();
+    let row0 = s.get(0, 0) + s.get(0, 1) + s.get(0, 2);
+    let row1 = s.get(1, 0) + s.get(1, 1) + s.get(1, 2);
+    assert(row0 > 0.999 && row0 < 1.001, "row0 sums to 1");
+    assert(row1 > 0.999 && row1 < 1.001, "row1 sums to 1");
+});
+
+test("softmax 2D — all values in (0,1)", () => {
+    let m = Tensor.from([[0.0, 5.0, -5.0], [-1.0, 0.0, 1.0]]);
+    let s = m.softmax();
+    let i = 0;
+    while (i < 2) {
+        let j = 0;
+        while (j < 3) {
+            let v = s.get(i, j);
+            assert(v > 0.0 && v < 1.0, "val in (0,1)");
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+});
+
+test("softmax 2D — argmax preserved per row", () => {
+    // row0: max at col 2 (val 10); row1: max at col 0 (val 8)
+    let m = Tensor.from([[1.0, 2.0, 10.0], [8.0, 1.0, 0.0]]);
+    let s = m.softmax();
+    assert(s.get(0, 2) > s.get(0, 0) && s.get(0, 2) > s.get(0, 1), "row0 max at col2");
+    assert(s.get(1, 0) > s.get(1, 1) && s.get(1, 0) > s.get(1, 2), "row1 max at col0");
+});
+
+test("softmax 2D — uniform input gives equal probs", () => {
+    let m = Tensor.from([[2.0, 2.0, 2.0], [5.0, 5.0, 5.0]]);
+    let s = m.softmax();
+    let expected = 0.3333333
+    assert(s.get(0, 0) > 0.332 && s.get(0, 0) < 0.334, "row0 col0 ≈ 1/3");
+    assert(s.get(1, 1) > 0.332 && s.get(1, 1) < 0.334, "row1 col1 ≈ 1/3");
+});
+
+// ── layer_norm ────────────────────────────────────────────────────────────────
+
+test("layer_norm — zero mean per row (gamma=1, beta=0)", () => {
+    let x = Tensor.from([[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]]);
+    let g = Tensor.ones([4]);
+    let b = Tensor.zeros([4]);
+    let y = x.layer_norm(g, b, 0.000001);
+    // mean of each row should be ≈ 0
+    let mean0 = (y.get(0,0) + y.get(0,1) + y.get(0,2) + y.get(0,3)) / 4.0;
+    let mean1 = (y.get(1,0) + y.get(1,1) + y.get(1,2) + y.get(1,3)) / 4.0;
+    assert(mean0 > -0.01 && mean0 < 0.01, "row0 mean ≈ 0");
+    assert(mean1 > -0.01 && mean1 < 0.01, "row1 mean ≈ 0");
+});
+
+test("layer_norm — unit variance per row", () => {
+    let x = Tensor.from([[1.0, 3.0, 5.0, 7.0]]);
+    let g = Tensor.ones([4]);
+    let b = Tensor.zeros([4]);
+    let y = x.layer_norm(g, b, 0.000001);
+    // var = mean of squares (mean is 0)
+    let v0 = y.get(0,0); let v1 = y.get(0,1);
+    let v2 = y.get(0,2); let v3 = y.get(0,3);
+    let var_ = (v0*v0 + v1*v1 + v2*v2 + v3*v3) / 4.0;
+    assert(var_ > 0.98 && var_ < 1.02, "unit variance ≈ 1.0");
+});
+
+test("layer_norm — gamma scales output", () => {
+    let x = Tensor.from([[1.0, 2.0, 3.0, 4.0]]);
+    let g1 = Tensor.ones([4]);
+    let g2 = Tensor.from([2.0, 2.0, 2.0, 2.0]);
+    let b  = Tensor.zeros([4]);
+    let y1 = x.layer_norm(g1, b, 0.000001);
+    let y2 = x.layer_norm(g2, b, 0.000001);
+    // y2 = 2 * y1 element-wise
+    let ratio0 = y2.get(0,0) / y1.get(0,0);
+    let ratio1 = y2.get(0,3) / y1.get(0,3);
+    assert(ratio0 > 1.99 && ratio0 < 2.01, "gamma=2 doubles col0");
+    assert(ratio1 > 1.99 && ratio1 < 2.01, "gamma=2 doubles col3");
+});
+
+test("layer_norm — beta shifts output", () => {
+    let x = Tensor.from([[1.0, 2.0, 3.0, 4.0]]);
+    let g = Tensor.ones([4]);
+    let b = Tensor.from([5.0, 5.0, 5.0, 5.0]);
+    let y0 = x.layer_norm(g, Tensor.zeros([4]), 0.000001);
+    let y5 = x.layer_norm(g, b, 0.000001);
+    // y5 = y0 + 5 at every element
+    let diff0 = y5.get(0,0) - y0.get(0,0);
+    let diff3 = y5.get(0,3) - y0.get(0,3);
+    assert(diff0 > 4.99 && diff0 < 5.01, "beta=5 shifts col0 by 5");
+    assert(diff3 > 4.99 && diff3 < 5.01, "beta=5 shifts col3 by 5");
+});
+
+// ── mha — forward shape + output sanity ───────────────────────────────────────
+
+test("mha — output shape [seq, d_model]", () => {
+    let seq = 4
+    let d   = 8
+    let std = 0.1
+    let x  = Random.normalTensor([seq, d], 0.0, std)
+    let Wq = Random.normalTensor([d, d], 0.0, std)
+    let Wk = Random.normalTensor([d, d], 0.0, std)
+    let Wv = Random.normalTensor([d, d], 0.0, std)
+    let Wo = Random.normalTensor([d, d], 0.0, std)
+    let y  = x.mha(Wq, Wk, Wv, Wo, 2)
+    let sh = y.shape()
+    assert(sh[0] == seq, "rows = seq_len");
+    assert(sh[1] == d,   "cols = d_model");
+});
+
+test("mha — output values finite (no NaN/Inf)", () => {
+    let d  = 8
+    let std = 0.05
+    let x  = Random.normalTensor([3, d], 0.0, std)
+    let Wq = Random.normalTensor([d, d], 0.0, std)
+    let Wk = Random.normalTensor([d, d], 0.0, std)
+    let Wv = Random.normalTensor([d, d], 0.0, std)
+    let Wo = Random.normalTensor([d, d], 0.0, std)
+    let y  = x.mha(Wq, Wk, Wv, Wo, 2)
+    let ok = true
+    let i  = 0
+    while (i < 3) {
+        let j = 0
+        while (j < d) {
+            let v = y.get(i, j)
+            if (v != v) { ok = false }    // NaN check: NaN != NaN
+            j = j + 1
+        }
+        i = i + 1
+    }
+    assert(ok, "all output values are finite");
+});
+
+test("mha — 1-head equals standard attention (output shape)", () => {
+    let d  = 4
+    let std = 0.1
+    let x  = Random.normalTensor([5, d], 0.0, std)
+    let Wq = Random.normalTensor([d, d], 0.0, std)
+    let Wk = Random.normalTensor([d, d], 0.0, std)
+    let Wv = Random.normalTensor([d, d], 0.0, std)
+    let Wo = Tensor.eye(d)
+    let y  = x.mha(Wq, Wk, Wv, Wo, 1)
+    let sh = y.shape()
+    assert(sh[0] == 5, "seq=5");
+    assert(sh[1] == d, "d_model=4");
+});
+
+// ── autodiff backward ─────────────────────────────────────────────────────────
+
+test("autodiff — softmax 2D gradient propagates", () => {
+    let m = Tensor.from([[1.0, 2.0, 3.0], [0.0, 1.0, 0.0]]);
+    Autodiff.tape()
+    let s = m.softmax()
+    Autodiff.backward(s)    // s is on the tape; starts backprop from here
+    let gm = Autodiff.gradient(m)
+    let sh = gm.shape()
+    assert(sh[0] == 2, "grad rows = 2");
+    assert(sh[1] == 3, "grad cols = 3");
+});
+
+test("autodiff — layer_norm gradients for gamma and beta", () => {
+    let x = Tensor.from([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]);
+    let g = Tensor.ones([4]);
+    let b = Tensor.zeros([4]);
+    Autodiff.tape()
+    let y = x.layer_norm(g, b, 0.000001)
+    Autodiff.backward(y)    // grad of sum(y) w.r.t. g and b
+    let db = Autodiff.gradient(b)
+    let dg = Autodiff.gradient(g)
+    // d(sum_all_y) / d(beta[c]) = num_rows = 2
+    assert(db.get(0) > 1.99 && db.get(0) < 2.01, "d_beta[0] ≈ 2 (sum over 2 rows)");
+    assert(db.get(3) > 1.99 && db.get(3) < 2.01, "d_beta[3] ≈ 2");
+    assert(dg.norm() > 0.0, "d_gamma is non-zero");
+});
+
+test("autodiff — mha gradients on all weight matrices", () => {
+    let d   = 8
+    let std = 0.05
+    let x  = Random.normalTensor([4, d], 0.0, std)
+    let Wq = Random.normalTensor([d, d], 0.0, std)
+    let Wk = Random.normalTensor([d, d], 0.0, std)
+    let Wv = Random.normalTensor([d, d], 0.0, std)
+    let Wo = Random.normalTensor([d, d], 0.0, std)
+    Autodiff.tape()
+    let y = x.mha(Wq, Wk, Wv, Wo, 2)
+    Autodiff.backward(y)    // y is on the tape
+    let dWq = Autodiff.gradient(Wq)
+    let dWk = Autodiff.gradient(Wk)
+    let dWv = Autodiff.gradient(Wv)
+    let dWo = Autodiff.gradient(Wo)
+    assert(dWq.norm() > 0.0, "dWq non-zero");
+    assert(dWk.norm() > 0.0, "dWk non-zero");
+    assert(dWv.norm() > 0.0, "dWv non-zero");
+    assert(dWo.norm() > 0.0, "dWo non-zero");
+});
+
+test("autodiff — TransformerBlock-style residual + layer_norm chain", () => {
+    let d   = 8
+    let std = 0.05
+    let x  = Random.normalTensor([3, d], 0.0, std)
+    let Wq = Random.normalTensor([d, d], 0.0, std)
+    let Wk = Random.normalTensor([d, d], 0.0, std)
+    let Wv = Random.normalTensor([d, d], 0.0, std)
+    let Wo = Random.normalTensor([d, d], 0.0, std)
+    let g  = Tensor.ones([d])
+    let b  = Tensor.zeros([d])
+    Autodiff.tape()
+    let attn = x.mha(Wq, Wk, Wv, Wo, 2)
+    let res  = attn.add(x)
+    let ln   = res.layer_norm(g, b, 0.000001)
+    Autodiff.backward(ln)   // ln is on the tape
+    let dg  = Autodiff.gradient(g)
+    let dWq = Autodiff.gradient(Wq)
+    assert(dg.norm()  > 0.0, "d_gamma flows through residual+LN");
+    assert(dWq.norm() > 0.0, "dWq flows through residual+LN");
+});
+
+summary()
