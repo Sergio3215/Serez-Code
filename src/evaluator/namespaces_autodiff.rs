@@ -43,6 +43,30 @@ pub enum TapeOp {
         out_shape: Vec<usize>,
         max_indices: Vec<usize>,
     },
+    Lstm {
+        x_id: u64, wx_id: u64, wh_id: u64, b_id: u64, h0_id: u64, c0_id: u64,
+        x_data: Vec<f64>,
+        wx_data: Vec<f64>,
+        wh_data: Vec<f64>,
+        h_all: Vec<f64>,    // [seq_len+1, hidden_size] — h0 at index 0
+        c_all: Vec<f64>,    // [seq_len+1, hidden_size] — c0 at index 0
+        gates_i: Vec<f64>,  // [seq_len, hidden_size]
+        gates_f: Vec<f64>,
+        gates_g: Vec<f64>,
+        gates_o: Vec<f64>,
+        seq_len: usize, input_size: usize, hidden_size: usize,
+    },
+    Gru {
+        x_id: u64, wx_id: u64, wh_id: u64, b_id: u64, h0_id: u64,
+        x_data: Vec<f64>,
+        wx_data: Vec<f64>,
+        wh_data: Vec<f64>,
+        h_all: Vec<f64>,    // [seq_len+1, hidden_size]
+        gates_r: Vec<f64>,  // [seq_len, hidden_size] — reset gate output
+        gates_z: Vec<f64>,  // [seq_len, hidden_size] — update gate output
+        gates_n: Vec<f64>,  // [seq_len, hidden_size] — new gate output
+        seq_len: usize, input_size: usize, hidden_size: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -272,6 +296,164 @@ impl super::Evaluator {
                                 }
                             }
                             Self::accum_grad(&mut self.ad_grads, *in_id, dinput);
+                        }
+                        TapeOp::Lstm { x_id, wx_id, wh_id, b_id, h0_id, c0_id,
+                                       x_data, wx_data, wh_data, h_all, c_all,
+                                       gates_i, gates_f, gates_g, gates_o,
+                                       seq_len, input_size, hidden_size } => {
+                            let (sl, is, hs) = (*seq_len, *input_size, *hidden_size);
+                            let four_h = 4 * hs;
+                            let mut dx  = vec![0.0f64; sl * is];
+                            let mut dwx = vec![0.0f64; is * four_h];
+                            let mut dwh = vec![0.0f64; hs * four_h];
+                            let mut db  = vec![0.0f64; four_h];
+                            let mut dh_next = vec![0.0f64; hs];
+                            let mut dc_next = vec![0.0f64; hs];
+                            // out_grad: [1, hs] — gradient of loss w.r.t. last hidden state
+                            for t in (0..sl).rev() {
+                                let mut dh = dh_next.clone();
+                                if t == sl - 1 {
+                                    for j in 0..hs { dh[j] += out_grad[j]; }
+                                }
+                                let i_t = &gates_i[t*hs..(t+1)*hs];
+                                let f_t = &gates_f[t*hs..(t+1)*hs];
+                                let g_t = &gates_g[t*hs..(t+1)*hs];
+                                let o_t = &gates_o[t*hs..(t+1)*hs];
+                                let c_t   = &c_all[(t+1)*hs..(t+2)*hs];
+                                let c_prev = &c_all[t*hs..(t+1)*hs];
+                                let h_prev = &h_all[t*hs..(t+1)*hs];
+                                let x_t   = &x_data[t*is..(t+1)*is];
+                                // do_t = dh * tanh(c_t)
+                                let do_t: Vec<f64> = (0..hs).map(|j| dh[j] * c_t[j].tanh()).collect();
+                                // dc = dh * o_t * (1 - tanh(c_t)^2) + dc_next
+                                let dc: Vec<f64> = (0..hs).map(|j| {
+                                    let tc = c_t[j].tanh();
+                                    dh[j] * o_t[j] * (1.0 - tc*tc) + dc_next[j]
+                                }).collect();
+                                let df: Vec<f64> = (0..hs).map(|j| dc[j] * c_prev[j]).collect();
+                                let di: Vec<f64> = (0..hs).map(|j| dc[j] * g_t[j]).collect();
+                                let dg: Vec<f64> = (0..hs).map(|j| dc[j] * i_t[j]).collect();
+                                // Gate pre-activation gradients
+                                let mut dz = vec![0.0f64; four_h];
+                                for j in 0..hs {
+                                    dz[j]        = di[j] * i_t[j] * (1.0 - i_t[j]);
+                                    dz[hs+j]     = df[j] * f_t[j] * (1.0 - f_t[j]);
+                                    dz[2*hs+j]   = dg[j] * (1.0 - g_t[j]*g_t[j]);
+                                    dz[3*hs+j]   = do_t[j] * o_t[j] * (1.0 - o_t[j]);
+                                }
+                                // dx_t = dz @ Wx^T
+                                for k in 0..is {
+                                    for j in 0..four_h {
+                                        dx[t*is+k] += dz[j] * wx_data[k*four_h+j];
+                                    }
+                                }
+                                // dWx += x_t^T ⊗ dz
+                                for k in 0..is {
+                                    for j in 0..four_h { dwx[k*four_h+j] += x_t[k] * dz[j]; }
+                                }
+                                // dWh += h_prev^T ⊗ dz
+                                for k in 0..hs {
+                                    for j in 0..four_h { dwh[k*four_h+j] += h_prev[k] * dz[j]; }
+                                }
+                                for j in 0..four_h { db[j] += dz[j]; }
+                                // dh_next = dz @ Wh^T
+                                let mut new_dh_next = vec![0.0f64; hs];
+                                for k in 0..hs {
+                                    for j in 0..four_h {
+                                        new_dh_next[k] += dz[j] * wh_data[k*four_h+j];
+                                    }
+                                }
+                                dh_next = new_dh_next;
+                                dc_next = (0..hs).map(|j| dc[j] * f_t[j]).collect();
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *x_id,  dx);
+                            Self::accum_grad(&mut self.ad_grads, *wx_id, dwx);
+                            Self::accum_grad(&mut self.ad_grads, *wh_id, dwh);
+                            Self::accum_grad(&mut self.ad_grads, *b_id,  db);
+                            Self::accum_grad(&mut self.ad_grads, *h0_id, dh_next);
+                            Self::accum_grad(&mut self.ad_grads, *c0_id, dc_next);
+                        }
+                        TapeOp::Gru { x_id, wx_id, wh_id, b_id, h0_id,
+                                      x_data, wx_data, wh_data, h_all,
+                                      gates_r, gates_z, gates_n,
+                                      seq_len, input_size, hidden_size } => {
+                            let (sl, is, hs) = (*seq_len, *input_size, *hidden_size);
+                            let three_h = 3 * hs;
+                            let mut dx  = vec![0.0f64; sl * is];
+                            let mut dwx = vec![0.0f64; is * three_h];
+                            let mut dwh = vec![0.0f64; hs * three_h];
+                            let mut db  = vec![0.0f64; three_h];
+                            let mut dh_next = vec![0.0f64; hs];
+                            for t in (0..sl).rev() {
+                                let mut dh = dh_next.clone();
+                                if t == sl - 1 {
+                                    for j in 0..hs { dh[j] += out_grad[j]; }
+                                }
+                                let r_t   = &gates_r[t*hs..(t+1)*hs];
+                                let z_t   = &gates_z[t*hs..(t+1)*hs];
+                                let n_t   = &gates_n[t*hs..(t+1)*hs];
+                                let h_prev = &h_all[t*hs..(t+1)*hs];
+                                let x_t   = &x_data[t*is..(t+1)*is];
+                                // dh_t = (1-z)*h_prev + z*n  → derive
+                                // dh_prev from direct path: dh * (1-z)
+                                // dn_t = dh * z
+                                // dz_t = dh * (n - h_prev)
+                                let dn: Vec<f64> = (0..hs).map(|j| dh[j] * z_t[j]).collect();
+                                let dz_gate: Vec<f64> = (0..hs).map(|j| dh[j] * (n_t[j] - h_prev[j])).collect();
+                                let mut dh_prev: Vec<f64> = (0..hs).map(|j| dh[j] * (1.0 - z_t[j])).collect();
+                                // n_t = tanh(x@Wx_n + (r*h_prev)@Wh_n + b_n)
+                                let dz_n: Vec<f64> = (0..hs).map(|j| dn[j] * (1.0 - n_t[j]*n_t[j])).collect();
+                                // d(r*h_prev) = dz_n @ Wh_n^T
+                                let mut d_rh = vec![0.0f64; hs];
+                                for k in 0..hs {
+                                    for j in 0..hs {
+                                        d_rh[k] += dz_n[j] * wh_data[k*three_h + 2*hs + j];
+                                    }
+                                }
+                                // dr_t = d_rh * h_prev;  dh_prev += d_rh * r_t
+                                let dr: Vec<f64> = (0..hs).map(|j| d_rh[j] * h_prev[j]).collect();
+                                for j in 0..hs { dh_prev[j] += d_rh[j] * r_t[j]; }
+                                // r_t sigmoid deriv
+                                let dz_r: Vec<f64> = (0..hs).map(|j| dr[j] * r_t[j] * (1.0 - r_t[j])).collect();
+                                // z_t sigmoid deriv
+                                let dz_z: Vec<f64> = (0..hs).map(|j| dz_gate[j] * z_t[j] * (1.0 - z_t[j])).collect();
+                                // Pack pre-activation gradients: [dz_r | dz_z | dz_n]
+                                let mut dz = vec![0.0f64; three_h];
+                                dz[..hs].copy_from_slice(&dz_r);
+                                dz[hs..2*hs].copy_from_slice(&dz_z);
+                                dz[2*hs..].copy_from_slice(&dz_n);
+                                // dx_t = dz @ Wx^T (all gates contribute)
+                                for k in 0..is {
+                                    for j in 0..three_h {
+                                        dx[t*is+k] += dz[j] * wx_data[k*three_h+j];
+                                    }
+                                }
+                                for k in 0..is {
+                                    for j in 0..three_h { dwx[k*three_h+j] += x_t[k] * dz[j]; }
+                                }
+                                // dWh for r,z gates: h_prev^T ⊗ dz[r,z]
+                                // dWh for n gate: (r*h_prev)^T ⊗ dz_n
+                                for k in 0..hs {
+                                    for j in 0..2*hs { dwh[k*three_h+j] += h_prev[k] * dz[j]; }
+                                    for j in 0..hs {
+                                        dwh[k*three_h+2*hs+j] += r_t[k] * h_prev[k] * dz_n[j];
+                                    }
+                                }
+                                for j in 0..three_h { db[j] += dz[j]; }
+                                // dh_prev from r,z gate paths
+                                let mut new_dh_next = dh_prev;
+                                for k in 0..hs {
+                                    for j in 0..2*hs {
+                                        new_dh_next[k] += dz[j] * wh_data[k*three_h+j];
+                                    }
+                                }
+                                dh_next = new_dh_next;
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *x_id,  dx);
+                            Self::accum_grad(&mut self.ad_grads, *wx_id, dwx);
+                            Self::accum_grad(&mut self.ad_grads, *wh_id, dwh);
+                            Self::accum_grad(&mut self.ad_grads, *b_id,  db);
+                            Self::accum_grad(&mut self.ad_grads, *h0_id, dh_next);
                         }
                     }
                 }

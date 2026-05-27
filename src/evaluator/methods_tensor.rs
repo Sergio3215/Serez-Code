@@ -963,6 +963,218 @@ impl super::Evaluator {
                 EvalResult::Value(out_ref)
             }
 
+            // ── one_hot(vocab_size) ───────────────────────────────────────────
+            "one_hot" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.one_hot(vocab_size) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.one_hot() input must be 1D [seq_len] of indices");
+                    return EvalResult::Error;
+                }
+                let v_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let vocab = match self.resolve(v_ref).cloned() {
+                    Some(ObjectData::Integer(n)) if n > 0 => n as usize,
+                    _ => { eprintln!("❌ ERROR: Tensor.one_hot() vocab_size must be a positive integer"); return EvalResult::Error; }
+                };
+                let seq_len = shape[0];
+                let mut out = vec![0.0f64; seq_len * vocab];
+                for (i, &val) in data.iter().enumerate() {
+                    let idx = val as usize;
+                    if idx < vocab { out[i * vocab + idx] = 1.0; }
+                }
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![seq_len, vocab], data: out, tid: 0 }))
+            }
+
+            // ── lstm(Wx, Wh, b, h0, c0) → [1, hidden_size] last hidden state ─
+            "lstm" => {
+                if dot_call.arguments.len() != 5 {
+                    eprintln!("❌ ERROR: Tensor.lstm(Wx, Wh, b, h0, c0) requires 5 arguments");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.lstm() input must be 2D [seq_len, input_size]");
+                    return EvalResult::Error;
+                }
+                let (seq_len, input_size) = (shape[0], shape[1]);
+                let wx_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let wh_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let b_ref  = match self.eval_expression(&dot_call.arguments[2]) { EvalResult::Value(r) => r, other => return other };
+                let h0_ref = match self.eval_expression(&dot_call.arguments[3]) { EvalResult::Value(r) => r, other => return other };
+                let c0_ref = match self.eval_expression(&dot_call.arguments[4]) { EvalResult::Value(r) => r, other => return other };
+                let (wx_shape, wx_data) = match self.resolve(wx_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
+                    _ => { eprintln!("❌ ERROR: Tensor.lstm() Wx must be a Tensor"); return EvalResult::Error; }
+                };
+                let (wh_shape, wh_data) = match self.resolve(wh_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
+                    _ => { eprintln!("❌ ERROR: Tensor.lstm() Wh must be a Tensor"); return EvalResult::Error; }
+                };
+                let b_data = match self.resolve(b_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, .. }) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.lstm() b must be a Tensor"); return EvalResult::Error; }
+                };
+                let h0_data = match self.resolve(h0_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, .. }) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.lstm() h0 must be a Tensor"); return EvalResult::Error; }
+                };
+                let c0_data = match self.resolve(c0_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, .. }) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.lstm() c0 must be a Tensor"); return EvalResult::Error; }
+                };
+                if wx_shape.len() != 2 || wx_shape[0] != input_size || wx_shape[1] % 4 != 0 {
+                    eprintln!("❌ ERROR: Tensor.lstm() Wx must be [input_size, 4*hidden_size]"); return EvalResult::Error;
+                }
+                let four_h = wx_shape[1];
+                let hidden_size = four_h / 4;
+                if wh_shape.len() != 2 || wh_shape[0] != hidden_size || wh_shape[1] != four_h {
+                    eprintln!("❌ ERROR: Tensor.lstm() Wh must be [hidden_size, 4*hidden_size]"); return EvalResult::Error;
+                }
+                if b_data.len() != four_h {
+                    eprintln!("❌ ERROR: Tensor.lstm() b must have length 4*hidden_size"); return EvalResult::Error;
+                }
+                // Forward pass
+                let mut h_all = vec![0.0f64; (seq_len + 1) * hidden_size];
+                let mut c_all = vec![0.0f64; (seq_len + 1) * hidden_size];
+                let mut gates_i = vec![0.0f64; seq_len * hidden_size];
+                let mut gates_f = vec![0.0f64; seq_len * hidden_size];
+                let mut gates_g = vec![0.0f64; seq_len * hidden_size];
+                let mut gates_o = vec![0.0f64; seq_len * hidden_size];
+                for j in 0..hidden_size.min(h0_data.len()) { h_all[j] = h0_data[j]; }
+                for j in 0..hidden_size.min(c0_data.len()) { c_all[j] = c0_data[j]; }
+                for t in 0..seq_len {
+                    let x_t   = &data[t*input_size..(t+1)*input_size];
+                    let h_prev: Vec<f64> = h_all[t*hidden_size..(t+1)*hidden_size].to_vec();
+                    let c_prev: Vec<f64> = c_all[t*hidden_size..(t+1)*hidden_size].to_vec();
+                    let mut z = b_data.clone();
+                    for j in 0..four_h {
+                        for k in 0..input_size  { z[j] += x_t[k]    * wx_data[k*four_h+j]; }
+                        for k in 0..hidden_size { z[j] += h_prev[k] * wh_data[k*four_h+j]; }
+                    }
+                    let sig = |x: f64| 1.0f64 / (1.0 + (-x).exp());
+                    let i_t: Vec<f64> = z[..hidden_size].iter().map(|&x| sig(x)).collect();
+                    let f_t: Vec<f64> = z[hidden_size..2*hidden_size].iter().map(|&x| sig(x)).collect();
+                    let g_t: Vec<f64> = z[2*hidden_size..3*hidden_size].iter().map(|&x| x.tanh()).collect();
+                    let o_t: Vec<f64> = z[3*hidden_size..].iter().map(|&x| sig(x)).collect();
+                    let c_t: Vec<f64> = (0..hidden_size).map(|j| f_t[j]*c_prev[j] + i_t[j]*g_t[j]).collect();
+                    let h_t: Vec<f64> = (0..hidden_size).map(|j| o_t[j]*c_t[j].tanh()).collect();
+                    gates_i[t*hidden_size..(t+1)*hidden_size].copy_from_slice(&i_t);
+                    gates_f[t*hidden_size..(t+1)*hidden_size].copy_from_slice(&f_t);
+                    gates_g[t*hidden_size..(t+1)*hidden_size].copy_from_slice(&g_t);
+                    gates_o[t*hidden_size..(t+1)*hidden_size].copy_from_slice(&o_t);
+                    h_all[(t+1)*hidden_size..(t+2)*hidden_size].copy_from_slice(&h_t);
+                    c_all[(t+1)*hidden_size..(t+2)*hidden_size].copy_from_slice(&c_t);
+                }
+                let last_h = h_all[seq_len*hidden_size..].to_vec();
+                let out_ref = self.alloc(ObjectData::Tensor { shape: vec![1, hidden_size], data: last_h, tid: 0 });
+                if self.ad_recording {
+                    let x_id  = self.ad_tensor_id(tensor_ref);
+                    let wx_id = self.ad_tensor_id(wx_ref);
+                    let wh_id = self.ad_tensor_id(wh_ref);
+                    let b_id  = self.ad_tensor_id(b_ref);
+                    let h0_id = self.ad_tensor_id(h0_ref);
+                    let c0_id = self.ad_tensor_id(c0_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Lstm {
+                        x_id, wx_id, wh_id, b_id, h0_id, c0_id,
+                        x_data: data, wx_data, wh_data,
+                        h_all, c_all, gates_i, gates_f, gates_g, gates_o,
+                        seq_len, input_size, hidden_size,
+                    });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── gru(Wx, Wh, b, h0) → [1, hidden_size] last hidden state ──────
+            "gru" => {
+                if dot_call.arguments.len() != 4 {
+                    eprintln!("❌ ERROR: Tensor.gru(Wx, Wh, b, h0) requires 4 arguments");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.gru() input must be 2D [seq_len, input_size]");
+                    return EvalResult::Error;
+                }
+                let (seq_len, input_size) = (shape[0], shape[1]);
+                let wx_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let wh_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let b_ref  = match self.eval_expression(&dot_call.arguments[2]) { EvalResult::Value(r) => r, other => return other };
+                let h0_ref = match self.eval_expression(&dot_call.arguments[3]) { EvalResult::Value(r) => r, other => return other };
+                let (wx_shape, wx_data) = match self.resolve(wx_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
+                    _ => { eprintln!("❌ ERROR: Tensor.gru() Wx must be a Tensor"); return EvalResult::Error; }
+                };
+                let (wh_shape, wh_data) = match self.resolve(wh_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
+                    _ => { eprintln!("❌ ERROR: Tensor.gru() Wh must be a Tensor"); return EvalResult::Error; }
+                };
+                let b_data = match self.resolve(b_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, .. }) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.gru() b must be a Tensor"); return EvalResult::Error; }
+                };
+                let h0_data = match self.resolve(h0_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, .. }) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.gru() h0 must be a Tensor"); return EvalResult::Error; }
+                };
+                if wx_shape.len() != 2 || wx_shape[0] != input_size || wx_shape[1] % 3 != 0 {
+                    eprintln!("❌ ERROR: Tensor.gru() Wx must be [input_size, 3*hidden_size]"); return EvalResult::Error;
+                }
+                let three_h = wx_shape[1];
+                let hidden_size = three_h / 3;
+                if wh_shape.len() != 2 || wh_shape[0] != hidden_size || wh_shape[1] != three_h {
+                    eprintln!("❌ ERROR: Tensor.gru() Wh must be [hidden_size, 3*hidden_size]"); return EvalResult::Error;
+                }
+                if b_data.len() != three_h {
+                    eprintln!("❌ ERROR: Tensor.gru() b must have length 3*hidden_size"); return EvalResult::Error;
+                }
+                let mut h_all = vec![0.0f64; (seq_len + 1) * hidden_size];
+                let mut gates_r = vec![0.0f64; seq_len * hidden_size];
+                let mut gates_z = vec![0.0f64; seq_len * hidden_size];
+                let mut gates_n = vec![0.0f64; seq_len * hidden_size];
+                for j in 0..hidden_size.min(h0_data.len()) { h_all[j] = h0_data[j]; }
+                let sig = |x: f64| 1.0f64 / (1.0 + (-x).exp());
+                for t in 0..seq_len {
+                    let x_t   = &data[t*input_size..(t+1)*input_size];
+                    let h_prev: Vec<f64> = h_all[t*hidden_size..(t+1)*hidden_size].to_vec();
+                    // r gate and z gate: x@Wx[r,z] + h_prev@Wh[r,z] + b[r,z]
+                    let mut rz_pre = b_data[..2*hidden_size].to_vec();
+                    for j in 0..2*hidden_size {
+                        for k in 0..input_size  { rz_pre[j] += x_t[k]    * wx_data[k*three_h+j]; }
+                        for k in 0..hidden_size { rz_pre[j] += h_prev[k] * wh_data[k*three_h+j]; }
+                    }
+                    let r_t: Vec<f64> = rz_pre[..hidden_size].iter().map(|&x| sig(x)).collect();
+                    let z_t: Vec<f64> = rz_pre[hidden_size..].iter().map(|&x| sig(x)).collect();
+                    // n gate: x@Wx_n + (r*h_prev)@Wh_n + b_n
+                    let mut n_pre: Vec<f64> = b_data[2*hidden_size..].to_vec();
+                    for j in 0..hidden_size {
+                        for k in 0..input_size  { n_pre[j] += x_t[k]              * wx_data[k*three_h+2*hidden_size+j]; }
+                        for k in 0..hidden_size { n_pre[j] += r_t[k] * h_prev[k] * wh_data[k*three_h+2*hidden_size+j]; }
+                    }
+                    let n_t: Vec<f64> = n_pre.iter().map(|&x| x.tanh()).collect();
+                    let h_t: Vec<f64> = (0..hidden_size).map(|j| (1.0 - z_t[j]) * h_prev[j] + z_t[j] * n_t[j]).collect();
+                    gates_r[t*hidden_size..(t+1)*hidden_size].copy_from_slice(&r_t);
+                    gates_z[t*hidden_size..(t+1)*hidden_size].copy_from_slice(&z_t);
+                    gates_n[t*hidden_size..(t+1)*hidden_size].copy_from_slice(&n_t);
+                    h_all[(t+1)*hidden_size..(t+2)*hidden_size].copy_from_slice(&h_t);
+                }
+                let last_h = h_all[seq_len*hidden_size..].to_vec();
+                let out_ref = self.alloc(ObjectData::Tensor { shape: vec![1, hidden_size], data: last_h, tid: 0 });
+                if self.ad_recording {
+                    let x_id  = self.ad_tensor_id(tensor_ref);
+                    let wx_id = self.ad_tensor_id(wx_ref);
+                    let wh_id = self.ad_tensor_id(wh_ref);
+                    let b_id  = self.ad_tensor_id(b_ref);
+                    let h0_id = self.ad_tensor_id(h0_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Gru {
+                        x_id, wx_id, wh_id, b_id, h0_id,
+                        x_data: data, wx_data, wh_data,
+                        h_all, gates_r, gates_z, gates_n,
+                        seq_len, input_size, hidden_size,
+                    });
+                }
+                EvalResult::Value(out_ref)
+            }
+
             // ── outer product ─────────────────────────────────────────────────
             "outer" => {
                 if dot_call.arguments.len() != 1 {
