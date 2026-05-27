@@ -2,7 +2,7 @@
 name = "serez-code"
 version = "3.5.2"
 edition = "2024"
-description = "A hand-crafted interpreted programming language written in Rust"
+description = "Serez Code - The programming language for AI, UI, systems, and GPU in a single runtime"
 license = "MIT"
 repository = "https://github.com/Sergio3215/serez-code"
 homepage = "https://github.com/Sergio3215/serez-code"
