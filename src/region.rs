@@ -53,6 +53,7 @@ pub enum OwnedValue {
     Tensor {
         shape: Vec<usize>,
         data: Vec<f64>,
+        tid: u64,        // stable identity — assigned at creation, survives extract/plant
     },
     Ptr(String), // pointer to a named variable
     Null,
@@ -93,7 +94,7 @@ impl OwnedValue {
                 let inner: Vec<String> = elements.iter().map(|v| v.display_str()).collect();
                 format!("Set[{}]", inner.join(", "))
             }
-            OwnedValue::Tensor { shape, data } => format_tensor(shape, data),
+            OwnedValue::Tensor { shape, data, .. } => format_tensor(shape, data),
             OwnedValue::Ptr(name) => format!("&{}", name),
             OwnedValue::Null => "null".to_string(),
         }
@@ -137,6 +138,7 @@ pub enum ObjectData {
     Tensor {
         shape: Vec<usize>,
         data: Vec<f64>,
+        tid: u64,        // stable identity — assigned at creation, survives extract/plant
     },
     Ptr(String), // pointer to a named variable
     Null,
@@ -158,7 +160,7 @@ impl std::fmt::Display for ObjectData {
             ObjectData::Instance { class_name, .. } => write!(f, "{}{{...}}", class_name),
             ObjectData::EnumVariant { enum_name, variant } => write!(f, "{}.{}", enum_name, variant),
             ObjectData::Set { .. } => write!(f, "Set{{...}}"),
-            ObjectData::Tensor { shape, data } => write!(f, "{}", format_tensor(shape, data)),
+            ObjectData::Tensor { shape, data, .. } => write!(f, "{}", format_tensor(shape, data)),
             ObjectData::Ptr(name) => write!(f, "Ptr(&{})", name),
             ObjectData::Null => write!(f, "Null"),
         }

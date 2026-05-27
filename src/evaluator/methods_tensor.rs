@@ -38,7 +38,7 @@ impl super::Evaluator {
         } else {
             0.0
         };
-        EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: vec![fill; total] }))
+        EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: vec![fill; total] , tid: 0}))
     }
 
     // ── Static namespace: Tensor.zeros / ones / eye / from ───────────────────
@@ -53,7 +53,7 @@ impl super::Evaluator {
                     Ok(s) => s, Err(e) => return e,
                 };
                 let total: usize = shape.iter().product();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: vec![0.0; total] }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: vec![0.0; total] , tid: 0}))
             }
             "ones" => {
                 if dot_call.arguments.len() != 1 {
@@ -64,7 +64,7 @@ impl super::Evaluator {
                     Ok(s) => s, Err(e) => return e,
                 };
                 let total: usize = shape.iter().product();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: vec![1.0; total] }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: vec![1.0; total] , tid: 0}))
             }
             "eye" => {
                 if dot_call.arguments.len() != 1 {
@@ -81,7 +81,7 @@ impl super::Evaluator {
                 };
                 let mut data = vec![0.0f64; n * n];
                 for i in 0..n { data[i * n + i] = 1.0; }
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![n, n], data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![n, n], data , tid: 0}))
             }
             "from" => {
                 if dot_call.arguments.len() != 1 {
@@ -154,7 +154,7 @@ impl super::Evaluator {
                 };
                 let mut new_data = data;
                 new_data[idx] = val;
-                let new_obj = ObjectData::Tensor { shape, data: new_data };
+                let new_obj = ObjectData::Tensor { shape, data: new_data , tid: 0};
                 match tensor_ref.region {
                     RegionId::Global => self.global_arena.update(tensor_ref.index, new_obj),
                     RegionId::Scoped => self.scopes.arena.update(tensor_ref.index, new_obj),
@@ -174,7 +174,7 @@ impl super::Evaluator {
                     eprintln!("❌ ERROR: Tensor.reshape() — shape has {} elements but tensor has {}", new_total, data.len());
                     return EvalResult::Error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: new_shape, data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: new_shape, data , tid: 0}))
             }
             "transpose" => {
                 if shape.len() != 2 {
@@ -188,12 +188,12 @@ impl super::Evaluator {
                         new_data[c * rows + r] = data[r * cols + c];
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![cols, rows], data: new_data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![cols, rows], data: new_data, tid: 0 }))
             }
-            "add" => self.tensor_elementwise(shape, data, dot_call, "add"),
-            "sub" => self.tensor_elementwise(shape, data, dot_call, "sub"),
-            "mul" => self.tensor_elementwise(shape, data, dot_call, "mul"),
-            "div" => self.tensor_elementwise(shape, data, dot_call, "div"),
+            "add" => self.tensor_elementwise(tensor_ref, shape, data, dot_call, "add"),
+            "sub" => self.tensor_elementwise(tensor_ref, shape, data, dot_call, "sub"),
+            "mul" => self.tensor_elementwise(tensor_ref, shape, data, dot_call, "mul"),
+            "div" => self.tensor_elementwise(tensor_ref, shape, data, dot_call, "div"),
             "dot" => {
                 if dot_call.arguments.len() != 1 {
                     eprintln!("❌ ERROR: Tensor.dot() requires 1 argument");
@@ -205,7 +205,7 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
                 match self.resolve(arg_ref).cloned() {
-                    Some(ObjectData::Tensor { shape: s2, data: d2 }) => {
+                    Some(ObjectData::Tensor { shape: s2, data: d2 , ..}) => {
                         if shape.len() != 1 || s2.len() != 1 {
                             eprintln!("❌ ERROR: Tensor.dot() only works on 1D tensors (use matmul for 2D)");
                             return EvalResult::Error;
@@ -234,7 +234,7 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
                 match self.resolve(arg_ref).cloned() {
-                    Some(ObjectData::Tensor { shape: s2, data: d2 }) => {
+                    Some(ObjectData::Tensor { shape: s2, data: d2 , ..}) => {
                         if shape.len() != 2 || s2.len() != 2 {
                             eprintln!("❌ ERROR: Tensor.matmul() requires 2D tensors");
                             return EvalResult::Error;
@@ -252,7 +252,16 @@ impl super::Evaluator {
                                 result[i * n + j] = acc;
                             }
                         }
-                        EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![m, n], data: result }))
+                        let out_ref = self.alloc(ObjectData::Tensor { shape: vec![m, n], data: result, tid: 0 });
+                        if self.ad_recording {
+                            let a_id = self.ad_tensor_id(tensor_ref);
+                            let b_id = self.ad_tensor_id(arg_ref);
+                            self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::MatMul {
+                                a_id, b_id, a_rows: m, a_cols: k, b_cols: n,
+                                a_data: data.clone(), b_data: d2.clone(),
+                            });
+                        }
+                        EvalResult::Value(out_ref)
                     }
                     _ => {
                         eprintln!("❌ ERROR: Tensor.matmul() requires a 2D Tensor argument");
@@ -264,15 +273,32 @@ impl super::Evaluator {
                 if data.is_empty() {
                     return EvalResult::Value(self.alloc(ObjectData::Decimal(0.0)));
                 }
+                let in_len = data.len();
                 let s: f64 = data.iter().sum();
-                EvalResult::Value(self.alloc(ObjectData::Decimal(s)))
+                if self.ad_recording {
+                    // Return a 1-element Tensor so backward() can track it
+                    let out_ref = self.alloc(ObjectData::Tensor { shape: vec![1], data: vec![s], tid: 0 });
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Sum { in_id, in_len });
+                    EvalResult::Value(out_ref)
+                } else {
+                    EvalResult::Value(self.alloc(ObjectData::Decimal(s)))
+                }
             }
             "mean" => {
                 if data.is_empty() {
                     return EvalResult::Value(self.alloc(ObjectData::Decimal(0.0)));
                 }
-                let m = data.iter().sum::<f64>() / data.len() as f64;
-                EvalResult::Value(self.alloc(ObjectData::Decimal(m)))
+                let in_len = data.len();
+                let m = data.iter().sum::<f64>() / in_len as f64;
+                if self.ad_recording {
+                    let out_ref = self.alloc(ObjectData::Tensor { shape: vec![1], data: vec![m], tid: 0 });
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Mean { in_id, in_len });
+                    EvalResult::Value(out_ref)
+                } else {
+                    EvalResult::Value(self.alloc(ObjectData::Decimal(m)))
+                }
             }
             "max" => {
                 if data.is_empty() {
@@ -292,7 +318,7 @@ impl super::Evaluator {
             }
             "flatten" => {
                 let len = data.len();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![len], data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![len], data , tid: 0}))
             }
             "fill" => {
                 if dot_call.arguments.len() != 1 {
@@ -308,7 +334,7 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: vec![val; data.len()] }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: vec![val; data.len()] , tid: 0}))
             }
             "toArray" => {
                 if shape.len() == 1 {
@@ -349,50 +375,66 @@ impl super::Evaluator {
 
             // ── Activation functions ─────────────────────────────────────────
             "relu" => {
+                let cached = data.clone();
                 let new_data: Vec<f64> = data.iter().map(|&x| if x > 0.0 { x } else { 0.0 }).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                let out_ref = self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0});
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Relu { in_id, cached_input: cached });
+                }
+                EvalResult::Value(out_ref)
             }
             "sigmoid" => {
                 let new_data: Vec<f64> = data.iter().map(|&x| 1.0 / (1.0 + (-x).exp())).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                let out_ref = self.alloc(ObjectData::Tensor { shape, data: new_data.clone() , tid: 0});
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Sigmoid { in_id, cached_output: new_data });
+                }
+                EvalResult::Value(out_ref)
             }
             "tanh" => {
                 let new_data: Vec<f64> = data.iter().map(|&x| x.tanh()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                let out_ref = self.alloc(ObjectData::Tensor { shape, data: new_data.clone() , tid: 0});
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Tanh { in_id, cached_output: new_data });
+                }
+                EvalResult::Value(out_ref)
             }
             "softmax" => {
                 if data.is_empty() {
-                    return EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data }));
+                    return EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data, tid: 0 }));
                 }
                 let max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                 let exps: Vec<f64> = data.iter().map(|&x| (x - max).exp()).collect();
                 let sum: f64 = exps.iter().sum();
                 let new_data: Vec<f64> = exps.iter().map(|&e| e / sum).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
 
             // ── Element-wise math ────────────────────────────────────────────
             "abs" => {
                 let new_data: Vec<f64> = data.iter().map(|&x| x.abs()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
             "sqrt" => {
                 for &x in &data {
                     if x < 0.0 { eprintln!("❌ ERROR: Tensor.sqrt() — negative value {}", x); return EvalResult::Error; }
                 }
                 let new_data: Vec<f64> = data.iter().map(|&x| x.sqrt()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
             "exp" => {
                 let new_data: Vec<f64> = data.iter().map(|&x| x.exp()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
             "log" => {
                 for &x in &data {
                     if x <= 0.0 { eprintln!("❌ ERROR: Tensor.log() — non-positive value {}", x); return EvalResult::Error; }
                 }
                 let new_data: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
             "pow" => {
                 if dot_call.arguments.len() != 1 {
@@ -409,7 +451,7 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
                 let new_data: Vec<f64> = data.iter().map(|&x| x.powf(exp)).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
 
             // ── Norms ────────────────────────────────────────────────────────
@@ -461,7 +503,7 @@ impl super::Evaluator {
                 };
                 if lo > hi { eprintln!("❌ ERROR: Tensor.clamp() min > max"); return EvalResult::Error; }
                 let new_data: Vec<f64> = data.iter().map(|&x| x.clamp(lo, hi)).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
 
             // ── Broadcast add: (m,n) + (n,) ─────────────────────────────────
@@ -481,7 +523,7 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
                 let bias_data = match self.resolve(bias_ref).cloned() {
-                    Some(ObjectData::Tensor { shape: bs, data: bd }) => {
+                    Some(ObjectData::Tensor { shape: bs, data: bd , ..}) => {
                         if bs != vec![cols] {
                             eprintln!("❌ ERROR: Tensor.broadcastAdd() bias shape {:?} must match last dim {}", bs, cols);
                             return EvalResult::Error;
@@ -496,7 +538,296 @@ impl super::Evaluator {
                         new_data[r * cols + c] += bias_data[c];
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data }))
+                let out_ref = self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0});
+                if self.ad_recording {
+                    let mat_id = self.ad_tensor_id(tensor_ref);
+                    let bias_id = self.ad_tensor_id(bias_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::BroadcastAdd { mat_id, bias_id, rows, cols });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── Broadcast mul/sub/div: (m,n) op (n,) ────────────────────────
+            "broadcastMul" | "broadcastSub" | "broadcastDiv" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.{}() requires 1 argument", dot_call.method);
+                    return EvalResult::Error;
+                }
+                if shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.{}() only supported for 2D tensors", dot_call.method);
+                    return EvalResult::Error;
+                }
+                let (rows, cols) = (shape[0], shape[1]);
+                let rhs_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                let rhs_data = match self.resolve(rhs_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: rs, data: rd , ..}) => {
+                        if rs != vec![cols] {
+                            eprintln!("❌ ERROR: Tensor.{}() rhs shape {:?} must match last dim {}", dot_call.method, rs, cols);
+                            return EvalResult::Error;
+                        }
+                        rd
+                    }
+                    _ => { eprintln!("❌ ERROR: Tensor.{}() argument must be a 1D Tensor", dot_call.method); return EvalResult::Error; }
+                };
+                if dot_call.method == "broadcastDiv" {
+                    for v in &rhs_data {
+                        if *v == 0.0 {
+                            eprintln!("❌ ERROR: Tensor.broadcastDiv() division by zero in rhs");
+                            return EvalResult::Error;
+                        }
+                    }
+                }
+                let mut new_data = data.clone();
+                for r in 0..rows {
+                    for c in 0..cols {
+                        let idx = r * cols + c;
+                        match dot_call.method.as_str() {
+                            "broadcastMul" => new_data[idx] *= rhs_data[c],
+                            "broadcastSub" => new_data[idx] -= rhs_data[c],
+                            "broadcastDiv" => new_data[idx] /= rhs_data[c],
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+                let out_ref = self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0});
+                if self.ad_recording && dot_call.method == "broadcastMul" {
+                    let mat_id = self.ad_tensor_id(tensor_ref);
+                    let rhs_id = self.ad_tensor_id(rhs_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::BroadcastMul { mat_id, rhs_id, rows, cols });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── sum(axis) / mean(axis) ────────────────────────────────────────
+            "sumAxis" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.sumAxis(axis) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.sumAxis() only supported for 2D tensors");
+                    return EvalResult::Error;
+                }
+                let (rows, cols) = (shape[0], shape[1]);
+                let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let axis = match self.resolve(ax_ref).cloned() {
+                    Some(ObjectData::Integer(n)) if n == 0 || n == 1 => n as usize,
+                    _ => { eprintln!("❌ ERROR: Tensor.sumAxis() axis must be 0 or 1"); return EvalResult::Error; }
+                };
+                if axis == 0 {
+                    let mut out = vec![0.0f64; cols];
+                    for r in 0..rows { for c in 0..cols { out[c] += data[r * cols + c]; } }
+                    EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![cols], data: out, tid: 0 }))
+                } else {
+                    let mut out = vec![0.0f64; rows];
+                    for r in 0..rows { for c in 0..cols { out[r] += data[r * cols + c]; } }
+                    EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![rows], data: out, tid: 0 }))
+                }
+            }
+
+            "meanAxis" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.meanAxis(axis) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.meanAxis() only supported for 2D tensors");
+                    return EvalResult::Error;
+                }
+                let (rows, cols) = (shape[0], shape[1]);
+                let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let axis = match self.resolve(ax_ref).cloned() {
+                    Some(ObjectData::Integer(n)) if n == 0 || n == 1 => n as usize,
+                    _ => { eprintln!("❌ ERROR: Tensor.meanAxis() axis must be 0 or 1"); return EvalResult::Error; }
+                };
+                if axis == 0 {
+                    let mut out = vec![0.0f64; cols];
+                    for r in 0..rows { for c in 0..cols { out[c] += data[r * cols + c]; } }
+                    for v in &mut out { *v /= rows as f64; }
+                    EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![cols], data: out, tid: 0 }))
+                } else {
+                    let mut out = vec![0.0f64; rows];
+                    for r in 0..rows { for c in 0..cols { out[r] += data[r * cols + c]; } }
+                    for v in &mut out { *v /= cols as f64; }
+                    EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![rows], data: out, tid: 0 }))
+                }
+            }
+
+            // ── argmax / argmin ───────────────────────────────────────────────
+            "argmax" => {
+                if data.is_empty() {
+                    eprintln!("❌ ERROR: Tensor.argmax() on empty tensor");
+                    return EvalResult::Error;
+                }
+                let idx = data.iter().enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(i, _)| i).unwrap_or(0);
+                EvalResult::Value(self.alloc(ObjectData::Integer(idx as i64)))
+            }
+
+            "argmin" => {
+                if data.is_empty() {
+                    eprintln!("❌ ERROR: Tensor.argmin() on empty tensor");
+                    return EvalResult::Error;
+                }
+                let idx = data.iter().enumerate()
+                    .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(i, _)| i).unwrap_or(0);
+                EvalResult::Value(self.alloc(ObjectData::Integer(idx as i64)))
+            }
+
+            // ── slice(start, end) — flat index range ──────────────────────────
+            "slice" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.slice(start, end) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let r0 = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let r1 = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let (start, end) = match (self.resolve(r0).cloned(), self.resolve(r1).cloned()) {
+                    (Some(ObjectData::Integer(a)), Some(ObjectData::Integer(b))) => (a as usize, b as usize),
+                    _ => { eprintln!("❌ ERROR: Tensor.slice() arguments must be integers"); return EvalResult::Error; }
+                };
+                if start > end || end > data.len() {
+                    eprintln!("❌ ERROR: Tensor.slice() invalid range {}..{} for tensor of length {}", start, end, data.len());
+                    return EvalResult::Error;
+                }
+                let sliced = data[start..end].to_vec();
+                let len = end - start;
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![len], data: sliced, tid: 0 }))
+            }
+
+            // ── concat(other, axis) — 2D row/col concatenation ────────────────
+            "concat" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.concat(other, axis) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.concat() only supported for 2D tensors");
+                    return EvalResult::Error;
+                }
+                let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let ax_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let axis = match self.resolve(ax_ref).cloned() {
+                    Some(ObjectData::Integer(n)) if n == 0 || n == 1 => n as usize,
+                    _ => { eprintln!("❌ ERROR: Tensor.concat() axis must be 0 or 1"); return EvalResult::Error; }
+                };
+                let (rows, cols) = (shape[0], shape[1]);
+                match self.resolve(other_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: os, data: od , ..}) => {
+                        if axis == 0 {
+                            if os.len() != 2 || os[1] != cols {
+                                eprintln!("❌ ERROR: Tensor.concat(axis=0) column mismatch: {} vs {}", os.get(1).copied().unwrap_or(0), cols);
+                                return EvalResult::Error;
+                            }
+                            let mut out = data.clone();
+                            out.extend_from_slice(&od);
+                            EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![rows + os[0], cols], data: out , tid: 0}))
+                        } else {
+                            if os.len() != 2 || os[0] != rows {
+                                eprintln!("❌ ERROR: Tensor.concat(axis=1) row mismatch: {} vs {}", os.get(0).copied().unwrap_or(0), rows);
+                                return EvalResult::Error;
+                            }
+                            let other_cols = os[1];
+                            let new_cols = cols + other_cols;
+                            let mut out = Vec::with_capacity(rows * new_cols);
+                            for r in 0..rows {
+                                out.extend_from_slice(&data[r * cols..(r + 1) * cols]);
+                                out.extend_from_slice(&od[r * other_cols..(r + 1) * other_cols]);
+                            }
+                            EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![rows, new_cols], data: out, tid: 0 }))
+                        }
+                    }
+                    _ => { eprintln!("❌ ERROR: Tensor.concat() argument must be a Tensor"); EvalResult::Error }
+                }
+            }
+
+            // ── neg / scale ───────────────────────────────────────────────────
+            "neg" => {
+                let new_data: Vec<f64> = data.iter().map(|x| -x).collect();
+                let out_ref = self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0});
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Neg { in_id });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            "scale" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.scale(s) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let s_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let s = match self.resolve(s_ref).cloned() {
+                    Some(ObjectData::Integer(n)) => n as f64,
+                    Some(ObjectData::Decimal(d)) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.scale() argument must be a number"); return EvalResult::Error; }
+                };
+                let new_data: Vec<f64> = data.iter().map(|x| x * s).collect();
+                let out_ref = self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0});
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Scale { in_id, scalar: s });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── leaky_relu / gelu ─────────────────────────────────────────────
+            "leaky_relu" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.leaky_relu(alpha) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let a_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let alpha = match self.resolve(a_ref).cloned() {
+                    Some(ObjectData::Integer(n)) => n as f64,
+                    Some(ObjectData::Decimal(d)) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.leaky_relu() alpha must be a number"); return EvalResult::Error; }
+                };
+                let new_data: Vec<f64> = data.iter().map(|&x| if x >= 0.0 { x } else { alpha * x }).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
+            }
+
+            "gelu" => {
+                // Gaussian Error Linear Unit: x * Φ(x) approximated via tanh
+                let sqrt2_over_pi = (2.0f64 / std::f64::consts::PI).sqrt();
+                let new_data: Vec<f64> = data.iter().map(|&x| {
+                    0.5 * x * (1.0 + (sqrt2_over_pi * (x + 0.044715 * x * x * x)).tanh())
+                }).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
+            }
+
+            // ── outer product ─────────────────────────────────────────────────
+            "outer" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.outer(other) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.outer() requires 1D tensors");
+                    return EvalResult::Error;
+                }
+                let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                match self.resolve(other_ref).cloned() {
+                    Some(ObjectData::Tensor { shape: os, data: od , ..}) => {
+                        if os.len() != 1 {
+                            eprintln!("❌ ERROR: Tensor.outer() argument must be a 1D Tensor");
+                            return EvalResult::Error;
+                        }
+                        let m = shape[0];
+                        let n = os[0];
+                        let mut out = Vec::with_capacity(m * n);
+                        for i in 0..m { for j in 0..n { out.push(data[i] * od[j]); } }
+                        EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![m, n], data: out, tid: 0 }))
+                    }
+                    _ => { eprintln!("❌ ERROR: Tensor.outer() argument must be a Tensor"); EvalResult::Error }
+                }
             }
 
             _ => {
@@ -508,7 +839,7 @@ impl super::Evaluator {
 
     // ── Shared helpers ────────────────────────────────────────────────────────
 
-    fn eval_shape_expr(&mut self, expr: &ast::Expression) -> Result<Vec<usize>, EvalResult> {
+    pub(super) fn eval_shape_expr(&mut self, expr: &ast::Expression) -> Result<Vec<usize>, EvalResult> {
         let r = match self.eval_expression(expr) {
             EvalResult::Value(r) => r,
             EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
@@ -598,6 +929,7 @@ impl super::Evaluator {
                     return EvalResult::Value(self.alloc(ObjectData::Tensor {
                         shape: vec![0],
                         data: vec![],
+                        tid: 0,
                     }));
                 }
                 // Detect 2D: first element is also an array
@@ -635,6 +967,7 @@ impl super::Evaluator {
                     EvalResult::Value(self.alloc(ObjectData::Tensor {
                         shape: vec![nrows, ncols],
                         data,
+                        tid: 0,
                     }))
                 } else {
                     // 1D
@@ -650,7 +983,7 @@ impl super::Evaluator {
                         }
                     }
                     let len = data.len();
-                    EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![len], data }))
+                    EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![len], data , tid: 0}))
                 }
             }
             _ => {
@@ -662,6 +995,7 @@ impl super::Evaluator {
 
     fn tensor_elementwise(
         &mut self,
+        tensor_ref: ObjectRef,
         shape: Vec<usize>,
         data: Vec<f64>,
         dot_call: &ast::DotCallExpression,
@@ -676,8 +1010,18 @@ impl super::Evaluator {
             EvalResult::Throw(v) => return EvalResult::Throw(v),
             _ => return EvalResult::Error,
         };
+        let is_tensor_arg = matches!(self.resolve(arg_ref), Some(ObjectData::Tensor { .. }));
+        // For mul tape recording, save both input data before consuming them
+        let saved_a = if self.ad_recording && is_tensor_arg && op == "mul" { Some(data.clone()) } else { None };
+        let saved_b = if self.ad_recording && is_tensor_arg && op == "mul" {
+            match self.resolve(arg_ref) {
+                Some(ObjectData::Tensor { data: d2, .. }) => Some(d2.clone()),
+                _ => None,
+            }
+        } else { None };
+
         let result_data = match self.resolve(arg_ref).cloned() {
-            Some(ObjectData::Tensor { shape: s2, data: d2 }) => {
+            Some(ObjectData::Tensor { shape: s2, data: d2 , ..}) => {
                 if s2 != shape {
                     eprintln!("❌ ERROR: Tensor.{}() shape mismatch: {:?} vs {:?}", op, shape, s2);
                     return EvalResult::Error;
@@ -714,6 +1058,22 @@ impl super::Evaluator {
                 return EvalResult::Error;
             }
         };
-        EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: result_data }))
+        let out_ref = self.alloc(ObjectData::Tensor { shape, data: result_data , tid: 0});
+        if self.ad_recording && is_tensor_arg {
+            let a_id = self.ad_tensor_id(tensor_ref);
+            let b_id = self.ad_tensor_id(arg_ref);
+            let tape_op = match op {
+                "add" => crate::evaluator::namespaces_autodiff::TapeOp::Add { a_id, b_id },
+                "sub" => crate::evaluator::namespaces_autodiff::TapeOp::Sub { a_id, b_id },
+                "mul" => crate::evaluator::namespaces_autodiff::TapeOp::Mul {
+                    a_id, b_id,
+                    a_data: saved_a.unwrap_or_default(),
+                    b_data: saved_b.unwrap_or_default(),
+                },
+                _ => { return EvalResult::Value(out_ref); }
+            };
+            self.ad_push(out_ref, tape_op);
+        }
+        EvalResult::Value(out_ref)
     }
 }

@@ -22,8 +22,11 @@ impl super::Evaluator {
                 // Always allocate a fresh slot so the variable never aliases its
                 // source (e.g. `let x = arr[0]` must not share the slot with arr[0],
                 // or a later `x = new_val` would silently mutate the array element).
+                // Cloning ObjectData::Tensor preserves the tid, so autodiff tracking
+                // works automatically via the stable tid in ad_tensor_ids.
                 let fresh_data = self.resolve(val_ref).unwrap().clone();
-                let val_ref = self.alloc(fresh_data);
+                let new_ref = self.alloc(fresh_data);
+                let val_ref = new_ref;
 
                 if self.scopes.is_empty() {
                     self.global_bindings.insert(let_stmt.name.clone(), val_ref);

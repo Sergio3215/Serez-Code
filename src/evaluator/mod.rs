@@ -15,6 +15,8 @@ mod namespaces_socket;
 mod namespaces_binary;
 mod namespaces_gpu;
 mod namespaces_memory;
+mod namespaces_random;
+mod namespaces_autodiff;
 
 use crate::ast::{self, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
@@ -109,6 +111,15 @@ pub struct Evaluator {
     memory_heap: HashMap<i64, Vec<u8>>,
     // Monotonically increasing ID counter for memory allocations
     memory_heap_next_id: i64,
+    // ── Autodiff tape ─────────────────────────────────────────────────────────
+    ad_recording: bool,
+    ad_tape: Vec<namespaces_autodiff::TapeEntry>,
+    ad_grads: HashMap<u64, Vec<f64>>,
+    ad_next_id: u64,
+    // Maps stable tensor tid → tape_node_id for the current recording session
+    ad_tensor_ids: HashMap<u64, u64>,
+    // Monotonically increasing counter for stable tensor identity (tid)
+    tensor_id_counter: u64,
 }
 
 impl Evaluator {
@@ -167,6 +178,12 @@ impl Evaluator {
             gpu_next_id: 1,
             memory_heap: HashMap::new(),
             memory_heap_next_id: 1,
+            ad_recording: false,
+            ad_tape: Vec::new(),
+            ad_grads: HashMap::new(),
+            ad_next_id: 1,
+            ad_tensor_ids: HashMap::new(),
+            tensor_id_counter: 1,
         }
     }
 
@@ -210,19 +227,26 @@ impl Evaluator {
     }
 
     fn alloc(&mut self, data: ObjectData) -> ObjectRef {
+        // Auto-assign stable tid to new tensors: tid==0 is the sentinel for "unassigned".
+        let data = if let ObjectData::Tensor { shape, data: d, tid: 0 } = data {
+            let tid = self.tensor_id_counter;
+            self.tensor_id_counter += 1;
+            ObjectData::Tensor { shape, data: d, tid }
+        } else {
+            data
+        };
         if self.scopes.is_empty() {
             let idx = self.global_arena.alloc(data);
-            ObjectRef {
-                region: RegionId::Global,
-                index: idx,
-            }
+            ObjectRef { region: RegionId::Global, index: idx }
         } else {
             let idx = self.scopes.arena.alloc(data);
-            ObjectRef {
-                region: RegionId::Scoped,
-                index: idx,
-            }
+            ObjectRef { region: RegionId::Scoped, index: idx }
         }
+    }
+
+    // Allocate a new Tensor — tid is auto-assigned by alloc().
+    pub(super) fn alloc_tensor(&mut self, shape: Vec<usize>, data: Vec<f64>) -> ObjectRef {
+        self.alloc(ObjectData::Tensor { shape, data, tid: 0 })
     }
 
     pub fn resolve(&self, obj_ref: ObjectRef) -> Option<&ObjectData> {
@@ -310,7 +334,7 @@ impl Evaluator {
                 let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
                 format!("[{}]", elems.join(", "))
             }
-            Some(ObjectData::Tensor { shape, data }) => crate::region::format_tensor(shape, data),
+            Some(ObjectData::Tensor { shape, data, .. }) => crate::region::format_tensor(shape, data),
             Some(ObjectData::Ptr(name)) => format!("&{}", name),
             Some(ObjectData::Null) => "null".to_string(),
             None => "❌ Referencia inválida".to_string(),
@@ -369,10 +393,9 @@ impl Evaluator {
             Some(ObjectData::Set { elements: refs }) => OwnedValue::Set {
                 elements: refs.iter().map(|&r| self.extract_inner(r, depth + 1)).collect(),
             },
-            Some(ObjectData::Tensor { shape, data }) => OwnedValue::Tensor {
-                shape: shape.clone(),
-                data: data.clone(),
-            },
+            Some(ObjectData::Tensor { shape, data, tid }) => {
+                OwnedValue::Tensor { shape: shape.clone(), data: data.clone(), tid: *tid }
+            }
             Some(ObjectData::Ptr(name)) => OwnedValue::Ptr(name.clone()),
             Some(ObjectData::Null) | None => OwnedValue::Null,
         }
@@ -420,7 +443,9 @@ impl Evaluator {
                 let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant(v)).collect();
                 self.alloc(ObjectData::Set { elements: refs })
             }
-            OwnedValue::Tensor { shape, data } => self.alloc(ObjectData::Tensor { shape, data }),
+            OwnedValue::Tensor { shape, data, tid } => {
+                self.alloc(ObjectData::Tensor { shape, data, tid })
+            }
             OwnedValue::Ptr(name) => self.alloc(ObjectData::Ptr(name)),
             OwnedValue::Null => self.null_ref,
         }
@@ -488,8 +513,8 @@ impl Evaluator {
                 let idx = self.global_arena.alloc(ObjectData::Set { elements: refs });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
-            OwnedValue::Tensor { shape, data } => {
-                let idx = self.global_arena.alloc(ObjectData::Tensor { shape, data });
+            OwnedValue::Tensor { shape, data, tid } => {
+                let idx = self.global_arena.alloc(ObjectData::Tensor { shape, data, tid });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Ptr(name) => {
@@ -923,7 +948,7 @@ fn json_stringify_owned(val: &OwnedValue) -> String {
             let parts: Vec<String> = elements.iter().map(json_stringify_owned).collect();
             format!("[{}]", parts.join(","))
         }
-        OwnedValue::Tensor { shape, data } => {
+        OwnedValue::Tensor { shape, data, .. } => {
             fn nest_json(shape: &[usize], data: &[f64], off: usize) -> String {
                 if shape.len() == 1 {
                     let vs: Vec<String> = (0..shape[0]).map(|i| {

@@ -550,6 +550,12 @@ impl super::Evaluator {
                     if name == "Memory" {
                         return self.eval_memory_namespace(dot_call);
                     }
+                    if name == "Random" {
+                        return self.eval_random_namespace(dot_call);
+                    }
+                    if name == "Autodiff" {
+                        return self.eval_autodiff_namespace(dot_call);
+                    }
                     // ── Enum variant access: Color.Red ────────────────────────
                     if let Some(variants) = self.enum_registry.get(name).cloned() {
                         let variant = dot_call.method.clone();
@@ -799,7 +805,7 @@ impl super::Evaluator {
                     }
 
                     // ── Tensor methods ────────────────────────────────────────
-                    ObjectData::Tensor { shape, data } => {
+                    ObjectData::Tensor { shape, data, .. } => {
                         self.eval_tensor_method(obj_ref, shape, data, dot_call)
                     }
 
