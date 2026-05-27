@@ -62,6 +62,19 @@ fn run() {
             return;
         }
 
+        // ── `sz uninstall <pkg>` subcommand ───────────────────────────────────
+        if args[1] == "uninstall" {
+            if args.len() >= 3 {
+                let name = &args[2];
+                if let Err(e) = package_manager::uninstall_package(name) {
+                    eprintln!("❌ ERROR: {}", e);
+                }
+            } else {
+                eprintln!("❌ ERROR: Usage: sz uninstall <package-name>");
+            }
+            return;
+        }
+
         let mut is_check = false;
         let mut is_watch = false;
         let mut file_path = String::new();

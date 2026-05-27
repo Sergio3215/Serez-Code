@@ -1032,17 +1032,19 @@ impl super::Evaluator {
 
         // Candidate directories to search, in priority order:
         //  1. Current file's directory (relative import)
-        //  2. Process working directory (project root when running via cargo or the sz binary)
-        //  3. SEREZ_HOME env var (installed stdlib / workspace root)
-        //  4. Executable's directory (bundled stdlib)
-        //  5. SEREZ_PACKAGES env var (test override for package directory)
-        //  6. ~/.serez/packages/ (user-installed packages)
+        //  2. Process working directory (project root)
+        //  3. <cwd>/packages/ (local project packages — installed with `sz install`)
+        //  4. SEREZ_HOME env var (installed stdlib / workspace root)
+        //  5. Executable's directory (bundled stdlib)
+        //  6. ~/.serez/packages/ (global fallback)
         let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
 
         if let Some(ref d) = self.current_dir {
             search_dirs.push(d.clone());
         }
-        search_dirs.push(std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        search_dirs.push(cwd.clone());
+        search_dirs.push(cwd.join("packages"));
         if let Ok(home) = std::env::var("SEREZ_HOME") {
             search_dirs.push(std::path::PathBuf::from(home));
         }
@@ -1051,7 +1053,6 @@ impl super::Evaluator {
                 search_dirs.push(exe_dir.to_path_buf());
             }
         }
-        // Package directories (SEREZ_PACKAGES overrides default ~/.serez/packages/)
         search_dirs.push(crate::package_manager::packages_dir());
 
         // Try each candidate directory. For each base, also try <base>/<pkg>/index.sz

@@ -97,7 +97,14 @@ impl SerezManifest {
 
 // ── Package resolution ────────────────────────────────────────────────────────
 
-/// Returns the user's package directory: $SEREZ_PACKAGES or ~/.serez/packages/
+/// Returns the local project package directory: <cwd>/packages/
+pub fn local_packages_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("packages")
+}
+
+/// Returns the global fallback package directory: $SEREZ_PACKAGES or ~/.serez/packages/
 pub fn packages_dir() -> PathBuf {
     if let Ok(p) = std::env::var("SEREZ_PACKAGES") {
         return PathBuf::from(p);
@@ -151,7 +158,7 @@ pub fn install_package(pkg_spec: &str) -> Result<(), String> {
         ));
     }
 
-    let dest = packages_dir().join(&pkg_name);
+    let dest = local_packages_dir().join(&pkg_name);
     if dest.exists() {
         println!("Package '{}' already installed, updating...", pkg_name);
         std::fs::remove_dir_all(&dest)
@@ -161,7 +168,19 @@ pub fn install_package(pkg_spec: &str) -> Result<(), String> {
     copy_dir_recursive(&src, &dest)
         .map_err(|e| format!("Failed to install '{}@{}': {}", pkg_name, version, e))?;
 
-    println!("✅ Installed {}@{}", pkg_name, version);
+    println!("✅ Installed {}@{} → ./packages/{}", pkg_name, version, pkg_name);
+    Ok(())
+}
+
+/// Remove a package from the local project packages directory.
+pub fn uninstall_package(pkg_name: &str) -> Result<(), String> {
+    let dest = local_packages_dir().join(pkg_name);
+    if !dest.exists() {
+        return Err(format!("Package '{}' is not installed in ./packages/", pkg_name));
+    }
+    std::fs::remove_dir_all(&dest)
+        .map_err(|e| format!("Failed to uninstall '{}': {}", pkg_name, e))?;
+    println!("✅ Uninstalled {}", pkg_name);
     Ok(())
 }
 
@@ -258,6 +277,9 @@ fn skip_ws_and(chars: &mut std::iter::Peekable<std::str::Chars>, expect: char) {
         chars.next();
     }
     if chars.peek() == Some(&expect) {
+        chars.next();
+    }
+    while chars.peek().map_or(false, |c| c.is_whitespace()) {
         chars.next();
     }
 }
