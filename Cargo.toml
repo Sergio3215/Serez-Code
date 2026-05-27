@@ -21,6 +21,7 @@ llvm = ["inkwell"]
 [dependencies]
 notify = "8"
 ureq = "2"
+zip = "2"
 
 [dependencies.inkwell]
 version = "0.4"

@@ -13,8 +13,13 @@
 //   <name>/
 //     <version>/
 //       index.sz
+//
+// HTTP registry (SEREZ_REGISTRY_URL env var or https://registry.serezcode.org):
+//   GET /packages/<name>/latest        → plain-text version string
+//   GET /packages/<name>/<version>.zip → zip archive of package files
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
@@ -126,37 +131,30 @@ pub fn registry_dir() -> PathBuf {
     PathBuf::from(".serez/registry")
 }
 
-/// Install a package from the registry into the packages directory.
+/// Returns the HTTP registry base URL: $SEREZ_REGISTRY_URL or the official registry.
+pub fn registry_url() -> String {
+    std::env::var("SEREZ_REGISTRY_URL")
+        .unwrap_or_else(|_| "https://registry.serezcode.org".to_string())
+}
+
+/// Install a package from the local registry or HTTP registry into ./packages/.
 /// pkg_spec = "name" or "name@version".
 pub fn install_package(pkg_spec: &str) -> Result<(), String> {
     let (pkg_name, pkg_version) = parse_pkg_spec(pkg_spec);
     let registry = registry_dir();
 
-    // Find the version to install
+    // Resolve version: explicit → local registry latest → HTTP latest
     let version = if let Some(v) = pkg_version {
         v
     } else {
-        // Use the highest version in the registry
         let pkg_reg_dir = registry.join(&pkg_name);
-        if !pkg_reg_dir.exists() {
-            return Err(format!(
-                "Package '{}' not found in registry at {}",
-                pkg_name,
-                registry.display()
-            ));
+        if pkg_reg_dir.exists() {
+            find_latest_version(&pkg_reg_dir)
+                .ok_or_else(|| format!("No versions of '{}' found in local registry", pkg_name))?
+        } else {
+            fetch_latest_version(&pkg_name)?
         }
-        find_latest_version(&pkg_reg_dir)
-            .ok_or_else(|| format!("No versions of '{}' found in registry", pkg_name))?
     };
-
-    let src = registry.join(&pkg_name).join(&version);
-    if !src.exists() {
-        return Err(format!(
-            "Package '{}@{}' not found in registry at {}",
-            pkg_name, version,
-            src.display()
-        ));
-    }
 
     let dest = local_packages_dir().join(&pkg_name);
     if dest.exists() {
@@ -165,10 +163,16 @@ pub fn install_package(pkg_spec: &str) -> Result<(), String> {
             .map_err(|e| format!("Failed to remove old version: {}", e))?;
     }
 
-    copy_dir_recursive(&src, &dest)
-        .map_err(|e| format!("Failed to install '{}@{}': {}", pkg_name, version, e))?;
+    // Try local registry first, fall back to HTTP
+    let src = registry.join(&pkg_name).join(&version);
+    if src.exists() {
+        copy_dir_recursive(&src, &dest)
+            .map_err(|e| format!("Failed to install '{}@{}': {}", pkg_name, version, e))?;
+        println!("✅ Installed {}@{} → ./packages/{}", pkg_name, version, pkg_name);
+    } else {
+        download_package(&pkg_name, &version)?;
+    }
 
-    println!("✅ Installed {}@{} → ./packages/{}", pkg_name, version, pkg_name);
     Ok(())
 }
 
@@ -198,6 +202,123 @@ pub fn install_all() -> Result<(), String> {
     for (name, version) in &manifest.dependencies {
         let spec = format!("{}@{}", name, version);
         install_package(&spec)?;
+    }
+    Ok(())
+}
+
+// ── HTTP registry ─────────────────────────────────────────────────────────────
+
+/// Fetch the latest version string for a package from the HTTP registry.
+/// GET <registry_url>/packages/<name>/latest → plain-text version e.g. "1.0.0"
+fn fetch_latest_version(pkg_name: &str) -> Result<String, String> {
+    let url = format!("{}/packages/{}/latest", registry_url(), pkg_name);
+    let response = ureq::get(&url).call().map_err(|e| match e {
+        ureq::Error::Status(404, _) => format!(
+            "Package '{}' not found in local registry or remote registry ({})",
+            pkg_name, registry_url()
+        ),
+        other => format!("Failed to reach registry for '{}': {}", pkg_name, other),
+    })?;
+    let version = response
+        .into_string()
+        .map_err(|e| format!("Invalid response from registry: {}", e))?
+        .trim()
+        .to_string();
+    if version.is_empty() {
+        return Err(format!("Registry returned empty version for '{}'", pkg_name));
+    }
+    Ok(version)
+}
+
+/// Download a package zip from the HTTP registry and extract it to ./packages/<name>/.
+/// GET <registry_url>/packages/<name>/<version>.zip
+fn download_package(pkg_name: &str, version: &str) -> Result<(), String> {
+    let url = format!("{}/packages/{}/{}.zip", registry_url(), pkg_name, version);
+    println!("Downloading {}@{} from {}...", pkg_name, version, registry_url());
+
+    let response = ureq::get(&url).call().map_err(|e| match e {
+        ureq::Error::Status(404, _) => format!(
+            "Package '{}@{}' not found in remote registry",
+            pkg_name, version
+        ),
+        other => format!("Download failed for '{}@{}': {}", pkg_name, version, other),
+    })?;
+
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to read download for '{}@{}': {}", pkg_name, version, e))?;
+
+    let dest = local_packages_dir().join(pkg_name);
+    extract_zip(&bytes, &dest)
+        .map_err(|e| format!("Failed to extract '{}@{}': {}", pkg_name, version, e))?;
+
+    println!("✅ Installed {}@{} → ./packages/{} (remote)", pkg_name, version, pkg_name);
+    Ok(())
+}
+
+/// Extract a zip archive into dest/, skipping any top-level directory wrapper.
+fn extract_zip(data: &[u8], dest: &Path) -> Result<(), String> {
+    let cursor = std::io::Cursor::new(data);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid zip archive: {}", e))?;
+
+    // Detect common top-level prefix (e.g. "serez-ai-1.0.0/") to strip it
+    let prefix: Option<String> = (archive.len() > 0)
+        .then(|| {
+            archive
+                .by_index(0)
+                .ok()
+                .and_then(|f| {
+                    let name = f.name().to_string();
+                    name.find('/').map(|i| name[..=i].to_string())
+                })
+        })
+        .flatten();
+
+    std::fs::create_dir_all(dest)
+        .map_err(|e| format!("Cannot create destination: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Zip read error at entry {}: {}", i, e))?;
+
+        let raw_name = file.name().to_string();
+
+        // Security: reject path traversal
+        if raw_name.contains("..") {
+            return Err(format!("Unsafe path in archive: '{}'", raw_name));
+        }
+
+        // Strip top-level prefix if present
+        let rel = if let Some(ref pfx) = prefix {
+            raw_name.strip_prefix(pfx.as_str()).unwrap_or(&raw_name)
+        } else {
+            &raw_name
+        };
+
+        if rel.is_empty() {
+            continue;
+        }
+
+        let outpath = dest.join(rel);
+
+        if raw_name.ends_with('/') {
+            std::fs::create_dir_all(&outpath)
+                .map_err(|e| format!("Cannot create dir '{}': {}", outpath.display(), e))?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Cannot create dir '{}': {}", parent.display(), e))?;
+            }
+            let mut content = Vec::new();
+            file.read_to_end(&mut content)
+                .map_err(|e| format!("Cannot read zip entry '{}': {}", raw_name, e))?;
+            std::fs::write(&outpath, content)
+                .map_err(|e| format!("Cannot write '{}': {}", outpath.display(), e))?;
+        }
     }
     Ok(())
 }
