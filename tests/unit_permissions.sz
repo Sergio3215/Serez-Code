@@ -1,0 +1,54 @@
+// unit_permissions.sz — tests for use permissions {} statement
+
+test("use permissions grants namespace access", () => {
+    use permissions { Time }
+    let t = Time.now();
+    assert(t > 0, "Time.now should work after use permissions { Time }");
+});
+
+test("permissions accumulate across multiple use permissions blocks", () => {
+    use permissions { OS }
+    use permissions { Env }
+    let p = OS.platform();
+    let u = Env.get("PATH");
+    assert(p is string, "OS should be accessible");
+    assert(u is string, "Env should be accessible");
+});
+
+test("unsafe block gates dangerous operations within permitted namespace", () => {
+    use permissions { OS }
+    let result = null;
+    unsafe {
+        result = OS.exec("echo", ["unsafe-test"]);
+    }
+    assert(result != null, "exec should work inside unsafe with OS permission");
+    assert(result.code == 0, "echo should succeed");
+});
+
+test("Env.set works inside unsafe with Env permission", () => {
+    use permissions { Env }
+    unsafe {
+        Env.set("SEREZ_PERM_TEST", "ok");
+    }
+    let val = Env.get("SEREZ_PERM_TEST");
+    assert(val == "ok", "Env.set/get should work with permission + unsafe");
+});
+
+test("System namespace accessible with permission", () => {
+    use permissions { System }
+    let cpu = System.cpuCount();
+    assert(cpu >= 1, "cpuCount should return at least 1");
+});
+
+test("File extended methods work without extra permission", () => {
+    let dir = "test_perm_dir_xyz";
+    File.mkdir(dir);
+    assert(File.exists(dir), "mkdir should work");
+    let entries = File.listDir(dir);
+    assert(entries is [string], "listDir should work");
+    let stat = File.stat(dir);
+    assert(stat.isDir == true, "stat should work");
+    unsafe { File.delete(dir); }
+});
+
+summary();

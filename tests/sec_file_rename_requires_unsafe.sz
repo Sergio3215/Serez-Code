@@ -1,0 +1,2 @@
+// Security: File.rename without unsafe block must fail
+File.rename("src.txt", "dst.txt");

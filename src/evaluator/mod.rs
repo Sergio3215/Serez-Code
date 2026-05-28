@@ -17,6 +17,7 @@ mod namespaces_gpu;
 mod namespaces_memory;
 mod namespaces_random;
 mod namespaces_autodiff;
+mod namespaces_os;
 
 use crate::ast::{self, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
@@ -111,6 +112,8 @@ pub struct Evaluator {
     memory_heap: HashMap<i64, Vec<u8>>,
     // Monotonically increasing ID counter for memory allocations
     memory_heap_next_id: i64,
+    // Granted permissions: populated from serez.json + `use permissions { }` blocks
+    permissions: HashSet<String>,
     // ── Autodiff tape ─────────────────────────────────────────────────────────
     ad_recording: bool,
     ad_tape: Vec<namespaces_autodiff::TapeEntry>,
@@ -178,12 +181,19 @@ impl Evaluator {
             gpu_next_id: 1,
             memory_heap: HashMap::new(),
             memory_heap_next_id: 1,
+            permissions: HashSet::new(),
             ad_recording: false,
             ad_tape: Vec::new(),
             ad_grads: HashMap::new(),
             ad_next_id: 1,
             ad_tensor_ids: HashMap::new(),
             tensor_id_counter: 1,
+        }
+    }
+
+    pub fn set_permissions(&mut self, perms: Vec<String>) {
+        for p in perms {
+            self.permissions.insert(p);
         }
     }
 

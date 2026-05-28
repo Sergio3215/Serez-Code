@@ -328,8 +328,9 @@ impl HirLowerer {
             // Native function declaration — no HIR; dispatch is at runtime
             Statement::NativeDeclaration(_) => vec![],
 
-            // Import/Export — resolved at eval time, not compile time
+            // Import/Export/Permissions — resolved at eval time, not compile time
             Statement::Import(_) => vec![],
+            Statement::UsePermissions(_) => vec![],
             Statement::Export(inner) => self.lower_stmt(inner),
 
             // Already handled at program level

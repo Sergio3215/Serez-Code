@@ -1,0 +1,2 @@
+// Security: File.delete without unsafe block must fail
+File.delete("any_file.txt");

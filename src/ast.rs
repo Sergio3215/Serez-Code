@@ -39,6 +39,7 @@ pub enum Statement {
     LetDestructureArray(LetDestructureArray),                // let [a, b, ...rest] = expr;
     LetDestructureDict(LetDestructureDict),                  // let {key, key: alias} = expr;
     Yield(Expression),                                       // yield expr;  (inside fn*)
+    UsePermissions(Vec<String>),                             // use permissions { Terminal, OS.exec }
 }
 
 #[derive(Debug, Clone)]

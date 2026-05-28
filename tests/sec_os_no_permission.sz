@@ -1,0 +1,2 @@
+// Security: OS namespace without permission must fail
+OS.platform();

@@ -1,0 +1,5 @@
+// Security: OS.exec targeting system paths must be blocked
+use permissions { OS }
+unsafe {
+    OS.exec("C:\\Windows\\System32\\cmd.exe", []);
+}

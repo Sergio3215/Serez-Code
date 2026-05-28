@@ -220,6 +220,7 @@ impl Parser {
             TokenType::KwNative => self.parse_native_declaration(),
             TokenType::KwImport => self.parse_import_statement(),
             TokenType::KwExport => self.parse_export_statement(),
+            TokenType::KwUse => self.parse_use_permissions(),
             TokenType::KwYield => {
                 self.next_token(); // consume 'yield', current = first token of expr
                 let expr = self.parse_expression(Precedence::Lowest)?;
@@ -422,6 +423,58 @@ impl Parser {
         self.next_token(); // consume 'export', move to the inner keyword
         let inner = self.parse_statement()?;
         Some(Statement::Export(Box::new(inner)))
+    }
+
+    fn parse_use_permissions(&mut self) -> Option<Statement> {
+        // use permissions { Terminal, OS.exec, File.delete }
+        if self.peek_token.token_type != TokenType::Ident || self.peek_token.literal != "permissions" {
+            self.parser_error("expected 'permissions' after 'use'");
+            return None;
+        }
+        self.next_token(); // current = "permissions"
+        if self.peek_token.token_type != TokenType::LBrace {
+            self.parser_error("expected '{' after 'use permissions'");
+            return None;
+        }
+        self.next_token(); // current = '{'
+        let mut perms: Vec<String> = Vec::new();
+        loop {
+            if self.peek_token.token_type == TokenType::RBrace || self.peek_token.token_type == TokenType::Eof {
+                self.next_token();
+                break;
+            }
+            self.next_token(); // current = permission name (Ident)
+            if self.current_token.token_type != TokenType::Ident {
+                self.parser_error("expected permission name inside 'use permissions { }'");
+                return None;
+            }
+            let mut perm = self.current_token.literal.clone();
+            // Handle dotted names: OS.exec, File.delete
+            while self.peek_token.token_type == TokenType::Dot {
+                self.next_token(); // current = '.'
+                if self.peek_token.token_type != TokenType::Ident {
+                    self.parser_error("expected identifier after '.' in permission name");
+                    return None;
+                }
+                self.next_token(); // current = sub-name
+                perm.push('.');
+                perm.push_str(&self.current_token.literal);
+            }
+            perms.push(perm);
+            if self.peek_token.token_type == TokenType::Comma {
+                self.next_token(); // consume ','
+            } else if self.peek_token.token_type == TokenType::RBrace {
+                self.next_token(); // consume '}'
+                break;
+            } else {
+                self.parser_error("expected ',' or '}' in 'use permissions'");
+                return None;
+            }
+        }
+        if self.peek_token.token_type == TokenType::Semicolon {
+            self.next_token();
+        }
+        Some(Statement::UsePermissions(perms))
     }
 
     fn parse_import_statement(&mut self) -> Option<Statement> {

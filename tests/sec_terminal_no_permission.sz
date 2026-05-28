@@ -1,0 +1,2 @@
+// Security: Terminal namespace without permission must fail
+Terminal.getSize();

@@ -1,0 +1,2 @@
+// Security: Time namespace without permission must fail
+Time.now();

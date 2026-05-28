@@ -1,0 +1,3 @@
+// Security: OS.exec without unsafe block must fail
+use permissions { OS }
+OS.exec("echo", ["test"]);

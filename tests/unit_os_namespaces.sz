@@ -1,0 +1,118 @@
+// unit_os_namespaces.sz — tests for OS, Env, Time, System namespaces
+
+use permissions { OS, Env, Time, System }
+
+test("OS.platform returns a string", () => {
+    let p = OS.platform();
+    assert(p is string, "platform should be a string");
+    assert(p.length() > 0, "platform should not be empty");
+});
+
+test("OS.pid returns a positive integer", () => {
+    let pid = OS.pid();
+    assert(pid is int, "pid should be an integer");
+    assert(pid > 0, "pid should be positive");
+});
+
+test("OS.exec returns ExecResult with stdout stderr code", () => {
+    let result = null;
+    unsafe {
+        result = OS.exec("echo", ["hello"]);
+    }
+    assert(result != null, "exec result should not be null");
+    assert(result.code is int, "code should be an integer");
+    assert(result.stdout is string, "stdout should be a string");
+    assert(result.stderr is string, "stderr should be a string");
+    assert(result.code == 0, "echo should exit with 0");
+});
+
+test("OS.exec stdout contains expected output", () => {
+    let result = null;
+    unsafe {
+        result = OS.exec("echo", ["serez-test"]);
+    }
+    assert(result.stdout.includes("serez-test"), "stdout should contain echoed text");
+});
+
+test("Env.get returns string for existing var", () => {
+    let val = Env.get("PATH");
+    assert(val is string, "PATH should be a string");
+    assert(val.length() > 0, "PATH should not be empty");
+});
+
+test("Env.get returns null for missing var", () => {
+    let val = Env.get("SEREZ_NONEXISTENT_VAR_XYZ");
+    assert(val == null, "missing env var should return null");
+});
+
+test("Env.set and Env.get roundtrip", () => {
+    unsafe {
+        Env.set("SEREZ_TEST_VAR", "hello123");
+    }
+    let val = Env.get("SEREZ_TEST_VAR");
+    assert(val == "hello123", "set/get roundtrip should work");
+});
+
+test("Env.args returns an array", () => {
+    let args = Env.args();
+    assert(args is [string], "args should be a string array");
+    assert(args.length() > 0, "args should have at least the program name");
+});
+
+test("Time.now returns a positive integer", () => {
+    let t = Time.now();
+    assert(t is int, "now should be an integer");
+    assert(t > 0, "timestamp should be positive");
+});
+
+test("Time.now is monotonically increasing", () => {
+    let t1 = Time.now();
+    Time.sleep(10);
+    let t2 = Time.now();
+    assert(t2 >= t1, "second timestamp should be >= first");
+});
+
+test("Time.sleep pauses execution", () => {
+    let t1 = Time.now();
+    Time.sleep(50);
+    let t2 = Time.now();
+    assert(t2 - t1 >= 40, "sleep(50) should pause at least 40ms");
+});
+
+test("System.cpuCount returns a positive integer", () => {
+    let n = System.cpuCount();
+    assert(n is int, "cpuCount should be an integer");
+    assert(n >= 1, "cpuCount should be at least 1");
+});
+
+test("System.totalMemory returns a large positive integer", () => {
+    let m = System.totalMemory();
+    assert(m is int, "totalMemory should be an integer");
+    assert(m > 0, "totalMemory should be positive");
+});
+
+test("System.freeMemory returns a positive integer", () => {
+    let m = System.freeMemory();
+    assert(m is int, "freeMemory should be an integer");
+    assert(m > 0, "freeMemory should be positive");
+});
+
+test("System.freeMemory <= System.totalMemory", () => {
+    let total = System.totalMemory();
+    let free = System.freeMemory();
+    assert(free <= total, "free memory should not exceed total");
+});
+
+test("System.hostname returns a non-empty string", () => {
+    let h = System.hostname();
+    assert(h is string, "hostname should be a string");
+    assert(h.length() > 0, "hostname should not be empty");
+});
+
+test("System.uptime returns a positive integer", () => {
+    let u = System.uptime();
+    assert(u is int, "uptime should be an integer");
+    assert(u > 0, "uptime should be positive");
+});
+
+summary();

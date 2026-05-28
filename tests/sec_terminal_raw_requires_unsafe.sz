@@ -1,0 +1,3 @@
+// Security: Terminal.setRawMode without unsafe block must fail
+use permissions { Terminal }
+Terminal.setRawMode(true);

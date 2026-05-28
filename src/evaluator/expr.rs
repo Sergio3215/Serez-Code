@@ -556,6 +556,21 @@ impl super::Evaluator {
                     if name == "Autodiff" {
                         return self.eval_autodiff_namespace(dot_call);
                     }
+                    if name == "Terminal" {
+                        return self.eval_terminal_namespace(dot_call);
+                    }
+                    if name == "OS" {
+                        return self.eval_os_namespace(dot_call);
+                    }
+                    if name == "Env" {
+                        return self.eval_env_namespace(dot_call);
+                    }
+                    if name == "Time" {
+                        return self.eval_time_namespace(dot_call);
+                    }
+                    if name == "System" {
+                        return self.eval_system_namespace(dot_call);
+                    }
                     // ── Enum variant access: Color.Red ────────────────────────
                     if let Some(variants) = self.enum_registry.get(name).cloned() {
                         let variant = dot_call.method.clone();

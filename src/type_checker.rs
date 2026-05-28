@@ -159,6 +159,7 @@ impl<'a> TypeChecker<'a> {
             }
             Statement::NativeDeclaration(_) => {}
             Statement::Import(_) => {}
+            Statement::UsePermissions(_) => {}
             Statement::Export(inner) => self.check_statement(inner, expected_return),
             Statement::LetDestructureArray(d) => self.check_expression(&d.value, expected_return),
             Statement::LetDestructureDict(d) => self.check_expression(&d.value, expected_return),

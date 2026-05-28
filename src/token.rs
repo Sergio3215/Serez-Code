@@ -130,6 +130,7 @@ pub enum TokenType {
     KwExport,    // export
     KwYield,     // yield
     KwMatch,     // match
+    KwUse,       // use
     Pipe,        // |>  (pipe operator: expr |> fn  →  fn(expr))
 }
 
@@ -202,6 +203,7 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "export"   => TokenType::KwExport,
         "yield"    => TokenType::KwYield,
         "match"    => TokenType::KwMatch,
+        "use"      => TokenType::KwUse,
         _ => TokenType::Ident,
     }
 }

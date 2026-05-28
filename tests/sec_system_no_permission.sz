@@ -1,0 +1,2 @@
+// Security: System namespace without permission must fail
+System.cpuCount();

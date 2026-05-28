@@ -35,7 +35,17 @@ fn run_file(file_path: &str, is_check: bool) {
 
     let mut evaluator = evaluator::Evaluator::new();
     evaluator.set_source(source_lines);
-    evaluator.set_current_file(std::path::Path::new(file_path));
+
+    // Load permissions from serez.json if present in the file's directory
+    let file_path_obj = std::path::Path::new(file_path);
+    if let Some(dir) = file_path_obj.parent() {
+        let dir = if dir == std::path::Path::new("") { std::path::Path::new(".") } else { dir };
+        if let Ok(manifest) = package_manager::SerezManifest::load(dir) {
+            evaluator.set_permissions(manifest.permissions);
+        }
+    }
+
+    evaluator.set_current_file(file_path_obj);
     if is_check {
         evaluator.check_program(&program);
     } else {

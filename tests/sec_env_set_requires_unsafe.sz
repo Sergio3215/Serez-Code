@@ -1,0 +1,3 @@
+// Security: Env.set without unsafe block must fail
+use permissions { Env }
+Env.set("TEST", "value");

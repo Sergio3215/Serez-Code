@@ -128,6 +128,13 @@ impl super::Evaluator {
                 }
             }
 
+            Statement::UsePermissions(perms) => {
+                for p in perms {
+                    self.permissions.insert(p.clone());
+                }
+                EvalResult::Value(self.null_ref)
+            }
+
             Statement::Block(block_stmt) => self.eval_block(block_stmt),
 
             Statement::Unsafe(block_stmt) => self.eval_unsafe_block(block_stmt),

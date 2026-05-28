@@ -203,6 +203,122 @@ impl super::Evaluator {
                     Err(e) => { eprintln!("❌ ERROR: File error writing binary '{}': {}", path, e); EvalResult::Error }
                 }
             }
+            "listDir" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: File.listDir(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.listDir requires a string path"); return EvalResult::Error; }
+                };
+                match std::fs::read_dir(&path) {
+                    Ok(entries) => {
+                        let refs: Vec<ObjectRef> = entries
+                            .filter_map(|e| e.ok())
+                            .map(|e| {
+                                let name = e.file_name().to_string_lossy().to_string();
+                                self.alloc(ObjectData::Str(name))
+                            })
+                            .collect();
+                        EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("string".to_string()), elements: refs }))
+                    }
+                    Err(e) => { eprintln!("❌ ERROR: File.listDir '{}' failed: {}", path, e); EvalResult::Error }
+                }
+            }
+            "mkdir" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: File.mkdir(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.mkdir requires a string path"); return EvalResult::Error; }
+                };
+                match std::fs::create_dir_all(&path) {
+                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Err(e) => { eprintln!("❌ ERROR: File.mkdir '{}' failed: {}", path, e); EvalResult::Error }
+                }
+            }
+            "stat" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: File.stat(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.stat requires a string path"); return EvalResult::Error; }
+                };
+                match std::fs::metadata(&path) {
+                    Ok(meta) => {
+                        let size = meta.len() as i64;
+                        let is_dir = meta.is_dir();
+                        let modified = meta.modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(-1);
+                        use crate::region::OwnedValue;
+                        EvalResult::Value(self.alloc(ObjectData::Instance {
+                            class_name: "FileStat".to_string(),
+                            fields: vec![
+                                ("size".to_string(),     OwnedValue::Integer(size)),
+                                ("modified".to_string(), OwnedValue::Integer(modified)),
+                                ("isDir".to_string(),    OwnedValue::Boolean(is_dir)),
+                            ],
+                        }))
+                    }
+                    Err(e) => { eprintln!("❌ ERROR: File.stat '{}' failed: {}", path, e); EvalResult::Error }
+                }
+            }
+            "delete" => {
+                if !self.in_unsafe_block {
+                    eprintln!("❌ ERROR: File.delete requires an `unsafe {{ }}` block — it permanently removes files");
+                    return EvalResult::Error;
+                }
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: File.delete(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let path = match self.resolve(pr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.delete requires a string path"); return EvalResult::Error; }
+                };
+                let p = std::path::Path::new(&path);
+                let result = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
+                match result {
+                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Err(e) => { eprintln!("❌ ERROR: File.delete '{}' failed: {}", path, e); EvalResult::Error }
+                }
+            }
+            "rename" => {
+                if !self.in_unsafe_block {
+                    eprintln!("❌ ERROR: File.rename requires an `unsafe {{ }}` block — it modifies the filesystem");
+                    return EvalResult::Error;
+                }
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: File.rename(from, to) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let fr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let tr = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let from = match self.resolve(fr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.rename: 'from' must be a string"); return EvalResult::Error; }
+                };
+                let to = match self.resolve(tr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: File.rename: 'to' must be a string"); return EvalResult::Error; }
+                };
+                match std::fs::rename(&from, &to) {
+                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Err(e) => { eprintln!("❌ ERROR: File.rename '{}' → '{}' failed: {}", from, to, e); EvalResult::Error }
+                }
+            }
             _ => {
                 eprintln!("❌ ERROR: Unknown File method '{}'", dot_call.method);
                 EvalResult::Error

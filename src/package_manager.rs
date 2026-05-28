@@ -34,6 +34,7 @@ pub struct SerezManifest {
     pub description: String,
     pub author: String,
     pub dependencies: HashMap<String, String>,
+    pub permissions: Vec<String>,
 }
 
 impl SerezManifest {
@@ -56,6 +57,7 @@ impl SerezManifest {
         let mut description = String::new();
         let mut author = String::new();
         let mut dependencies: HashMap<String, String> = HashMap::new();
+        let mut permissions: Vec<String> = Vec::new();
 
         // Extract top-level string fields and the dependencies object.
         let inner = &raw[1..raw.len() - 1];
@@ -95,6 +97,13 @@ impl SerezManifest {
                         skip_value(&mut chars);
                     }
                 }
+                Some('[') => {
+                    if key == "permissions" {
+                        permissions = parse_string_array(&mut chars)?;
+                    } else {
+                        skip_value(&mut chars);
+                    }
+                }
                 _ => { skip_value(&mut chars); }
             }
         }
@@ -105,7 +114,7 @@ impl SerezManifest {
         if version.is_empty() {
             return Err("serez.json: 'version' field is required".to_string());
         }
-        Ok(SerezManifest { name, version, description, author, dependencies })
+        Ok(SerezManifest { name, version, description, author, dependencies, permissions })
     }
 }
 
@@ -602,6 +611,27 @@ fn parse_string_map(
         map.insert(key, val);
     }
     Ok(map)
+}
+
+fn parse_string_array(
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+) -> Result<Vec<String>, String> {
+    if chars.next() != Some('[') {
+        return Err("Expected '['".to_string());
+    }
+    let mut arr = Vec::new();
+    loop {
+        while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
+            chars.next();
+        }
+        match chars.peek() {
+            None | Some(']') => { chars.next(); break; }
+            Some('"') => {}
+            _ => break,
+        }
+        arr.push(read_json_string(chars)?);
+    }
+    Ok(arr)
 }
 
 fn skip_value(chars: &mut std::iter::Peekable<std::str::Chars>) {

@@ -1,0 +1,80 @@
+// unit_file_extended.sz — tests for File extended methods
+
+let tmpDir = "test_tmp_dir_xyz";
+let tmpFile = "test_tmp_rename_src.txt";
+let tmpDest = "test_tmp_rename_dst.txt";
+
+test("File.mkdir creates a directory", () => {
+    File.mkdir(tmpDir);
+    assert(File.exists(tmpDir), "directory should exist after mkdir");
+});
+
+test("File.listDir returns an array", () => {
+    File.mkdir(tmpDir);
+    let entries = File.listDir(tmpDir);
+    assert(entries is [string], "listDir should return a string array");
+});
+
+test("File.listDir contains created files", () => {
+    File.mkdir(tmpDir);
+    File.write(tmpDir + "/hello.txt", "hi");
+    let entries = File.listDir(tmpDir);
+    let found = false;
+    for (let i = 0; i < entries.length(); i++) {
+        if (entries[i] == "hello.txt") { found = true; }
+    }
+    assert(found, "listDir should contain created file");
+});
+
+test("File.stat returns size isDir modified", () => {
+    let path = "test_stat_file.txt";
+    File.write(path, "hello world");
+    let stat = File.stat(path);
+    assert(stat.size is int, "stat.size should be int");
+    assert(stat.size > 0, "stat.size should be positive");
+    assert(stat.isDir == false, "stat.isDir should be false for file");
+    assert(stat.modified is int, "stat.modified should be int");
+    assert(stat.modified > 0, "stat.modified should be a positive timestamp");
+    unsafe { File.delete(path); }
+});
+
+test("File.stat isDir is true for directory", () => {
+    File.mkdir(tmpDir);
+    let stat = File.stat(tmpDir);
+    assert(stat.isDir == true, "stat.isDir should be true for directory");
+});
+
+test("File.rename moves a file", () => {
+    File.write(tmpFile, "content to move");
+    unsafe {
+        File.rename(tmpFile, tmpDest);
+    }
+    assert(File.exists(tmpFile) == false, "source should not exist after rename");
+    assert(File.exists(tmpDest) == true, "destination should exist after rename");
+    let content = File.read(tmpDest);
+    assert(content == "content to move", "renamed file should preserve content");
+});
+
+test("File.delete removes a file", () => {
+    File.write("test_delete_me.txt", "bye");
+    assert(File.exists("test_delete_me.txt") == true, "file should exist before delete");
+    unsafe { File.delete("test_delete_me.txt"); }
+    assert(File.exists("test_delete_me.txt") == false, "file should not exist after delete");
+});
+
+test("File.delete removes a directory", () => {
+    let dir = "test_del_dir_xyz";
+    File.mkdir(dir);
+    assert(File.exists(dir) == true, "dir should exist before delete");
+    unsafe { File.delete(dir); }
+    assert(File.exists(dir) == false, "dir should not exist after delete");
+});
+
+// Cleanup
+unsafe {
+    if (File.exists(tmpDir)) { File.delete(tmpDir); }
+    if (File.exists(tmpDest)) { File.delete(tmpDest); }
+    if (File.exists(tmpFile)) { File.delete(tmpFile); }
+}
+
+summary();
