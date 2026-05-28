@@ -411,7 +411,7 @@ impl super::Evaluator {
                             }
                             Self::accum_grad(&mut self.ad_grads, *in_id, dx);
                         }
-                        TapeOp::LayerNorm { in_id, g_id, b_id, eps, x_norm, stds, x_mu, gamma_data, rows, cols } => {
+                        TapeOp::LayerNorm { in_id, g_id, b_id, eps: _, x_norm, stds, x_mu, gamma_data, rows, cols } => {
                             let (r, c) = (*rows, *cols);
                             // d_gamma = sum_rows(d_out * x_norm)
                             let mut dgamma = vec![0.0f64; c];

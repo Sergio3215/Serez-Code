@@ -34,35 +34,33 @@ macro_rules! require_unsafe {
 // ── Platform helpers (no external deps) ──────────────────────────────────────
 
 #[cfg(windows)]
+#[repr(C)]
+struct MemoryStatusEx {
+    dw_length: u32, dw_memory_load: u32,
+    ull_total_phys: u64, ull_avail_phys: u64,
+    ull_total_page_file: u64, ull_avail_page_file: u64,
+    ull_total_virtual: u64, ull_avail_virtual: u64,
+    ull_avail_extended_virtual: u64,
+}
+
+#[cfg(windows)]
+unsafe extern "system" { fn GlobalMemoryStatusEx(lp: *mut MemoryStatusEx) -> i32; }
+
+#[cfg(windows)]
+fn os_memory_status() -> Option<MemoryStatusEx> {
+    let mut info: MemoryStatusEx = unsafe { std::mem::zeroed() };
+    info.dw_length = std::mem::size_of::<MemoryStatusEx>() as u32;
+    if unsafe { GlobalMemoryStatusEx(&mut info) } != 0 { Some(info) } else { None }
+}
+
+#[cfg(windows)]
 fn os_total_memory() -> i64 {
-    #[repr(C)]
-    struct MEMORYSTATUSEX {
-        dw_length: u32, dw_memory_load: u32,
-        ull_total_phys: u64, ull_avail_phys: u64,
-        ull_total_page_file: u64, ull_avail_page_file: u64,
-        ull_total_virtual: u64, ull_avail_virtual: u64,
-        ull_avail_extended_virtual: u64,
-    }
-    unsafe extern "system" { fn GlobalMemoryStatusEx(lp: *mut MEMORYSTATUSEX) -> i32; }
-    let mut info: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
-    info.dw_length = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-    if unsafe { GlobalMemoryStatusEx(&mut info) } != 0 { info.ull_total_phys as i64 } else { -1 }
+    os_memory_status().map(|s| s.ull_total_phys as i64).unwrap_or(-1)
 }
 
 #[cfg(windows)]
 fn os_free_memory() -> i64 {
-    #[repr(C)]
-    struct MEMORYSTATUSEX {
-        dw_length: u32, dw_memory_load: u32,
-        ull_total_phys: u64, ull_avail_phys: u64,
-        ull_total_page_file: u64, ull_avail_page_file: u64,
-        ull_total_virtual: u64, ull_avail_virtual: u64,
-        ull_avail_extended_virtual: u64,
-    }
-    unsafe extern "system" { fn GlobalMemoryStatusEx(lp: *mut MEMORYSTATUSEX) -> i32; }
-    let mut info: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
-    info.dw_length = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-    if unsafe { GlobalMemoryStatusEx(&mut info) } != 0 { info.ull_avail_phys as i64 } else { -1 }
+    os_memory_status().map(|s| s.ull_avail_phys as i64).unwrap_or(-1)
 }
 
 #[cfg(windows)]

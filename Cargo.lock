@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "serez-code"
-version = "3.6.2"
+version = "3.7.0"
 dependencies = [
  "crossterm",
  "inkwell",
