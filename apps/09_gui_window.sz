@@ -1,0 +1,82 @@
+// 09_gui_window.sz — Demo del namespace Gui (ventana nativa de píxeles, no TUI)
+//
+// Un formulario gráfico: campo de texto (se escribe con el teclado) + botón
+// que reacciona al mouse (hover/clic). Demuestra dibujo, texto, tecleo y clic.
+//
+// Controles:
+//   teclas      → escribir en el campo
+//   Backspace   → borrar
+//   Enter / clic en "Enviar" → enviar
+//   Esc o cerrar la ventana  → salir
+//
+// Ejecutar:  sz apps/09_gui_window.sz   (requiere un escritorio gráfico)
+
+use permissions { Gui }
+
+let W = 560
+let H = 360
+
+Gui.open("serez-code GUI — formulario", W, H)
+
+let name   = ""
+let status = "Escribe tu nombre y pulsa Enviar"
+
+// Geometría del botón
+let bx = 40
+let by = 240
+let bw = 200
+let bh = 56
+
+while (Gui.isOpen()) {
+    if (Gui.keyDown("Esc")) { break }
+
+    // ── Entrada ───────────────────────────────────────────────────────────────
+    let typed = Gui.charsTyped()
+    if (typed.length() > 0) { name = name + typed }
+
+    let keys = Gui.keysPressed()
+    let ki = 0
+    while (ki < keys.length()) {
+        if (keys[ki] == "Backspace" && name.length() > 0) {
+            name = name.substring(0, name.length() - 1)
+        }
+        if (keys[ki] == "Enter" && name.length() > 0) {
+            status = "Enviado: hola, " + name + "!"
+        }
+        ki = ki + 1
+    }
+
+    let m     = Gui.mouse()
+    let hover = m[0] >= bx && m[0] < bx + bw && m[1] >= by && m[1] < by + bh
+    if (hover && Gui.mousePressed() && name.length() > 0) {
+        status = "Enviado: hola, " + name + "!"
+    }
+
+    // ── Dibujo ──────────────────────────────────────────────────────────────--
+    Gui.clear(0x0f172a)
+
+    // Barra superior
+    Gui.fillRect(0, 0, W, 64, 0x1e293b)
+    Gui.drawText(24, 24, "Formulario GUI", 2, 0xffffff)
+
+    // Campo de texto
+    Gui.drawText(40, 110, "Nombre:", 2, 0x94a3b8)
+    Gui.fillRect(40, 140, 480, 44, 0x111827)
+    Gui.fillRect(40, 140, 480, 2, 0x334155)
+    Gui.drawText(52, 154, name + "_", 2, 0xe2e8f0)
+
+    // Botón
+    let color = 0x3b82f6
+    if (hover) { color = 0x60a5fa }
+    if (hover && Gui.mouseDown()) { color = 0x1d4ed8 }
+    Gui.fillRect(bx, by, bw, bh, color)
+    Gui.drawText(bx + 56, by + 20, "Enviar", 2, 0xffffff)
+
+    // Estado
+    Gui.drawText(40, 320, status, 1, 0x9ca3af)
+
+    Gui.present()
+}
+
+Gui.close()
+out "Ventana cerrada."

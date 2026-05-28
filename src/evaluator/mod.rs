@@ -18,6 +18,7 @@ mod namespaces_memory;
 mod namespaces_random;
 mod namespaces_autodiff;
 mod namespaces_os;
+mod namespaces_gui;
 
 use crate::ast::{self, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
@@ -123,6 +124,9 @@ pub struct Evaluator {
     ad_tensor_ids: HashMap<u64, u64>,
     // Monotonically increasing counter for stable tensor identity (tid)
     tensor_id_counter: u64,
+    // ── GUI ───────────────────────────────────────────────────────────────────
+    // Native pixel-window state (minifb): None until Gui.open() is called
+    gui_state: Option<namespaces_gui::GuiState>,
 }
 
 impl Evaluator {
@@ -188,6 +192,7 @@ impl Evaluator {
             ad_next_id: 1,
             ad_tensor_ids: HashMap::new(),
             tensor_id_counter: 1,
+            gui_state: None,
         }
     }
 

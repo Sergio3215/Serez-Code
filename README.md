@@ -1896,6 +1896,80 @@ out System.uptime()        // → 168517  (seconds)
 
 ---
 
+### Gui
+
+`Gui` opens a native OS window and draws on a CPU pixel framebuffer (`0xRRGGBB`). It is a **real graphical interface** (not the terminal): pixels, mouse, and keyboard. Backed by `minifb` (windowing) and `font8x8` (bitmap text). **Requires `use permissions { Gui }`.** No `unsafe` needed.
+
+The model is poll/present: each frame you `clear`, draw, `present`, then read input. Call these in a loop driven by `Gui.isOpen()`.
+
+| Function | Description |
+|---|---|
+| `Gui.open(title, w, h)` | Opens a resizable window with a `w`×`h` framebuffer. |
+| `Gui.isOpen()` | Returns `bool` — `false` once the window is closed. |
+| `Gui.close()` | Closes the window and frees its state. |
+| `Gui.size()` | Returns `[w, h]` — current framebuffer size (tracks resizes). |
+| `Gui.present()` | Pushes the framebuffer to the window and pumps input events. |
+| `Gui.clear(color)` | Fills the whole buffer with `color`; reallocates on window resize. |
+| `Gui.fillRect(x, y, w, h, color)` | Fills a rectangle (clipped to the buffer). |
+| `Gui.fillRectAlpha(x, y, w, h, color, alpha)` | Alpha-blended rectangle (`alpha` 0–255). |
+| `Gui.setPixel(x, y, color)` | Sets a single pixel. |
+| `Gui.drawLine(x0, y0, x1, y1, color)` | Draws a line (Bresenham). |
+| `Gui.drawText(x, y, text, scale, color)` | Draws bitmap text; each glyph is 8×8 × `scale` px. |
+| `Gui.measureText(text, scale)` | Returns `[w, h]` in pixels for the given text. |
+| `Gui.mouse()` | Returns `[x, y]` — mouse position (clamped to the window). |
+| `Gui.mouseDown()` | Returns `bool` — left button held. |
+| `Gui.mousePressed()` | Returns `bool` — left button **clicked this frame** (edge). |
+| `Gui.scroll()` | Returns `[dx, dy]` — scroll wheel delta this frame. |
+| `Gui.keyDown(name)` | Returns `bool` — named key currently held. |
+| `Gui.keysPressed()` | Returns `[name]` — keys **pressed this frame** (edge): `"Enter"`, `"Backspace"`, `"Left"`, etc. |
+| `Gui.charsTyped()` | Returns the `string` of printable characters typed this frame (with key-repeat). |
+
+`color` is an `int` in `0xRRGGBB` form. Key names match `Terminal`: characters (`"a"`), digits, and `"Enter"`, `"Esc"`, `"Space"`, `"Backspace"`, `"Tab"`, `"Delete"`, `"Left"`/`"Right"`/`"Up"`/`"Down"`, `"Home"`, `"End"`.
+
+> **Note:** `charsTyped()` maps keys to characters using a US-ASCII layout. Bitmap text is fixed-grid (8×8 scaled) — pixelated but dependency-light. Vector typography (TrueType, antialiasing) is a planned upgrade.
+
+```serez
+use permissions { Gui }
+
+Gui.open("Mi App", 480, 320)
+
+let name = ""
+
+while (Gui.isOpen()) {
+    if (Gui.keyDown("Esc")) { break }
+
+    // Input
+    name = name + Gui.charsTyped()
+    let keys = Gui.keysPressed()
+    let i = 0
+    while (i < keys.length()) {
+        if (keys[i] == "Backspace" && name.length() > 0) {
+            name = name.substring(0, name.length() - 1)
+        }
+        i = i + 1
+    }
+
+    // Draw
+    Gui.clear(0x0f172a)
+    Gui.fillRect(20, 20, 200, 48, 0x3b82f6)
+    Gui.drawText(36, 36, "Hola", 2, 0xffffff)
+    Gui.drawText(20, 100, name + "_", 2, 0xe2e8f0)
+
+    let m = Gui.mouse()
+    if (Gui.mousePressed()) {
+        out "click en {m[0]},{m[1]}"
+    }
+
+    Gui.present()
+}
+
+Gui.close()
+```
+
+See `apps/09_gui_window.sz` for a full graphical form (text field + clickable button).
+
+---
+
 ### Permissions
 
 Serez-Code uses a **three-level permission model** to control access to OS, hardware, and destructive operations. Programs run in a sandbox by default — no OS access without an explicit opt-in.
@@ -1908,7 +1982,7 @@ Grants namespaces to every file in the project:
 {
   "name": "my-app",
   "version": "1.0.0",
-  "permissions": ["Terminal", "OS", "Env", "Time", "System"]
+  "permissions": ["Terminal", "OS", "Env", "Time", "System", "Gui"]
 }
 ```
 

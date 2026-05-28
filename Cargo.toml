@@ -1,6 +1,6 @@
 [package]
 name = "serez-code"
-version = "3.7.0"
+version = "3.8.0"
 edition = "2024"
 description = "Serez Code - The programming language for AI, UI, systems, and GPU in a single runtime"
 license = "MIT"
@@ -23,6 +23,8 @@ notify = "8"
 ureq = "2"
 zip = "2"
 crossterm = "0.28"
+minifb = "0.27"
+font8x8 = "0.3"
 
 [dependencies.inkwell]
 version = "0.4"

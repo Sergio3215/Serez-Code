@@ -571,6 +571,9 @@ impl super::Evaluator {
                     if name == "System" {
                         return self.eval_system_namespace(dot_call);
                     }
+                    if name == "Gui" {
+                        return self.eval_gui_namespace(dot_call);
+                    }
                     // ── Enum variant access: Color.Red ────────────────────────
                     if let Some(variants) = self.enum_registry.get(name).cloned() {
                         let variant = dot_call.method.clone();
