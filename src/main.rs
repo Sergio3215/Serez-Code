@@ -75,6 +75,38 @@ fn run() {
             return;
         }
 
+        // ── `sz publish` subcommand ───────────────────────────────────────────
+        if args[1] == "publish" {
+            if let Err(e) = package_manager::publish_package() {
+                eprintln!("❌ ERROR: {}", e);
+            }
+            return;
+        }
+
+        // ── `sz unpublish <pkg>@<version>` subcommand ────────────────────────
+        if args[1] == "unpublish" {
+            if args.len() >= 3 {
+                if let Err(e) = package_manager::unpublish_package_remote(&args[2]) {
+                    eprintln!("❌ ERROR: {}", e);
+                }
+            } else {
+                eprintln!("❌ ERROR: Usage: sz unpublish <package>@<version>");
+            }
+            return;
+        }
+
+        // ── `sz info <pkg>` subcommand ────────────────────────────────────────
+        if args[1] == "info" {
+            if args.len() >= 3 {
+                if let Err(e) = package_manager::info_package(&args[2]) {
+                    eprintln!("❌ ERROR: {}", e);
+                }
+            } else {
+                eprintln!("❌ ERROR: Usage: sz info <package-name>");
+            }
+            return;
+        }
+
         let mut is_check = false;
         let mut is_watch = false;
         let mut file_path = String::new();

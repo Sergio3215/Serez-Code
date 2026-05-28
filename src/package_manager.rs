@@ -7,16 +7,19 @@
 //       <submod>.sz     ← named submodule
 //
 // serez.json (project manifest):
-//   { "name": "...", "version": "...", "dependencies": { "pkg": "version", ... } }
+//   { "name": "...", "version": "...", "description": "...", "author": "...", "dependencies": { "pkg": "version", ... } }
 //
 // Registry layout (SEREZ_REGISTRY env var or ~/.serez/registry/):
 //   <name>/
 //     <version>/
 //       index.sz
 //
-// HTTP registry (SEREZ_REGISTRY_URL env var or https://registry.serezcode.org):
-//   GET /packages/<name>/latest        → plain-text version string
-//   GET /packages/<name>/<version>.zip → zip archive of package files
+// HTTP registry (SEREZ_REGISTRY_URL env var or https://packages.serezcode.org):
+//   GET  /api/packages/<name>/latest          → plain-text version string
+//   GET  /api/packages/<name>/<version>.zip   → zip archive of package files
+//   GET  /api/packages/<name>/stats           → JSON with download stats
+//   POST /api/publish                         → publish a new package version
+//   DEL  /api/unpublish/<name>/<version>      → yank a version
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -28,6 +31,8 @@ use std::path::{Path, PathBuf};
 pub struct SerezManifest {
     pub name: String,
     pub version: String,
+    pub description: String,
+    pub author: String,
     pub dependencies: HashMap<String, String>,
 }
 
@@ -48,6 +53,8 @@ impl SerezManifest {
         }
         let mut name = String::new();
         let mut version = String::new();
+        let mut description = String::new();
+        let mut author = String::new();
         let mut dependencies: HashMap<String, String> = HashMap::new();
 
         // Extract top-level string fields and the dependencies object.
@@ -74,9 +81,11 @@ impl SerezManifest {
                 Some('"') => {
                     let val = read_json_string(&mut chars)?;
                     match key.as_str() {
-                        "name"    => name = val,
-                        "version" => version = val,
-                        _         => {} // unknown fields ignored
+                        "name"        => name = val,
+                        "version"     => version = val,
+                        "description" => description = val,
+                        "author"      => author = val,
+                        _             => {}
                     }
                 }
                 Some('{') => {
@@ -96,7 +105,7 @@ impl SerezManifest {
         if version.is_empty() {
             return Err("serez.json: 'version' field is required".to_string());
         }
-        Ok(SerezManifest { name, version, dependencies })
+        Ok(SerezManifest { name, version, description, author, dependencies })
     }
 }
 
@@ -134,7 +143,7 @@ pub fn registry_dir() -> PathBuf {
 /// Returns the HTTP registry base URL: $SEREZ_REGISTRY_URL or the official registry.
 pub fn registry_url() -> String {
     std::env::var("SEREZ_REGISTRY_URL")
-        .unwrap_or_else(|_| "https://registry.serezcode.org".to_string())
+        .unwrap_or_else(|_| "https://packages.serezcode.org".to_string())
 }
 
 /// Install a package from the local registry or HTTP registry into ./packages/.
@@ -209,9 +218,8 @@ pub fn install_all() -> Result<(), String> {
 // ── HTTP registry ─────────────────────────────────────────────────────────────
 
 /// Fetch the latest version string for a package from the HTTP registry.
-/// GET <registry_url>/packages/<name>/latest → plain-text version e.g. "1.0.0"
 fn fetch_latest_version(pkg_name: &str) -> Result<String, String> {
-    let url = format!("{}/packages/{}/latest", registry_url(), pkg_name);
+    let url = format!("{}/api/packages/{}/latest", registry_url(), pkg_name);
     let response = ureq::get(&url).call().map_err(|e| match e {
         ureq::Error::Status(404, _) => format!(
             "Package '{}' not found in local registry or remote registry ({})",
@@ -231,9 +239,8 @@ fn fetch_latest_version(pkg_name: &str) -> Result<String, String> {
 }
 
 /// Download a package zip from the HTTP registry and extract it to ./packages/<name>/.
-/// GET <registry_url>/packages/<name>/<version>.zip
 fn download_package(pkg_name: &str, version: &str) -> Result<(), String> {
-    let url = format!("{}/packages/{}/{}.zip", registry_url(), pkg_name, version);
+    let url = format!("{}/api/packages/{}/{}.zip", registry_url(), pkg_name, version);
     println!("Downloading {}@{} from {}...", pkg_name, version, registry_url());
 
     let response = ureq::get(&url).call().map_err(|e| match e {
@@ -256,6 +263,173 @@ fn download_package(pkg_name: &str, version: &str) -> Result<(), String> {
 
     println!("✅ Installed {}@{} → ./packages/{} (remote)", pkg_name, version, pkg_name);
     Ok(())
+}
+
+// ── Publish / Unpublish / Info ────────────────────────────────────────────────
+
+/// Publish the package in the current directory to the registry.
+/// Reads serez.json, zips all .sz files, and POSTs to /api/publish.
+pub fn publish_package() -> Result<(), String> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let manifest = SerezManifest::load(&cwd)?;
+
+    let api_key = std::env::var("SEREZ_API_KEY")
+        .map_err(|_| "SEREZ_API_KEY environment variable not set.\nSet it with: export SEREZ_API_KEY=<your-key>".to_string())?;
+
+    println!("Publishing {}@{} ...", manifest.name, manifest.version);
+
+    let zip_bytes = create_package_zip(&cwd)?;
+    let boundary = "SerezPkgBoundary7MA4YWxkTrZu0gW";
+    let mut body: Vec<u8> = Vec::new();
+
+    for (key, val) in &[
+        ("name",        manifest.name.as_str()),
+        ("version",     manifest.version.as_str()),
+        ("description", manifest.description.as_str()),
+        ("author",      manifest.author.as_str()),
+    ] {
+        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", key).as_bytes(),
+        );
+        body.extend_from_slice(val.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(
+        format!(
+            "Content-Disposition: form-data; name=\"zip\"; filename=\"{}-{}.zip\"\r\nContent-Type: application/zip\r\n\r\n",
+            manifest.name, manifest.version
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(&zip_bytes);
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+
+    let url = format!("{}/api/publish", registry_url());
+    let ct  = format!("multipart/form-data; boundary={}", boundary);
+
+    ureq::post(&url)
+        .set("x-api-key", &api_key)
+        .set("Content-Type", &ct)
+        .send_bytes(&body)
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => "Unauthorized — check your SEREZ_API_KEY".to_string(),
+            ureq::Error::Status(409, _) => format!("Version {} already exists in the registry", manifest.version),
+            ureq::Error::Status(400, r) => format!("Bad request: {}", r.into_string().unwrap_or_default()),
+            other => format!("Publish failed: {}", other),
+        })?;
+
+    println!("✅ Published {}@{}", manifest.name, manifest.version);
+    Ok(())
+}
+
+/// Remove a published version from the registry (yank).
+/// pkg_spec = "name@version"
+pub fn unpublish_package_remote(pkg_spec: &str) -> Result<(), String> {
+    let (pkg_name, version) = parse_pkg_spec(pkg_spec);
+    let version = version.ok_or_else(|| "Usage: sz unpublish <package>@<version>".to_string())?;
+
+    let api_key = std::env::var("SEREZ_API_KEY")
+        .map_err(|_| "SEREZ_API_KEY environment variable not set".to_string())?;
+
+    let url = format!("{}/api/unpublish/{}/{}", registry_url(), pkg_name, version);
+
+    ureq::delete(&url)
+        .set("x-api-key", &api_key)
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => "Unauthorized — check your SEREZ_API_KEY".to_string(),
+            ureq::Error::Status(404, _) => format!("{}@{} not found in registry", pkg_name, version),
+            other => format!("Unpublish failed: {}", other),
+        })?;
+
+    println!("✅ Unpublished {}@{}", pkg_name, version);
+    Ok(())
+}
+
+/// Show stats and version list for a package in the registry.
+pub fn info_package(pkg_name: &str) -> Result<(), String> {
+    let url = format!("{}/api/packages/{}/stats", registry_url(), pkg_name);
+    let body = ureq::get(&url)
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(404, _) => format!("Package '{}' not found", pkg_name),
+            other => format!("Failed to reach registry: {}", other),
+        })?
+        .into_string()
+        .map_err(|e| format!("Invalid response: {}", e))?;
+
+    // Minimal display — extract numbers with basic string search
+    let total   = extract_json_number(&body, "total").unwrap_or(0);
+    let weekly  = extract_json_number(&body, "weekly").unwrap_or(0);
+    let monthly = extract_json_number(&body, "monthly").unwrap_or(0);
+
+    println!("\nPackage: {}", pkg_name);
+    println!("  Total downloads:   {}", total);
+    println!("  Weekly downloads:  {}", weekly);
+    println!("  Monthly downloads: {}", monthly);
+
+    // Extract versions array entries
+    println!("\nVersions:");
+    let mut search = body.as_str();
+    while let Some(idx) = search.find("\"version\":") {
+        search = &search[idx + 10..];
+        if let Some(start) = search.find('"') {
+            let inner = &search[start + 1..];
+            if let Some(end) = inner.find('"') {
+                let ver = &inner[..end];
+                let yanked = search.contains("\"yanked\":1") || search.find("\"yanked\":1").map_or(false, |i| i < 60);
+                if yanked {
+                    println!("  {} (unpublished)", ver);
+                } else {
+                    println!("  {}", ver);
+                }
+            }
+        }
+    }
+    println!();
+    Ok(())
+}
+
+fn extract_json_number(json: &str, key: &str) -> Option<u64> {
+    let needle = format!("\"{}\":", key);
+    let idx = json.find(&needle)?;
+    let after = json[idx + needle.len()..].trim_start();
+    let end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
+    after[..end].parse().ok()
+}
+
+/// Zip all .sz files in dir into an in-memory buffer.
+fn create_package_zip(dir: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(buf);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    for entry in std::fs::read_dir(dir)
+        .map_err(|e| format!("Cannot read directory: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Directory read error: {}", e))?;
+        let path  = entry.path();
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "sz") {
+            let fname = path.file_name().unwrap().to_string_lossy().to_string();
+            zip.start_file(&fname, options)
+                .map_err(|e| format!("Zip error on '{}': {}", fname, e))?;
+            let content = std::fs::read(&path)
+                .map_err(|e| format!("Cannot read '{}': {}", fname, e))?;
+            zip.write_all(&content)
+                .map_err(|e| format!("Zip write error: {}", e))?;
+        }
+    }
+
+    let buf = zip.finish().map_err(|e| format!("Zip finish error: {}", e))?;
+    Ok(buf.into_inner())
 }
 
 /// Extract a zip archive into dest/, skipping any top-level directory wrapper.
