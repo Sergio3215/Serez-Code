@@ -46,6 +46,12 @@ out fibonacci(10);   // → 55
    - [Math](#math)
    - [File](#file)
    - [JSON](#json)
+   - [Terminal](#terminal)
+   - [OS](#os)
+   - [Env](#env)
+   - [Time](#time)
+   - [System](#system)
+   - [Permissions](#permissions)
    - [Classes & Interfaces](#classes--interfaces)
    - [Type Conversions](#type-conversions)
    - [Output](#output)
@@ -1692,6 +1698,11 @@ out Math.atan2(1.0, 1.0);      // → 0.7853981633974483  (π/4)
 | `File.create(path)` | Creates an empty file at `path` if it does not already exist (touch). No-op if the file exists. Returns `null`. |
 | `File.read_asBinary(path)` | Returns the raw bytes of the file as a `[int]` array (each byte as an integer 0–255). |
 | `File.write_asBinary(path, bytes)` | Writes a `[int]` array of bytes to `path`. |
+| `File.listDir(path)` | Returns a `[string]` array with the names of entries in the directory at `path`. |
+| `File.mkdir(path)` | Creates a directory (and all intermediate directories) at `path`. |
+| `File.stat(path)` | Returns an object `{ size: int, modified: int, isDir: bool }` with file metadata. `modified` is a Unix timestamp in ms. |
+| `File.delete(path)` ⚠️ | Deletes a file or directory recursively. **Requires `unsafe {}` block.** |
+| `File.rename(from, to)` ⚠️ | Moves/renames a file or directory. **Requires `unsafe {}` block.** |
 
 ```serez
 File.write("hello.txt", "Hello, world!");
@@ -1729,6 +1740,217 @@ out parsed["age"];    // → 30
 let arr = JSON.stringify([1, 2, 3]);
 out arr;              // → [1,2,3]
 ```
+
+---
+
+### Terminal
+
+`Terminal` interacts with the terminal emulator directly. **Requires `use permissions { Terminal }` or a project-level `"permissions": ["Terminal"]` in `serez.json`.**
+
+| Function | Description |
+|---|---|
+| `Terminal.getSize()` | Returns `[cols, rows]` — current terminal dimensions in characters. |
+| `Terminal.clear()` | Clears the screen. |
+| `Terminal.setCursor(row, col)` | Moves the cursor to the given position (0-indexed). |
+| `Terminal.writeByte(int)` | Writes a single byte to stdout. Useful for ANSI escape sequences. |
+| `Terminal.setRawMode(bool)` ⚠️ | Enables or disables raw mode (no line buffering, no echo). **Requires `unsafe {}`**. |
+| `Terminal.readByte()` → `int` ⚠️ | Reads one raw byte from stdin. **Requires `unsafe {}`**. |
+| `Terminal.enableMouse(bool)` ⚠️ | Enables or disables mouse event reporting. **Requires `unsafe {}`**. |
+| `Terminal.readEvent()` ⚠️ | Reads the next terminal event (key or mouse). Returns a `KeyEvent`, `MouseEvent`, or `ResizeEvent`. **Requires `unsafe {}`**. |
+
+**Event objects returned by `Terminal.readEvent()`:**
+
+```serez
+// Key event
+{ type: "key", code: "a", modifiers: ["ctrl"] }
+
+// Mouse event
+{ type: "mouse", kind: "down", button: "left", col: 10, row: 5, modifiers: [] }
+
+// Resize event
+{ type: "resize", cols: 120, rows: 40 }
+```
+
+`code` can be a character (`"a"`, `"A"`) or a named key (`"Enter"`, `"Esc"`, `"Up"`, `"Down"`, `"Left"`, `"Right"`, `"Tab"`, `"Backspace"`, `"Delete"`, `"F1"`–`"F12"`, etc.).
+`kind` for mouse: `"down"`, `"up"`, `"drag"`, `"move"`, `"scrollDown"`, `"scrollUp"`.
+`button`: `"left"`, `"right"`, `"middle"`, `"none"`.
+
+```serez
+use permissions { Terminal }
+
+let size = Terminal.getSize()
+out "Columns: {size[0]}, Rows: {size[1]}"
+
+unsafe {
+    Terminal.setRawMode(true)
+    Terminal.enableMouse(true)
+
+    let evt = Terminal.readEvent()
+    if (evt.type == "key") {
+        out "Key pressed: {evt.code}"
+    } else if (evt.type == "mouse") {
+        out "Mouse {evt.kind} at col={evt.col} row={evt.row}"
+    }
+
+    Terminal.enableMouse(false)
+    Terminal.setRawMode(false)
+}
+```
+
+---
+
+### OS
+
+`OS` provides access to operating system process information. **Requires `use permissions { OS }`.**
+
+| Function | Description |
+|---|---|
+| `OS.platform()` | Returns `"windows"`, `"linux"`, or `"macos"`. |
+| `OS.pid()` | Returns the current process ID as `int`. |
+| `OS.exec(cmd, args)` ⚠️ | Executes an external command. Returns `{ stdout: string, stderr: string, code: int }`. **Requires `unsafe {}`**. Blocked for system paths (`C:\Windows\System32`, `/etc/`, etc.). |
+| `OS.kill(pid)` ⚠️ | Terminates a process by PID. **Requires `unsafe {}`**. |
+
+```serez
+use permissions { OS }
+
+out OS.platform()   // → windows
+out OS.pid()        // → 12345
+
+let result = null
+unsafe {
+    result = OS.exec("git", ["status"])
+}
+out result.code     // → 0
+out result.stdout   // → On branch improve...
+```
+
+---
+
+### Env
+
+`Env` reads and writes environment variables and program arguments. **Requires `use permissions { Env }`.**
+
+| Function | Description |
+|---|---|
+| `Env.get(key)` | Returns the value of environment variable `key`, or `null` if not set. |
+| `Env.args()` | Returns a `[string]` array of command-line arguments (including the program name). |
+| `Env.set(key, value)` ⚠️ | Sets an environment variable. **Requires `unsafe {}`**. |
+
+```serez
+use permissions { Env }
+
+let path = Env.get("PATH")
+out path
+
+let args = Env.args()
+out args.length   // → number of CLI arguments
+
+unsafe {
+    Env.set("MY_VAR", "hello")
+}
+out Env.get("MY_VAR")   // → hello
+```
+
+---
+
+### Time
+
+`Time` provides time and sleep utilities. **Requires `use permissions { Time }`.**
+
+| Function | Description |
+|---|---|
+| `Time.now()` | Returns the current Unix timestamp in **milliseconds** as `int`. |
+| `Time.sleep(ms)` | Pauses execution for `ms` milliseconds. |
+
+```serez
+use permissions { Time }
+
+let t1 = Time.now()
+Time.sleep(100)
+let t2 = Time.now()
+out t2 - t1   // → ~100 (ms elapsed)
+```
+
+---
+
+### System
+
+`System` provides read-only system information. **Requires `use permissions { System }`.**
+
+| Function | Description |
+|---|---|
+| `System.cpuCount()` | Number of logical CPU cores available. |
+| `System.totalMemory()` | Total physical RAM in bytes. |
+| `System.freeMemory()` | Available physical RAM in bytes. |
+| `System.hostname()` | The machine hostname as `string`. |
+| `System.uptime()` | Seconds since system boot as `int`. |
+
+```serez
+use permissions { System }
+
+out System.cpuCount()      // → 15
+out System.totalMemory()   // → 34279034880  (bytes)
+out System.hostname()      // → DESKTOP-XYZ
+out System.uptime()        // → 168517  (seconds)
+```
+
+---
+
+### Permissions
+
+Serez-Code uses a **three-level permission model** to control access to OS, hardware, and destructive operations. Programs run in a sandbox by default — no OS access without an explicit opt-in.
+
+#### Level 1 — Project-wide (`serez.json`)
+
+Grants namespaces to every file in the project:
+
+```json
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "permissions": ["Terminal", "OS", "Env", "Time", "System"]
+}
+```
+
+#### Level 2 — File-level (`use permissions {}`)
+
+Grants additional namespaces for the current file only. Additive — cannot revoke project-level permissions.
+
+```serez
+use permissions { OS, File }
+```
+
+#### Level 3 — Operation-level (`unsafe {}`)
+
+Certain destructive or OS-modifying operations require an `unsafe {}` block even when the namespace is permitted:
+
+| Operation | Why unsafe |
+|---|---|
+| `Terminal.setRawMode` | Modifies OS terminal state |
+| `Terminal.readByte` | Reads raw input |
+| `Terminal.enableMouse` | Modifies OS input mode |
+| `Terminal.readEvent` | Reads raw input events |
+| `OS.exec` | Executes external processes |
+| `OS.kill` | Terminates processes |
+| `Env.set` | Modifies environment (thread-unsafe) |
+| `File.delete` | Permanently removes files |
+| `File.rename` | Modifies the filesystem |
+
+```serez
+use permissions { OS, Env }
+
+// Safe operations — no unsafe needed
+out OS.platform()
+out Env.get("HOME")
+
+// Dangerous operations — unsafe required
+unsafe {
+    let result = OS.exec("echo", ["hello"])
+    Env.set("BUILD", "release")
+}
+```
+
+Without a declared permission, every namespace call fails immediately with a clear error pointing to how to grant it.
 
 ---
 
@@ -2548,6 +2770,7 @@ src/
     ├── methods_string.rs — String method dispatch (split, replace, trim, padStart, …)
     ├── methods_set.rs    — Set method dispatch (add, has, delete, toArray, union, …)
     ├── namespaces.rs     — Built-in namespace dispatch (Math, File, JSON)
+    ├── namespaces_os.rs  — OS/hardware namespaces (Terminal, OS, Env, Time, System)
     └── control.rs        — Control flow helpers (break, continue, labeled loops, do-while)
 ```
 
@@ -2785,8 +3008,8 @@ cargo test                         # Rust unit tests (lexer, etc.)
 
 ### Project conventions
 
-- **No `unsafe`** — the memory model is intentionally built without unsafe blocks. Keep it that way.
-- **No external runtime dependencies** — `[dependencies]` stays empty. Dev dependencies are fine.
+- **No `unsafe` in the interpreter core** — the arena memory model is intentionally built without Rust unsafe blocks. New language features must maintain this invariant. (`namespaces_os.rs` uses `unsafe` only for platform FFI calls such as `GlobalMemoryStatusEx`.)
+- **Minimal external runtime dependencies** — adding a new crate requires a strong reason. Current runtime deps: `notify`, `ureq`, `zip`, `crossterm`.
 - **Errors go to `stderr`** — use `eprintln!` for all error output; `println!` only for program output (`out` statements) and the REPL.
 - **Flash Scope invariant** — any new block-level construct must call `scopes.push()` before evaluating its body and `scopes.pop()` after, in **all** code paths including error paths. Forgetting a pop on an error path leaks the call stack in the REPL.
 - **All new syntax flows through the full pipeline** — `token.rs` → `lexer.rs` → `ast.rs` → `parser.rs` → `evaluator.rs`. Never add to the evaluator without a corresponding AST node.
@@ -2864,6 +3087,10 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] `is` type-check operator — `expr is TypeName` returns `bool` at runtime
 - [x] Default parameters — `fn int f(int x = 10)` with fallback when argument is omitted
 - [x] Security test suite — 17 error tests (`sec_*.sz`) + 6 unit test files (`unit_sec_*.sz`) covering arithmetic, null safety, type safety, error isolation, injection, and resource limits
+- [x] OS/hardware namespaces — `Terminal` (raw mode, keyboard, mouse, cursor), `OS` (platform, pid, exec, kill), `Env` (get, set, args), `Time` (now, sleep), `System` (cpuCount, totalMemory, freeMemory, hostname, uptime)
+- [x] File extended — `listDir`, `mkdir`, `stat`, `delete`, `rename`
+- [x] Permission system — three-level model: `serez.json` (project-wide) → `use permissions {}` (file-level) → `unsafe {}` (operation-level)
+- [x] `use permissions {}` keyword — grants namespace access at file scope
 
 ### Type system
 - [x] Typed arrays — `[int]`, `[string]`, `[decimal]`, `[T?]` with element-level enforcement on `push`, `unshift`, index-assign, and construction
