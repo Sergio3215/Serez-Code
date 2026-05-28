@@ -1,0 +1,3 @@
+// Security: Terminal.readEvent without unsafe block must fail
+use permissions { Terminal }
+Terminal.readEvent();

@@ -1,0 +1,3 @@
+// Security: Terminal.enableMouse without unsafe block must fail
+use permissions { Terminal }
+Terminal.enableMouse(true);

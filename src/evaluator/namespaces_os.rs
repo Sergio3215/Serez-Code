@@ -231,6 +231,127 @@ impl super::Evaluator {
                 }
             }
 
+            "enableMouse" => {
+                require_unsafe!(self, "Terminal.enableMouse");
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Terminal.enableMouse(bool) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let ar = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
+                let enable = match self.resolve(ar).cloned() {
+                    Some(ObjectData::Boolean(b)) => b,
+                    _ => { eprintln!("❌ ERROR: Terminal.enableMouse requires a boolean"); return EvalResult::Error; }
+                };
+                use crossterm::{ExecutableCommand, event::{EnableMouseCapture, DisableMouseCapture}};
+                let mut out = std::io::stdout();
+                let result = if enable {
+                    out.execute(EnableMouseCapture)
+                } else {
+                    out.execute(DisableMouseCapture)
+                };
+                match result {
+                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Err(e) => { eprintln!("❌ ERROR: Terminal.enableMouse failed: {}", e); EvalResult::Error }
+                }
+            }
+
+            // readEvent() → { type: "key"|"mouse"|"resize", ... }
+            // key:    { type: "key",    code: string, modifiers: [string] }
+            // mouse:  { type: "mouse",  kind: string, button: string, col: int, row: int, modifiers: [string] }
+            // resize: { type: "resize", cols: int, rows: int }
+            "readEvent" => {
+                require_unsafe!(self, "Terminal.readEvent");
+                if !dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: Terminal.readEvent() takes no arguments");
+                    return EvalResult::Error;
+                }
+                use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind, MouseButton};
+                match event::read() {
+                    Ok(Event::Key(key)) => {
+                        let code = match key.code {
+                            KeyCode::Char(c)  => c.to_string(),
+                            KeyCode::Enter    => "Enter".to_string(),
+                            KeyCode::Backspace => "Backspace".to_string(),
+                            KeyCode::Left     => "Left".to_string(),
+                            KeyCode::Right    => "Right".to_string(),
+                            KeyCode::Up       => "Up".to_string(),
+                            KeyCode::Down     => "Down".to_string(),
+                            KeyCode::Tab      => "Tab".to_string(),
+                            KeyCode::Esc      => "Esc".to_string(),
+                            KeyCode::Delete   => "Delete".to_string(),
+                            KeyCode::Home     => "Home".to_string(),
+                            KeyCode::End      => "End".to_string(),
+                            KeyCode::PageUp   => "PageUp".to_string(),
+                            KeyCode::PageDown => "PageDown".to_string(),
+                            KeyCode::F(n)     => format!("F{}", n),
+                            _                 => "Unknown".to_string(),
+                        };
+                        let mut mods: Vec<ObjectRef> = Vec::new();
+                        if key.modifiers.contains(KeyModifiers::CONTROL) { mods.push(self.alloc(ObjectData::Str("ctrl".to_string()))); }
+                        if key.modifiers.contains(KeyModifiers::ALT)     { mods.push(self.alloc(ObjectData::Str("alt".to_string()))); }
+                        if key.modifiers.contains(KeyModifiers::SHIFT)   { mods.push(self.alloc(ObjectData::Str("shift".to_string()))); }
+                        let mods_ref = self.alloc(ObjectData::Array { element_type: Some("string".to_string()), elements: mods });
+                        let mods_owned = self.extract(mods_ref);
+                        EvalResult::Value(self.alloc(ObjectData::Instance {
+                            class_name: "KeyEvent".to_string(),
+                            fields: vec![
+                                ("type".to_string(),      OwnedValue::Str("key".to_string())),
+                                ("code".to_string(),      OwnedValue::Str(code)),
+                                ("modifiers".to_string(), mods_owned),
+                            ],
+                        }))
+                    }
+                    Ok(Event::Mouse(mouse)) => {
+                        let kind = match mouse.kind {
+                            MouseEventKind::Down(_)       => "down",
+                            MouseEventKind::Up(_)         => "up",
+                            MouseEventKind::Drag(_)       => "drag",
+                            MouseEventKind::Moved         => "move",
+                            MouseEventKind::ScrollDown    => "scrollDown",
+                            MouseEventKind::ScrollUp      => "scrollUp",
+                            _                             => "unknown",
+                        }.to_string();
+                        let button = match mouse.kind {
+                            MouseEventKind::Down(b) | MouseEventKind::Up(b) | MouseEventKind::Drag(b) => match b {
+                                MouseButton::Left   => "left",
+                                MouseButton::Right  => "right",
+                                MouseButton::Middle => "middle",
+                            },
+                            _ => "none",
+                        }.to_string();
+                        let mut mods: Vec<ObjectRef> = Vec::new();
+                        if mouse.modifiers.contains(KeyModifiers::CONTROL) { mods.push(self.alloc(ObjectData::Str("ctrl".to_string()))); }
+                        if mouse.modifiers.contains(KeyModifiers::ALT)     { mods.push(self.alloc(ObjectData::Str("alt".to_string()))); }
+                        if mouse.modifiers.contains(KeyModifiers::SHIFT)   { mods.push(self.alloc(ObjectData::Str("shift".to_string()))); }
+                        let mods_ref = self.alloc(ObjectData::Array { element_type: Some("string".to_string()), elements: mods });
+                        let mods_owned = self.extract(mods_ref);
+                        EvalResult::Value(self.alloc(ObjectData::Instance {
+                            class_name: "MouseEvent".to_string(),
+                            fields: vec![
+                                ("type".to_string(),      OwnedValue::Str("mouse".to_string())),
+                                ("kind".to_string(),      OwnedValue::Str(kind)),
+                                ("button".to_string(),    OwnedValue::Str(button)),
+                                ("col".to_string(),       OwnedValue::Integer(mouse.column as i64)),
+                                ("row".to_string(),       OwnedValue::Integer(mouse.row as i64)),
+                                ("modifiers".to_string(), mods_owned),
+                            ],
+                        }))
+                    }
+                    Ok(Event::Resize(cols, rows)) => {
+                        EvalResult::Value(self.alloc(ObjectData::Instance {
+                            class_name: "ResizeEvent".to_string(),
+                            fields: vec![
+                                ("type".to_string(), OwnedValue::Str("resize".to_string())),
+                                ("cols".to_string(), OwnedValue::Integer(cols as i64)),
+                                ("rows".to_string(), OwnedValue::Integer(rows as i64)),
+                            ],
+                        }))
+                    }
+                    Err(e) => { eprintln!("❌ ERROR: Terminal.readEvent failed: {}", e); EvalResult::Error }
+                    _ => EvalResult::Value(self.null_ref),
+                }
+            }
+
             _ => { eprintln!("❌ ERROR: Unknown Terminal method '{}'", dot_call.method); EvalResult::Error }
         }
     }
