@@ -15,7 +15,7 @@
 // Binary.concat(a, b)          → [int]   concatenate two byte arrays
 
 use crate::ast;
-use crate::region::{ObjectData, ObjectRef};
+use crate::region::{ObjectData, ObjectRef, OwnedValue};
 use super::EvalResult;
 
 impl super::Evaluator {
@@ -37,11 +37,11 @@ impl super::Evaluator {
                     eprintln!("❌ ERROR: Binary.fromHex: hex string must have even length");
                     return EvalResult::Error;
                 }
-                let mut bytes: Vec<ObjectRef> = Vec::with_capacity(hex.len() / 2);
+                let mut bytes: Vec<OwnedValue> = Vec::with_capacity(hex.len() / 2);
                 for i in (0..hex.len()).step_by(2) {
                     match u8::from_str_radix(&hex[i..i + 2], 16) {
                         Ok(b) => {
-                            bytes.push(self.alloc(ObjectData::Integer(b as i64)));
+                            bytes.push(OwnedValue::Integer(b as i64));
                         }
                         Err(_) => {
                             eprintln!(
@@ -76,9 +76,9 @@ impl super::Evaluator {
                 };
                 let mut hex = String::with_capacity(elems.len() * 2);
                 for r in elems {
-                    match self.resolve(r) {
-                        Some(ObjectData::Integer(b)) => {
-                            hex.push_str(&format!("{:02x}", (*b as u8)));
+                    match r {
+                        OwnedValue::Integer(b) => {
+                            hex.push_str(&format!("{:02x}", (b as u8)));
                         }
                         _ => {
                             eprintln!("❌ ERROR: Binary.toHex: all elements must be integers");
@@ -98,14 +98,14 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                let refs: Vec<ObjectRef> = s
+                let owned: Vec<OwnedValue> = s
                     .as_bytes()
                     .iter()
-                    .map(|&b| self.alloc(ObjectData::Integer(b as i64)))
+                    .map(|&b| OwnedValue::Integer(b as i64))
                     .collect();
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
-                    elements: refs,
+                    elements: owned,
                 }))
             }
 
@@ -127,8 +127,8 @@ impl super::Evaluator {
                 };
                 let bytes: Result<Vec<u8>, _> = elems
                     .iter()
-                    .map(|&r| match self.resolve(r) {
-                        Some(ObjectData::Integer(b)) => Ok(*b as u8),
+                    .map(|r| match r {
+                        OwnedValue::Integer(b) => Ok(*b as u8),
                         _ => Err(()),
                     })
                     .collect();
@@ -268,13 +268,13 @@ impl super::Evaluator {
     // ── Binary helpers ────────────────────────────────────────────────────────
 
     fn alloc_byte_array(&mut self, bytes: &[u8]) -> EvalResult {
-        let refs: Vec<ObjectRef> = bytes
+        let owned: Vec<OwnedValue> = bytes
             .iter()
-            .map(|&b| self.alloc(ObjectData::Integer(b as i64)))
+            .map(|&b| OwnedValue::Integer(b as i64))
             .collect();
         EvalResult::Value(self.alloc(ObjectData::Array {
             element_type: Some("int".to_string()),
-            elements: refs,
+            elements: owned,
         }))
     }
 
@@ -319,9 +319,9 @@ impl super::Evaluator {
             }
         };
         let mut bytes = Vec::with_capacity(elems.len());
-        for elem_ref in elems {
-            match self.resolve(elem_ref) {
-                Some(ObjectData::Integer(b)) => bytes.push(*b as u8),
+        for elem in elems {
+            match elem {
+                OwnedValue::Integer(b) => bytes.push(b as u8),
                 _ => {
                     eprintln!("❌ ERROR: {}: all elements must be integers", ctx);
                     return Err(EvalResult::Error);

@@ -5,7 +5,7 @@ use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::rc::Rc;
-use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str,
+use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str, owned_to_key_str,
             obj_data_eq, format_decimal, json_stringify_owned, json_parse,
             operator_to_method_name};
 
@@ -30,9 +30,9 @@ impl super::Evaluator {
                 let captured = self.capture_lambda_env(&func_lit.body); // snapshot incl. referenced globals (B-83)
                 let func_data = ObjectData::Function {
                     return_type: func_lit.return_type.clone(),
-                    parameters: func_lit.parameters.clone(),
+                    parameters: Rc::new(func_lit.parameters.clone()),
                     body: Rc::new(func_lit.body.clone()),
-                    captured,
+                    captured: Rc::new(captured),
                     is_generator: func_lit.is_generator,
                 };
                 EvalResult::Value(self.alloc(func_data))
@@ -54,9 +54,9 @@ impl super::Evaluator {
                 let captured = self.capture_lambda_env(&body); // snapshot incl. referenced globals (B-83)
                 EvalResult::Value(self.alloc(ObjectData::Function {
                     return_type: None,
-                    parameters: params,
+                    parameters: Rc::new(params),
                     body: Rc::new(body),
-                    captured,
+                    captured: Rc::new(captured),
                     is_generator: false,
                 }))
             }
@@ -164,8 +164,9 @@ impl super::Evaluator {
                         };
                         match self.resolve(spread_ref).cloned() {
                             Some(ObjectData::Array { elements: spread_elems, .. }) => {
-                                for elem_ref in spread_elems {
-                                    arg_refs.push(elem_ref);
+                                for elem in spread_elems {
+                                    let planted = self.plant(elem);
+                                    arg_refs.push(planted);
                                 }
                             }
                             _ => {
@@ -234,14 +235,16 @@ impl super::Evaluator {
                 }
 
                 // Bind captured environment first — params shadow same-named captures
-                for (name, cap_ref) in &captured {
+                for (name, cap_ref) in captured.iter() {
                     self.scopes.declare(name.clone(), *cap_ref);
                 }
 
                 for (i, param) in parameters.iter().enumerate() {
                     if param.is_rest {
                         // Collect remaining args into an array
-                        let rest_elems: Vec<ObjectRef> = arg_refs[i..].to_vec();
+                        let rest_elems: Vec<OwnedValue> = arg_refs[i..].iter()
+                            .map(|&r| self.extract(r))
+                            .collect();
                         let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_elems });
                         self.scopes.declare(param.name.clone(), rest_ref);
                         break;
@@ -303,9 +306,7 @@ impl super::Evaluator {
                     self.call_stack.pop();
                     if early_error { return EvalResult::Error; }
                     if let Some(thrown) = early_throw { return EvalResult::Throw(self.plant(thrown)); }
-                    let arr_refs: Vec<ObjectRef> = collected.into_iter()
-                        .map(|v| self.plant(v)).collect();
-                    let arr_ref = self.alloc(ObjectData::Array { element_type: None, elements: arr_refs });
+                    let arr_ref = self.alloc(ObjectData::Array { element_type: None, elements: collected });
                     return EvalResult::Value(arr_ref);
                 }
 
@@ -343,7 +344,7 @@ impl super::Evaluator {
             }
 
             Expression::ArrayLiteral(arr) => {
-                let mut refs = Vec::new();
+                let mut owned_elems = Vec::new();
                 for el in &arr.elements {
                     // Spread: ...expr expands an array into this array
                     if let Expression::Spread(inner) = el {
@@ -354,11 +355,8 @@ impl super::Evaluator {
                         };
                         match self.resolve(spread_ref).cloned() {
                             Some(ObjectData::Array { elements: spread_elems, .. }) => {
-                                let owned_elems: Vec<OwnedValue> = spread_elems.iter()
-                                    .map(|&r| self.extract(r))
-                                    .collect();
-                                for owned in owned_elems {
-                                    refs.push(self.plant(owned));
+                                for elem in spread_elems {
+                                    owned_elems.push(elem);
                                 }
                             }
                             _ => {
@@ -380,7 +378,8 @@ impl super::Evaluator {
                                     return EvalResult::Error;
                                 }
                             }
-                            refs.push(r);
+                            let owned = self.extract(r);
+                            owned_elems.push(owned);
                         }
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
@@ -388,7 +387,7 @@ impl super::Evaluator {
                 }
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: arr.element_type.clone(),
-                    elements: refs,
+                    elements: owned_elems,
                 }))
             }
 
@@ -440,17 +439,23 @@ impl super::Evaluator {
                             self.print_call_stack();
                             EvalResult::Error
                         } else {
-                            EvalResult::Value(elements[*i as usize])
+                            EvalResult::Value(self.plant(elements[*i as usize].clone()))
                         }
                     }
                     (ObjectData::Dict { entries, value_type, .. }, _) => {
                         let search_key = obj_data_to_key_str(&idx_data);
-                        let found = entries.iter().find(|&&(k_ref, _)| {
-                            let k_data = self.resolve(k_ref).unwrap();
-                            obj_data_to_key_str(k_data) == search_key
+                        let found = entries.iter().find(|(k, _)| {
+                            let key_str = match k {
+                                OwnedValue::Str(s) => s.clone(),
+                                OwnedValue::Integer(i) => i.to_string(),
+                                OwnedValue::Decimal(d) => d.to_string(),
+                                OwnedValue::Boolean(b) => b.to_string(),
+                                _ => format!("{:?}", k),
+                            };
+                            key_str == search_key
                         });
                         match found {
-                            Some(&(_, v_ref)) => EvalResult::Value(v_ref),
+                            Some((_, v)) => EvalResult::Value(self.plant(v.clone())),
                             None => {
                                 if value_type != "any" {
                                     eprintln!(
@@ -472,7 +477,7 @@ impl super::Evaluator {
             }
 
             Expression::DictLiteral(dict_lit) => {
-                let mut entries: Vec<(ObjectRef, ObjectRef)> = Vec::new();
+                let mut entries: Vec<(OwnedValue, OwnedValue)> = Vec::new();
                 for (key_expr, val_expr) in &dict_lit.entries {
                     let key_ref = match self.eval_expression(key_expr) {
                         EvalResult::Value(r) => r,
@@ -502,7 +507,7 @@ impl super::Evaluator {
                         }
                     }
 
-                    entries.push((key_ref, val_ref));
+                    entries.push((self.extract(key_ref), self.extract(val_ref)));
                 }
                 EvalResult::Value(self.alloc(ObjectData::Dict {
                     key_type: dict_lit.key_type.clone(),
@@ -701,14 +706,9 @@ impl super::Evaluator {
                                 let search_key = obj_data_to_key_str(&key_data);
 
                                 let mut replaced = false;
-                                for (k_ref, v_ref) in entries.iter_mut() {
-                                    let existing = self.resolve(*k_ref).unwrap().clone();
-                                    if obj_data_to_key_str(&existing) == search_key {
-                                        let owned_val = self.extract(val_ref);
-                                        *v_ref = match obj_ref.region {
-                                            RegionId::Global => self.plant_global(owned_val),
-                                            RegionId::Scoped => self.plant(owned_val),
-                                        };
+                                for (k, v) in entries.iter_mut() {
+                                    if owned_to_key_str(k) == search_key {
+                                        *v = self.extract(val_ref);
                                         replaced = true;
                                         break;
                                     }
@@ -716,15 +716,7 @@ impl super::Evaluator {
                                 if !replaced {
                                     let owned_k = self.extract(key_ref);
                                     let owned_v = self.extract(val_ref);
-                                    let new_k = match obj_ref.region {
-                                        RegionId::Global => self.plant_global(owned_k),
-                                        RegionId::Scoped => self.plant(owned_k),
-                                    };
-                                    let new_v = match obj_ref.region {
-                                        RegionId::Global => self.plant_global(owned_v),
-                                        RegionId::Scoped => self.plant(owned_v),
-                                    };
-                                    entries.push((new_k, new_v));
+                                    entries.push((owned_k, owned_v));
                                 }
 
                                 self.update_dict(obj_ref, key_type, value_type, entries);
@@ -744,9 +736,8 @@ impl super::Evaluator {
                                 let key_data = self.resolve(key_ref).unwrap().clone();
                                 let search_key = obj_data_to_key_str(&key_data);
 
-                                entries.retain(|(k_ref, _)| {
-                                    let kd = self.resolve(*k_ref).unwrap();
-                                    obj_data_to_key_str(kd) != search_key
+                                entries.retain(|(k, _)| {
+                                    owned_to_key_str(k) != search_key
                                 });
 
                                 self.update_dict(obj_ref, key_type, value_type, entries);
@@ -765,36 +756,27 @@ impl super::Evaluator {
                             // Returns array of keys: [k1, k2, ...]
                             "toList" | "keys" => {
                                 let keys: Vec<OwnedValue> = entries.iter()
-                                    .map(|&(k, _)| self.extract(k))
+                                    .map(|(k, _)| k.clone())
                                     .collect();
-                                let refs: Vec<ObjectRef> = keys.into_iter()
-                                    .map(|v| self.plant(v))
-                                    .collect();
-                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: refs }))
+                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: keys }))
                             }
 
                             "values" => {
                                 let vals: Vec<OwnedValue> = entries.iter()
-                                    .map(|&(_, v)| self.extract(v))
+                                    .map(|(_, v)| v.clone())
                                     .collect();
-                                let refs: Vec<ObjectRef> = vals.into_iter()
-                                    .map(|v| self.plant(v))
-                                    .collect();
-                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: refs }))
+                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: vals }))
                             }
 
                             // Returns 2-D array of entries: [[k1,v1],[k2,v2],...]
                             "toArray" => {
                                 let pairs: Vec<OwnedValue> = entries.iter()
-                                    .map(|&(k, v)| OwnedValue::Array {
+                                    .map(|(k, v)| OwnedValue::Array {
                                         element_type: None,
-                                        elements: vec![self.extract(k), self.extract(v)],
+                                        elements: vec![k.clone(), v.clone()],
                                     })
                                     .collect();
-                                let rows: Vec<ObjectRef> = pairs.into_iter()
-                                    .map(|row| self.plant(row))
-                                    .collect();
-                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: rows }))
+                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: pairs }))
                             }
 
                             "length" => {

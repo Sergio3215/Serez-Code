@@ -34,9 +34,9 @@ pub enum OwnedValue {
     },
     Function {
         return_type: Option<String>,
-        parameters: Vec<Parameter>,
+        parameters: Rc<Vec<Parameter>>,
         body: Rc<BlockStatement>, // Rc: cloning a function is O(1), not O(body_size)
-        captured: Vec<(String, ObjectRef)>,
+        captured: Rc<Vec<(String, ObjectRef)>>,
         is_generator: bool,
     },
     Instance {
@@ -109,18 +109,18 @@ pub enum ObjectData {
     Str(String),
     Array {
         element_type: Option<String>,
-        elements: Vec<ObjectRef>,
+        elements: Vec<OwnedValue>,
     },
     Dict {
         key_type: String,
         value_type: String,
-        entries: Vec<(ObjectRef, ObjectRef)>,
+        entries: Vec<(OwnedValue, OwnedValue)>,
     },
     Function {
         return_type: Option<String>,
-        parameters: Vec<Parameter>,
+        parameters: Rc<Vec<Parameter>>,
         body: Rc<BlockStatement>, // Rc: cloning a function is O(1), not O(body_size)
-        captured: Vec<(String, ObjectRef)>,
+        captured: Rc<Vec<(String, ObjectRef)>>,
         is_generator: bool,
     },
     // Fields stored as OwnedValues (embedded, arena-independent) to avoid cross-scope refs.
@@ -133,7 +133,7 @@ pub enum ObjectData {
         variant: String,
     },
     Set {
-        elements: Vec<ObjectRef>,
+        elements: Vec<OwnedValue>,
     },
     Tensor {
         shape: Vec<usize>,

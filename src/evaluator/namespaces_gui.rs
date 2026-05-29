@@ -182,11 +182,9 @@ impl super::Evaluator {
 
             "size" => {
                 let (w, h) = self.gui_state.as_ref().map(|s| (s.width as i64, s.height as i64)).unwrap_or((0, 0));
-                let wr = self.alloc(ObjectData::Integer(w));
-                let hr = self.alloc(ObjectData::Integer(h));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
-                    elements: vec![wr, hr],
+                    elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
                 }))
             }
 
@@ -358,11 +356,9 @@ impl super::Evaluator {
                 let count = text.chars().count() as i64;
                 let w = count * 8 * scale;
                 let h = 8 * scale;
-                let wr = self.alloc(ObjectData::Integer(w));
-                let hr = self.alloc(ObjectData::Integer(h));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
-                    elements: vec![wr, hr],
+                    elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
                 }))
             }
 
@@ -386,11 +382,9 @@ impl super::Evaluator {
                 let (mx, my) = self.gui_state.as_ref()
                     .and_then(|s| s.window.get_mouse_pos(MouseMode::Clamp))
                     .unwrap_or((0.0, 0.0));
-                let xr = self.alloc(ObjectData::Integer(mx as i64));
-                let yr = self.alloc(ObjectData::Integer(my as i64));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
-                    elements: vec![xr, yr],
+                    elements: vec![OwnedValue::Integer(mx as i64), OwnedValue::Integer(my as i64)],
                 }))
             }
 
@@ -410,11 +404,9 @@ impl super::Evaluator {
                 let (dx, dy) = self.gui_state.as_ref()
                     .and_then(|s| s.window.get_scroll_wheel())
                     .unwrap_or((0.0, 0.0));
-                let xr = self.alloc(ObjectData::Integer(dx as i64));
-                let yr = self.alloc(ObjectData::Integer(dy as i64));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
-                    elements: vec![xr, yr],
+                    elements: vec![OwnedValue::Integer(dx as i64), OwnedValue::Integer(dy as i64)],
                 }))
             }
 
@@ -440,8 +432,8 @@ impl super::Evaluator {
                         .filter_map(key_name).collect(),
                     None => Vec::new(),
                 };
-                let mut elems = Vec::with_capacity(names.len());
-                for n in names { elems.push(self.alloc(ObjectData::Str(n))); }
+                let mut elems: Vec<OwnedValue> = Vec::with_capacity(names.len());
+                for n in names { elems.push(OwnedValue::Str(n)); }
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("string".to_string()),
                     elements: elems,

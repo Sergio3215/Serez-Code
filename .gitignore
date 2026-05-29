@@ -3,6 +3,7 @@ Serez-Code-Internals.md
 serez_internal_architecture.docx
 AUDIT.md
 implementacion_clases.md
+ANALISIS_MEMORIA_RENDIMIENTO.md
 *.sz
 *.txt
 *.json

@@ -139,7 +139,7 @@ impl super::Evaluator {
                         let rr = self.alloc(ObjectData::Integer(rows as i64));
                         EvalResult::Value(self.alloc(ObjectData::Array {
                             element_type: Some("int".to_string()),
-                            elements: vec![cr, rr],
+                            elements: vec![self.extract(cr), self.extract(rr)],
                         }))
                     }
                     Err(e) => { eprintln!("❌ ERROR: Terminal.getSize failed: {}", e); EvalResult::Error }
@@ -284,12 +284,11 @@ impl super::Evaluator {
                             KeyCode::F(n)     => format!("F{}", n),
                             _                 => "Unknown".to_string(),
                         };
-                        let mut mods: Vec<ObjectRef> = Vec::new();
-                        if key.modifiers.contains(KeyModifiers::CONTROL) { mods.push(self.alloc(ObjectData::Str("ctrl".to_string()))); }
-                        if key.modifiers.contains(KeyModifiers::ALT)     { mods.push(self.alloc(ObjectData::Str("alt".to_string()))); }
-                        if key.modifiers.contains(KeyModifiers::SHIFT)   { mods.push(self.alloc(ObjectData::Str("shift".to_string()))); }
-                        let mods_ref = self.alloc(ObjectData::Array { element_type: Some("string".to_string()), elements: mods });
-                        let mods_owned = self.extract(mods_ref);
+                        let mut mods: Vec<OwnedValue> = Vec::new();
+                        if key.modifiers.contains(KeyModifiers::CONTROL) { mods.push(OwnedValue::Str("ctrl".to_string())); }
+                        if key.modifiers.contains(KeyModifiers::ALT)     { mods.push(OwnedValue::Str("alt".to_string())); }
+                        if key.modifiers.contains(KeyModifiers::SHIFT)   { mods.push(OwnedValue::Str("shift".to_string())); }
+                        let mods_owned = OwnedValue::Array { element_type: Some("string".to_string()), elements: mods };
                         EvalResult::Value(self.alloc(ObjectData::Instance {
                             class_name: "KeyEvent".to_string(),
                             fields: vec![
@@ -317,12 +316,11 @@ impl super::Evaluator {
                             },
                             _ => "none",
                         }.to_string();
-                        let mut mods: Vec<ObjectRef> = Vec::new();
-                        if mouse.modifiers.contains(KeyModifiers::CONTROL) { mods.push(self.alloc(ObjectData::Str("ctrl".to_string()))); }
-                        if mouse.modifiers.contains(KeyModifiers::ALT)     { mods.push(self.alloc(ObjectData::Str("alt".to_string()))); }
-                        if mouse.modifiers.contains(KeyModifiers::SHIFT)   { mods.push(self.alloc(ObjectData::Str("shift".to_string()))); }
-                        let mods_ref = self.alloc(ObjectData::Array { element_type: Some("string".to_string()), elements: mods });
-                        let mods_owned = self.extract(mods_ref);
+                        let mut mods: Vec<OwnedValue> = Vec::new();
+                        if mouse.modifiers.contains(KeyModifiers::CONTROL) { mods.push(OwnedValue::Str("ctrl".to_string())); }
+                        if mouse.modifiers.contains(KeyModifiers::ALT)     { mods.push(OwnedValue::Str("alt".to_string())); }
+                        if mouse.modifiers.contains(KeyModifiers::SHIFT)   { mods.push(OwnedValue::Str("shift".to_string())); }
+                        let mods_owned = OwnedValue::Array { element_type: Some("string".to_string()), elements: mods };
                         EvalResult::Value(self.alloc(ObjectData::Instance {
                             class_name: "MouseEvent".to_string(),
                             fields: vec![
@@ -389,8 +387,8 @@ impl super::Evaluator {
                 if dot_call.arguments.len() >= 2 {
                     let ar = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                     if let Some(ObjectData::Array { elements, .. }) = self.resolve(ar).cloned() {
-                        for r in elements {
-                            if let Some(ObjectData::Str(s)) = self.resolve(r).cloned() {
+                        for elem in elements {
+                            if let OwnedValue::Str(s) = elem {
                                 args_vec.push(s);
                             }
                         }
@@ -462,12 +460,12 @@ impl super::Evaluator {
             }
 
             "args" => {
-                let refs: Vec<ObjectRef> = std::env::args()
-                    .map(|a| self.alloc(ObjectData::Str(a)))
+                let owned: Vec<OwnedValue> = std::env::args()
+                    .map(|a| OwnedValue::Str(a))
                     .collect();
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("string".to_string()),
-                    elements: refs,
+                    elements: owned,
                 }))
             }
 

@@ -432,15 +432,14 @@ impl Evaluator {
             }
             Some(ObjectData::Boolean(b)) => format!("{}", b),
             Some(ObjectData::Str(s)) => format!("{}", s),
-            Some(ObjectData::Array { elements: refs, .. }) => {
-                let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
+            Some(ObjectData::Array { elements, .. }) => {
+                let elems: Vec<String> = elements.iter().map(|e| e.display_str()).collect();
                 format!("[{}]", elems.join(", "))
             }
             Some(ObjectData::Dict { entries, .. }) => {
-                let kv: Vec<(ObjectRef, ObjectRef)> = entries.iter().copied().collect();
-                let pairs: Vec<String> = kv
-                    .into_iter()
-                    .map(|(k, v)| format!("{}: {}", self.display(k), self.display(v)))
+                let pairs: Vec<String> = entries
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k.display_str(), v.display_str()))
                     .collect();
                 format!("{{{}}}", pairs.join(", "))
             }
@@ -454,9 +453,9 @@ impl Evaluator {
             Some(ObjectData::EnumVariant { enum_name, variant }) => {
                 format!("{}.{}", enum_name, variant)
             }
-            Some(ObjectData::Set { elements: refs }) => {
-                let elems: Vec<String> = refs.iter().map(|&r| self.display(r)).collect();
-                format!("[{}]", elems.join(", "))
+            Some(ObjectData::Set { elements }) => {
+                let elems: Vec<String> = elements.iter().map(|e| e.display_str()).collect();
+                format!("Set[{}]", elems.join(", "))
             }
             Some(ObjectData::Tensor { shape, data, .. }) => crate::region::format_tensor(shape, data),
             Some(ObjectData::Ptr(name)) => format!("&{}", name),
@@ -471,6 +470,37 @@ impl Evaluator {
         self.extract_inner(obj_ref, 0)
     }
 
+    fn extract_inner_owned(&self, owned: OwnedValue, depth: usize) -> OwnedValue {
+        const MAX_DEPTH: usize = 500;
+        if depth > MAX_DEPTH {
+            eprintln!("❌ ERROR: Maximum nesting depth ({}) exceeded", MAX_DEPTH);
+            return OwnedValue::Null;
+        }
+        match owned {
+            OwnedValue::Array { element_type, elements } => {
+                OwnedValue::Array {
+                    element_type,
+                    elements: elements.into_iter().map(|e| self.extract_inner_owned(e, depth + 1)).collect(),
+                }
+            }
+            OwnedValue::Dict { key_type, value_type, entries } => {
+                OwnedValue::Dict {
+                    key_type,
+                    value_type,
+                    entries: entries.into_iter()
+                        .map(|(k, v)| (self.extract_inner_owned(k, depth + 1), self.extract_inner_owned(v, depth + 1)))
+                        .collect(),
+                }
+            }
+            OwnedValue::Set { elements } => {
+                OwnedValue::Set {
+                    elements: elements.into_iter().map(|e| self.extract_inner_owned(e, depth + 1)).collect(),
+                }
+            }
+            other => other,
+        }
+    }
+
     fn extract_inner(&self, obj_ref: ObjectRef, depth: usize) -> OwnedValue {
         const MAX_DEPTH: usize = 500;
         if depth > MAX_DEPTH {
@@ -482,16 +512,16 @@ impl Evaluator {
             Some(ObjectData::Decimal(d)) => OwnedValue::Decimal(*d),
             Some(ObjectData::Boolean(b)) => OwnedValue::Boolean(*b),
             Some(ObjectData::Str(s)) => OwnedValue::Str(s.clone()),
-            Some(ObjectData::Array { element_type, elements: refs }) => {
+            Some(ObjectData::Array { element_type, elements }) => {
                 OwnedValue::Array {
                     element_type: element_type.clone(),
-                    elements: refs.iter().map(|&r| self.extract_inner(r, depth + 1)).collect(),
+                    elements: elements.iter().map(|e| self.extract_inner_owned(e.clone(), depth + 1)).collect(),
                 }
             }
             Some(ObjectData::Dict { key_type, value_type, entries }) => OwnedValue::Dict {
                 key_type: key_type.clone(),
                 value_type: value_type.clone(),
-                entries: entries.iter().map(|&(k, v)| (self.extract_inner(k, depth + 1), self.extract_inner(v, depth + 1))).collect(),
+                entries: entries.iter().map(|(k, v)| (self.extract_inner_owned(k.clone(), depth + 1), self.extract_inner_owned(v.clone(), depth + 1))).collect(),
             },
             Some(ObjectData::Function {
                 return_type,
@@ -514,8 +544,8 @@ impl Evaluator {
                 enum_name: enum_name.clone(),
                 variant: variant.clone(),
             },
-            Some(ObjectData::Set { elements: refs }) => OwnedValue::Set {
-                elements: refs.iter().map(|&r| self.extract_inner(r, depth + 1)).collect(),
+            Some(ObjectData::Set { elements }) => OwnedValue::Set {
+                elements: elements.iter().map(|e| self.extract_inner_owned(e.clone(), depth + 1)).collect(),
             },
             Some(ObjectData::Tensor { shape, data, tid }) => {
                 OwnedValue::Tensor { shape: shape.clone(), data: data.clone(), tid: *tid }
@@ -534,15 +564,10 @@ impl Evaluator {
             OwnedValue::Boolean(b) => self.alloc(ObjectData::Boolean(b)),
             OwnedValue::Str(s) => self.alloc(ObjectData::Str(s)),
             OwnedValue::Array { element_type, elements: items } => {
-                let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant(v)).collect();
-                self.alloc(ObjectData::Array { element_type, elements: refs })
+                self.alloc(ObjectData::Array { element_type, elements: items })
             }
             OwnedValue::Dict { key_type, value_type, entries } => {
-                let planted: Vec<(ObjectRef, ObjectRef)> = entries
-                    .into_iter()
-                    .map(|(k, v)| (self.plant(k), self.plant(v)))
-                    .collect();
-                self.alloc(ObjectData::Dict { key_type, value_type, entries: planted })
+                self.alloc(ObjectData::Dict { key_type, value_type, entries })
             }
             OwnedValue::Function {
                 return_type,
@@ -564,8 +589,7 @@ impl Evaluator {
                 self.alloc(ObjectData::EnumVariant { enum_name, variant })
             }
             OwnedValue::Set { elements: items } => {
-                let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant(v)).collect();
-                self.alloc(ObjectData::Set { elements: refs })
+                self.alloc(ObjectData::Set { elements: items })
             }
             OwnedValue::Tensor { shape, data, tid } => {
                 self.alloc(ObjectData::Tensor { shape, data, tid })
@@ -583,22 +607,6 @@ impl Evaluator {
     // elemento corrupto). Se promueve el contenedor (deep) a la arena global para
     // que sus elementos sobrevivan. Escalares e instancias (campos OwnedValue) no
     // sufren esto y se devuelven sin tocar — evita fugas con `i = i + 1`, etc.
-    fn promote_container_for_assign(&mut self, val_ref: ObjectRef) -> ObjectRef {
-        if val_ref.region != RegionId::Scoped || self.scopes.depth() <= 1 {
-            return val_ref;
-        }
-        let is_container = matches!(
-            self.resolve(val_ref),
-            Some(ObjectData::Array { .. }) | Some(ObjectData::Dict { .. }) | Some(ObjectData::Set { .. })
-        );
-        if is_container {
-            let owned = self.extract(val_ref);
-            self.plant_global(owned)
-        } else {
-            val_ref
-        }
-    }
-
     // Igual que plant() pero siempre aloca en la arena global.
     // Necesario cuando se muta un array global desde dentro de un scope:
     // los nuevos elementos deben vivir en la misma arena que el array.
@@ -621,20 +629,14 @@ impl Evaluator {
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Array { element_type, elements: items } => {
-                let refs: Vec<ObjectRef> =
-                    items.into_iter().map(|v| self.plant_global(v)).collect();
-                let idx = self.global_arena.alloc(ObjectData::Array { element_type, elements: refs });
+                let idx = self.global_arena.alloc(ObjectData::Array { element_type, elements: items });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Dict { key_type, value_type, entries } => {
-                let planted: Vec<(ObjectRef, ObjectRef)> = entries
-                    .into_iter()
-                    .map(|(k, v)| (self.plant_global(k), self.plant_global(v)))
-                    .collect();
                 let idx = self.global_arena.alloc(ObjectData::Dict {
                     key_type,
                     value_type,
-                    entries: planted,
+                    entries,
                 });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
@@ -657,8 +659,7 @@ impl Evaluator {
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Set { elements: items } => {
-                let refs: Vec<ObjectRef> = items.into_iter().map(|v| self.plant_global(v)).collect();
-                let idx = self.global_arena.alloc(ObjectData::Set { elements: refs });
+                let idx = self.global_arena.alloc(ObjectData::Set { elements: items });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Tensor { shape, data, tid } => {
@@ -744,7 +745,7 @@ impl Evaluator {
         obj_ref: ObjectRef,
         key_type: String,
         value_type: String,
-        entries: Vec<(ObjectRef, ObjectRef)>,
+        entries: Vec<(OwnedValue, OwnedValue)>,
     ) {
         let data = ObjectData::Dict { key_type, value_type, entries };
         match obj_ref.region {
@@ -753,7 +754,7 @@ impl Evaluator {
         }
     }
 
-    fn update_array(&mut self, arr_ref: ObjectRef, element_type: Option<String>, elems: Vec<ObjectRef>) {
+    fn update_array(&mut self, arr_ref: ObjectRef, element_type: Option<String>, elems: Vec<OwnedValue>) {
         let data = ObjectData::Array { element_type, elements: elems };
         match arr_ref.region {
             RegionId::Global => self.global_arena.update(arr_ref.index, data),
@@ -788,8 +789,9 @@ impl Evaluator {
             }
             Some(ObjectData::Array { elements, .. }) => {
                 let mut parts = Vec::with_capacity(elements.len());
-                for elem_ref in elements {
-                    parts.push(self.fmt_value(elem_ref)?);
+                for elem in elements {
+                    let elem_planted = self.plant(elem);
+                    parts.push(self.fmt_value(elem_planted)?);
                 }
                 Ok(format!("[{}]", parts.join(", ")))
             }
@@ -895,15 +897,15 @@ impl Evaluator {
                 }
                 self.scopes.push();
                 self.call_depth += 1;
-                for (name, cap_ref) in &captured {
+                for (name, cap_ref) in captured.iter() {
                     self.scopes.declare(name.clone(), *cap_ref);
                 }
                 for (i, param) in parameters.iter().enumerate() {
                     if param.is_rest {
-                        let rest_refs: Vec<ObjectRef> = arg_vals[i..].iter()
-                            .map(|v| self.plant(v.clone()))
+                        let rest_items: Vec<OwnedValue> = arg_vals[i..].iter()
+                            .cloned()
                             .collect();
-                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_items });
                         self.scopes.declare(param.name.clone(), rest_ref);
                         break;
                     }
@@ -1020,6 +1022,37 @@ fn obj_data_to_key_str(data: &ObjectData) -> String {
         ObjectData::Integer(i) => i.to_string(),
         ObjectData::Boolean(b) => b.to_string(),
         _ => String::new(),
+    }
+}
+
+pub(super) fn owned_to_key_str(owned: &OwnedValue) -> String {
+    match owned {
+        OwnedValue::Str(s) => s.clone(),
+        OwnedValue::Integer(i) => i.to_string(),
+        OwnedValue::Boolean(b) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+pub(super) fn owned_to_obj_data(owned: &OwnedValue) -> ObjectData {
+    match owned {
+        OwnedValue::Null => ObjectData::Null,
+        OwnedValue::Integer(i) => ObjectData::Integer(*i),
+        OwnedValue::Decimal(d) => ObjectData::Decimal(*d),
+        OwnedValue::Boolean(b) => ObjectData::Boolean(*b),
+        OwnedValue::Str(s) => ObjectData::Str(s.clone()),
+        OwnedValue::Array { element_type, elements: _ } => {
+            ObjectData::Array { element_type: element_type.clone(), elements: Vec::new() }
+        }
+        OwnedValue::Dict { key_type, value_type, entries: _ } => {
+            ObjectData::Dict { key_type: key_type.clone(), value_type: value_type.clone(), entries: Vec::new() }
+        }
+        OwnedValue::Set { elements: _ } => ObjectData::Set { elements: Vec::new() },
+        OwnedValue::Function { .. } => ObjectData::Null,
+        OwnedValue::Instance { class_name, fields: _ } => ObjectData::Instance { class_name: class_name.clone(), fields: Vec::new() },
+        OwnedValue::Tensor { shape, data, tid } => ObjectData::Tensor { shape: shape.clone(), data: data.clone(), tid: *tid },
+        OwnedValue::EnumVariant { .. } => ObjectData::Null,
+        OwnedValue::Ptr(_) => ObjectData::Null,
     }
 }
 

@@ -215,7 +215,7 @@ impl super::Evaluator {
                             return EvalResult::Error;
                         }
                         let idx = (self.lcg_next_u64() % elements.len() as u64) as usize;
-                        EvalResult::Value(elements[idx])
+                        EvalResult::Value(self.plant(elements[idx].clone()))
                     }
                     _ => { eprintln!("❌ ERROR: Random.choice requires an array"); EvalResult::Error }
                 }

@@ -119,10 +119,10 @@ impl super::Evaluator {
 
             for (i, param) in ctor.parameters.iter().enumerate() {
                 if param.is_rest {
-                    let rest_refs: Vec<ObjectRef> = arg_vals[i..].iter()
-                        .map(|v| self.plant(v.clone()))
+                    let rest_items: Vec<OwnedValue> = arg_vals[i..].iter()
+                        .cloned()
                         .collect();
-                    let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+                    let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_items });
                     self.scopes.declare(param.name.clone(), rest_ref);
                     break;
                 }
@@ -223,10 +223,10 @@ impl super::Evaluator {
         self.scopes.push();
         for (i, param) in parent_ctor.parameters.iter().enumerate() {
             if param.is_rest {
-                let rest_refs: Vec<ObjectRef> = arg_vals[i..].iter()
-                    .map(|v| self.plant(v.clone()))
+                let rest_owned: Vec<OwnedValue> = arg_vals[i..].iter()
+                    .cloned()
                     .collect();
-                let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+                let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_owned });
                 self.scopes.declare(param.name.clone(), rest_ref);
                 break;
             }
@@ -341,10 +341,10 @@ impl super::Evaluator {
 
         for (i, param) in method.parameters.iter().enumerate() {
             if param.is_rest {
-                let rest_refs: Vec<ObjectRef> = arg_vals[i..].iter()
-                    .map(|v| self.plant(v.clone()))
+                let rest_owned: Vec<OwnedValue> = arg_vals[i..].iter()
+                    .cloned()
                     .collect();
-                let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+                let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_owned });
                 self.scopes.declare(param.name.clone(), rest_ref);
                 break;
             }
@@ -596,10 +596,10 @@ impl super::Evaluator {
 
         for (i, param) in m.parameters.iter().enumerate() {
             if param.is_rest {
-                let rest_refs: Vec<ObjectRef> = arg_vals[i..].iter()
-                    .map(|v| self.plant(v.clone()))
+                let rest_owned: Vec<OwnedValue> = arg_vals[i..].iter()
+                    .cloned()
                     .collect();
-                let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+                let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_owned });
                 self.scopes.declare(param.name.clone(), rest_ref);
                 break;
             }

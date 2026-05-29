@@ -76,13 +76,13 @@ impl super::Evaluator {
                         return EvalResult::Error;
                     }
                 };
-                let refs: Vec<ObjectRef> = data
+                let owned: Vec<OwnedValue> = data
                     .iter()
-                    .map(|&f| self.alloc(ObjectData::Decimal(f)))
+                    .map(|&f| OwnedValue::Decimal(f))
                     .collect();
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("decimal".to_string()),
-                    elements: refs,
+                    elements: owned,
                 }))
             }
 
@@ -488,9 +488,10 @@ impl super::Evaluator {
         };
         let mut out = Vec::with_capacity(elems.len());
         for r in elems {
-            match self.to_f64(r) {
-                Some(f) => out.push(f),
-                None => {
+            match r {
+                OwnedValue::Integer(i) => out.push(i as f64),
+                OwnedValue::Decimal(d) => out.push(d),
+                _ => {
                     eprintln!("❌ ERROR: {}: all array elements must be numeric", ctx);
                     return Err(EvalResult::Error);
                 }

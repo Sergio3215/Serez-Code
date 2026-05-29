@@ -59,7 +59,6 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                let val_ref = self.promote_container_for_assign(val_ref);
                 let new_data = self.resolve(val_ref).unwrap().clone();
 
                 if let Some(r) = self.scopes.assign(&assign_stmt.name, new_data.clone()) {
@@ -81,9 +80,9 @@ impl super::Evaluator {
                 let captured = self.capture_env(true); // named fn: reference semantics
                 let func_data = ObjectData::Function {
                     return_type: func_decl.function.return_type.clone(),
-                    parameters: func_decl.function.parameters.clone(),
+                    parameters: Rc::new(func_decl.function.parameters.clone()),
                     body: Rc::new(func_decl.function.body.clone()),
-                    captured,
+                    captured: Rc::new(captured),
                     is_generator: func_decl.function.is_generator,
                 };
                 let func_ref = self.alloc(func_data);
@@ -162,7 +161,6 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                let val_ref = self.promote_container_for_assign(val_ref);
                 let new_data = self.resolve(val_ref).unwrap().clone();
                 if let Some(r) = self.scopes.assign(&var_name, new_data.clone()) {
                     if r.region == RegionId::Global {
@@ -451,12 +449,7 @@ impl super::Evaluator {
                         }
 
                         let owned = self.extract(val_ref);
-                        let new_elem_ref = match arr_ref.region {
-                            RegionId::Global => self.plant_global(owned),
-                            RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(owned),
-                            RegionId::Scoped => self.plant(owned),
-                        };
-                        elements[i as usize] = new_elem_ref;
+                        elements[i as usize] = owned;
 
                         match arr_ref.region {
                             RegionId::Global => {
@@ -482,36 +475,23 @@ impl super::Evaluator {
                         let search_key = obj_data_to_key_str(&idx_data);
                         let owned_val = self.extract(val_ref);
 
-                        // Use global arena when mutating a scoped dict from a nested block —
-                        // values allocated in the inner scope are freed when that block exits.
-                        let use_global = arr_ref.region == RegionId::Global
-                            || self.scopes.depth() > 1;
-
-                        // Index-based loop so we can call &mut self methods (plant/plant_global)
                         let mut replaced = false;
-                        let mut i = 0;
-                        while i < entries.len() {
-                            let k_data = self.resolve(entries[i].0).unwrap().clone();
-                            if obj_data_to_key_str(&k_data) == search_key {
-                                let new_ref = if use_global {
-                                    self.plant_global(owned_val.clone())
-                                } else {
-                                    self.plant(owned_val.clone())
-                                };
-                                entries[i].1 = new_ref;
+                        for entry in entries.iter_mut() {
+                            let key_str = match &entry.0 {
+                                OwnedValue::Str(s) => s.clone(),
+                                OwnedValue::Integer(i) => i.to_string(),
+                                OwnedValue::Decimal(d) => d.to_string(),
+                                OwnedValue::Boolean(b) => b.to_string(),
+                                _ => format!("{:?}", entry.0),
+                            };
+                            if key_str == search_key {
+                                entry.1 = owned_val.clone();
                                 replaced = true;
                                 break;
                             }
-                            i += 1;
                         }
                         if !replaced {
-                            let owned_k = OwnedValue::Str(search_key);
-                            let (new_k, new_v) = if use_global {
-                                (self.plant_global(owned_k), self.plant_global(owned_val))
-                            } else {
-                                (self.plant(owned_k), self.plant(owned_val))
-                            };
-                            entries.push((new_k, new_v));
+                            entries.push((OwnedValue::Str(search_key), owned_val));
                         }
                         self.update_dict(arr_ref, key_type, value_type, entries);
                     }
@@ -692,13 +672,13 @@ impl super::Evaluator {
 
         let items: Vec<OwnedValue> = match self.resolve(iter_ref).cloned() {
             Some(ObjectData::Array { elements, .. }) => {
-                elements.iter().map(|&r| self.extract(r)).collect()
+                elements.iter().cloned().collect()
             }
             Some(ObjectData::Str(s)) => {
                 s.chars().map(|c| OwnedValue::Str(c.to_string())).collect()
             }
             Some(ObjectData::Dict { entries, .. }) => {
-                entries.iter().map(|(k, _)| self.extract(*k)).collect()
+                entries.iter().map(|(k, _)| k.clone()).collect()
             }
             _ => {
                 eprintln!("❌ ERROR: for-in requires an array, string, or dict");
@@ -732,7 +712,7 @@ impl super::Evaluator {
                     // item must be an array; destructure it
                     let elems: Vec<OwnedValue> = match self.resolve(item_ref).cloned() {
                         Some(ObjectData::Array { elements, .. }) => {
-                            elements.iter().map(|&r| self.extract(r)).collect()
+                            elements.iter().cloned().collect()
                         }
                         _ => {
                             eprintln!("❌ ERROR: for-in destructure expects each item to be an array");
@@ -750,8 +730,7 @@ impl super::Evaluator {
                     if let Some(rest_name) = rest {
                         let start = slots.len();
                         let rest_items: Vec<OwnedValue> = elems.into_iter().skip(start).collect();
-                        let rest_refs: Vec<ObjectRef> = rest_items.into_iter().map(|v| self.plant(v)).collect();
-                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_items });
                         self.scopes.declare(rest_name.clone(), rest_ref);
                     }
                 }
@@ -787,7 +766,7 @@ impl super::Evaluator {
 
         let elems: Vec<OwnedValue> = match self.resolve(val_ref).cloned() {
             Some(ObjectData::Array { elements, .. }) => {
-                elements.iter().map(|&r| self.extract(r)).collect()
+                elements.iter().cloned().collect()
             }
             _ => {
                 eprintln!("❌ ERROR: Array destructure requires an array on the right side");
@@ -813,8 +792,7 @@ impl super::Evaluator {
         if let Some(ref rest_name) = d.rest {
             let start = d.names.len();
             let rest_items: Vec<OwnedValue> = elems.into_iter().skip(start).collect();
-            let rest_refs: Vec<ObjectRef> = rest_items.into_iter().map(|v| self.plant(v)).collect();
-            let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_refs });
+            let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_items });
             if self.scopes.is_empty() {
                 self.global_bindings.insert(rest_name.clone(), rest_ref);
             } else {
@@ -837,7 +815,7 @@ impl super::Evaluator {
 
         let entries: Vec<(OwnedValue, OwnedValue)> = match self.resolve(val_ref).cloned() {
             Some(ObjectData::Dict { entries, .. }) => {
-                entries.iter().map(|&(k, v)| (self.extract(k), self.extract(v))).collect()
+                entries.iter().cloned().collect()
             }
             Some(ObjectData::Instance { fields, .. }) => {
                 fields.iter().map(|(k, v)| (OwnedValue::Str(k.clone()), v.clone())).collect()

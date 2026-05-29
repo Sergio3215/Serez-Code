@@ -1,5 +1,5 @@
 use crate::ast;
-use crate::region::{ObjectData, ObjectRef, RegionId};
+use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use super::EvalResult;
 
 impl super::Evaluator {
@@ -112,12 +112,12 @@ impl super::Evaluator {
     ) -> EvalResult {
         match dot_call.method.as_str() {
             "shape" => {
-                let refs: Vec<ObjectRef> = shape.iter()
-                    .map(|&d| self.alloc(ObjectData::Integer(d as i64)))
+                let owned: Vec<OwnedValue> = shape.iter()
+                    .map(|&d| OwnedValue::Integer(d as i64))
                     .collect();
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
-                    elements: refs,
+                    elements: owned,
                 }))
             }
             "ndim" => EvalResult::Value(self.alloc(ObjectData::Integer(shape.len() as i64))),
@@ -343,33 +343,33 @@ impl super::Evaluator {
             }
             "toArray" => {
                 if shape.len() == 1 {
-                    let refs: Vec<ObjectRef> = data.iter()
-                        .map(|&x| self.alloc(ObjectData::Decimal(x)))
+                    let owned: Vec<OwnedValue> = data.iter()
+                        .map(|&x| OwnedValue::Decimal(x))
                         .collect();
                     EvalResult::Value(self.alloc(ObjectData::Array {
                         element_type: Some("decimal".to_string()),
-                        elements: refs,
+                        elements: owned,
                     }))
                 } else if shape.len() == 2 {
                     let (rows, cols) = (shape[0], shape[1]);
-                    let row_refs: Vec<ObjectRef> = (0..rows).map(|r| {
-                        let col_refs: Vec<ObjectRef> = (0..cols)
-                            .map(|c| self.alloc(ObjectData::Decimal(data[r * cols + c])))
+                    let row_owned: Vec<OwnedValue> = (0..rows).map(|r| {
+                        let col_owned: Vec<OwnedValue> = (0..cols)
+                            .map(|c| OwnedValue::Decimal(data[r * cols + c]))
                             .collect();
-                        self.alloc(ObjectData::Array {
+                        OwnedValue::Array {
                             element_type: Some("decimal".to_string()),
-                            elements: col_refs,
-                        })
+                            elements: col_owned,
+                        }
                     }).collect();
-                    EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: row_refs }))
+                    EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: row_owned }))
                 } else {
                     // Higher dims: return flat
-                    let refs: Vec<ObjectRef> = data.iter()
-                        .map(|&x| self.alloc(ObjectData::Decimal(x)))
+                    let owned: Vec<OwnedValue> = data.iter()
+                        .map(|&x| OwnedValue::Decimal(x))
                         .collect();
                     EvalResult::Value(self.alloc(ObjectData::Array {
                         element_type: Some("decimal".to_string()),
-                        elements: refs,
+                        elements: owned,
                     }))
                 }
             }
@@ -1388,9 +1388,9 @@ impl super::Evaluator {
             Some(ObjectData::Array { elements, .. }) => {
                 let mut shape = Vec::new();
                 for e in elements {
-                    match self.resolve(e).cloned() {
-                        Some(ObjectData::Integer(n)) if n > 0 => shape.push(n as usize),
-                        Some(ObjectData::Integer(n)) => {
+                    match e {
+                        OwnedValue::Integer(n) if n > 0 => shape.push(n as usize),
+                        OwnedValue::Integer(n) => {
                             eprintln!("❌ ERROR: Tensor shape dimensions must be positive, got {}", n);
                             return Err(EvalResult::Error);
                         }
@@ -1472,14 +1472,13 @@ impl super::Evaluator {
                     }));
                 }
                 // Detect 2D: first element is also an array
-                let first = self.resolve(elements[0]).cloned();
-                if let Some(ObjectData::Array { .. }) = first {
+                if let OwnedValue::Array { .. } = &elements[0] {
                     let nrows = elements.len();
                     let mut data = Vec::new();
                     let mut ncols = 0usize;
-                    for (row_i, row_ref) in elements.iter().enumerate() {
-                        match self.resolve(*row_ref).cloned() {
-                            Some(ObjectData::Array { elements: cols, .. }) => {
+                    for (row_i, row) in elements.iter().enumerate() {
+                        match row {
+                            OwnedValue::Array { elements: cols, .. } => {
                                 if row_i == 0 {
                                     ncols = cols.len();
                                 } else if cols.len() != ncols {
@@ -1487,9 +1486,9 @@ impl super::Evaluator {
                                     return EvalResult::Error;
                                 }
                                 for c in cols {
-                                    match self.resolve(c) {
-                                        Some(ObjectData::Integer(n)) => data.push(*n as f64),
-                                        Some(ObjectData::Decimal(d)) => data.push(*d),
+                                    match c {
+                                        OwnedValue::Integer(n) => data.push(*n as f64),
+                                        OwnedValue::Decimal(d) => data.push(*d),
                                         _ => {
                                             eprintln!("❌ ERROR: Tensor.from() — elements must be numbers");
                                             return EvalResult::Error;
@@ -1512,9 +1511,9 @@ impl super::Evaluator {
                     // 1D
                     let mut data = Vec::new();
                     for e in &elements {
-                        match self.resolve(*e) {
-                            Some(ObjectData::Integer(n)) => data.push(*n as f64),
-                            Some(ObjectData::Decimal(d)) => data.push(*d),
+                        match e {
+                            OwnedValue::Integer(n) => data.push(*n as f64),
+                            OwnedValue::Decimal(d) => data.push(*d),
                             _ => {
                                 eprintln!("❌ ERROR: Tensor.from() — elements must be numbers");
                                 return EvalResult::Error;

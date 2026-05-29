@@ -130,11 +130,11 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 let sep = match self.eval_str_arg(&dot_call.arguments[0]) { Some(v) => v, None => return EvalResult::Error };
-                let parts: Vec<ObjectRef> = if sep.is_empty() {
+                let parts: Vec<OwnedValue> = if sep.is_empty() {
                     // Empty separator → split into individual characters
-                    s.chars().map(|c| self.alloc(ObjectData::Str(c.to_string()))).collect()
+                    s.chars().map(|c| OwnedValue::Str(c.to_string())).collect()
                 } else {
-                    s.split(&sep[..]).map(|p| self.alloc(ObjectData::Str(p.to_string()))).collect()
+                    s.split(&sep[..]).map(|p| OwnedValue::Str(p.to_string())).collect()
                 };
                 EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: parts }))
             }

@@ -7,14 +7,14 @@ use std::io::{self, Write};
 use std::rc::Rc;
 use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str,
             obj_data_eq, format_decimal, json_stringify_owned, json_parse,
-            operator_to_method_name};
+            operator_to_method_name, owned_to_obj_data};
 
 impl super::Evaluator {
     pub(super) fn eval_array_method(
         &mut self,
         arr_ref: ObjectRef,
         element_type: Option<String>,
-        elems: Vec<ObjectRef>,
+        elems: Vec<OwnedValue>,
         dot_call: &ast::DotCallExpression,
     ) -> EvalResult {
         match dot_call.method.as_str() {
@@ -42,13 +42,8 @@ impl super::Evaluator {
                     }
                 }
                 let val = self.extract(val_ref);
-                let new_ref = match arr_ref.region {
-                    RegionId::Global => self.plant_global(val),
-                    RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(val),
-                    RegionId::Scoped => self.plant(val),
-                };
                 let mut e = elems;
-                e.push(new_ref);
+                e.push(val);
                 self.update_array(arr_ref, element_type, e);
                 EvalResult::Value(self.null_ref)
             }
@@ -60,9 +55,8 @@ impl super::Evaluator {
                 }
                 let mut e = elems;
                 let last = e.pop().unwrap();
-                let owned = self.extract(last);
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(self.plant(owned))
+                EvalResult::Value(self.plant(last))
             }
 
             "shift" => {
@@ -72,9 +66,8 @@ impl super::Evaluator {
                 }
                 let mut e = elems;
                 let first = e.remove(0);
-                let owned = self.extract(first);
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(self.plant(owned))
+                EvalResult::Value(self.plant(first))
             }
 
             "unshift" => {
@@ -98,13 +91,8 @@ impl super::Evaluator {
                     }
                 }
                 let val = self.extract(val_ref);
-                let new_ref = match arr_ref.region {
-                    RegionId::Global => self.plant_global(val),
-                    RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(val),
-                    RegionId::Scoped => self.plant(val),
-                };
                 let mut e = elems;
-                e.insert(0, new_ref);
+                e.insert(0, val);
                 self.update_array(arr_ref, element_type, e);
                 EvalResult::Value(self.null_ref)
             }
@@ -126,10 +114,9 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 let mut e = elems;
-                let removed_ref = e.remove(idx as usize);
-                let owned = self.extract(removed_ref);
+                let removed = e.remove(idx as usize);
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(self.plant(owned))
+                EvalResult::Value(self.plant(removed))
             }
 
             "sort" => {
@@ -152,7 +139,7 @@ impl super::Evaluator {
                 if is_comparator {
                     let cb_ref = arg_ref.unwrap();
                     let mut owned_vals: Vec<OwnedValue> =
-                        elems.iter().map(|&r| self.extract(r)).collect();
+                        elems.iter().cloned().collect();
                     let n = owned_vals.len();
                     // Bubble sort (simple, avoids borrow issues with call_function)
                     let mut i = 0;
@@ -192,14 +179,7 @@ impl super::Evaluator {
                     if let Some(err) = sort_err {
                         return err;
                     }
-                    let new_refs: Vec<ObjectRef> = owned_vals.into_iter().map(|v| {
-                        match arr_ref.region {
-                            RegionId::Global => self.plant_global(v),
-                            RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(v),
-                            RegionId::Scoped => self.plant(v),
-                        }
-                    }).collect();
-                    self.update_array(arr_ref, element_type, new_refs);
+                    self.update_array(arr_ref, element_type, owned_vals);
                     return EvalResult::Value(arr_ref);
                 }
 
@@ -212,8 +192,7 @@ impl super::Evaluator {
                 };
                 let descending = order == "desc";
 
-                let mut owned_vals: Vec<OwnedValue> =
-                    elems.iter().map(|&r| self.extract(r)).collect();
+                let mut owned_vals: Vec<OwnedValue> = elems.clone();
 
                 let all_ints = owned_vals.iter().all(|v| matches!(v, OwnedValue::Integer(_)));
                 let all_decs = owned_vals.iter().all(|v| matches!(v, OwnedValue::Decimal(_)));
@@ -235,14 +214,7 @@ impl super::Evaluator {
                     if descending { cmp.reverse() } else { cmp }
                 });
 
-                let new_refs: Vec<ObjectRef> = owned_vals.into_iter().map(|v| {
-                    match arr_ref.region {
-                        RegionId::Global => self.plant_global(v),
-                        RegionId::Scoped if self.scopes.depth() > 1 => self.plant_global(v),
-                        RegionId::Scoped => self.plant(v),
-                    }
-                }).collect();
-                self.update_array(arr_ref, element_type, new_refs);
+                self.update_array(arr_ref, element_type, owned_vals);
                 EvalResult::Value(arr_ref)
             }
 
@@ -260,8 +232,8 @@ impl super::Evaluator {
                     Some(n) => n,
                     None => { eprintln!("❌ ERROR: map argument must be a function"); return EvalResult::Error; }
                 };
-                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
-                let mut results = Vec::new();
+                let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
+                let mut results: Vec<OwnedValue> = Vec::new();
                 for (i, val) in owned_elems.into_iter().enumerate() {
                     let args = if n_params >= 2 {
                         vec![val, OwnedValue::Integer(i as i64)]
@@ -269,7 +241,7 @@ impl super::Evaluator {
                         vec![val]
                     };
                     match self.call_function(cb_ref, args) {
-                        EvalResult::Value(r) => results.push(r),
+                        EvalResult::Value(r) => results.push(self.extract(r)),
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     }
@@ -291,8 +263,8 @@ impl super::Evaluator {
                     Some(n) => n,
                     None => { eprintln!("❌ ERROR: filter argument must be a function"); return EvalResult::Error; }
                 };
-                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
-                let mut kept = Vec::new();
+                let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
+                let mut kept: Vec<OwnedValue> = Vec::new();
                 for (i, val) in owned_elems.into_iter().enumerate() {
                     let args = if n_params >= 2 {
                         vec![val.clone(), OwnedValue::Integer(i as i64)]
@@ -308,7 +280,7 @@ impl super::Evaluator {
                         _ => return EvalResult::Error,
                     };
                     if keep {
-                        kept.push(self.plant(val));
+                        kept.push(val);
                     }
                 }
                 EvalResult::Value(self.alloc(ObjectData::Array { element_type, elements: kept }))
@@ -319,7 +291,7 @@ impl super::Evaluator {
                     eprintln!("❌ ERROR: reduce expects 1 argument (callback) or 2 (initial, callback)");
                     return EvalResult::Error;
                 }
-                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
+                let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
                 let (mut acc_ref, cb_ref, start_idx) = if dot_call.arguments.len() == 2 {
                     // reduce(initial, callback)
                     let init = match self.eval_expression(&dot_call.arguments[0]) {
@@ -368,7 +340,7 @@ impl super::Evaluator {
                     }
                 };
                 let parts: Vec<String> = elems.iter()
-                    .map(|&r| self.display(r))
+                    .map(|v| v.display_str())
                     .collect();
                 EvalResult::Value(self.alloc(ObjectData::Str(parts.join(&sep))))
             }
@@ -390,7 +362,7 @@ impl super::Evaluator {
                 };
                 let needle_data = self.resolve(needle_ref).cloned();
                 let idx = elems.iter().enumerate().find(|(_, elem)| {
-                    let elem_data = self.resolve(**elem).cloned();
+                    let elem_data = Some(owned_to_obj_data(elem));
                     obj_data_eq(&elem_data, &needle_data)
                 }).map(|(i, _)| i as i64).unwrap_or(-1);
                 EvalResult::Value(self.alloc(ObjectData::Integer(idx)))
@@ -408,7 +380,7 @@ impl super::Evaluator {
                 };
                 let needle_data = self.resolve(needle_ref).cloned();
                 let found = elems.iter().any(|elem| {
-                    let elem_data = self.resolve(*elem).cloned();
+                    let elem_data = Some(owned_to_obj_data(elem));
                     obj_data_eq(&elem_data, &needle_data)
                 });
                 EvalResult::Value(self.alloc(ObjectData::Boolean(found)))
@@ -424,7 +396,7 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
+                let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
                 for val in owned_elems {
                     let val_clone = val.clone();
                     let result = match self.call_function(cb_ref, vec![val]) {
@@ -449,7 +421,7 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
+                let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
                 for (i, val) in owned_elems.into_iter().enumerate() {
                     let result = match self.call_function(cb_ref, vec![val]) {
                         EvalResult::Value(r) => r,
@@ -481,10 +453,7 @@ impl super::Evaluator {
                 let start = (if start_i < 0 { (len + start_i).max(0) } else { start_i.min(len) }) as usize;
                 let end   = (if end_i   < 0 { (len + end_i  ).max(0) } else { end_i.min(len)   }) as usize;
                 let end = end.max(start); // prevent inverted range
-                let sliced: Vec<ObjectRef> = elems[start..end].iter().map(|r| {
-                    let owned = self.extract(*r);
-                    self.plant(owned)
-                }).collect();
+                let sliced: Vec<OwnedValue> = elems[start..end].iter().cloned().collect();
                 EvalResult::Value(self.alloc(ObjectData::Array { element_type: element_type.clone(), elements: sliced }))
             }
 
@@ -505,7 +474,7 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
+                let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
                 for val in owned_elems {
                     let result = match self.call_function(cb_ref, vec![val]) {
                         EvalResult::Value(r) => r,
@@ -529,7 +498,7 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                let owned_elems: Vec<OwnedValue> = elems.iter().map(|&r| self.extract(r)).collect();
+                let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
                 for val in owned_elems {
                     let result = match self.call_function(cb_ref, vec![val]) {
                         EvalResult::Value(r) => r,
@@ -572,10 +541,8 @@ impl super::Evaluator {
                     result
                 }
 
-                let owned_elems: Vec<OwnedValue> = elems.iter().map(|r| self.extract(*r)).collect();
-                let flat = flat_owned(owned_elems, depth);
-                let refs: Vec<ObjectRef> = flat.into_iter().map(|v| self.plant(v)).collect();
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: refs }))
+                let flat = flat_owned(elems.clone(), depth);
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: flat }))
             }
 
             _ => {

@@ -168,10 +168,10 @@ impl super::Evaluator {
                 }
                 match std::fs::read(&path) {
                     Ok(bytes) => {
-                        let refs: Vec<ObjectRef> = bytes.iter()
-                            .map(|&b| self.alloc(ObjectData::Integer(b as i64)))
+                        let owned: Vec<OwnedValue> = bytes.iter()
+                            .map(|&b| OwnedValue::Integer(b as i64))
                             .collect();
-                        EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements: refs }))
+                        EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements: owned }))
                     }
                     Err(e) => { eprintln!("❌ ERROR: File error reading binary '{}': {}", path, e); EvalResult::Error }
                 }
@@ -192,9 +192,9 @@ impl super::Evaluator {
                     _ => { eprintln!("❌ ERROR: File.write_asBinary bytes must be an array"); return EvalResult::Error; }
                 };
                 let mut buf: Vec<u8> = Vec::with_capacity(bytes_data.len());
-                for r in bytes_data {
-                    match self.resolve(r).cloned() {
-                        Some(ObjectData::Integer(b)) if b >= 0 && b <= 255 => buf.push(b as u8),
+                for owned in bytes_data {
+                    match owned {
+                        OwnedValue::Integer(b) if b >= 0 && b <= 255 => buf.push(b as u8),
                         _ => { eprintln!("❌ ERROR: File.write_asBinary: each byte must be int 0-255"); return EvalResult::Error; }
                     }
                 }
@@ -215,14 +215,14 @@ impl super::Evaluator {
                 };
                 match std::fs::read_dir(&path) {
                     Ok(entries) => {
-                        let refs: Vec<ObjectRef> = entries
+                        let owned: Vec<OwnedValue> = entries
                             .filter_map(|e| e.ok())
                             .map(|e| {
                                 let name = e.file_name().to_string_lossy().to_string();
-                                self.alloc(ObjectData::Str(name))
+                                OwnedValue::Str(name)
                             })
                             .collect();
-                        EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("string".to_string()), elements: refs }))
+                        EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("string".to_string()), elements: owned }))
                     }
                     Err(e) => { eprintln!("❌ ERROR: File.listDir '{}' failed: {}", path, e); EvalResult::Error }
                 }

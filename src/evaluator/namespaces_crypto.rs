@@ -2,7 +2,7 @@
 // All algorithms implemented in pure Rust — no external crates required.
 
 use crate::ast;
-use crate::region::{ObjectData, ObjectRef};
+use crate::region::{ObjectData, ObjectRef, OwnedValue};
 use super::EvalResult;
 
 impl super::Evaluator {
@@ -74,9 +74,9 @@ impl super::Evaluator {
                     Some(ObjectData::Array { elements, .. }) => {
                         let mut bytes = Vec::new();
                         for e in elements {
-                            match self.resolve(e) {
-                                Some(ObjectData::Integer(n)) if *n >= 0 && *n <= 255 => {
-                                    bytes.push(*n as u8);
+                            match e {
+                                OwnedValue::Integer(n) if n >= 0 && n <= 255 => {
+                                    bytes.push(n as u8);
                                 }
                                 _ => {
                                     let msg = self.alloc(ObjectData::Str(
@@ -100,12 +100,12 @@ impl super::Evaluator {
                 };
                 match hex_decode(&s) {
                     Ok(bytes) => {
-                        let refs: Vec<ObjectRef> = bytes.iter()
-                            .map(|&b| self.alloc(ObjectData::Integer(b as i64)))
+                        let owned: Vec<OwnedValue> = bytes.iter()
+                            .map(|&b| OwnedValue::Integer(b as i64))
                             .collect();
                         EvalResult::Value(self.alloc(ObjectData::Array {
                             element_type: Some("int".to_string()),
-                            elements: refs,
+                            elements: owned,
                         }))
                     }
                     Err(e) => {
