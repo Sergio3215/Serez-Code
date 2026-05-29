@@ -1,0 +1,36 @@
+// unit_paren_lambda.sz — Regression for B-84: a single-param arrow lambda
+// wrapped in parentheses, ( x => body ), failed to parse ("Expected ')' in
+// grouped expression"), while (x) => body, bare x => body and (a,b) => body
+// all worked. The parser now recognizes ( ident => ... ) as a parenthesized
+// single-param lambda.
+
+test("parenthesized single-param lambda — assign and call", () => {
+    let f = (x => x + 100);
+    assert(f(5) == 105, "(x => body) parses and is callable");
+});
+
+test("parenthesized single-param lambda — immediately invoked", () => {
+    assert(((x => x + 1))(5) == 6, "IIFE single param");
+});
+
+test("parenthesized single-param lambda — pipe target", () => {
+    assert((5 |> (x => x * 2)) == 10, "pipe into (x => body)");
+});
+
+test("parenthesized single-param lambda — block body", () => {
+    let f = (x => { return x * 3; });
+    assert(f(4) == 12, "block body");
+});
+
+test("regression — (a, b) => body still works", () => {
+    let g = ((a, b) => a + b);
+    assert(g(2, 3) == 5, "multi-param grouped lambda");
+});
+
+test("regression — grouped arithmetic still works", () => {
+    assert((3 + 4) * 2 == 14, "grouped expression");
+    let y = 9;
+    assert((y) == 9, "parenthesized identifier");
+});
+
+summary();

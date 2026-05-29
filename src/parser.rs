@@ -1893,6 +1893,20 @@ impl Parser {
                         }
                     }
 
+                    // (x => body) — single-param lambda wrapped in parentheses.
+                    // (x) => body is handled by the RParen arm; this is the case
+                    // where the param has no inner parens: ( x => ... ). (B-84)
+                    TokenType::Arrow => {
+                        self.next_token(); // current = '=>'
+                        let body = self.parse_lambda_body()?;
+                        if self.peek_token.token_type != TokenType::RParen {
+                            self.parser_error("Expected ')' after parenthesized lambda");
+                            return None;
+                        }
+                        self.next_token(); // ')'
+                        Some(Expression::Lambda(LambdaExpression { params: vec![first_name], body }))
+                    }
+
                     // (ident op ...) — grouped expression starting with an identifier
                     _ => {
                         let first = Some(Expression::Identifier(first_name));

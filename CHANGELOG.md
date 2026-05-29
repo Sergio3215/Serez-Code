@@ -5,6 +5,18 @@ Order: most recent to oldest.
 
 ---
 
+## [3.8.3] — branch `improve`
+
+### Bug fixes
+
+- **B-84** — Parenthesized single-parameter arrow lambda failed to parse. `(x => body)` raised `Expected ')' in grouped expression`, even though `(x) => body`, bare `x => body`, and `(a, b) => body` all parsed. After consuming `(` and a leading identifier, the parser matched `,` (multi-param), `)` (`(a)`/`(a) => …`) and a catch-all that assumed a grouped expression — so a following `=>` (Arrow) was never recognized. Added an explicit `Arrow` arm that parses `( ident => body )` as a parenthesized single-param lambda. This unblocks common forms like `5 |> (x => x * 2)`, `((x => x + 1))(5)`, and `let f = (x => …)`. New regression: `unit_paren_lambda` (6 cases). Found while fuzzing pipe/lambda syntax.
+
+### Test count
+
+- 306 passing (0 failing) — added `unit_paren_lambda`.
+
+---
+
 ## [3.8.2] — branch `improve`
 
 ### Bug fixes
