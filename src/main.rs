@@ -50,6 +50,10 @@ fn run_file(file_path: &str, is_check: bool) {
         evaluator.check_program(&program);
     } else {
         evaluator.eval_program(&program);
+        if std::env::var("SEREZ_ARENA_STATS").is_ok() {
+            let (global, scoped) = evaluator.arena_stats();
+            eprintln!("[arena] global={} scoped={}", global, scoped);
+        }
     }
 }
 

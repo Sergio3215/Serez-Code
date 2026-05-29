@@ -272,6 +272,13 @@ impl Evaluator {
         }
     }
 
+    /// Read-only diagnostic: current sizes of the two arenas (object slots).
+    /// global never shrinks (top-level + everything promoted); scoped is the
+    /// rewindable stack. NOT a GC — just instrumentation for measuring growth.
+    pub fn arena_stats(&self) -> (usize, usize) {
+        (self.global_arena.watermark(), self.scopes.arena.watermark())
+    }
+
     pub fn set_permissions(&mut self, perms: Vec<String>) {
         for p in perms {
             self.permissions.insert(p);

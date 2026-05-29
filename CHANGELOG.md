@@ -5,6 +5,14 @@ Order: most recent to oldest.
 
 ---
 
+## [3.8.4] — branch `improve`
+
+### Tooling / diagnostics
+
+- **Arena stats** — `Evaluator::arena_stats()` returns the current object-slot counts of the two arenas `(global, scoped)`. When the program is run with the environment variable `SEREZ_ARENA_STATS` set, a line `[arena] global=N scoped=M` is printed to stderr at exit. Read-only diagnostic for measuring memory behaviour of the Region-Based Memory (e.g. confirming that scoped loops stay flat and which patterns promote to the never-freed global arena). **Not a GC and not an optimization** — zero runtime overhead unless the env var is set (a single `env::var` lookup at exit). Used to characterize the closure/escaping-container promotion-to-global behaviour (documented; the GUI memory discipline belongs to serez-ui, not the core).
+
+---
+
 ## [3.8.3] — branch `improve`
 
 ### Bug fixes
