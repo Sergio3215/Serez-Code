@@ -27,7 +27,7 @@ impl super::Evaluator {
             },
 
             Expression::FunctionLiteral(func_lit) => {
-                let captured = self.capture_env(false); // lambda: snapshot semantics
+                let captured = self.capture_lambda_env(&func_lit.body); // snapshot incl. referenced globals (B-83)
                 let func_data = ObjectData::Function {
                     return_type: func_lit.return_type.clone(),
                     parameters: func_lit.parameters.clone(),
@@ -51,7 +51,7 @@ impl super::Evaluator {
                         })],
                     },
                 };
-                let captured = self.capture_env(false); // arrow lambda: snapshot semantics
+                let captured = self.capture_lambda_env(&body); // snapshot incl. referenced globals (B-83)
                 EvalResult::Value(self.alloc(ObjectData::Function {
                     return_type: None,
                     parameters: params,

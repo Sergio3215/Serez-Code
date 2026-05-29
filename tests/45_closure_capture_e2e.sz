@@ -1,0 +1,33 @@
+// 45_closure_capture_e2e.sz — B-83: lambda capture is value-snapshot consistently,
+// including referenced TOP-LEVEL globals (previously resolved live, inconsistent
+// with function-local snapshot). Referenced global functions stay live (not
+// snapshotted) so recursion / calls keep working.
+
+// Snapshot a global data var captured by a lambda
+let x = 10
+let f = () => x
+x = 20
+out f()                                      // 10 (snapshot at creation, not 20)
+
+// Each loop iteration's lambda captures its own snapshot of the global
+let fns = []
+let i = 0
+while (i < 3) {
+    fns.push(() => i)
+    i = i + 1
+}
+out "" + fns[0]() + fns[1]() + fns[2]()       // 012
+
+// A referenced global function stays live/callable (not snapshotted away)
+fn int helper(int n) { return n * 2 }
+let g = () => helper(5)
+out g()                                       // 10
+
+// Consistency with function scope: same pattern inside a function
+fn int inFunc() {
+    let y = 10
+    let h = () => y
+    y = 20
+    return h()
+}
+out inFunc()                                  // 10

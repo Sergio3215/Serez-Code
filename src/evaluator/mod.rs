@@ -129,6 +129,82 @@ pub struct Evaluator {
     gui_state: Option<namespaces_gui::GuiState>,
 }
 
+// ── Free-identifier collection (for consistent lambda capture, B-83) ──────────
+// Best-effort walk: collects identifier names referenced inside a block. Used to
+// also snapshot referenced GLOBAL data vars when a lambda is created, so closures
+// capture globals by value (snapshot) just like they already snapshot scoped
+// locals. Over-approximation (e.g. collecting a nested lambda's own locals) is
+// harmless; incompleteness only degrades to live global lookup (the prior
+// behavior) and can never break a valid closure.
+fn collect_idents_block(b: &crate::ast::BlockStatement, out: &mut Vec<String>) {
+    for s in &b.statements { collect_idents_stmt(s, out); }
+}
+
+fn collect_idents_stmt(s: &crate::ast::Statement, out: &mut Vec<String>) {
+    use crate::ast::Statement as St;
+    match s {
+        St::Let(l) => collect_idents_expr(&l.value, out),
+        St::Assign(a) => { out.push(a.name.clone()); collect_idents_expr(&a.value, out); }
+        St::Block(b) | St::Unsafe(b) => collect_idents_block(b, out),
+        St::Return(r) => collect_idents_expr(&r.return_value, out),
+        St::Expression(e) | St::Throw(e) | St::Yield(e) => collect_idents_expr(e, out),
+        St::Out(o) => collect_idents_expr(&o.value, out),
+        St::While(w) | St::DoWhile(w) => { collect_idents_expr(&w.condition, out); collect_idents_block(&w.body, out); }
+        St::For(f) => {
+            collect_idents_expr(&f.init.value, out);
+            collect_idents_expr(&f.condition, out);
+            collect_idents_expr(&f.update.value, out);
+            collect_idents_block(&f.body, out);
+        }
+        St::ForEach(fe) => { collect_idents_expr(&fe.iterable, out); collect_idents_block(&fe.body, out); }
+        St::IndexAssign(ia) => { collect_idents_expr(&ia.target, out); collect_idents_expr(&ia.index, out); collect_idents_expr(&ia.value, out); }
+        St::FieldAssign(fa) => { out.push(fa.object.clone()); collect_idents_expr(&fa.value, out); }
+        St::DerefAssign { ptr, value } => { collect_idents_expr(ptr, out); collect_idents_expr(value, out); }
+        _ => {}
+    }
+}
+
+fn collect_idents_expr(e: &crate::ast::Expression, out: &mut Vec<String>) {
+    use crate::ast::Expression as Ex;
+    match e {
+        Ex::Identifier(n) => out.push(n.clone()),
+        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) => collect_idents_expr(inner, out),
+        Ex::Infix(i) => { collect_idents_expr(&i.left, out); collect_idents_expr(&i.right, out); }
+        Ex::Call(c) => { collect_idents_expr(&c.function, out); for a in &c.arguments { collect_idents_expr(a, out); } }
+        Ex::DotCall(d) => { collect_idents_expr(&d.object, out); for a in &d.arguments { collect_idents_expr(a, out); } }
+        Ex::Index(ix) => { collect_idents_expr(&ix.left, out); collect_idents_expr(&ix.index, out); }
+        Ex::ArrayLiteral(al) => { for el in &al.elements { collect_idents_expr(el, out); } }
+        Ex::DictLiteral(dl) => { for (k, v) in &dl.entries { collect_idents_expr(k, out); collect_idents_expr(v, out); } }
+        Ex::EntryLiteral(k, v) => { collect_idents_expr(k, out); collect_idents_expr(v, out); }
+        Ex::Ternary(t) => { collect_idents_expr(&t.condition, out); collect_idents_expr(&t.then_expr, out); collect_idents_expr(&t.else_expr, out); }
+        Ex::If(ife) => {
+            collect_idents_expr(&ife.condition, out);
+            collect_idents_block(&ife.consequence, out);
+            if let Some(alt) = &ife.alternative { collect_idents_block(alt, out); }
+        }
+        Ex::InterpolatedString(parts) => { for p in parts { if let crate::ast::StringPart::Expr(ex) = p { collect_idents_expr(ex, out); } } }
+        Ex::New(n) => match &n.args {
+            crate::ast::NewArgs::Positional(v) => { for a in v { collect_idents_expr(a, out); } }
+            crate::ast::NewArgs::Fields(f) => { for (_, a) in f { collect_idents_expr(a, out); } }
+        },
+        Ex::Match(m) => {
+            collect_idents_expr(&m.subject, out);
+            for arm in &m.arms {
+                if let Some(g) = &arm.guard { collect_idents_expr(g, out); }
+                collect_idents_block(&arm.body, out);
+            }
+        }
+        Ex::FunctionLiteral(fl) => collect_idents_block(&fl.body, out),
+        Ex::Lambda(l) => match &l.body {
+            crate::ast::LambdaBody::Block(b) => collect_idents_block(b, out),
+            crate::ast::LambdaBody::Expr(ex) => collect_idents_expr(ex, out),
+        },
+        Ex::UnsafeBlock(b) => collect_idents_block(b, out),
+        Ex::ObjectPatch(fields) => { for (_, ex) in fields { collect_idents_expr(ex, out); } }
+        _ => {}
+    }
+}
+
 impl Evaluator {
     pub fn new() -> Self {
         let mut global_arena = Arena::new();
@@ -307,6 +383,32 @@ impl Evaluator {
             result.push((name, global_ref));
         }
         result
+    }
+
+    /// Capture for lambdas (B-83). `capture_env(false)` already snapshots scoped
+    /// locals, but referenced GLOBAL data vars were resolved live at call time —
+    /// so the same lambda captured locals by value yet globals by reference,
+    /// depending on scope. Here we additionally snapshot referenced global DATA
+    /// vars (functions are skipped so recursion / late binding keep working),
+    /// making lambda capture value-snapshot consistently at every scope level.
+    fn capture_lambda_env(&mut self, body: &crate::ast::BlockStatement) -> Vec<(String, ObjectRef)> {
+        let mut captured = self.capture_env(false);
+        let mut names: Vec<String> = Vec::new();
+        collect_idents_block(body, &mut names);
+        let mut have: std::collections::HashSet<String> =
+            captured.iter().map(|(n, _)| n.clone()).collect();
+        for name in names {
+            if have.contains(&name) { continue; }
+            have.insert(name.clone());
+            // Scoped locals are already captured by capture_env above.
+            if self.scopes.lookup(&name).is_some() { continue; }
+            let gref = match self.global_bindings.get(&name) { Some(&r) => r, None => continue };
+            if matches!(self.resolve(gref), Some(ObjectData::Function { .. })) { continue; }
+            let owned = self.extract(gref);
+            let snap = self.plant_global(owned);
+            captured.push((name, snap));
+        }
+        captured
     }
 
     pub fn display(&self, obj_ref: ObjectRef) -> String {

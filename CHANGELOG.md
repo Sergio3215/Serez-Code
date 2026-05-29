@@ -5,6 +5,18 @@ Order: most recent to oldest.
 
 ---
 
+## [3.8.2] — branch `improve`
+
+### Bug fixes
+
+- **B-83** — Inconsistent lambda capture: scope-dependent snapshot vs. live reference. Lambdas snapshot scoped locals (`capture_env` extracts + plants them to the global arena at creation), but variables referenced from a lambda that live in the **global** arena (top-level `let`s) were resolved *live* at call time. So the exact same lambda captured locals by value but globals by reference, depending only on where it was written: `let x=10; let f=()=>x; x=20; f()` gave `20` at top level but `10` inside a function; `while (i<3){ fns.push(()=>i); i=i+1 }` gave `3 3 3` at top level but `0 1 2` inside a function. Fixed with `capture_lambda_env`: in addition to the existing local snapshot, a best-effort free-identifier walk of the lambda body now also snapshots referenced **global data variables** at creation. Global **functions** are intentionally skipped (kept live) so recursion and late binding keep working. The walk only ever *adds* snapshots — an unhandled construct simply degrades to the previous live-lookup behavior, so it cannot break a valid closure (the whole suite is unchanged). New regression: `45_closure_capture_e2e`.
+
+### Test count
+
+- 305 passing (0 failing) — added `45_closure_capture_e2e`.
+
+---
+
 ## [3.8.1] — branch `improve`
 
 ### Bug fixes
