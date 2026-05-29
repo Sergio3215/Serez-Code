@@ -5,6 +5,18 @@ Order: most recent to oldest.
 
 ---
 
+## [3.8.1] — branch `improve`
+
+### Bug fixes
+
+- **B-82** — Nested arrays corrupted when reassigning an outer-scope variable from inside a nested block. The shared scoped arena is a single stack rewound on block exit (`pop` → `reset_to`). A plain variable assignment (`x = value`) stored a *shallow* clone of the value's `ObjectData`: for an array/dict/set it copied the inner `ObjectRef`s, which could point into a deeper block's region. When that inner block popped, the inner refs dangled — the container's `.length()` stayed correct but indexing an element read a truncated/reused slot (symptom: `is array` == false, "Index operator not supported"). `push`/index-assign/dict-value-assign already promoted to the global arena at `depth > 1`, but plain variable assignment was missed. Fixed by `promote_container_for_assign`: when assigning a heap container (Array/Dict/Set) to a variable from inside a nested scope, the value is deep-promoted to the global arena so its elements outlive inner-block pops. Scalars and instances (fields are `OwnedValue`) are untouched — no effect on loop counters like `i = i + 1`. Found while building serez-ui's `.szs` CSS parser. New regression: `unit_nested_array_assign` (4 cases).
+
+### Test count
+
+- 303 passing (0 failing) — added `unit_nested_array_assign`.
+
+---
+
 ## [2.1.0] — branch `improve`
 
 ### New features

@@ -59,6 +59,7 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
+                let val_ref = self.promote_container_for_assign(val_ref);
                 let new_data = self.resolve(val_ref).unwrap().clone();
 
                 if let Some(r) = self.scopes.assign(&assign_stmt.name, new_data.clone()) {
@@ -161,6 +162,7 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
+                let val_ref = self.promote_container_for_assign(val_ref);
                 let new_data = self.resolve(val_ref).unwrap().clone();
                 if let Some(r) = self.scopes.assign(&var_name, new_data.clone()) {
                     if r.region == RegionId::Global {

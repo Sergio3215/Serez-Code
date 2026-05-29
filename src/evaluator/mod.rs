@@ -466,6 +466,30 @@ impl Evaluator {
         }
     }
 
+    // Cuando se ASIGNA un contenedor (Array/Dict/Set) a una variable desde dentro
+    // de un bloque anidado, sus refs internas pueden apuntar a un scope que se
+    // libera ANTES que la variable (la variable vive en un frame más externo).
+    // Al hacer pop de ese bloque interno, esas refs quedan colgando y el elemento
+    // se lee como basura ("Index operator not supported" / longitud correcta pero
+    // elemento corrupto). Se promueve el contenedor (deep) a la arena global para
+    // que sus elementos sobrevivan. Escalares e instancias (campos OwnedValue) no
+    // sufren esto y se devuelven sin tocar — evita fugas con `i = i + 1`, etc.
+    fn promote_container_for_assign(&mut self, val_ref: ObjectRef) -> ObjectRef {
+        if val_ref.region != RegionId::Scoped || self.scopes.depth() <= 1 {
+            return val_ref;
+        }
+        let is_container = matches!(
+            self.resolve(val_ref),
+            Some(ObjectData::Array { .. }) | Some(ObjectData::Dict { .. }) | Some(ObjectData::Set { .. })
+        );
+        if is_container {
+            let owned = self.extract(val_ref);
+            self.plant_global(owned)
+        } else {
+            val_ref
+        }
+    }
+
     // Igual que plant() pero siempre aloca en la arena global.
     // Necesario cuando se muta un array global desde dentro de un scope:
     // los nuevos elementos deben vivir en la misma arena que el array.

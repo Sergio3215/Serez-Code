@@ -1,0 +1,71 @@
+// unit_nested_array_assign.sz — Regression for the nested-array corruption bug.
+//
+// Reassigning a variable (declared in an outer block) to an array-of-arrays
+// produced inside an inner block used to leave the array's element refs
+// dangling once the inner block popped (shallow clone kept inner-scope refs).
+// The element would read back as a scalar ("Index operator not supported" /
+// `is array` == false) even though `.length()` was correct.
+// Fixed by promoting heap containers to the global arena on cross-scope assign.
+
+test("reassign array-of-arrays from inner block", () => {
+    let decls = [];
+    let flag = true;
+    if (flag) {
+        let inner = [[1, 2], [3, 4]];
+        decls = inner;
+    }
+    assert(decls.length() == 2, "decls length preserved");
+    assert(decls[0] is array, "decls[0] is still an array");
+    assert(decls[1] is array, "decls[1] is still an array");
+    assert(decls[1][1] == 4, "decls[1][1] == 4");
+});
+
+test("reassign nested array in a loop (multiple iterations)", () => {
+    let rows = [];
+    let n = 0;
+    while (n < 3) {
+        let row = [];
+        if (n >= 0) {
+            let built = [[n, n + 1]];
+            row = built;
+        }
+        rows.push(row[0]);
+        n = n + 1;
+    }
+    assert(rows.length() == 3, "three rows collected");
+    assert(rows[0] is array, "rows[0] is array");
+    assert(rows[2] is array, "rows[2] is array");
+    assert(rows[2][1] == 3, "rows[2][1] == 3");
+});
+
+test("three-level nesting reassigned from inner block", () => {
+    let deep = [];
+    let flag = true;
+    if (flag) {
+        let v = [[[7]]];
+        deep = v;
+    }
+    assert(deep[0] is array, "deep[0] is array");
+    assert(deep[0][0] is array, "deep[0][0] is array");
+    assert(deep[0][0][0] == 7, "deep[0][0][0] == 7");
+});
+
+test("compound-assign accumulating nested arrays across blocks", () => {
+    let acc = [];
+    let i = 0;
+    while (i < 2) {
+        if (i == 0) {
+            let pair = [10, 20];
+            acc.push(pair);
+        } else {
+            let pair = [30, 40];
+            acc.push(pair);
+        }
+        i = i + 1;
+    }
+    assert(acc[0] is array, "acc[0] is array");
+    assert(acc[1] is array, "acc[1] is array");
+    assert(acc[1][0] == 30, "acc[1][0] == 30");
+});
+
+summary();
