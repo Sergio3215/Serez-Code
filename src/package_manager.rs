@@ -277,7 +277,8 @@ fn download_package(pkg_name: &str, version: &str) -> Result<(), String> {
 // ── Publish / Unpublish / Info ────────────────────────────────────────────────
 
 /// Publish the package in the current directory to the registry.
-/// Reads serez.json, zips all .sz files, and POSTs to /api/publish.
+/// Reads serez.json, zips the package directory recursively (honoring .szignore),
+/// and POSTs to /api/publish.
 pub fn publish_package() -> Result<(), String> {
     let cwd = std::env::current_dir()
         .map_err(|e| format!("Cannot get current directory: {}", e))?;
@@ -416,29 +417,136 @@ fn extract_json_number(json: &str, key: &str) -> Option<u64> {
 fn create_package_zip(dir: &Path) -> Result<Vec<u8>, String> {
     use std::io::Write;
 
+    let patterns = read_szignore(dir);
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    collect_package_files(dir, dir, &patterns, &mut files)?;
+    files.sort();
+
     let buf = std::io::Cursor::new(Vec::new());
     let mut zip = zip::ZipWriter::new(buf);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    for entry in std::fs::read_dir(dir)
-        .map_err(|e| format!("Cannot read directory: {}", e))?
-    {
-        let entry = entry.map_err(|e| format!("Directory read error: {}", e))?;
-        let path  = entry.path();
-        if path.is_file() && path.extension().map_or(false, |ext| ext == "sz") {
-            let fname = path.file_name().unwrap().to_string_lossy().to_string();
-            zip.start_file(&fname, options)
-                .map_err(|e| format!("Zip error on '{}': {}", fname, e))?;
-            let content = std::fs::read(&path)
-                .map_err(|e| format!("Cannot read '{}': {}", fname, e))?;
-            zip.write_all(&content)
-                .map_err(|e| format!("Zip write error: {}", e))?;
-        }
+    for (rel, path) in &files {
+        zip.start_file(rel, options)
+            .map_err(|e| format!("Zip error on '{}': {}", rel, e))?;
+        let content = std::fs::read(path)
+            .map_err(|e| format!("Cannot read '{}': {}", rel, e))?;
+        zip.write_all(&content)
+            .map_err(|e| format!("Zip write error: {}", e))?;
     }
 
     let buf = zip.finish().map_err(|e| format!("Zip finish error: {}", e))?;
     Ok(buf.into_inner())
+}
+
+/// Read patterns from `<dir>/.szignore` (gitignore-like). Blank lines and lines
+/// starting with `#` are skipped. Returns an empty list if the file is absent.
+fn read_szignore(dir: &Path) -> Vec<String> {
+    match std::fs::read_to_string(dir.join(".szignore")) {
+        Ok(s) => s
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Recursively collect files under `dir` (relative to `root`), skipping ignored
+/// paths, `.git/` and the `.szignore` file itself. Fills `out` with
+/// (relative_path_with_forward_slashes, absolute_path).
+fn collect_package_files(
+    root: &Path,
+    dir: &Path,
+    patterns: &[String],
+    out: &mut Vec<(String, PathBuf)>,
+) -> Result<(), String> {
+    for entry in std::fs::read_dir(dir).map_err(|e| format!("Cannot read directory: {}", e))? {
+        let entry = entry.map_err(|e| format!("Directory read error: {}", e))?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Never publish VCS metadata or the ignore file itself.
+        if name == ".git" || name == ".szignore" {
+            continue;
+        }
+
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        if is_ignored(&rel, patterns) {
+            continue;
+        }
+
+        if path.is_dir() {
+            collect_package_files(root, &path, patterns, out)?;
+        } else if path.is_file() {
+            out.push((rel, path));
+        }
+    }
+    Ok(())
+}
+
+/// gitignore-like match. A pattern may be an exact name/path, a directory
+/// (`apps/` or `/apps/`) which excludes it and everything under it, or a glob
+/// with `*` (e.g. `*.txt`).
+fn is_ignored(rel: &str, patterns: &[String]) -> bool {
+    let rel = rel.trim_start_matches("./");
+    for pat in patterns {
+        let p = pat.trim_start_matches("./").trim_start_matches('/');
+        if p.is_empty() {
+            continue;
+        }
+        // Directory pattern: "apps/" → the dir and everything beneath it.
+        if let Some(d) = p.strip_suffix('/') {
+            if rel == d
+                || rel.starts_with(&format!("{}/", d))
+                || rel.split('/').any(|seg| seg == d)
+            {
+                return true;
+            }
+            continue;
+        }
+        // Glob pattern: matched against the basename and the full relative path.
+        if p.contains('*') {
+            let base = rel.rsplit('/').next().unwrap_or(rel);
+            if glob_match(p, base) || glob_match(p, rel) {
+                return true;
+            }
+            continue;
+        }
+        // Plain name/path: exact path, basename anywhere, or as a directory prefix.
+        let base = rel.rsplit('/').next().unwrap_or(rel);
+        if rel == p
+            || base == p
+            || rel.starts_with(&format!("{}/", p))
+            || rel.split('/').any(|seg| seg == p)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Minimal wildcard matcher supporting `*` (matches any run of characters).
+fn glob_match(pattern: &str, text: &str) -> bool {
+    fn helper(p: &[u8], t: &[u8]) -> bool {
+        if p.is_empty() {
+            return t.is_empty();
+        }
+        if p[0] == b'*' {
+            helper(&p[1..], t) || (!t.is_empty() && helper(p, &t[1..]))
+        } else if !t.is_empty() && p[0] == t[0] {
+            helper(&p[1..], &t[1..])
+        } else {
+            false
+        }
+    }
+    helper(pattern.as_bytes(), text.as_bytes())
 }
 
 /// Extract a zip archive into dest/, skipping any top-level directory wrapper.
@@ -447,18 +555,21 @@ fn extract_zip(data: &[u8], dest: &Path) -> Result<(), String> {
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid zip archive: {}", e))?;
 
-    // Detect common top-level prefix (e.g. "serez-ai-1.0.0/") to strip it
-    let prefix: Option<String> = (archive.len() > 0)
-        .then(|| {
+    // Detect a single common top-level wrapper dir (e.g. "serez-ai-1.0.0/") shared
+    // by ALL entries, and strip it. If entries don't share one prefix (files at the
+    // root plus subdirs like src/), strip nothing — preserve the layout as-is.
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| {
             archive
-                .by_index(0)
-                .ok()
-                .and_then(|f| {
-                    let name = f.name().to_string();
-                    name.find('/').map(|i| name[..=i].to_string())
-                })
+                .by_index(i)
+                .map(|f| f.name().to_string())
+                .unwrap_or_default()
         })
-        .flatten();
+        .collect();
+    let prefix: Option<String> = names
+        .first()
+        .and_then(|name| name.find('/').map(|i| name[..=i].to_string()))
+        .filter(|p| names.iter().all(|n| n.starts_with(p.as_str())));
 
     std::fs::create_dir_all(dest)
         .map_err(|e| format!("Cannot create destination: {}", e))?;
