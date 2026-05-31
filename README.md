@@ -1,6 +1,6 @@
 <div align="center">
 
-# ![](./img/serez-icon.svg) Serez-Code
+# ![](./img/sz-icon.svg) Serez-Code
 
 **A hand-crafted interpreted programming language — written from scratch in Rust.**
 

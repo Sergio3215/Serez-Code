@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 150" width="35" height="35" style="background-color: rgba(0,0,0,0.0);">
+<defs>
+<linearGradient id="sz-gradient" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#8b5cf6"/><stop offset="100%" stop-color="#0ea5e9"/>
+</linearGradient>
+</defs>
+<rect width="150" height="150" fill="url(#sz-gradient)" rx="20"/>
+<text x="75" y="82" fill="#fff" dominant-baseline="middle" font-family="system-ui, -apple-system, sans-serif" font-size="70" font-weight="900" letter-spacing="0" text-anchor="middle">.SZ</text>
+</svg>
