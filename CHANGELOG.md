@@ -5,23 +5,19 @@ Order: most recent to oldest.
 
 ---
 
-## [4.0.0] — branch `improve`
+## [4.0.1] — branch `improve`
 
 ### Networking / stdlib
 
-- **`fetch` is now a complete general-purpose HTTP client.** Previously `fetch(url, [method], [body])` always sent a hardcoded `Content-Type: application/json`, had a fixed 10 s timeout, threw on any status ≥ 400 (discarding the response body), only supported GET/POST/PUT/PATCH/DELETE, and corrupted binary responses via `from_utf8_lossy`. It now accepts an optional **options dict** after the url — `fetch(url, [method], [body], options)` — where `options` is a serez dict (e.g. `({"full", true})`):
-  - `headers` — a `<string, string>` dict of request headers (enables `Authorization`, `Accept`, cookies, custom headers, …). Names/values containing control chars (`\n` `\r` `\0`) are rejected to prevent CRLF / header injection. A user-set `Content-Type` overrides the default (which is now only applied when a body is sent and the user didn't set one).
-  - **Default `User-Agent`** — `fetch` now sends `User-Agent: Serez-Code/<version>` unless the caller sets one in `headers`. Without it, ureq sends `ureq/x.y`, which some CDNs/WAFs answer with `503`; an identifiable UA avoids those spurious failures. A caller-provided `User-Agent` always wins.
-  - `timeout` — request timeout in seconds (default **60**, was 10; connect capped at 30).
-  - `full` — when `true`, returns a `<string, any>` dict `{ status, ok, statusText, headers, body }` and does **not** throw on HTTP status, so 4xx/5xx (404, 429, 529, …) can be inspected. `headers` is a `<string, any>` dict keyed by lowercased name; a missing key reads as `null`.
-  - `binary` — when `true`, the body is returned as a byte array `[int]` (0-255) instead of a UTF-8 string, so images / zips / PDFs download intact. Decode with `Binary.toUtf8` / `Binary.toHex`.
-  - Default (no options) behaviour is unchanged: returns the body string and throws on status ≥ 400 — now with the response body embedded in the thrown message instead of just the status code.
-  - Any HTTP method is accepted (incl. HEAD/OPTIONS) via `Agent::request`. Arguments are sniffed by type: the first string after the url is the method, the second is the body, and a dict is the options — so `fetch(url, opts)`, `fetch(url, "POST", opts)` and `fetch(url, "POST", body, opts)` all work. 100% backward compatible; `native fn` declarations are unaffected.
-  - Implemented in `src/evaluator/builtins.rs` (`eval_fetch` + `fetch_make_value`).
+- **Default `User-Agent`** — `fetch` now sends `User-Agent: Serez-Code/<version>` unless the caller sets one in `headers`. Without it, ureq sends `ureq/x.y`, which some CDNs/WAFs answer with `503`; an identifiable UA avoids those spurious failures. A caller-provided `User-Agent` always wins. (`src/evaluator/builtins.rs`, `eval_fetch`.)
 
 ### JSON
 
 - **`JSON.pretty(value, [indent])`** — pretty-prints values as indented JSON (default **2** spaces per level; `0` falls back to compact). When given a raw JSON string — such as a `fetch` response body — it parses it first and re-indents, so `JSON.pretty(fetch(url))` prints formatted output directly; non-JSON strings are kept as-is. `JSON.stringify` is unchanged (still compact, single-line). Implemented in `src/evaluator/mod.rs` (`json_pretty_owned` / `json_pretty_inner`) + `src/evaluator/namespaces.rs`.
+
+### Docs
+
+- Documented the `fetch` HTTP client (signature, default headers incl. the new `User-Agent`, options dict, `full`/`binary` modes, throw-on-4xx/5xx) and `JSON.pretty` in `README.md` and the serez-code-page builtins page.
 
 ### Fixes
 
@@ -31,6 +27,25 @@ Order: most recent to oldest.
 ### Test count
 
 - 310 passing (0 failing) — added `unit_json_pretty` (10 `JSON.pretty` cases) and two `fetch` User-Agent tests in `unit_native_fns`.
+
+---
+
+## [4.0.0] — branch `improve`
+
+### Networking / stdlib
+
+- **`fetch` is now a complete general-purpose HTTP client.** Previously `fetch(url, [method], [body])` always sent a hardcoded `Content-Type: application/json`, had a fixed 10 s timeout, threw on any status ≥ 400 (discarding the response body), only supported GET/POST/PUT/PATCH/DELETE, and corrupted binary responses via `from_utf8_lossy`. It now accepts an optional **options dict** after the url — `fetch(url, [method], [body], options)` — where `options` is a serez dict (e.g. `({"full", true})`):
+  - `headers` — a `<string, string>` dict of request headers (enables `Authorization`, `Accept`, cookies, custom headers, …). Names/values containing control chars (`\n` `\r` `\0`) are rejected to prevent CRLF / header injection. A user-set `Content-Type` overrides the default (which is now only applied when a body is sent and the user didn't set one).
+  - `timeout` — request timeout in seconds (default **60**, was 10; connect capped at 30).
+  - `full` — when `true`, returns a `<string, any>` dict `{ status, ok, statusText, headers, body }` and does **not** throw on HTTP status, so 4xx/5xx (404, 429, 529, …) can be inspected. `headers` is a `<string, any>` dict keyed by lowercased name; a missing key reads as `null`.
+  - `binary` — when `true`, the body is returned as a byte array `[int]` (0-255) instead of a UTF-8 string, so images / zips / PDFs download intact. Decode with `Binary.toUtf8` / `Binary.toHex`.
+  - Default (no options) behaviour is unchanged: returns the body string and throws on status ≥ 400 — now with the response body embedded in the thrown message instead of just the status code.
+  - Any HTTP method is accepted (incl. HEAD/OPTIONS) via `Agent::request`. Arguments are sniffed by type: the first string after the url is the method, the second is the body, and a dict is the options — so `fetch(url, opts)`, `fetch(url, "POST", opts)` and `fetch(url, "POST", body, opts)` all work. 100% backward compatible; `native fn` declarations are unaffected.
+  - Implemented in `src/evaluator/builtins.rs` (`eval_fetch` + `fetch_make_value`).
+
+### Test count
+
+- 309 passing (0 failing) — added `43_fetch_full_e2e`, `44_fetch_binary_e2e`, `sec_fetch_header_injection`.
 
 ---
 
