@@ -821,6 +821,182 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
 
+            // ── Phase 1-2: New activations (tracked) ─────────────────────────
+            "elu" => {
+                let alpha = if dot_call.arguments.is_empty() { 1.0 } else {
+                    match self.eval_expression(&dot_call.arguments[0]) {
+                        EvalResult::Value(r) => match self.resolve(r) {
+                            Some(ObjectData::Decimal(d)) => *d,
+                            Some(ObjectData::Integer(n)) => *n as f64,
+                            _ => 1.0,
+                        },
+                        _ => 1.0,
+                    }
+                };
+                let cached_input = data.clone();
+                let new_data: Vec<f64> = data.iter().map(|&x| {
+                    if x > 0.0 { x } else { alpha * (x.exp() - 1.0) }
+                }).collect();
+                let out_ref = self.alloc_tensor(shape, new_data);
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Elu { in_id, cached_input, alpha });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            "swish" | "silu" => {
+                // swish(x) = x * sigmoid(x)  — also known as SiLU
+                let cached_sigmoid: Vec<f64> = data.iter()
+                    .map(|&x| 1.0 / (1.0 + (-x).exp())).collect();
+                let new_data: Vec<f64> = data.iter().zip(cached_sigmoid.iter())
+                    .map(|(&x, &s)| x * s).collect();
+                let out_ref = self.alloc_tensor(shape, new_data);
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Swish { in_id, cached_sigmoid });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            "mish" => {
+                // mish(x) = x * tanh(softplus(x))  where softplus(x) = ln(1 + e^x)
+                let cached_input = data.clone();
+                let new_data: Vec<f64> = data.iter().map(|&x| {
+                    let sp = (1.0 + x.exp()).ln();
+                    x * sp.tanh()
+                }).collect();
+                let out_ref = self.alloc_tensor(shape, new_data);
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Mish { in_id, cached_input });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // leaky_relu with autodiff tracking
+            "leaky_relu_tracked" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.leaky_relu_tracked(alpha) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let a_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let alpha = match self.resolve(a_ref).cloned() {
+                    Some(ObjectData::Integer(n)) => n as f64,
+                    Some(ObjectData::Decimal(d)) => d,
+                    _ => { eprintln!("❌ ERROR: Tensor.leaky_relu_tracked() alpha must be a number"); return EvalResult::Error; }
+                };
+                let cached_input = data.clone();
+                let new_data: Vec<f64> = data.iter().map(|&x| if x >= 0.0 { x } else { alpha * x }).collect();
+                let out_ref = self.alloc_tensor(shape, new_data);
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::LeakyRelu { in_id, cached_input, alpha });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── Phase 2: avg_pool2d ───────────────────────────────────────────
+            "avg_pool2d" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Tensor.avg_pool2d(kernel, stride) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 4 {
+                    eprintln!("❌ ERROR: Tensor.avg_pool2d() input must be 4D [N, H, W, C]");
+                    return EvalResult::Error;
+                }
+                let k_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let s_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let kernel = match self.resolve(k_ref) {
+                    Some(ObjectData::Integer(n)) if *n > 0 => *n as usize,
+                    _ => { eprintln!("❌ ERROR: avg_pool2d kernel must be a positive integer"); return EvalResult::Error; }
+                };
+                let stride = match self.resolve(s_ref) {
+                    Some(ObjectData::Integer(n)) if *n > 0 => *n as usize,
+                    _ => { eprintln!("❌ ERROR: avg_pool2d stride must be a positive integer"); return EvalResult::Error; }
+                };
+                let (n_batch, in_h, in_w, ch) = (shape[0], shape[1], shape[2], shape[3]);
+                let out_h = (in_h - kernel) / stride + 1;
+                let out_w = (in_w - kernel) / stride + 1;
+                let pool_area = (kernel * kernel) as f64;
+                let mut out_data = vec![0.0_f64; n_batch * out_h * out_w * ch];
+                for nb in 0..n_batch {
+                    for oh in 0..out_h {
+                        for ow in 0..out_w {
+                            for c in 0..ch {
+                                let mut s = 0.0_f64;
+                                for kh in 0..kernel {
+                                    for kw in 0..kernel {
+                                        let ih = oh * stride + kh;
+                                        let iw = ow * stride + kw;
+                                        s += data[nb*in_h*in_w*ch + ih*in_w*ch + iw*ch + c];
+                                    }
+                                }
+                                out_data[nb*out_h*out_w*ch + oh*out_w*ch + ow*ch + c] = s / pool_area;
+                            }
+                        }
+                    }
+                }
+                let out_shape = vec![n_batch, out_h, out_w, ch];
+                let out_ref = self.alloc_tensor(out_shape.clone(), out_data);
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::AvgPool2d {
+                        in_id, kernel, stride,
+                        in_shape: shape.clone(),
+                        out_shape,
+                    });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── Phase 3: Additional tensor utilities ──────────────────────────
+            "variance" => {
+                // .variance() → scalar tensor
+                let n = data.len() as f64;
+                let mean = data.iter().sum::<f64>() / n;
+                let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![1], data: vec![var], tid: 0 }))
+            }
+
+            "std" => {
+                // .std() → scalar tensor
+                let n = data.len() as f64;
+                let mean = data.iter().sum::<f64>() / n;
+                let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![1], data: vec![var.sqrt()], tid: 0 }))
+            }
+
+            "cumsum" => {
+                // .cumsum() → flat cumulative sum tensor
+                let mut out = Vec::with_capacity(data.len());
+                let mut acc = 0.0_f64;
+                for &x in &data { acc += x; out.push(acc); }
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![data.len()], data: out, tid: 0 }))
+            }
+
+            "softplus" => {
+                // softplus(x) = log(1 + exp(x))
+                let new_data: Vec<f64> = data.iter()
+                    .map(|&x| (1.0 + x.exp()).ln()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "hardsigmoid" => {
+                // hard sigmoid: clamp((x+3)/6, 0, 1)
+                let new_data: Vec<f64> = data.iter()
+                    .map(|&x| ((x + 3.0) / 6.0).clamp(0.0, 1.0)).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "hardswish" => {
+                // hard swish: x * hardsigmoid(x)
+                let new_data: Vec<f64> = data.iter()
+                    .map(|&x| x * ((x + 3.0) / 6.0).clamp(0.0, 1.0)).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
             // ── conv2d(weights, bias, kernel, stride) ─────────────────────────
             "conv2d" => {
                 if dot_call.arguments.len() != 4 {

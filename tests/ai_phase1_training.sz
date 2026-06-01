@@ -1,0 +1,211 @@
+// Phase 1: Core training infrastructure tests
+// Optimizers, loss functions, weight initialization, gradient clipping
+
+// ── Weight initialization ─────────────────────────────────────────────────────
+
+test("xavierUniform shape [4,3] is correct", () => {
+    let w = Autodiff.xavierUniform([4, 3])
+    let s = w.shape
+    assert(s[0] == 4 and s[1] == 3, "xavierUniform shape mismatch")
+})
+
+test("xavierUniform values are bounded", () => {
+    let w = Autodiff.xavierUniform([10, 10])
+    let limit = Math.sqrt(6.0 / 20.0)
+    let all_data = w.toArray()
+    let i = 0
+    while i < all_data.length() {
+        assert(all_data[i] >= -limit - 0.01 and all_data[i] <= limit + 0.01, "xavierUniform out of bounds at " + i)
+        i++
+    }
+})
+
+test("heNormal shape [8,4] is correct", () => {
+    let w = Autodiff.heNormal([8, 4])
+    let s = w.shape
+    assert(s[0] == 8 and s[1] == 4, "heNormal shape mismatch")
+})
+
+test("xavierNormal produces non-zero values", () => {
+    let w = Autodiff.xavierNormal([4, 4])
+    let arr = w.toArray()
+    let nonzero = false
+    let i = 0
+    while i < arr.length() {
+        if arr[i] != 0.0 { nonzero = true }
+        i++
+    }
+    assert(nonzero, "xavierNormal all zeros")
+})
+
+test("heUniform shape correct", () => {
+    let w = Autodiff.heUniform([6, 2])
+    let s = w.shape
+    assert(s[0] == 6 and s[1] == 2, "heUniform shape")
+})
+
+// ── Loss functions ────────────────────────────────────────────────────────────
+
+test("mseLoss perfect prediction = 0", () => {
+    let pred = Tensor.from([1.0, 2.0, 3.0])
+    let tgt  = Tensor.from([1.0, 2.0, 3.0])
+    let loss = Autodiff.mseLoss(pred, tgt)
+    let v = loss.toArray()[0]
+    assert(v < 0.001, "mseLoss perfect prediction should be ~0, got " + v)
+})
+
+test("mseLoss known value", () => {
+    // MSE([0,0], [1,1]) = (1+1)/2 = 1.0
+    let pred = Tensor.from([0.0, 0.0])
+    let tgt  = Tensor.from([1.0, 1.0])
+    let loss = Autodiff.mseLoss(pred, tgt)
+    let v = loss.toArray()[0]
+    assert(v > 0.99 and v < 1.01, "mseLoss expected ~1.0, got " + v)
+})
+
+test("maeLoss known value", () => {
+    // MAE([0,0], [1,1]) = (1+1)/2 = 1.0
+    let pred = Tensor.from([0.0, 0.0])
+    let tgt  = Tensor.from([1.0, 1.0])
+    let loss = Autodiff.maeLoss(pred, tgt)
+    let v = loss.toArray()[0]
+    assert(v > 0.99 and v < 1.01, "maeLoss expected ~1.0, got " + v)
+})
+
+test("bceLoss perfect sigmoid output near 0", () => {
+    // BCE(0.99, 1.0) ≈ -ln(0.99) ≈ 0.01
+    let pred = Tensor.from([0.99])
+    let tgt  = Tensor.from([1.0])
+    let loss = Autodiff.bceLoss(pred, tgt)
+    let v = loss.toArray()[0]
+    assert(v < 0.02, "bceLoss perfect should be small, got " + v)
+})
+
+test("crossEntropyLoss correct class = low loss", () => {
+    // logits: [10, -10] — class 0 is strongly predicted
+    // target: [0] — class 0
+    let logits = Tensor.from([10.0, -10.0])
+    logits = logits.reshape([1, 2])
+    let targets = Tensor.from([0.0])
+    let loss = Autodiff.crossEntropyLoss(logits, targets)
+    let v = loss.toArray()[0]
+    assert(v < 0.001, "crossEntropyLoss should be near 0 for correct confident prediction, got " + v)
+})
+
+test("crossEntropyLoss wrong class = high loss", () => {
+    // logits: [10, -10] — class 0 strongly predicted
+    // target: [1] — class 1 (wrong)
+    let logits = Tensor.from([10.0, -10.0])
+    logits = logits.reshape([1, 2])
+    let targets = Tensor.from([1.0])
+    let loss = Autodiff.crossEntropyLoss(logits, targets)
+    let v = loss.toArray()[0]
+    assert(v > 5.0, "crossEntropyLoss should be high for wrong prediction, got " + v)
+})
+
+// ── Gradient clipping ─────────────────────────────────────────────────────────
+
+test("clipGrad clips large gradient", () => {
+    let grad = Tensor.from([3.0, 4.0])  // norm = 5.0
+    let clipped = Autodiff.clipGrad(grad, 1.0)
+    let arr = clipped.toArray()
+    let norm = Math.sqrt(arr[0]*arr[0] + arr[1]*arr[1])
+    assert(norm < 1.01, "clipGrad norm should be <= 1.0, got " + norm)
+})
+
+test("clipGrad does not clip small gradient", () => {
+    let grad = Tensor.from([0.1, 0.1])
+    let clipped = Autodiff.clipGrad(grad, 10.0)
+    let arr = clipped.toArray()
+    assert(arr[0] > 0.09 and arr[0] < 0.11, "clipGrad should not change small grad")
+})
+
+test("clipGradNorm clips array of gradients", () => {
+    let g1 = Tensor.from([3.0, 4.0])  // norm = 5.0
+    let g2 = Tensor.from([0.0, 0.0])
+    let clipped = Autodiff.clipGradNorm([g1, g2], 1.0)
+    let c1 = clipped[0]
+    let arr = c1.toArray()
+    let n = Math.sqrt(arr[0]*arr[0] + arr[1]*arr[1])
+    assert(n < 1.01, "clipGradNorm should clip to max_norm, got " + n)
+})
+
+// ── Optimizers ────────────────────────────────────────────────────────────────
+
+test("adamStep decreases loss on linear regression", () => {
+    // Simple: param = [0.0], target = [1.0]
+    // After one step, param should move toward 1.0
+    let param = Tensor.from([0.0])
+    let m = Tensor.zeros([1])
+    let v = Tensor.zeros([1])
+
+    Autodiff.tape()
+    let loss = Autodiff.mseLoss(param, Tensor.from([1.0]))
+    Autodiff.backward(loss)
+    let grad = Autodiff.gradient(param)
+    let result = Autodiff.adamStep(param, grad, m, v, 1, 0.1)
+    let new_param = result[0]
+    let arr = new_param.toArray()
+    assert(arr[0] > 0.0, "adam should move param toward target, got " + arr[0])
+})
+
+test("sgdStep moves parameter in correct direction", () => {
+    let param = Tensor.from([0.0])
+    let grad  = Tensor.from([2.0])   // loss increases with param → grad > 0 → update decreases param
+    let vel   = Tensor.zeros([1])
+    let result = Autodiff.sgdStep(param, grad, vel, 0.1)
+    let new_param = result[0]
+    let arr = new_param.toArray()
+    // new_vel = 0.9*0 - 0.1*2 = -0.2; new_p = 0 + (-0.2) = -0.2
+    assert(arr[0] < 0.0, "sgd should decrease param when grad>0, got " + arr[0])
+})
+
+test("adamwStep applies weight decay", () => {
+    let param = Tensor.from([1.0])
+    let grad  = Tensor.zeros([1])
+    let m     = Tensor.zeros([1])
+    let v     = Tensor.zeros([1])
+    // With zero grad and weight decay, param should decrease
+    let result = Autodiff.adamwStep(param, grad, m, v, 1, 0.1, 0.1)
+    let new_p = result[0]
+    let arr = new_p.toArray()
+    assert(arr[0] < 1.0, "adamw weight decay should shrink param, got " + arr[0])
+})
+
+test("rmspropStep moves toward target", () => {
+    let param  = Tensor.from([0.0])
+    let grad   = Tensor.from([-1.0])  // neg grad → param should increase
+    let sq_avg = Tensor.zeros([1])
+    let result = Autodiff.rmspropStep(param, grad, sq_avg, 0.01)
+    let new_p  = result[0]
+    let arr = new_p.toArray()
+    assert(arr[0] > 0.0, "rmsprop negative grad should increase param, got " + arr[0])
+})
+
+// ── Autodiff with new loss functions ─────────────────────────────────────────
+
+test("mseLoss backward produces correct gradient", () => {
+    // MSE([p], [1]) = (p-1)^2 → d/dp = 2*(p-1)
+    // For p=0: d/dp = -2, normalized = -2/1 = -2
+    let param = Tensor.from([0.0])
+    Autodiff.tape()
+    let loss = Autodiff.mseLoss(param, Tensor.from([1.0]))
+    Autodiff.backward(loss)
+    let grad = Autodiff.gradient(param)
+    let g = grad.toArray()[0]
+    // d/dp MSE = 2*(p-target)/n = 2*(0-1)/1 = -2
+    assert(g < -1.9 and g > -2.1, "mseLoss gradient should be -2, got " + g)
+})
+
+test("crossEntropyLoss backward gradient flows", () => {
+    let logits = Tensor.from([1.0, 0.0])
+    logits = logits.reshape([1, 2])
+    Autodiff.tape()
+    let loss = Autodiff.crossEntropyLoss(logits, Tensor.from([0.0]))
+    Autodiff.backward(loss)
+    let grad = Autodiff.gradient(logits)
+    let s = grad.shape
+    assert(s[0] == 1 and s[1] == 2, "crossEntropy gradient shape should be [1,2]")
+})
+
+summary()

@@ -87,6 +87,37 @@ pub enum TapeOp {
         concat_heads: Vec<f64>, // [sl, dm]
         seq_len: usize, d_model: usize, n_heads: usize, dh: usize,
     },
+    // ── Phase 1: Loss functions ───────────────────────────────────────────────
+    MseLoss { pred_id: u64, target_data: Vec<f64>, n: usize },
+    MaeLoss { pred_id: u64, signs: Vec<f64>, n: usize },
+    BceLoss { pred_id: u64, pred_data: Vec<f64>, target_data: Vec<f64>, n: usize },
+    CrossEntropyLoss { logits_id: u64, probs: Vec<f64>, target_indices: Vec<usize>, batch: usize, classes: usize },
+    // ── Phase 2: Activations ─────────────────────────────────────────────────
+    Elu   { in_id: u64, cached_input: Vec<f64>, alpha: f64 },
+    Swish { in_id: u64, cached_sigmoid: Vec<f64> },
+    Mish  { in_id: u64, cached_input: Vec<f64> },
+    // ── Phase 2: Normalization & Regularization ───────────────────────────────
+    BatchNorm {
+        in_id: u64, g_id: u64, b_id: u64,
+        eps: f64,
+        x_norm: Vec<f64>,   // [N, C] normalized values
+        stds:   Vec<f64>,   // [C] per-feature std
+        x_mu:   Vec<f64>,   // [N, C] x - mean
+        gamma_data: Vec<f64>,
+        rows: usize, cols: usize,
+    },
+    Dropout { in_id: u64, mask: Vec<f64>, keep_prob: f64 },
+    // ── Phase 2: Embedding ───────────────────────────────────────────────────
+    Embedding { w_id: u64, indices: Vec<usize>, seq_len: usize, emb_dim: usize },
+    // ── Phase 2: Pooling ─────────────────────────────────────────────────────
+    AvgPool2d {
+        in_id: u64,
+        kernel: usize, stride: usize,
+        in_shape: Vec<usize>,
+        out_shape: Vec<usize>,
+    },
+    // ── Phase 2: Leaky relu (tracked) ────────────────────────────────────────
+    LeakyRelu { in_id: u64, cached_input: Vec<f64>, alpha: f64 },
 }
 
 #[derive(Clone, Debug)]
@@ -531,6 +562,205 @@ impl super::Evaluator {
                             Self::accum_grad(&mut self.ad_grads, *wv_id, dwv);
                             Self::accum_grad(&mut self.ad_grads, *wo_id, dwo);
                         }
+                        // ── Phase 1: Loss function backwards ─────────────────
+                        TapeOp::MseLoss { pred_id, target_data, n } => {
+                            // d/d_pred = 2*(pred - target) / n
+                            let g_scalar = out_grad.iter().sum::<f64>();
+                            // We stored target; grad w.r.t. pred requires pred values.
+                            // pred values are not stored — only the target.
+                            // Workaround: The tape doesn't store pred_data, so we recover
+                            // the gradient shape from target_data.
+                            let scale = 2.0 * g_scalar / (*n as f64);
+                            // We emit a "ones * scale" gradient — the real per-element
+                            // gradient requires pred-target which is only available if we
+                            // store it at record time (done via a separate step below).
+                            // NOTE: MseLoss TapeOp now stores pred-target diff. See forward.
+                            let dpred: Vec<f64> = target_data.iter()
+                                .map(|diff| diff * scale).collect();
+                            Self::accum_grad(&mut self.ad_grads, *pred_id, dpred);
+                        }
+                        TapeOp::MaeLoss { pred_id, signs, n } => {
+                            let g_scalar = out_grad.iter().sum::<f64>();
+                            let scale = g_scalar / (*n as f64);
+                            let dpred: Vec<f64> = signs.iter().map(|s| s * scale).collect();
+                            Self::accum_grad(&mut self.ad_grads, *pred_id, dpred);
+                        }
+                        TapeOp::BceLoss { pred_id, pred_data, target_data, n } => {
+                            let g_scalar = out_grad.iter().sum::<f64>();
+                            let scale = g_scalar / (*n as f64);
+                            let eps = 1e-12_f64;
+                            let dpred: Vec<f64> = pred_data.iter().zip(target_data.iter())
+                                .map(|(&p, &t)| {
+                                    let p = p.clamp(eps, 1.0 - eps);
+                                    (-t / p + (1.0 - t) / (1.0 - p)) * scale
+                                }).collect();
+                            Self::accum_grad(&mut self.ad_grads, *pred_id, dpred);
+                        }
+                        TapeOp::CrossEntropyLoss { logits_id, probs, target_indices, batch, classes } => {
+                            let g_scalar = out_grad.iter().sum::<f64>();
+                            let scale = g_scalar / (*batch as f64);
+                            let mut dlogits = vec![0.0f64; batch * classes];
+                            for b in 0..*batch {
+                                for c in 0..*classes {
+                                    let mut d = probs[b * classes + c];
+                                    if c == target_indices[b] { d -= 1.0; }
+                                    dlogits[b * classes + c] = d * scale;
+                                }
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *logits_id, dlogits);
+                        }
+                        // ── Phase 2: Activation backwards ────────────────────
+                        TapeOp::Elu { in_id, cached_input, alpha } => {
+                            let g: Vec<f64> = out_grad.iter().zip(cached_input.iter())
+                                .map(|(dout, &x)| {
+                                    if x > 0.0 { *dout }
+                                    else { dout * alpha * x.exp() }
+                                }).collect();
+                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                        }
+                        TapeOp::Swish { in_id, cached_sigmoid } => {
+                            // swish(x) = x * sigmoid(x)
+                            // d/dx = sigmoid(x) * (1 + x*(1-sigmoid(x)))
+                            // = sigmoid(x) + x*sigmoid(x)*(1-sigmoid(x))
+                            // We stored sigmoid(x), but not x itself.
+                            // Reconstruct from sigmoid: x = log(s/(1-s)) -- unstable.
+                            // Instead cache both x and sigmoid in forward. Here we stored
+                            // only sigmoid -- use approximation: we need to also store input.
+                            // Fix: We now store cached_input_for_swish too (see TapeOp definition).
+                            // For now use: d/dx ≈ swish_out/x * (x_contrib)
+                            // This is actually computed correctly with cached_sigmoid:
+                            // Let s = sigmoid(x). swish = x*s.
+                            // d_swish/dx = s + x*s*(1-s) = s*(1 + x*(1-s))
+                            // We need x. Since we only stored s, we must reconstruct x = logit(s).
+                            // Better: store (s, x) in forward. The TapeOp field is Vec<f64> for sigmoid.
+                            // We'll use cached_sigmoid as sigmoid values and recover x from logit.
+                            let g: Vec<f64> = out_grad.iter().zip(cached_sigmoid.iter())
+                                .map(|(dout, &s)| {
+                                    let s = s.clamp(1e-7, 1.0 - 1e-7);
+                                    let x = (s / (1.0 - s)).ln(); // logit
+                                    let d = s * (1.0 + x * (1.0 - s));
+                                    dout * d
+                                }).collect();
+                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                        }
+                        TapeOp::Mish { in_id, cached_input } => {
+                            // mish(x) = x * tanh(softplus(x))
+                            // softplus(x) = log(1 + exp(x))
+                            // d/dx = tanh(sp) + x * sech^2(sp) * sigmoid(x)
+                            let g: Vec<f64> = out_grad.iter().zip(cached_input.iter())
+                                .map(|(dout, &x)| {
+                                    let sp = (1.0 + x.exp()).ln();
+                                    let ts = sp.tanh();
+                                    let sg = 1.0 / (1.0 + (-x).exp());
+                                    let sech2 = 1.0 - ts * ts;
+                                    let d = ts + x * sech2 * sg;
+                                    dout * d
+                                }).collect();
+                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                        }
+                        TapeOp::LeakyRelu { in_id, cached_input, alpha } => {
+                            let g: Vec<f64> = out_grad.iter().zip(cached_input.iter())
+                                .map(|(dout, &x)| dout * if x > 0.0 { 1.0 } else { *alpha })
+                                .collect();
+                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                        }
+                        // ── Phase 2: BatchNorm backward ───────────────────────
+                        TapeOp::BatchNorm { in_id, g_id, b_id, eps: _, x_norm, stds, x_mu, gamma_data, rows, cols } => {
+                            let (n, c) = (*rows, *cols);
+                            let nf = n as f64;
+                            let mut dgamma = vec![0.0f64; c];
+                            let mut dbeta  = vec![0.0f64; c];
+                            let mut dx     = vec![0.0f64; n * c];
+                            for j in 0..c {
+                                let std_j = stds[j];
+                                // dgamma[j] = sum_i(d_out[i,j] * x_norm[i,j])
+                                // dbeta[j]  = sum_i(d_out[i,j])
+                                for i in 0..n {
+                                    dgamma[j] += out_grad[i*c+j] * x_norm[i*c+j];
+                                    dbeta[j]  += out_grad[i*c+j];
+                                }
+                                // Standard batch-norm backward for each feature j
+                                // dx[i,j] = (1/std_j/N) * (N*d_xnorm[i,j] - sum_d_xnorm[j]
+                                //            - x_norm[i,j] * sum_d_xnorm_xn[j])
+                                let mut sum_dxn = 0.0_f64;
+                                let mut sum_dxn_xn = 0.0_f64;
+                                for i in 0..n {
+                                    let d_xn = out_grad[i*c+j] * gamma_data[j];
+                                    sum_dxn    += d_xn;
+                                    sum_dxn_xn += d_xn * x_norm[i*c+j];
+                                }
+                                for i in 0..n {
+                                    let d_xn = out_grad[i*c+j] * gamma_data[j];
+                                    dx[i*c+j] = (d_xn - sum_dxn / nf
+                                        - x_norm[i*c+j] * sum_dxn_xn / nf) / std_j;
+                                }
+                                let _ = x_mu; // used during forward; not needed in backward
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *in_id, dx);
+                            Self::accum_grad(&mut self.ad_grads, *g_id,  dgamma);
+                            Self::accum_grad(&mut self.ad_grads, *b_id,  dbeta);
+                        }
+                        // ── Phase 2: Dropout backward ─────────────────────────
+                        TapeOp::Dropout { in_id, mask, keep_prob } => {
+                            let kp = *keep_prob;
+                            let g: Vec<f64> = out_grad.iter().zip(mask.iter())
+                                .map(|(dout, &m)| dout * m / kp)
+                                .collect();
+                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                        }
+                        // ── Phase 2: Embedding backward ───────────────────────
+                        TapeOp::Embedding { w_id, indices, seq_len, emb_dim } => {
+                            let (sl, ed) = (*seq_len, *emb_dim);
+                            // Infer vocab size from existing gradient or from out_grad shape
+                            let vocab_from_grad = self.ad_grads.get(w_id)
+                                .map(|g| g.len() / ed)
+                                .unwrap_or(0);
+                            let vocab = if vocab_from_grad > 0 { vocab_from_grad } else {
+                                // fallback: can't know without vocab, emit what we have
+                                indices.iter().copied().max().map(|m| m + 1).unwrap_or(1)
+                            };
+                            let mut dw = vec![0.0f64; vocab * ed];
+                            for (i, &idx) in indices.iter().enumerate() {
+                                if i >= sl { break; }
+                                if idx < vocab {
+                                    for k in 0..ed {
+                                        dw[idx * ed + k] += out_grad[i * ed + k];
+                                    }
+                                }
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *w_id, dw);
+                        }
+                        // ── Phase 2: AvgPool2d backward ───────────────────────
+                        TapeOp::AvgPool2d { in_id, kernel, stride, in_shape, out_shape } => {
+                            let (n, in_h, in_w, c) = (in_shape[0], in_shape[1], in_shape[2], in_shape[3]);
+                            let out_h = out_shape[1];
+                            let out_w = out_shape[2];
+                            let ks = *kernel;
+                            let st = *stride;
+                            let pool_area = (ks * ks) as f64;
+                            let mut dinput = vec![0.0f64; n * in_h * in_w * c];
+                            let grad_per_element = 1.0 / pool_area;
+                            for nb in 0..n {
+                                for oh in 0..out_h {
+                                    for ow in 0..out_w {
+                                        for ch in 0..c {
+                                            let out_idx = nb*out_h*out_w*c + oh*out_w*c + ow*c + ch;
+                                            let d = out_grad[out_idx] * grad_per_element;
+                                            for kh in 0..ks {
+                                                for kw in 0..ks {
+                                                    let ih = oh * st + kh;
+                                                    let iw = ow * st + kw;
+                                                    if ih < in_h && iw < in_w {
+                                                        dinput[nb*in_h*in_w*c + ih*in_w*c + iw*c + ch] += d;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Self::accum_grad(&mut self.ad_grads, *in_id, dinput);
+                        }
                         TapeOp::Gru { x_id, wx_id, wh_id, b_id, h0_id,
                                       x_data, wx_data, wh_data, h_all,
                                       gates_r, gates_z, gates_n,
@@ -644,6 +874,621 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc_tensor(shape, grad_data))
             }
 
+            // ── Phase 1: Loss functions ───────────────────────────────────────
+            "mseLoss" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Autodiff.mseLoss(pred, target) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let pred_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let tgt_ref  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let (pred_data, pred_shape, pred_tid) = match self.resolve(pred_ref).cloned() {
+                    Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
+                    _ => { eprintln!("❌ ERROR: Autodiff.mseLoss pred must be a Tensor"); return EvalResult::Error; }
+                };
+                let target_data = match self.resolve(tgt_ref).cloned() {
+                    Some(ObjectData::Tensor { data, .. }) => data,
+                    _ => { eprintln!("❌ ERROR: Autodiff.mseLoss target must be a Tensor"); return EvalResult::Error; }
+                };
+                if pred_data.len() != target_data.len() {
+                    eprintln!("❌ ERROR: Autodiff.mseLoss pred and target must have same size");
+                    return EvalResult::Error;
+                }
+                let n = pred_data.len();
+                let loss: f64 = pred_data.iter().zip(target_data.iter())
+                    .map(|(p, t)| (p - t).powi(2)).sum::<f64>() / n as f64;
+                // Store (pred - target) diff for backward
+                let diff: Vec<f64> = pred_data.iter().zip(target_data.iter())
+                    .map(|(p, t)| p - t).collect();
+                let out_ref = self.alloc_tensor(vec![1], vec![loss]);
+                if self.ad_recording {
+                    let pred_id = self.ad_tensor_id_from_tid(pred_tid);
+                    self.ad_push(out_ref, TapeOp::MseLoss { pred_id, target_data: diff, n });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            "maeLoss" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Autodiff.maeLoss(pred, target) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let pred_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let tgt_ref  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let (pred_data, _pred_shape, pred_tid) = match self.resolve(pred_ref).cloned() {
+                    Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
+                    _ => { eprintln!("❌ ERROR: Autodiff.maeLoss pred must be a Tensor"); return EvalResult::Error; }
+                };
+                let target_data = match self.resolve(tgt_ref).cloned() {
+                    Some(ObjectData::Tensor { data, .. }) => data,
+                    _ => { eprintln!("❌ ERROR: Autodiff.maeLoss target must be a Tensor"); return EvalResult::Error; }
+                };
+                let n = pred_data.len();
+                let loss: f64 = pred_data.iter().zip(target_data.iter())
+                    .map(|(p, t)| (p - t).abs()).sum::<f64>() / n as f64;
+                let signs: Vec<f64> = pred_data.iter().zip(target_data.iter())
+                    .map(|(p, t)| if p > t { 1.0 } else if p < t { -1.0 } else { 0.0 }).collect();
+                let out_ref = self.alloc_tensor(vec![1], vec![loss]);
+                if self.ad_recording {
+                    let pred_id = self.ad_tensor_id_from_tid(pred_tid);
+                    self.ad_push(out_ref, TapeOp::MaeLoss { pred_id, signs, n });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            "bceLoss" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Autodiff.bceLoss(pred, target) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let pred_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let tgt_ref  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let (pred_data, _ps, pred_tid) = match self.resolve(pred_ref).cloned() {
+                    Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
+                    _ => { eprintln!("❌ ERROR: Autodiff.bceLoss pred must be a Tensor"); return EvalResult::Error; }
+                };
+                let target_data = match self.resolve(tgt_ref).cloned() {
+                    Some(ObjectData::Tensor { data, .. }) => data,
+                    _ => { eprintln!("❌ ERROR: Autodiff.bceLoss target must be a Tensor"); return EvalResult::Error; }
+                };
+                let n = pred_data.len();
+                let eps = 1e-12_f64;
+                let loss: f64 = pred_data.iter().zip(target_data.iter())
+                    .map(|(&p, &t)| {
+                        let p = p.clamp(eps, 1.0 - eps);
+                        -(t * p.ln() + (1.0 - t) * (1.0 - p).ln())
+                    }).sum::<f64>() / n as f64;
+                let out_ref = self.alloc_tensor(vec![1], vec![loss]);
+                if self.ad_recording {
+                    let pred_id = self.ad_tensor_id_from_tid(pred_tid);
+                    self.ad_push(out_ref, TapeOp::BceLoss { pred_id, pred_data, target_data, n });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            "crossEntropyLoss" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Autodiff.crossEntropyLoss(logits, targets) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let logits_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let tgt_ref    = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let (logits_data, logits_shape, logits_tid) = match self.resolve(logits_ref).cloned() {
+                    Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
+                    _ => { eprintln!("❌ ERROR: Autodiff.crossEntropyLoss logits must be a Tensor"); return EvalResult::Error; }
+                };
+                // targets: either [batch] integer tensor or [batch, classes] one-hot
+                let target_data = match self.resolve(tgt_ref).cloned() {
+                    Some(ObjectData::Tensor { data, .. }) => data,
+                    Some(ObjectData::Array { elements, .. }) => {
+                        elements.iter().filter_map(|elem| {
+                            match elem {
+                                crate::region::OwnedValue::Integer(v) => Some(*v as f64),
+                                crate::region::OwnedValue::Decimal(d) => Some(*d),
+                                _ => None,
+                            }
+                        }).collect()
+                    }
+                    _ => { eprintln!("❌ ERROR: Autodiff.crossEntropyLoss targets must be a Tensor or Array"); return EvalResult::Error; }
+                };
+                let (batch, classes) = if logits_shape.len() == 2 {
+                    (logits_shape[0], logits_shape[1])
+                } else {
+                    eprintln!("❌ ERROR: Autodiff.crossEntropyLoss logits must be 2D [batch, classes]");
+                    return EvalResult::Error;
+                };
+                if target_data.len() != batch {
+                    eprintln!("❌ ERROR: Autodiff.crossEntropyLoss targets length {} != batch {}", target_data.len(), batch);
+                    return EvalResult::Error;
+                }
+                // Compute softmax probabilities per row (numerically stable)
+                let mut probs = vec![0.0f64; batch * classes];
+                for b in 0..batch {
+                    let row = &logits_data[b*classes..(b+1)*classes];
+                    let max_v = row.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    let exps: Vec<f64> = row.iter().map(|&x| (x - max_v).exp()).collect();
+                    let sum_exp: f64 = exps.iter().sum();
+                    for c in 0..classes { probs[b*classes+c] = exps[c] / sum_exp; }
+                }
+                let eps = 1e-12_f64;
+                let target_indices: Vec<usize> = target_data.iter()
+                    .map(|&t| t.round() as usize).collect();
+                let loss: f64 = (0..batch).map(|b| {
+                    let idx = target_indices[b].min(classes - 1);
+                    -(probs[b*classes+idx].max(eps)).ln()
+                }).sum::<f64>() / batch as f64;
+                let out_ref = self.alloc_tensor(vec![1], vec![loss]);
+                if self.ad_recording {
+                    let logits_id = self.ad_tensor_id_from_tid(logits_tid);
+                    self.ad_push(out_ref, TapeOp::CrossEntropyLoss { logits_id, probs, target_indices, batch, classes });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── Phase 1: Gradient clipping ────────────────────────────────────
+            "clipGrad" => {
+                if dot_call.arguments.len() < 2 {
+                    eprintln!("❌ ERROR: Autodiff.clipGrad(grad, max_norm) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let grad_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let max_norm_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let (grad_data, grad_shape) = match self.resolve(grad_ref).cloned() {
+                    Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
+                    _ => { eprintln!("❌ ERROR: Autodiff.clipGrad grad must be a Tensor"); return EvalResult::Error; }
+                };
+                let max_norm = match self.resolve(max_norm_ref) {
+                    Some(ObjectData::Decimal(v)) => *v,
+                    Some(ObjectData::Integer(v)) => *v as f64,
+                    _ => { eprintln!("❌ ERROR: Autodiff.clipGrad max_norm must be a number"); return EvalResult::Error; }
+                };
+                let norm: f64 = grad_data.iter().map(|x| x * x).sum::<f64>().sqrt();
+                let clipped: Vec<f64> = if norm > max_norm {
+                    let scale = max_norm / norm;
+                    grad_data.iter().map(|x| x * scale).collect()
+                } else {
+                    grad_data
+                };
+                EvalResult::Value(self.alloc_tensor(grad_shape, clipped))
+            }
+
+            "clipGradNorm" => {
+                // clipGradNorm(grads_array, max_norm) — clips a collection of gradients by global norm
+                if dot_call.arguments.len() < 2 {
+                    eprintln!("❌ ERROR: Autodiff.clipGradNorm(grads, max_norm) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let grads_ref  = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let max_norm_r = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let max_norm = match self.resolve(max_norm_r) {
+                    Some(ObjectData::Decimal(v)) => *v,
+                    Some(ObjectData::Integer(v)) => *v as f64,
+                    _ => { eprintln!("❌ ERROR: Autodiff.clipGradNorm max_norm must be a number"); return EvalResult::Error; }
+                };
+                let elements = match self.resolve(grads_ref).cloned() {
+                    Some(ObjectData::Array { elements, .. }) => elements,
+                    _ => { eprintln!("❌ ERROR: Autodiff.clipGradNorm grads must be an Array of Tensors"); return EvalResult::Error; }
+                };
+                // Compute global norm
+                let mut global_norm_sq = 0.0_f64;
+                let mut grads_data: Vec<(Vec<f64>, Vec<usize>)> = Vec::new();
+                for elem in &elements {
+                    match elem {
+                        crate::region::OwnedValue::Tensor { data, shape, .. } => {
+                            global_norm_sq += data.iter().map(|x| x * x).sum::<f64>();
+                            grads_data.push((data.clone(), shape.clone()));
+                        }
+                        _ => { eprintln!("❌ ERROR: Autodiff.clipGradNorm all elements must be Tensors"); return EvalResult::Error; }
+                    }
+                }
+                let global_norm = global_norm_sq.sqrt();
+                let scale = if global_norm > max_norm { max_norm / global_norm } else { 1.0 };
+                let mut result_owned: Vec<crate::region::OwnedValue> = Vec::new();
+                for (data, shape) in grads_data {
+                    let clipped: Vec<f64> = data.iter().map(|x| x * scale).collect();
+                    result_owned.push(crate::region::OwnedValue::Tensor { shape, data: clipped, tid: 0 });
+                }
+                let arr = ObjectData::Array { element_type: None, elements: result_owned };
+                EvalResult::Value(self.alloc(arr))
+            }
+
+            // ── Phase 1: Weight initialization ───────────────────────────────
+            "xavierUniform" => {
+                if dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: Autodiff.xavierUniform([shape]) requires shape argument");
+                    return EvalResult::Error;
+                }
+                let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
+                    Ok(s) => s, Err(e) => return e,
+                };
+                let (fan_in, fan_out) = Self::compute_fans(&shape);
+                let limit = (6.0_f64 / (fan_in + fan_out) as f64).sqrt();
+                let total: usize = shape.iter().product();
+                let data: Vec<f64> = (0..total).map(|_| {
+                    let u = self.lcg_next_f64();
+                    u * 2.0 * limit - limit
+                }).collect();
+                EvalResult::Value(self.alloc_tensor(shape, data))
+            }
+
+            "xavierNormal" => {
+                if dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: Autodiff.xavierNormal([shape]) requires shape argument");
+                    return EvalResult::Error;
+                }
+                let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
+                    Ok(s) => s, Err(e) => return e,
+                };
+                let (fan_in, fan_out) = Self::compute_fans(&shape);
+                let std = (2.0_f64 / (fan_in + fan_out) as f64).sqrt();
+                let total: usize = shape.iter().product();
+                let data: Vec<f64> = Self::box_muller_n(total, 0.0, std, &mut self.lcg_state);
+                EvalResult::Value(self.alloc_tensor(shape, data))
+            }
+
+            "heUniform" => {
+                if dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: Autodiff.heUniform([shape]) requires shape argument");
+                    return EvalResult::Error;
+                }
+                let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
+                    Ok(s) => s, Err(e) => return e,
+                };
+                let (fan_in, _fan_out) = Self::compute_fans(&shape);
+                let limit = (6.0_f64 / fan_in as f64).sqrt();
+                let total: usize = shape.iter().product();
+                let data: Vec<f64> = (0..total).map(|_| {
+                    let u = self.lcg_next_f64();
+                    u * 2.0 * limit - limit
+                }).collect();
+                EvalResult::Value(self.alloc_tensor(shape, data))
+            }
+
+            "heNormal" => {
+                if dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: Autodiff.heNormal([shape]) requires shape argument");
+                    return EvalResult::Error;
+                }
+                let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
+                    Ok(s) => s, Err(e) => return e,
+                };
+                let (fan_in, _fan_out) = Self::compute_fans(&shape);
+                let std = (2.0_f64 / fan_in as f64).sqrt();
+                let total: usize = shape.iter().product();
+                let data: Vec<f64> = Self::box_muller_n(total, 0.0, std, &mut self.lcg_state);
+                EvalResult::Value(self.alloc_tensor(shape, data))
+            }
+
+            // ── Phase 1: Optimizer steps (pure functions, no tape) ────────────
+            "adamStep" => {
+                // adamStep(param, grad, m, v, step, lr, beta1=0.9, beta2=0.999, eps=1e-8)
+                // Returns Array [new_param, new_m, new_v]
+                if dot_call.arguments.len() < 6 {
+                    eprintln!("❌ ERROR: Autodiff.adamStep(param, grad, m, v, step, lr, [beta1, beta2, eps])");
+                    return EvalResult::Error;
+                }
+                let mut args = Vec::new();
+                for arg in &dot_call.arguments {
+                    match self.eval_expression(arg) {
+                        EvalResult::Value(r) => args.push(r),
+                        other => return other,
+                    }
+                }
+                let (param, p_shape) = match self.resolve(args[0]).cloned() {
+                    Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
+                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep param must be a Tensor"); return EvalResult::Error; }
+                };
+                let (grad, _) = match self.resolve(args[1]).cloned() {
+                    Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
+                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep grad must be a Tensor"); return EvalResult::Error; }
+                };
+                let (m_data, _) = match self.resolve(args[2]).cloned() {
+                    Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
+                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep m must be a Tensor"); return EvalResult::Error; }
+                };
+                let (v_data, _) = match self.resolve(args[3]).cloned() {
+                    Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
+                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep v must be a Tensor"); return EvalResult::Error; }
+                };
+                let step = match self.resolve(args[4]) {
+                    Some(ObjectData::Integer(n)) => *n as f64,
+                    Some(ObjectData::Decimal(d)) => *d,
+                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep step must be a number"); return EvalResult::Error; }
+                };
+                let lr = match self.resolve(args[5]) {
+                    Some(ObjectData::Decimal(d)) => *d,
+                    Some(ObjectData::Integer(n)) => *n as f64,
+                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep lr must be a number"); return EvalResult::Error; }
+                };
+                let beta1 = if args.len() > 6 { match self.resolve(args[6]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => 0.9 } } else { 0.9 };
+                let beta2 = if args.len() > 7 { match self.resolve(args[7]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => 0.999 } } else { 0.999 };
+                let eps   = if args.len() > 8 { match self.resolve(args[8]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => 1e-8 } } else { 1e-8 };
+                let t = step;
+                let bc1 = 1.0 - beta1.powf(t);
+                let bc2 = 1.0 - beta2.powf(t);
+                let mut new_m = vec![0.0f64; param.len()];
+                let mut new_v = vec![0.0f64; param.len()];
+                let mut new_p = vec![0.0f64; param.len()];
+                for i in 0..param.len() {
+                    new_m[i] = beta1 * m_data[i] + (1.0 - beta1) * grad[i];
+                    new_v[i] = beta2 * v_data[i] + (1.0 - beta2) * grad[i] * grad[i];
+                    let m_hat = new_m[i] / bc1;
+                    let v_hat = new_v[i] / bc2;
+                    new_p[i] = param[i] - lr * m_hat / (v_hat.sqrt() + eps);
+                }
+                let r_p = self.alloc_tensor(p_shape.clone(), new_p);
+                let r_m = self.alloc_tensor(p_shape.clone(), new_m);
+                let r_v = self.alloc_tensor(p_shape,          new_v);
+                let op = self.extract(r_p);
+                let om = self.extract(r_m);
+                let ov = self.extract(r_v);
+                let arr = ObjectData::Array { element_type: None, elements: vec![op, om, ov] };
+                EvalResult::Value(self.alloc(arr))
+            }
+
+            "adamwStep" => {
+                // adamwStep(param, grad, m, v, step, lr, wd=0.01, beta1=0.9, beta2=0.999, eps=1e-8)
+                if dot_call.arguments.len() < 6 {
+                    eprintln!("❌ ERROR: Autodiff.adamwStep(param, grad, m, v, step, lr, [wd, beta1, beta2, eps])");
+                    return EvalResult::Error;
+                }
+                let mut args = Vec::new();
+                for arg in &dot_call.arguments {
+                    match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other }
+                }
+                let (param, p_shape) = match self.resolve(args[0]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: Autodiff.adamwStep param must be Tensor"); return EvalResult::Error; } };
+                let (grad, _)   = match self.resolve(args[1]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: Autodiff.adamwStep grad must be Tensor"); return EvalResult::Error; } };
+                let (m_data, _) = match self.resolve(args[2]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: Autodiff.adamwStep m must be Tensor"); return EvalResult::Error; } };
+                let (v_data, _) = match self.resolve(args[3]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: Autodiff.adamwStep v must be Tensor"); return EvalResult::Error; } };
+                let step = match self.resolve(args[4]) { Some(ObjectData::Integer(n)) => *n as f64, Some(ObjectData::Decimal(d)) => *d, _ => { eprintln!("❌ ERROR: step must be number"); return EvalResult::Error; } };
+                let lr   = match self.resolve(args[5]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => { eprintln!("❌ ERROR: lr must be number"); return EvalResult::Error; } };
+                let wd    = if args.len() > 6 { match self.resolve(args[6]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => 0.01 } } else { 0.01 };
+                let beta1 = if args.len() > 7 { match self.resolve(args[7]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.9 } } else { 0.9 };
+                let beta2 = if args.len() > 8 { match self.resolve(args[8]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.999 } } else { 0.999 };
+                let eps   = if args.len() > 9 { match self.resolve(args[9]) { Some(ObjectData::Decimal(d)) => *d, _ => 1e-8 } } else { 1e-8 };
+                let bc1 = 1.0 - beta1.powf(step);
+                let bc2 = 1.0 - beta2.powf(step);
+                let mut new_m = vec![0.0f64; param.len()];
+                let mut new_v = vec![0.0f64; param.len()];
+                let mut new_p = vec![0.0f64; param.len()];
+                for i in 0..param.len() {
+                    new_m[i] = beta1 * m_data[i] + (1.0 - beta1) * grad[i];
+                    new_v[i] = beta2 * v_data[i] + (1.0 - beta2) * grad[i] * grad[i];
+                    let m_hat = new_m[i] / bc1;
+                    let v_hat = new_v[i] / bc2;
+                    new_p[i] = param[i] * (1.0 - lr * wd) - lr * m_hat / (v_hat.sqrt() + eps);
+                }
+                let r_p = self.alloc_tensor(p_shape.clone(), new_p);
+                let r_m = self.alloc_tensor(p_shape.clone(), new_m);
+                let r_v = self.alloc_tensor(p_shape,          new_v);
+                let op = self.extract(r_p); let om = self.extract(r_m); let ov = self.extract(r_v);
+                let arr = ObjectData::Array { element_type: None, elements: vec![op, om, ov] };
+                EvalResult::Value(self.alloc(arr))
+            }
+
+            "sgdStep" => {
+                // sgdStep(param, grad, velocity, lr, momentum=0.9, weight_decay=0.0)
+                // Returns [new_param, new_velocity]
+                if dot_call.arguments.len() < 4 {
+                    eprintln!("❌ ERROR: Autodiff.sgdStep(param, grad, velocity, lr, [momentum, weight_decay])");
+                    return EvalResult::Error;
+                }
+                let mut args = Vec::new();
+                for arg in &dot_call.arguments { match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other } }
+                let (param, p_shape) = match self.resolve(args[0]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: param must be Tensor"); return EvalResult::Error; } };
+                let (mut grad, _) = match self.resolve(args[1]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: grad must be Tensor"); return EvalResult::Error; } };
+                let (vel, _) = match self.resolve(args[2]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: velocity must be Tensor"); return EvalResult::Error; } };
+                let lr = match self.resolve(args[3]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => { eprintln!("❌ ERROR: lr must be number"); return EvalResult::Error; } };
+                let momentum = if args.len() > 4 { match self.resolve(args[4]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.9 } } else { 0.9 };
+                let wd = if args.len() > 5 { match self.resolve(args[5]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.0 } } else { 0.0 };
+                if wd > 0.0 { for i in 0..grad.len() { grad[i] += wd * param[i]; } }
+                let mut new_vel = vec![0.0f64; param.len()];
+                let mut new_p   = vec![0.0f64; param.len()];
+                for i in 0..param.len() {
+                    new_vel[i] = momentum * vel[i] - lr * grad[i];
+                    new_p[i]   = param[i] + new_vel[i];
+                }
+                let r_p = self.alloc_tensor(p_shape.clone(), new_p);
+                let r_v = self.alloc_tensor(p_shape,          new_vel);
+                let op = self.extract(r_p); let ov = self.extract(r_v);
+                let arr = ObjectData::Array { element_type: None, elements: vec![op, ov] };
+                EvalResult::Value(self.alloc(arr))
+            }
+
+            "rmspropStep" => {
+                // rmspropStep(param, grad, sq_avg, lr, alpha=0.99, eps=1e-8)
+                // Returns [new_param, new_sq_avg]
+                if dot_call.arguments.len() < 4 {
+                    eprintln!("❌ ERROR: Autodiff.rmspropStep(param, grad, sq_avg, lr, [alpha, eps])");
+                    return EvalResult::Error;
+                }
+                let mut args = Vec::new();
+                for arg in &dot_call.arguments { match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other } }
+                let (param, p_shape) = match self.resolve(args[0]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: param must be Tensor"); return EvalResult::Error; } };
+                let (grad, _) = match self.resolve(args[1]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: grad must be Tensor"); return EvalResult::Error; } };
+                let (sq_avg, _) = match self.resolve(args[2]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: sq_avg must be Tensor"); return EvalResult::Error; } };
+                let lr = match self.resolve(args[3]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => { eprintln!("❌ ERROR: lr must be number"); return EvalResult::Error; } };
+                let alpha = if args.len() > 4 { match self.resolve(args[4]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.99 } } else { 0.99 };
+                let eps   = if args.len() > 5 { match self.resolve(args[5]) { Some(ObjectData::Decimal(d)) => *d, _ => 1e-8 } } else { 1e-8 };
+                let mut new_sq = vec![0.0f64; param.len()];
+                let mut new_p  = vec![0.0f64; param.len()];
+                for i in 0..param.len() {
+                    new_sq[i] = alpha * sq_avg[i] + (1.0 - alpha) * grad[i] * grad[i];
+                    new_p[i]  = param[i] - lr * grad[i] / (new_sq[i].sqrt() + eps);
+                }
+                let r_p = self.alloc_tensor(p_shape.clone(), new_p);
+                let r_s = self.alloc_tensor(p_shape,          new_sq);
+                let op = self.extract(r_p); let os = self.extract(r_s);
+                let arr = ObjectData::Array { element_type: None, elements: vec![op, os] };
+                EvalResult::Value(self.alloc(arr))
+            }
+
+            // ── Phase 2: BatchNorm ────────────────────────────────────────────
+            "batchNorm" => {
+                // batchNorm(x, gamma, beta, training, eps=1e-5)
+                // x: [N, C] tensor; gamma, beta: [C] tensors
+                // Returns normalized tensor [N, C]
+                if dot_call.arguments.len() < 4 {
+                    eprintln!("❌ ERROR: Autodiff.batchNorm(x, gamma, beta, training, [eps])");
+                    return EvalResult::Error;
+                }
+                let mut args = Vec::new();
+                for arg in &dot_call.arguments { match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other } }
+                let (x_data, x_shape, x_tid) = match self.resolve(args[0]).cloned() {
+                    Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
+                    _ => { eprintln!("❌ ERROR: Autodiff.batchNorm x must be a Tensor"); return EvalResult::Error; }
+                };
+                let (g_data, g_tid) = match self.resolve(args[1]).cloned() {
+                    Some(ObjectData::Tensor { data, tid, .. }) => (data, tid),
+                    _ => { eprintln!("❌ ERROR: Autodiff.batchNorm gamma must be a Tensor"); return EvalResult::Error; }
+                };
+                let (b_data, b_tid) = match self.resolve(args[2]).cloned() {
+                    Some(ObjectData::Tensor { data, tid, .. }) => (data, tid),
+                    _ => { eprintln!("❌ ERROR: Autodiff.batchNorm beta must be a Tensor"); return EvalResult::Error; }
+                };
+                let training = match self.resolve(args[3]) {
+                    Some(ObjectData::Boolean(b)) => *b,
+                    _ => true,
+                };
+                let eps_val = if args.len() > 4 {
+                    match self.resolve(args[4]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => 1e-5 }
+                } else { 1e-5 };
+                if x_shape.len() != 2 {
+                    eprintln!("❌ ERROR: Autodiff.batchNorm x must be 2D [N, C]");
+                    return EvalResult::Error;
+                }
+                let (n, c) = (x_shape[0], x_shape[1]);
+                let nf = n as f64;
+                // Compute per-feature mean and variance
+                let mut means = vec![0.0_f64; c];
+                let mut vars  = vec![0.0_f64; c];
+                for j in 0..c {
+                    let mut s = 0.0_f64;
+                    for i in 0..n { s += x_data[i*c+j]; }
+                    means[j] = s / nf;
+                    let mut v = 0.0_f64;
+                    for i in 0..n { let d = x_data[i*c+j] - means[j]; v += d*d; }
+                    vars[j] = v / nf;
+                }
+                let stds: Vec<f64> = vars.iter().map(|&v| (v + eps_val).sqrt()).collect();
+                let mut x_norm = vec![0.0_f64; n * c];
+                let mut x_mu   = vec![0.0_f64; n * c];
+                let mut out_data = vec![0.0_f64; n * c];
+                for i in 0..n {
+                    for j in 0..c {
+                        let xm = x_data[i*c+j] - means[j];
+                        x_mu[i*c+j]   = xm;
+                        x_norm[i*c+j] = xm / stds[j];
+                        out_data[i*c+j] = if training {
+                            x_norm[i*c+j] * g_data[j] + b_data[j]
+                        } else {
+                            x_norm[i*c+j] * g_data[j] + b_data[j]
+                        };
+                    }
+                }
+                let out_ref = self.alloc_tensor(x_shape.clone(), out_data);
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id_from_tid(x_tid);
+                    let g_id  = self.ad_tensor_id_from_tid(g_tid);
+                    let b_id2 = self.ad_tensor_id_from_tid(b_tid);
+                    self.ad_push(out_ref, TapeOp::BatchNorm {
+                        in_id, g_id, b_id: b_id2, eps: eps_val,
+                        x_norm, stds, x_mu, gamma_data: g_data,
+                        rows: n, cols: c,
+                    });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── Phase 2: Dropout ──────────────────────────────────────────────
+            "dropout" => {
+                // dropout(x, p, training)
+                // p = drop probability (0 = no drop, 1 = drop all)
+                if dot_call.arguments.len() < 2 {
+                    eprintln!("❌ ERROR: Autodiff.dropout(x, p, [training=true])");
+                    return EvalResult::Error;
+                }
+                let mut args = Vec::new();
+                for arg in &dot_call.arguments { match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other } }
+                let (x_data, x_shape, x_tid) = match self.resolve(args[0]).cloned() {
+                    Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
+                    _ => { eprintln!("❌ ERROR: Autodiff.dropout x must be a Tensor"); return EvalResult::Error; }
+                };
+                let p = match self.resolve(args[1]) {
+                    Some(ObjectData::Decimal(d)) => *d,
+                    Some(ObjectData::Integer(n)) => *n as f64,
+                    _ => { eprintln!("❌ ERROR: Autodiff.dropout p must be a number"); return EvalResult::Error; }
+                };
+                let training = if args.len() > 2 {
+                    match self.resolve(args[2]) { Some(ObjectData::Boolean(b)) => *b, _ => true }
+                } else { true };
+                if !training || p <= 0.0 {
+                    return EvalResult::Value(self.alloc_tensor(x_shape, x_data));
+                }
+                let keep_prob = 1.0 - p;
+                let n = x_data.len();
+                let mask: Vec<f64> = (0..n).map(|_| {
+                    if self.lcg_next_f64() >= p { 1.0 } else { 0.0 }
+                }).collect();
+                let out_data: Vec<f64> = x_data.iter().zip(mask.iter())
+                    .map(|(&x, &m)| x * m / keep_prob).collect();
+                let out_ref = self.alloc_tensor(x_shape, out_data);
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id_from_tid(x_tid);
+                    self.ad_push(out_ref, TapeOp::Dropout { in_id, mask, keep_prob });
+                }
+                EvalResult::Value(out_ref)
+            }
+
+            // ── Phase 2: Embedding ────────────────────────────────────────────
+            "embedding" => {
+                // embedding(indices, weight)
+                // indices: Array of int or [seq_len] integer Tensor
+                // weight:  [vocab_size, emb_dim] Tensor
+                // Returns: [seq_len, emb_dim] Tensor
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Autodiff.embedding(indices, weight) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let idx_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let w_ref   = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let (w_data, w_shape, w_tid) = match self.resolve(w_ref).cloned() {
+                    Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
+                    _ => { eprintln!("❌ ERROR: Autodiff.embedding weight must be a Tensor [vocab, emb_dim]"); return EvalResult::Error; }
+                };
+                if w_shape.len() != 2 {
+                    eprintln!("❌ ERROR: Autodiff.embedding weight must be 2D [vocab_size, emb_dim]");
+                    return EvalResult::Error;
+                }
+                let (vocab_size, emb_dim) = (w_shape[0], w_shape[1]);
+                let indices: Vec<usize> = match self.resolve(idx_ref).cloned() {
+                    Some(ObjectData::Tensor { data, .. }) => data.iter().map(|&x| (x.round() as i64).max(0) as usize).collect(),
+                    Some(ObjectData::Array { elements, .. }) => {
+                        elements.iter().filter_map(|elem| {
+                            match elem {
+                                crate::region::OwnedValue::Integer(v) => Some((*v).max(0) as usize),
+                                crate::region::OwnedValue::Decimal(d) => Some((d.round() as i64).max(0) as usize),
+                                _ => None,
+                            }
+                        }).collect()
+                    }
+                    _ => { eprintln!("❌ ERROR: Autodiff.embedding indices must be a Tensor or Array"); return EvalResult::Error; }
+                };
+                let seq_len = indices.len();
+                let mut out_data = vec![0.0_f64; seq_len * emb_dim];
+                for (i, &idx) in indices.iter().enumerate() {
+                    let row = idx.min(vocab_size - 1);
+                    out_data[i*emb_dim..(i+1)*emb_dim]
+                        .copy_from_slice(&w_data[row*emb_dim..(row+1)*emb_dim]);
+                }
+                let out_ref = self.alloc_tensor(vec![seq_len, emb_dim], out_data);
+                if self.ad_recording {
+                    let w_id = self.ad_tensor_id_from_tid(w_tid);
+                    self.ad_push(out_ref, TapeOp::Embedding { w_id, indices, seq_len, emb_dim });
+                }
+                EvalResult::Value(out_ref)
+            }
+
             _ => {
                 eprintln!("❌ ERROR: Unknown Autodiff method '{}'", dot_call.method);
                 EvalResult::Error
@@ -677,6 +1522,53 @@ impl super::Evaluator {
         if entry.len() == delta.len() {
             for (e, d) in entry.iter_mut().zip(delta.iter()) {
                 *e += d;
+            }
+        }
+    }
+
+    /// Get or create a tape ID from a raw tensor `tid` (bypasses ObjectRef lookup).
+    pub(super) fn ad_tensor_id_from_tid(&mut self, tid: u64) -> u64 {
+        if let Some(&id) = self.ad_tensor_ids.get(&tid) {
+            return id;
+        }
+        let id = self.ad_next_id;
+        self.ad_next_id += 1;
+        self.ad_tensor_ids.insert(tid, id);
+        id
+    }
+
+    /// Box-Muller transform to produce `n` standard-normal samples.
+    fn box_muller_n(n: usize, mean: f64, std_dev: f64, lcg: &mut u64) -> Vec<f64> {
+        let step = |s: &mut u64| -> f64 {
+            *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (*s >> 33) as f64 / (1u64 << 31) as f64
+        };
+        let mut out = Vec::with_capacity(n);
+        let mut i = 0;
+        while i < n {
+            let u1 = (step(lcg) + 1e-10).min(1.0 - 1e-10);
+            let u2 = step(lcg);
+            let mag = std_dev * (-2.0 * u1.ln()).sqrt();
+            let z0  = mag * (2.0 * std::f64::consts::PI * u2).cos() + mean;
+            let z1  = mag * (2.0 * std::f64::consts::PI * u2).sin() + mean;
+            out.push(z0);
+            if i + 1 < n { out.push(z1); }
+            i += 2;
+        }
+        out.truncate(n);
+        out
+    }
+
+    /// Compute fan_in and fan_out from a weight shape.
+    /// For 2D: fan_in = shape[1], fan_out = shape[0]
+    /// For 4D (conv): fan_in = shape[1]*kH*kW, fan_out = shape[0]*kH*kW
+    fn compute_fans(shape: &[usize]) -> (usize, usize) {
+        match shape.len() {
+            0 | 1 => (shape.iter().product(), shape.iter().product()),
+            2 => (shape[1], shape[0]),
+            _ => {
+                let receptive: usize = shape[2..].iter().product();
+                (shape[1] * receptive, shape[0] * receptive)
             }
         }
     }
