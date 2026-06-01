@@ -1489,6 +1489,20 @@ impl super::Evaluator {
                 EvalResult::Value(out_ref)
             }
 
+            // ── Phase 3: stopGrad / detach ────────────────────────────────────
+            "stopGrad" | "detach" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Autodiff.stopGrad(tensor) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let t_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let (shape, data) = match self.resolve(t_ref).cloned() {
+                    Some(ObjectData::Tensor { shape, data, .. }) => (shape, data),
+                    _ => { eprintln!("❌ ERROR: Autodiff.stopGrad() argument must be a Tensor"); return EvalResult::Error; }
+                };
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data, tid: 0 }))
+            }
+
             _ => {
                 eprintln!("❌ ERROR: Unknown Autodiff method '{}'", dot_call.method);
                 EvalResult::Error

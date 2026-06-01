@@ -997,6 +997,333 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
             }
 
+            // ── Phase 3: N-D shape manipulation ──────────────────────────────
+            "unsqueeze" => {
+                // .unsqueeze(dim) — insert dim of size 1 at position dim
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.unsqueeze(dim) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let d_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let dim = match self.resolve(d_ref) {
+                    Some(ObjectData::Integer(n)) => {
+                        let ndim = shape.len() as i64 + 1;
+                        let d = if *n < 0 { ndim + n } else { *n };
+                        if d < 0 || d > ndim { eprintln!("❌ ERROR: unsqueeze dim {} out of range for {}D tensor", n, shape.len()); return EvalResult::Error; }
+                        d as usize
+                    }
+                    _ => { eprintln!("❌ ERROR: unsqueeze dim must be an integer"); return EvalResult::Error; }
+                };
+                let mut new_shape = shape.clone();
+                new_shape.insert(dim, 1);
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: new_shape, data, tid: 0 }))
+            }
+
+            "squeeze" => {
+                // .squeeze() — remove all dims of size 1
+                // .squeeze(dim) — remove specific dim if size is 1
+                let new_shape: Vec<usize> = if dot_call.arguments.is_empty() {
+                    shape.iter().cloned().filter(|&d| d != 1).collect()
+                } else {
+                    let d_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                    let dim = match self.resolve(d_ref) {
+                        Some(ObjectData::Integer(n)) => {
+                            let nd = shape.len() as i64;
+                            let d = if *n < 0 { nd + n } else { *n };
+                            d as usize
+                        }
+                        _ => { eprintln!("❌ ERROR: squeeze dim must be an integer"); return EvalResult::Error; }
+                    };
+                    if dim < shape.len() && shape[dim] == 1 {
+                        let mut s = shape.clone(); s.remove(dim); s
+                    } else { shape.clone() }
+                };
+                let new_shape = if new_shape.is_empty() { vec![1] } else { new_shape };
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: new_shape, data, tid: 0 }))
+            }
+
+            "permute" => {
+                // .permute([ax0, ax1, ...]) — N-D generalized transpose
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.permute([axes]) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let axes_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let axes: Vec<usize> = match self.eval_shape_expr(&dot_call.arguments[0]) {
+                    Ok(s) => s,
+                    Err(_) => match self.resolve(axes_ref).cloned() {
+                        Some(ObjectData::Array { elements, .. }) => elements.iter().filter_map(|e| {
+                            match e { OwnedValue::Integer(n) => Some(*n as usize), _ => None }
+                        }).collect(),
+                        _ => { eprintln!("❌ ERROR: Tensor.permute() axes must be an array"); return EvalResult::Error; }
+                    }
+                };
+                if axes.len() != shape.len() {
+                    eprintln!("❌ ERROR: Tensor.permute() axes length {} must match tensor ndim {}", axes.len(), shape.len());
+                    return EvalResult::Error;
+                }
+                let new_shape: Vec<usize> = axes.iter().map(|&a| shape[a]).collect();
+                let total: usize = new_shape.iter().product();
+                let mut new_data = vec![0.0_f64; total];
+                // Compute strides for old shape
+                let ndim = shape.len();
+                let mut old_strides = vec![1usize; ndim];
+                for i in (0..ndim - 1).rev() { old_strides[i] = old_strides[i+1] * shape[i+1]; }
+                let mut new_strides = vec![1usize; ndim];
+                for i in (0..ndim - 1).rev() { new_strides[i] = new_strides[i+1] * new_shape[i+1]; }
+                // Iterate over new index space
+                for new_flat in 0..total {
+                    // Decode new_flat into new multi-index
+                    let mut rem = new_flat;
+                    let mut new_idx = vec![0usize; ndim];
+                    for i in 0..ndim { new_idx[i] = rem / new_strides[i]; rem %= new_strides[i]; }
+                    // Map new_idx back to old_idx via axes permutation
+                    let mut old_flat = 0usize;
+                    for i in 0..ndim { old_flat += new_idx[i] * old_strides[axes[i]]; }
+                    new_data[new_flat] = data[old_flat];
+                }
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: new_shape, data: new_data, tid: 0 }))
+            }
+
+            // ── Phase 3: N-D broadcasting ─────────────────────────────────────
+            "broadcastTo" => {
+                // .broadcastTo([shape]) — expand to target shape (numpy semantics)
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.broadcastTo([shape]) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let target_shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
+                    Ok(s) => s, Err(e) => return e,
+                };
+                match Self::broadcast_data(&data, &shape, &target_shape) {
+                    Some(new_data) => EvalResult::Value(self.alloc(ObjectData::Tensor { shape: target_shape, data: new_data, tid: 0 })),
+                    None => { eprintln!("❌ ERROR: Tensor.broadcastTo() incompatible shapes {:?} → {:?}", shape, target_shape); EvalResult::Error }
+                }
+            }
+
+            "broadcastAddNd" => {
+                // N-D broadcast add (full numpy semantics)
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.broadcastAddNd(other) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let (other_data, other_shape) = match self.resolve(other_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, shape: s, .. }) => (d, s),
+                    _ => { eprintln!("❌ ERROR: Tensor.broadcastAddNd() argument must be a Tensor"); return EvalResult::Error; }
+                };
+                let out_shape = match Self::broadcast_shape(&shape, &other_shape) {
+                    Some(s) => s,
+                    None => { eprintln!("❌ ERROR: Tensor.broadcastAddNd() shapes {:?} and {:?} are not broadcastable", shape, other_shape); return EvalResult::Error; }
+                };
+                let a_data = Self::broadcast_data(&data,       &shape,       &out_shape).unwrap();
+                let b_data = Self::broadcast_data(&other_data, &other_shape, &out_shape).unwrap();
+                let result: Vec<f64> = a_data.iter().zip(b_data.iter()).map(|(a,b)| a+b).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: out_shape, data: result, tid: 0 }))
+            }
+
+            "broadcastMulNd" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.broadcastMulNd(other) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let (other_data, other_shape) = match self.resolve(other_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, shape: s, .. }) => (d, s),
+                    _ => { eprintln!("❌ ERROR: Tensor.broadcastMulNd() argument must be a Tensor"); return EvalResult::Error; }
+                };
+                let out_shape = match Self::broadcast_shape(&shape, &other_shape) {
+                    Some(s) => s,
+                    None => { eprintln!("❌ ERROR: Tensor.broadcastMulNd() shapes not broadcastable"); return EvalResult::Error; }
+                };
+                let a_data = Self::broadcast_data(&data,       &shape,       &out_shape).unwrap();
+                let b_data = Self::broadcast_data(&other_data, &other_shape, &out_shape).unwrap();
+                let result: Vec<f64> = a_data.iter().zip(b_data.iter()).map(|(a,b)| a*b).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: out_shape, data: result, tid: 0 }))
+            }
+
+            // ── Phase 3: Batch matmul ─────────────────────────────────────────
+            "bmm" => {
+                // .bmm(other) — batch matmul: [B,N,M] @ [B,M,K] → [B,N,K]
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.bmm(other) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                if shape.len() != 3 {
+                    eprintln!("❌ ERROR: Tensor.bmm() requires 3D tensors [B,N,M], got {}D", shape.len());
+                    return EvalResult::Error;
+                }
+                let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let (other_data, other_shape) = match self.resolve(other_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, shape: s, .. }) => (d, s),
+                    _ => { eprintln!("❌ ERROR: Tensor.bmm() argument must be a Tensor"); return EvalResult::Error; }
+                };
+                if other_shape.len() != 3 || other_shape[0] != shape[0] || other_shape[1] != shape[2] {
+                    eprintln!("❌ ERROR: Tensor.bmm() shape mismatch: {:?} @ {:?}", shape, other_shape);
+                    return EvalResult::Error;
+                }
+                let (b, n, m, k) = (shape[0], shape[1], shape[2], other_shape[2]);
+                let mut out_data = vec![0.0_f64; b * n * k];
+                for bi in 0..b {
+                    for i in 0..n {
+                        for l in 0..m {
+                            for j in 0..k {
+                                out_data[bi*n*k + i*k + j] += data[bi*n*m + i*m + l] * other_data[bi*m*k + l*k + j];
+                            }
+                        }
+                    }
+                }
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![b,n,k], data: out_data, tid: 0 }))
+            }
+
+            // ── Phase 3: N-D reduce along axis ────────────────────────────────
+            "reduceSum" => {
+                // .reduceSum(axis, keepdim=false) — sum along axis for any N-D tensor
+                if dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: Tensor.reduceSum(axis) requires at least 1 argument");
+                    return EvalResult::Error;
+                }
+                let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let axis = match self.resolve(ax_ref) {
+                    Some(ObjectData::Integer(n)) => {
+                        let nd = shape.len() as i64;
+                        let a = if *n < 0 { nd + n } else { *n };
+                        if a < 0 || a >= nd { eprintln!("❌ ERROR: reduceSum axis {} out of range", n); return EvalResult::Error; }
+                        a as usize
+                    }
+                    _ => { eprintln!("❌ ERROR: reduceSum axis must be integer"); return EvalResult::Error; }
+                };
+                let keepdim = dot_call.arguments.len() > 1 && matches!(
+                    self.eval_expression(&dot_call.arguments[1]),
+                    EvalResult::Value(r) if matches!(self.resolve(r), Some(ObjectData::Boolean(true)))
+                );
+                let (new_shape, out_data) = Self::reduce_along_axis(&data, &shape, axis, keepdim, |a, b| a + b, 0.0);
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: new_shape, data: out_data, tid: 0 }))
+            }
+
+            "reduceMean" => {
+                if dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: Tensor.reduceMean(axis) requires at least 1 argument");
+                    return EvalResult::Error;
+                }
+                let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let axis = match self.resolve(ax_ref) {
+                    Some(ObjectData::Integer(n)) => {
+                        let nd = shape.len() as i64;
+                        let a = if *n < 0 { nd + n } else { *n };
+                        if a < 0 || a >= nd { eprintln!("❌ ERROR: reduceMean axis {} out of range", n); return EvalResult::Error; }
+                        a as usize
+                    }
+                    _ => { eprintln!("❌ ERROR: reduceMean axis must be integer"); return EvalResult::Error; }
+                };
+                let keepdim = dot_call.arguments.len() > 1 && matches!(
+                    self.eval_expression(&dot_call.arguments[1]),
+                    EvalResult::Value(r) if matches!(self.resolve(r), Some(ObjectData::Boolean(true)))
+                );
+                let n_reduce = shape[axis] as f64;
+                let (new_shape, sum_data) = Self::reduce_along_axis(&data, &shape, axis, keepdim, |a, b| a + b, 0.0);
+                let out_data: Vec<f64> = sum_data.iter().map(|x| x / n_reduce).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: new_shape, data: out_data, tid: 0 }))
+            }
+
+            "reduceMax" => {
+                if dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: Tensor.reduceMax(axis) requires at least 1 argument");
+                    return EvalResult::Error;
+                }
+                let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let axis = match self.resolve(ax_ref) {
+                    Some(ObjectData::Integer(n)) => {
+                        let nd = shape.len() as i64;
+                        let a = if *n < 0 { nd + n } else { *n };
+                        a as usize
+                    }
+                    _ => { eprintln!("❌ ERROR: reduceMax axis must be integer"); return EvalResult::Error; }
+                };
+                let keepdim = dot_call.arguments.len() > 1 && matches!(
+                    self.eval_expression(&dot_call.arguments[1]),
+                    EvalResult::Value(r) if matches!(self.resolve(r), Some(ObjectData::Boolean(true)))
+                );
+                let (new_shape, out_data) = Self::reduce_along_axis(&data, &shape, axis, keepdim, f64::max, f64::NEG_INFINITY);
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape: new_shape, data: out_data, tid: 0 }))
+            }
+
+            // ── Phase 3: stopGrad (detach from tape) ──────────────────────────
+            "stopGrad" | "detach" => {
+                // Returns a copy of the tensor not connected to the tape
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data, tid: 0 }))
+            }
+
+            // ── Phase 3: Element-wise operations ─────────────────────────────
+            "sign" => {
+                let new_data: Vec<f64> = data.iter()
+                    .map(|&x| if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 }).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "round" => {
+                let new_data: Vec<f64> = data.iter().map(|x| x.round()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "floor" => {
+                let new_data: Vec<f64> = data.iter().map(|x| x.floor()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "ceil" => {
+                let new_data: Vec<f64> = data.iter().map(|x| x.ceil()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "reciprocal" => {
+                let new_data: Vec<f64> = data.iter().map(|x| 1.0 / x).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "sin" => {
+                let new_data: Vec<f64> = data.iter().map(|x| x.sin()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "cos" => {
+                let new_data: Vec<f64> = data.iter().map(|x| x.cos()).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "maximum" => {
+                // .maximum(other) — element-wise max with another tensor
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.maximum(other) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let other_data = match self.resolve(other_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, .. }) => d,
+                    Some(ObjectData::Decimal(v)) => vec![v; data.len()],
+                    Some(ObjectData::Integer(v)) => vec![v as f64; data.len()],
+                    _ => { eprintln!("❌ ERROR: maximum requires Tensor or scalar"); return EvalResult::Error; }
+                };
+                let new_data: Vec<f64> = data.iter().zip(other_data.iter()).map(|(&a,&b)| a.max(b)).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
+            "minimum" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Tensor.minimum(other) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let other_data = match self.resolve(other_ref).cloned() {
+                    Some(ObjectData::Tensor { data: d, .. }) => d,
+                    Some(ObjectData::Decimal(v)) => vec![v; data.len()],
+                    Some(ObjectData::Integer(v)) => vec![v as f64; data.len()],
+                    _ => { eprintln!("❌ ERROR: minimum requires Tensor or scalar"); return EvalResult::Error; }
+                };
+                let new_data: Vec<f64> = data.iter().zip(other_data.iter()).map(|(&a,&b)| a.min(b)).collect();
+                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
+            }
+
             // ── conv2d(weights, bias, kernel, stride) ─────────────────────────
             "conv2d" => {
                 if dot_call.arguments.len() != 4 {
@@ -1789,5 +2116,112 @@ impl super::Evaluator {
             self.ad_push(out_ref, tape_op);
         }
         EvalResult::Value(out_ref)
+    }
+
+    // ── Phase 3: Static helpers for N-D broadcasting & reduction ─────────────
+
+    /// Compute broadcast output shape (numpy semantics).
+    /// Returns None if shapes are incompatible.
+    pub(super) fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
+        let ndim = a.len().max(b.len());
+        let mut out = vec![0usize; ndim];
+        for i in 0..ndim {
+            let ai = if i < ndim - a.len() { 1 } else { a[i - (ndim - a.len())] };
+            let bi = if i < ndim - b.len() { 1 } else { b[i - (ndim - b.len())] };
+            if ai == bi { out[i] = ai; }
+            else if ai == 1 { out[i] = bi; }
+            else if bi == 1 { out[i] = ai; }
+            else { return None; }
+        }
+        Some(out)
+    }
+
+    /// Broadcast `data` from `from_shape` to `to_shape`.
+    /// Returns None if incompatible.
+    pub(super) fn broadcast_data(data: &[f64], from_shape: &[usize], to_shape: &[usize]) -> Option<Vec<f64>> {
+        let ndim = to_shape.len();
+        if from_shape.len() > ndim { return None; }
+        // Pad from_shape on the left with 1s
+        let pad = ndim - from_shape.len();
+        let padded: Vec<usize> = (0..pad).map(|_| 1).chain(from_shape.iter().cloned()).collect();
+        // Verify compatible
+        for i in 0..ndim {
+            if padded[i] != to_shape[i] && padded[i] != 1 { return None; }
+        }
+        let out_len: usize = to_shape.iter().product();
+        let mut out = vec![0.0_f64; out_len];
+        // Compute strides for padded_shape
+        let mut strides = vec![0usize; ndim];
+        let mut s = 1usize;
+        for i in (0..ndim).rev() {
+            strides[i] = if padded[i] == 1 { 0 } else { s };
+            if padded[i] != 1 { s *= padded[i]; }
+        }
+        // Compute strides for to_shape (for iterating output)
+        let mut out_strides = vec![1usize; ndim];
+        for i in (0..ndim - 1).rev() { out_strides[i] = out_strides[i+1] * to_shape[i+1]; }
+        // Fill output
+        for flat_out in 0..out_len {
+            let mut rem = flat_out;
+            let mut src_flat = 0usize;
+            for i in 0..ndim {
+                let idx = rem / out_strides[i];
+                rem %= out_strides[i];
+                src_flat += idx * strides[i];
+            }
+            out[flat_out] = data[src_flat];
+        }
+        Some(out)
+    }
+
+    /// Generic reduce along a single axis. `keepdim=true` inserts a size-1 dim.
+    pub(super) fn reduce_along_axis(
+        data: &[f64],
+        shape: &[usize],
+        axis: usize,
+        keepdim: bool,
+        op: impl Fn(f64, f64) -> f64,
+        init: f64,
+    ) -> (Vec<usize>, Vec<f64>) {
+        let ndim = shape.len();
+        let axis_size = shape[axis];
+        // Output shape: remove or keep-dim the axis
+        let mut out_shape: Vec<usize> = shape.iter().cloned().enumerate()
+            .filter_map(|(i, d)| if i == axis { if keepdim { Some(1) } else { None } } else { Some(d) })
+            .collect();
+        if out_shape.is_empty() { out_shape = vec![1]; }
+        let out_len: usize = out_shape.iter().product();
+        let mut out_data = vec![init; out_len];
+        // Strides for input
+        let mut in_strides = vec![1usize; ndim];
+        for i in (0..ndim - 1).rev() { in_strides[i] = in_strides[i+1] * shape[i+1]; }
+        // Strides for output (using out_shape without the axis dim)
+        let out_shape_no_ax: Vec<usize> = shape.iter().cloned().enumerate()
+            .filter_map(|(i, d)| if i == axis { None } else { Some(d) }).collect();
+        let mut out_strides_no_ax = vec![1usize; out_shape_no_ax.len()];
+        if !out_shape_no_ax.is_empty() {
+            for i in (0..out_shape_no_ax.len() - 1).rev() {
+                out_strides_no_ax[i] = out_strides_no_ax[i+1] * out_shape_no_ax[i+1];
+            }
+        }
+        // Iterate all input elements
+        for flat_in in 0..data.len() {
+            // Decode multi-index
+            let mut rem = flat_in;
+            let mut out_flat = 0usize;
+            let mut out_ax = 0usize;
+            for i in 0..ndim {
+                let idx = rem / in_strides[i];
+                rem %= in_strides[i];
+                if i == axis { out_ax = idx; }
+                else {
+                    let ax_no = if i < axis { i } else { i - 1 };
+                    if ax_no < out_strides_no_ax.len() { out_flat += idx * out_strides_no_ax[ax_no]; }
+                }
+            }
+            let _ = out_ax;
+            out_data[out_flat] = op(out_data[out_flat], data[flat_in]);
+        }
+        (out_shape, out_data)
     }
 }
