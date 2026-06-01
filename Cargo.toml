@@ -20,7 +20,7 @@ llvm = ["inkwell"]
 
 [dependencies]
 notify = "8"
-ureq = "2"
+ureq = "3"
 zip = "2"
 crossterm = "0.28"
 minifb = "0.27"
