@@ -46,6 +46,7 @@ out fibonacci(10);   // → 55
    - [Math](#math)
    - [File](#file)
    - [JSON](#json)
+   - [Networking (fetch)](#networking-fetch)
    - [Terminal](#terminal)
    - [OS](#os)
    - [Env](#env)
@@ -1758,6 +1759,68 @@ out JSON.pretty(data);
 //     "age": 30,
 //     "active": true
 //   }
+```
+
+---
+
+### Networking (fetch)
+
+`fetch` is a general-purpose HTTP client. Declare it once as a `native fn`, then call it. Only `http://` and `https://` URLs are allowed; URLs/headers with control characters are rejected (CRLF / header-injection safe).
+
+```serez
+native fn string fetch(string url);
+
+let body = fetch("https://pokeapi.co/api/v2/pokemon/ditto");
+out JSON.pretty(body);
+```
+
+**Signature:** `fetch(url, [method], [body], [options])`. Arguments after the url are sniffed by type — the first string is the **method**, the second is the **body**, and a dict is the **options** — so `fetch(url, opts)`, `fetch(url, "POST", body)` and `fetch(url, "POST", body, opts)` all work.
+
+```serez
+// POST with a JSON body (Content-Type defaults to application/json when a body is sent)
+let res = fetch("https://example.com/api", "POST", "\{\"name\":\"serez\"}");
+```
+
+**Default headers sent automatically:**
+
+| Header | Value | When |
+|---|---|---|
+| `User-Agent` | `Serez-Code/<version>` | Always, unless you set your own. Without it some CDNs/WAFs reply `503`. |
+| `Content-Type` | `application/json` | Only when a body is sent and you didn't set one. |
+
+Both are overridable via the `headers` option (a caller-provided value always wins).
+
+**Options dict** (passed as a `<string, any>` dict, e.g. `({"full", true})`):
+
+| Key | Type | Effect |
+|---|---|---|
+| `headers` | `<string, string>` | Extra request headers (`Authorization`, `Accept`, cookies, a custom `User-Agent`, …). |
+| `timeout` | `int` | Request timeout in seconds (default **60**; connect capped at 30). |
+| `full` | `bool` | Return a dict `{ status, ok, statusText, headers, body }` and **do not throw** on HTTP status — so 4xx/5xx can be inspected. `headers` is keyed by lowercased name; a missing key reads as `null`. |
+| `binary` | `bool` | Return the body as a byte array `[int]` (0–255) instead of a UTF-8 string, so images/zips/PDFs download intact. Decode with `Binary.toUtf8` / `Binary.toHex`. |
+
+```serez
+native fn any fetch(string url, any options);
+
+let auth <string, string> = ({"Authorization", "Bearer TOKEN"});
+let opts <string, any> = ({"headers", auth}, {"full", true}, {"timeout", 10});
+
+let r = fetch("https://pokeapi.co/api/v2/pokemon/ditto", opts);
+if (r["ok"] == true) {
+    out "status " + r["status"];          // 200
+    out JSON.pretty(r["body"]);           // pretty-print the JSON body
+}
+```
+
+**Default mode** (no `full`) returns the body string and **throws on status ≥ 400**, embedding the response body in the thrown message — so wrap network calls in `try / catch`:
+
+```serez
+try {
+    let body = fetch("https://pokeapi.co/api/v2/pokemon/ditto");
+    out body.length();
+} catch (e) {
+    out "request failed: " + e;
+}
 ```
 
 ---
