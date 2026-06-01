@@ -23,7 +23,7 @@ notify = "8"
 ureq = "2"
 zip = "2"
 crossterm = "0.28"
-minifb = "0.27"
+minifb = "0.28"
 font8x8 = "0.3"
 
 [dependencies.inkwell]
