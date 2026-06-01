@@ -13,6 +13,7 @@ mod type_checker;
 
 use std::env;
 use std::fs;
+use std::io::Write;
 
 fn run_file(file_path: &str, is_check: bool) {
     let input = match fs::read_to_string(file_path) {
@@ -55,6 +56,7 @@ fn run_file(file_path: &str, is_check: bool) {
             eprintln!("[arena] global={} scoped={}", global, scoped);
         }
     }
+    let _ = std::io::stdout().flush();
 }
 
 fn run() {
