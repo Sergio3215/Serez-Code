@@ -1,105 +1,105 @@
-# Contribuir a Serez-Code
+# Contributing to Serez-Code
 
-Gracias por querer contribuir. Este documento explica cómo reportar issues, proponer cambios y enviar pull requests de forma que el proceso sea claro para todos.
+Thank you for wanting to contribute. This document explains how to report issues, propose changes, and submit pull requests so that the process is clear to everyone.
 
 ---
 
-## Reportar un issue
+## Reporting an Issue
 
-Antes de abrir un issue, buscá si ya existe uno similar abierto o cerrado.
+Before opening an issue, please check if a similar one is already open or closed.
 
-### Título del issue
+### Issue Title
 
-El título debe ser claro y conciso. Seguí este formato según el tipo:
+The title should be clear and concise. Follow this format according to the type:
 
-| Tipo | Formato | Ejemplo |
+| Type | Format | Example |
 |---|---|---|
-| Bug | `[BUG] Descripción corta del problema` | `[BUG] flat(n) solo aplana un nivel` |
-| Feature request | `[FEATURE] Lo que querés agregar` | `[FEATURE] Operador de módulo negativo` |
-| Documentación | `[DOCS] Qué falta o está mal` | `[DOCS] Ejemplo de Set.union incorrecto` |
-| Pregunta | `[QUESTION] Tu pregunta` | `[QUESTION] Cómo funciona el Flash Scope` |
+| Bug | `[BUG] Short description of the problem` | `[BUG] flat(n) only flattens one level` |
+| Feature request | `[FEATURE] What you want to add` | `[FEATURE] Negative modulo operator` |
+| Documentation | `[DOCS] What is missing or wrong` | `[DOCS] Incorrect Set.union example` |
+| Question | `[QUESTION] Your question` | `[QUESTION] How does Flash Scope work` |
 
-### Cuerpo del issue
+### Issue Body
 
-**Para bugs**, incluí:
-- Qué hiciste (código `.sz` mínimo que reproduce el problema)
-- Qué esperabas que pasara
-- Qué pasó en realidad (mensaje de error o output incorrecto)
-- Versión de `sz` (`sz --version`)
-- Sistema operativo
+**For bugs**, include:
+- What you did (minimal `.sz` code that reproduces the problem)
+- What you expected to happen
+- What actually happened (error message or incorrect output)
+- `sz` version (`sz --version`)
+- Operating system
 
-**Para features**, incluí:
-- Qué querés agregar y para qué sirve
-- Ejemplo de cómo se vería la sintaxis o el comportamiento
-- Si ya tenés una idea de cómo implementarlo, mencionalo
-
----
-
-## Proponer un cambio (antes de escribir código)
-
-Para cambios grandes — nueva sintaxis, cambios al evaluador, modificaciones al modelo de memoria — abrí un issue primero y describí qué querés hacer. Esto evita que trabajes en algo que no va a ser mergeado.
-
-Para cambios pequeños (fix de typo en docs, corrección de un bug simple), podés ir directo al PR.
+**For features**, include:
+- What you want to add and what it is useful for
+- Example of how the syntax or behavior would look
+- If you already have an idea of how to implement it, mention it
 
 ---
 
-## Flujo de trabajo
+## Proposing a Change (before writing code)
 
-### 1. Fork y clone
+For large changes — new syntax, changes to the evaluator, modifications to the memory model — open an issue first and describe what you want to do. This prevents you from working on something that won't be merged.
+
+For small changes (fixing a typo in docs, correcting a simple bug), you can go straight to a PR.
+
+---
+
+## Workflow
+
+### 1. Fork and Clone
 
 ```bash
-git clone https://github.com/<tu-usuario>/serez-code
+git clone https://github.com/<your-username>/serez-code
 cd serez-code
 cargo build
 ```
 
-### 2. Nombrar la rama
+### 2. Branch Naming
 
-La rama debe describir exactamente qué implementa. Usá el número del issue si existe:
+The branch should exactly describe what it implements. Use the issue number if it exists:
 
 ```
-# Con issue asociado:
+# With associated issue:
 feature/123-do-while-loop
 fix/87-flat-depth-parameter
 docs/45-update-set-examples
 
-# Sin issue (contribución directa):
+# Without issue (direct contribution):
 feature/string-repeat-method
 fix/parser-error-recovery-semicolon
 docs/add-closures-example
 ```
 
-**Prefijos válidos:**
+**Valid prefixes:**
 
-| Prefijo | Cuándo usarlo |
+| Prefix | When to use it |
 |---|---|
-| `feature/` | Nueva funcionalidad del lenguaje o tooling |
-| `fix/` | Corrección de bug |
-| `docs/` | Solo documentación |
-| `refactor/` | Cambio interno sin cambio de comportamiento |
-| `test/` | Agregar o corregir tests |
-| `ci/` | Cambios al pipeline de CI/CD |
+| `feature/` | New language feature or tooling |
+| `fix/` | Bug fix |
+| `docs/` | Documentation only |
+| `refactor/` | Internal change without behavioral change |
+| `test/` | Adding or fixing tests |
+| `ci/` | Changes to the CI/CD pipeline |
 
-Evitá nombres genéricos como `mi-rama`, `cambios`, `fix`, `patch`.
+Avoid generic names like `my-branch`, `changes`, `fix`, `patch`.
 
-### 3. Hacer los cambios
+### 3. Making Changes
 
-- Un commit por cambio lógico
-- El mensaje del commit debe explicar el **por qué**, no solo el qué
-- Si el cambio cierra un issue, incluí `Closes #123` en el cuerpo del commit
+- One commit per logical change
+- The commit message must explain the **why**, not just the what
+- If the change closes an issue, include `Closes #123` in the commit body
 
 ```bash
-git commit -m "fix: flat(n) ahora aplana n niveles recursivamente
+git commit -m "fix: flat(n) now flattens n levels recursively
 
-Antes solo se soportaba flat() con profundidad 1. Ahora flat(n) aplana
-hasta n niveles usando una función recursiva.
+Previously only flat() with depth 1 was supported. Now flat(n) flattens
+up to n levels using a recursive function.
 
 Closes #54"
 ```
 
-### 4. Correr los tests
+### 4. Running Tests
 
-Antes de enviar el PR, asegurate de que todos los tests pasen:
+Before submitting the PR, make sure all tests pass:
 
 ```powershell
 # Windows
@@ -109,54 +109,54 @@ Antes de enviar el PR, asegurate de que todos los tests pasen:
 ./run_tests.sh
 ```
 
-Si agregás una nueva feature, incluí al menos un test `.sz` que la ejercite en `tests/`.
+If you add a new feature, include at least one `.sz` test that exercises it in `tests/`.
 
-### 5. Abrir el Pull Request
+### 5. Opening the Pull Request
 
-**Título del PR:** igual que el commit principal, claro y descriptivo.
+**PR Title:** same as the main commit, clear and descriptive.
 
 ```
-fix: corregir flat(n) para profundidad mayor a 1
-feature: agregar método String.repeat(n)
-docs: documentar comportamiento de for-in con copies
+fix: fix flat(n) for depth greater than 1
+feature: add String.repeat(n) method
+docs: document behavior of for-in with copies
 ```
 
-**Descripción del PR**, incluí:
+**PR Description**, include:
 
-- **Qué hace este PR** — una o dos oraciones
-- **Por qué** — qué problema resuelve o qué mejora aporta
-- **Cómo probarlo** — pasos para verificar el cambio
-- **Issue relacionado** — `Closes #123` si aplica
+- **What this PR does** — one or two sentences
+- **Why** — what problem it solves or what improvement it brings
+- **How to test it** — steps to verify the change
+- **Related issue** — `Closes #123` if applicable
 
-**Ejemplo:**
+**Example:**
 
 ```markdown
-## Qué hace
-Corrige `flat(n)` para que aplane recursivamente n niveles en lugar de solo 1.
+## What it does
+Fixes `flat(n)` so that it recursively flattens n levels instead of just 1.
 
-## Por qué
-`[1, [2, [3]]].flat(2)` devolvía `[1, 2, [3]]` en lugar de `[1, 2, 3]`.
+## Why
+`[1, [2, [3]]].flat(2)` returned `[1, 2, [3]]` instead of `[1, 2, 3]`.
 
-## Cómo probarlo
+## How to test it
 sz tests/unit_array_methods_edge.sz
 
-## Issue relacionado
+## Related issue
 Closes #54
 ```
 
 ---
 
-## Convenciones técnicas
+## Technical Conventions
 
-- **Zero `unsafe`** — el modelo de memoria se mantiene sin bloques unsafe
-- **Sin dependencias de runtime externas** — `[dependencies]` en `Cargo.toml` solo para tooling imprescindible
-- **Los errores van a `stderr`** — `eprintln!` para errores, `println!` solo para output del programa y el REPL
-- **Nueva sintaxis sigue el pipeline completo** — `token.rs` → `lexer.rs` → `ast.rs` → `parser.rs` → `evaluator/`
-- **Nuevo operador infix requiere registro en dos lugares** en `parser.rs`: `token_precedence()` y el match `is_infix`
-- **Todo nuevo bloque `{ }` debe hacer push/pop** de scope en todos los code paths, incluyendo los de error
+- **Zero `unsafe`** — the memory model is maintained without unsafe blocks
+- **No external runtime dependencies** — `[dependencies]` in `Cargo.toml` only for essential tooling
+- **Errors go to `stderr`** — `eprintln!` for errors, `println!` only for program output and the REPL
+- **New syntax follows the full pipeline** — `token.rs` → `lexer.rs` → `ast.rs` → `parser.rs` → `evaluator/`
+- **New infix operator requires registration in two places** in `parser.rs`: `token_precedence()` and the `is_infix` match
+- **Every new `{ }` block must push/pop** scope in all code paths, including error paths
 
 ---
 
-## ¿Tenés dudas?
+## Any questions?
 
-Abrí un issue con el prefijo `[QUESTION]` o comentá en el issue/PR correspondiente.
+Open an issue with the prefix `[QUESTION]` or comment on the corresponding issue/PR.
