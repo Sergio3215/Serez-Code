@@ -198,6 +198,61 @@ pub fn install_package(pkg_spec: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Initialize a serez.json in the current directory.
+/// `yes` = skip prompts and use defaults (folder name as project name).
+pub fn init_project(yes: bool) -> Result<(), String> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+
+    let manifest_path = cwd.join("serez.json");
+    if manifest_path.exists() && !yes {
+        print!("serez.json already exists. Overwrite? (y/N): ");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    let folder_name = cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "my-project".to_string());
+
+    let (name, version, description, author) = if yes {
+        (folder_name, "1.0.0".to_string(), String::new(), String::new())
+    } else {
+        (
+            prompt(&format!("name ({}): ", folder_name), &folder_name),
+            prompt("version (1.0.0): ", "1.0.0"),
+            prompt("description: ", ""),
+            prompt("author: ", ""),
+        )
+    };
+
+    let json = format!(
+        "{{\n  \"name\": \"{}\",\n  \"version\": \"{}\",\n  \"description\": \"{}\",\n  \"author\": \"{}\",\n  \"scripts\": {{\n    \"dev\": \"sz index.sz\"\n  }},\n  \"dependencies\": {{}},\n  \"permissions\": []\n}}\n",
+        name, version, description, author
+    );
+
+    std::fs::write(&manifest_path, &json)
+        .map_err(|e| format!("Cannot write serez.json: {}", e))?;
+
+    println!("✅ Created serez.json");
+    Ok(())
+}
+
+fn prompt(label: &str, default: &str) -> String {
+    print!("{}", label);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).ok();
+    let trimmed = input.trim().to_string();
+    if trimmed.is_empty() { default.to_string() } else { trimmed }
+}
+
 /// Execute a script defined in serez.json's "scripts" section.
 pub fn run_script(script_name: &str) -> Result<(), String> {
     let cwd = std::env::current_dir()

@@ -123,6 +123,15 @@ fn run() {
             return;
         }
 
+        // ── `sz init [--y]` subcommand ────────────────────────────────────────
+        if args[1] == "init" {
+            let yes = args.iter().any(|a| a == "--y");
+            if let Err(e) = package_manager::init_project(yes) {
+                eprintln!("❌ ERROR: {}", e);
+            }
+            return;
+        }
+
         // ── `sz run <script>` subcommand ──────────────────────────────────────
         if args[1] == "run" {
             if args.len() >= 3 {
