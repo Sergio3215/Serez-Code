@@ -26,7 +26,7 @@ Order: most recent to oldest.
 ### Fixes
 
 - **`unit_native_fns.sz` parsing** — the POST test embedded a JSON body with an unescaped `{`, which serez treats as string-interpolation start. That silently aborted parsing of the rest of the file, so the POST test (and any added after it) never ran while the runner still reported the file as passing (parser errors go to stderr; the runner only greps stdout for `[FAIL]`). Escaped as `\{` so the whole file parses and executes.
-- **`43_fetch_full_e2e` flakiness** — the test only passed on a 2xx from httpbin and (because `full` mode does not throw on HTTP status) silently failed whenever httpbin replied 5xx, which it does intermittently. Rewritten to assert the *full-mode contract* — a structured `{ status, statusText, headers, body }` reply — so any well-formed HTTP response (incl. 4xx/5xx) or an outright network error all count as success. Verified against `/status/503` and `/status/404`. No longer depends on httpbin being healthy.
+- **`43_fetch_full_e2e` flakiness** — the test hit httpbin.org, which intermittently returns 503; since `full` mode does not throw on HTTP status, a 503 left `status="unknown"` and the test failed. Switched the endpoint to PokeAPI (`/api/v2/pokemon/ditto`) — a stable, CDN-backed service that consistently returns 200 — and tightened the assertions to check the *real* response (`status == 200`, `ok == true`, `statusText`/`headers` present, body contains `ditto`), so it actually exercises status-line/header/body parsing. Still degrades gracefully (`network_error`) on a genuine outage.
 
 ### Test count
 

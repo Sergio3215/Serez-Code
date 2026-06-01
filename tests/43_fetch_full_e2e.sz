@@ -1,5 +1,7 @@
 // E2E: fetch full-mode (status + headers as a structured object).
-// Network-tolerant: works if reachable, fails gracefully otherwise.
+// Uses PokeAPI — a stable, CDN-backed endpoint that consistently returns
+// 200 — so we can assert the real response instead of just tolerating it.
+// Still network-tolerant: a genuine network outage fails gracefully.
 
 native fn any fetch(string url, any options);
 
@@ -7,19 +9,19 @@ let status = "unknown";
 let opts <string, any> = ({"full", true});
 
 try {
-    let r = fetch("https://httpbin.org/get", opts);
-    // full mode returns a dict { status, ok, statusText, headers, body } and
-    // does NOT throw on HTTP status. The contract is the structured response
-    // itself — ANY well-formed HTTP reply (incl. a 4xx/5xx from a degraded
-    // server) proves full mode works, so we don't depend on httpbin being up.
-    if (r["status"] >= 100
+    let r = fetch("https://pokeapi.co/api/v2/pokemon/ditto", opts);
+    // full mode returns a dict { status, ok, statusText, headers, body }.
+    // Assert the actual response: a 200 with the expected payload proves the
+    // status line, headers and body are all parsed correctly.
+    if (r["status"] == 200
+        && r["ok"] == true
         && r["statusText"] != null
         && r["headers"] != null
-        && r["body"] != null) {
+        && r["body"].includes("ditto")) {
         status = "ok";
     }
 } catch (e) {
-    // Network unavailable (no HTTP reply at all) — also acceptable
+    // No HTTP reply at all (network down) — acceptable
     status = "network_error";
 }
 
