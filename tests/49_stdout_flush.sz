@@ -1,0 +1,8 @@
+// Regression for stdout flush (v4.0.2): verifies that large output is
+// fully flushed before process exit — no lines dropped or duplicated.
+let i = 0;
+while (i < 200) {
+    out "line-" + i;
+    i++;
+}
+out "done";

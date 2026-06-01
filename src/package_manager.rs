@@ -904,6 +904,42 @@ mod tests {
     }
 
     #[test]
+    fn test_manifest_scripts_parsed() {
+        let json = r#"{
+          "name": "my-app",
+          "version": "1.0.0",
+          "scripts": {
+            "dev": "sz index.sz",
+            "build": "sz apipack build"
+          },
+          "dependencies": {}
+        }"#;
+        let m = SerezManifest::parse(json).unwrap();
+        assert_eq!(m.scripts["dev"], "sz index.sz");
+        assert_eq!(m.scripts["build"], "sz apipack build");
+    }
+
+    #[test]
+    fn test_manifest_no_scripts_defaults_empty() {
+        let json = r#"{"name":"no-scripts","version":"1.0.0"}"#;
+        let m = SerezManifest::parse(json).unwrap();
+        assert!(m.scripts.is_empty());
+    }
+
+    #[test]
+    fn test_manifest_scripts_and_deps_coexist() {
+        let json = r#"{
+          "name": "full",
+          "version": "2.0.0",
+          "scripts": { "dev": "sz main.sz" },
+          "dependencies": { "serez-http": "1.0.0" }
+        }"#;
+        let m = SerezManifest::parse(json).unwrap();
+        assert_eq!(m.scripts["dev"], "sz main.sz");
+        assert_eq!(m.dependencies["serez-http"], "1.0.0");
+    }
+
+    #[test]
     fn test_pkg_spec_with_version() {
         let (name, ver) = parse_pkg_spec("foo@1.2.3");
         assert_eq!(name, "foo");

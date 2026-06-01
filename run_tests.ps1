@@ -72,6 +72,8 @@
 #                          null coalescing, is type check, ternario, recursión, integrador
 #   32_switch              Switch: multi-case, coerción int/decimal, strings, default
 #   33_try_catch           Try/catch/finally: throw, propagación, finally override, break en catch
+#   49_stdout_flush        Regresión flush de stdout (v4.0.2): 200 líneas de output
+#                          verifican que el buffer se vacía completamente antes de salir
 #   34_string_comprehensive Métodos de string completos: B-42, B-52, B-53, B-59 —
 #                          case, trim, startsWith/endsWith, indexOf, charAt, str[i],
 #                          replace(first)/replaceAll(all), substring, split, chaining
@@ -571,6 +573,47 @@ if ($runAll -or $cli) {
 
     $env:SEREZ_REGISTRY = ""
     Remove-Item $tmpProject -Recurse -Force -ErrorAction SilentlyContinue
+
+    # ── sz init tests ─────────────────────────────────────────────────────────
+    $tmpInit = Join-Path $env:TEMP "sz_init_test_$(Get-Random)"
+    New-Item -ItemType Directory -Force $tmpInit | Out-Null
+
+    Run-CLI-Test "cli: sz init --y creates serez.json"   @("init", "--y") `
+                 -expectOut "Created serez.json"  -workDir $tmpInit
+
+    $initLabel = "cli: sz init --y serez.json has name/scripts/dev"
+    if (-not $filter -or $initLabel -like "*$filter*") {
+        $initJson = Get-Content (Join-Path $tmpInit "serez.json") -Raw -ErrorAction SilentlyContinue
+        if ($initJson -and $initJson -match '"name"' -and $initJson -match '"scripts"' -and $initJson -match '"dev"') {
+            Write-Host "[PASS] $initLabel" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "[FAIL] $initLabel" -ForegroundColor Red
+            $script:fail++
+        }
+    }
+
+    Run-CLI-Test "cli: sz init --y overwrites existing serez.json" @("init", "--y") `
+                 -expectOut "Created serez.json"  -workDir $tmpInit
+
+    Remove-Item $tmpInit -Recurse -Force -ErrorAction SilentlyContinue
+
+    # ── sz run tests ──────────────────────────────────────────────────────────
+    $tmpRun = Join-Path $env:TEMP "sz_run_test_$(Get-Random)"
+    New-Item -ItemType Directory -Force $tmpRun | Out-Null
+    Set-Content (Join-Path $tmpRun "serez.json") `
+        '{"name":"run-test","version":"1.0.0","scripts":{"hello":"echo hello-from-script"}}' -NoNewline
+
+    Run-CLI-Test "cli: sz run executes script from serez.json" @("run", "hello") `
+                 -expectOut "hello-from-script"  -workDir $tmpRun
+
+    Run-CLI-Test "cli: sz run nonexistent script reports error" @("run", "nonexistent") `
+                 -expectErr "not found"  -workDir $tmpRun
+
+    Run-CLI-Test "cli: sz run no args reports usage error"  @("run") `
+                 -expectErr "Usage: sz run"
+
+    Remove-Item $tmpRun -Recurse -Force -ErrorAction SilentlyContinue
 
     # local ./packages/ resolution — runs from temp dir so nothing lands in repo root
     $tmpLP = Join-Path $env:TEMP "sz_lp_$(Get-Random)"
