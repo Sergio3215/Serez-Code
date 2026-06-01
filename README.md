@@ -1724,8 +1724,9 @@ out File.exists("empty.txt");         // → true
 
 | Function | Description |
 |---|---|
-| `JSON.stringify(value)` | Converts any value (int, decimal, bool, string, array, dict, null) to a JSON string. |
+| `JSON.stringify(value)` | Converts any value (int, decimal, bool, string, array, dict, null) to a compact, single-line JSON string. |
 | `JSON.parse(string)` | Parses a JSON string and returns the equivalent Serez-Code value. Runtime error on invalid JSON. |
+| `JSON.pretty(value, [indent])` | Like `stringify`, but indented for readability. `indent` is the number of spaces per level (default `2`; `0` falls back to compact). If `value` is a raw JSON string (e.g. a `fetch` body), it is parsed first and then re-indented. |
 
 ```serez
 let data <string,any> = ({"name","Sergio"},{"age",30},{"active",true});
@@ -1739,6 +1740,24 @@ out parsed["age"];    // → 30
 
 let arr = JSON.stringify([1, 2, 3]);
 out arr;              // → [1,2,3]
+```
+
+**Pretty-printing JSON** — handy when inspecting a `fetch` response in the console:
+
+```serez
+native fn string fetch(string url);
+
+let body = fetch("https://api.example.com/data");
+out JSON.pretty(body);       // parses the raw body and prints it indented (2 spaces)
+out JSON.pretty(body, 4);    // 4-space indent
+
+// Also works on structured values directly:
+out JSON.pretty(data);
+// → {
+//     "name": "Sergio",
+//     "age": 30,
+//     "active": true
+//   }
 ```
 
 ---
@@ -3155,7 +3174,7 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] Block comments — `/* ... */` multi-line comments
 - [x] Math namespace — `abs`, `sqrt`, `floor`, `ceil`, `round`, `trunc`, `min`, `max`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `clamp`, `sign`, `random`, `PI`, `E`
 - [x] File namespace — `read`, `write`, `create`, `exists`, `read_asBinary`, `write_asBinary`
-- [x] JSON namespace — `stringify`, `parse`
+- [x] JSON namespace — `stringify`, `parse`, `pretty`
 - [x] Power operator — `**` for integer and decimal exponentiation
 - [x] Bitwise operators — `&`, `|`, `^`, `~`, `<<`, `>>` (64-bit signed integers); binary (`0b`) and hex (`0x`) literals; numeric separators (`1_000_000`)
 - [x] `is` type-check operator — `expr is TypeName` returns `bool` at runtime

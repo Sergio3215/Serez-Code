@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::rc::Rc;
 use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str,
-            obj_data_eq, format_decimal, json_stringify_owned, json_parse,
+            obj_data_eq, format_decimal, json_stringify_owned, json_pretty_owned, json_parse,
             operator_to_method_name};
 
 impl super::Evaluator {
@@ -354,6 +354,31 @@ impl super::Evaluator {
                     Ok(owned) => EvalResult::Value(self.plant_global(owned)),
                     Err(e) => { eprintln!("❌ ERROR: JSON.parse error: {}", e); EvalResult::Error }
                 }
+            }
+            "pretty" => {
+                if dot_call.arguments.is_empty() || dot_call.arguments.len() > 2 {
+                    eprintln!("❌ ERROR: JSON.pretty(value, [indent]) requires 1 or 2 arguments");
+                    return EvalResult::Error;
+                }
+                let vr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                let owned = self.extract(vr);
+                // Optional second arg: spaces per level (default 2).
+                let indent = if dot_call.arguments.len() == 2 {
+                    let ir = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
+                    match self.resolve(ir) {
+                        Some(ObjectData::Integer(n)) if *n >= 0 => *n as usize,
+                        _ => { eprintln!("❌ ERROR: JSON.pretty indent must be a non-negative integer"); return EvalResult::Error; }
+                    }
+                } else { 2 };
+                // A raw string (e.g. a fetch body) is parsed as JSON first so its
+                // structure can be re-indented; non-JSON strings are left as-is.
+                let target: OwnedValue = if let OwnedValue::Str(s) = &owned {
+                    json_parse(s).unwrap_or_else(|_| owned.clone())
+                } else {
+                    owned
+                };
+                let json = json_pretty_owned(&target, indent);
+                EvalResult::Value(self.alloc(ObjectData::Str(json)))
             }
             _ => {
                 eprintln!("❌ ERROR: Unknown JSON method '{}'", dot_call.method);

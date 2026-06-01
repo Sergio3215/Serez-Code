@@ -1154,6 +1154,55 @@ fn json_stringify_owned(val: &OwnedValue) -> String {
     }
 }
 
+// Pretty-print an OwnedValue as indented JSON. `indent` is the number of
+// spaces per nesting level; an indent of 0 falls back to compact output.
+fn json_pretty_owned(val: &OwnedValue, indent: usize) -> String {
+    if indent == 0 {
+        return json_stringify_owned(val);
+    }
+    json_pretty_inner(val, indent, 0)
+}
+
+fn json_pretty_inner(val: &OwnedValue, indent: usize, level: usize) -> String {
+    match val {
+        OwnedValue::Array { elements, .. } | OwnedValue::Set { elements } => {
+            if elements.is_empty() { return "[]".to_string(); }
+            let pad = " ".repeat(indent * (level + 1));
+            let pad_close = " ".repeat(indent * level);
+            let parts: Vec<String> = elements
+                .iter()
+                .map(|e| format!("{}{}", pad, json_pretty_inner(e, indent, level + 1)))
+                .collect();
+            format!("[\n{}\n{}]", parts.join(",\n"), pad_close)
+        }
+        OwnedValue::Dict { entries, .. } => {
+            if entries.is_empty() { return "{}".to_string(); }
+            let pad = " ".repeat(indent * (level + 1));
+            let pad_close = " ".repeat(indent * level);
+            let parts: Vec<String> = entries.iter().map(|(k, v)| {
+                let key = match k {
+                    OwnedValue::Str(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+                    OwnedValue::Integer(i) => format!("\"{}\"", i),
+                    other => format!("\"{}\"", other.display_str()),
+                };
+                format!("{}{}: {}", pad, key, json_pretty_inner(v, indent, level + 1))
+            }).collect();
+            format!("{{\n{}\n{}}}", parts.join(",\n"), pad_close)
+        }
+        OwnedValue::Instance { fields, .. } => {
+            if fields.is_empty() { return "{}".to_string(); }
+            let pad = " ".repeat(indent * (level + 1));
+            let pad_close = " ".repeat(indent * level);
+            let parts: Vec<String> = fields.iter().map(|(k, v)| {
+                format!("{}\"{}\": {}", pad, k.replace('"', "\\\""), json_pretty_inner(v, indent, level + 1))
+            }).collect();
+            format!("{{\n{}\n{}}}", parts.join(",\n"), pad_close)
+        }
+        // Scalars (and tensors) have no nested structure to indent.
+        _ => json_stringify_owned(val),
+    }
+}
+
 // A minimal recursive-descent JSON parser — no external crates.
 fn json_parse(input: &str) -> Result<OwnedValue, String> {
     let chars: Vec<char> = input.chars().collect();

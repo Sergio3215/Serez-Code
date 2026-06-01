@@ -1,0 +1,53 @@
+// Unit tests for JSON.pretty(value, [indent]) — pretty-printed JSON output.
+// The framework (test/assert/summary) is prepended by the runner.
+
+test("pretty: simple object, default 2-space indent", () => {
+    let p = JSON.pretty("\{\"a\":1}");
+    assert(p == "\{\n  \"a\": 1\n}", "object should be indented with 2 spaces");
+});
+
+test("pretty: custom indent of 4 spaces", () => {
+    let p = JSON.pretty("\{\"a\":1}", 4);
+    assert(p == "\{\n    \"a\": 1\n}", "object should be indented with 4 spaces");
+});
+
+test("pretty: array of scalars", () => {
+    let p = JSON.pretty("[1,2]");
+    assert(p == "[\n  1,\n  2\n]", "array should be indented one element per line");
+});
+
+test("pretty: nested object and array", () => {
+    let p = JSON.pretty("\{\"a\":[1,2]}");
+    assert(p == "\{\n  \"a\": [\n    1,\n    2\n  ]\n}", "nesting should increase indent");
+});
+
+test("pretty: parses a raw JSON string (fetch-body case)", () => {
+    let body = "\{\"name\":\"serez\",\"version\":4}";
+    let p = JSON.pretty(body);
+    assert(p == "\{\n  \"name\": \"serez\",\n  \"version\": 4\n}", "raw string is parsed then re-indented");
+});
+
+test("pretty: structured dict (not a string) is formatted", () => {
+    let d <string, int> = ({"a", 1});
+    assert(JSON.pretty(d) == "\{\n  \"a\": 1\n}", "dict value is indented directly");
+});
+
+test("pretty: empty object and array stay compact", () => {
+    assert(JSON.pretty("\{}") == "\{}", "empty object");
+    assert(JSON.pretty("[]") == "[]", "empty array");
+});
+
+test("pretty: non-JSON string is kept as a quoted literal", () => {
+    assert(JSON.pretty("hola") == "\"hola\"", "non-JSON string stays as-is");
+});
+
+test("pretty: indent 0 falls back to compact output", () => {
+    assert(JSON.pretty("\{\"a\":1}", 0) == "\{\"a\":1}", "indent 0 = compact");
+});
+
+test("stringify stays compact (backwards compatible)", () => {
+    let parsed = JSON.parse("\{\"a\":1,\"b\":2}");
+    assert(JSON.stringify(parsed) == "\{\"a\":1,\"b\":2}", "stringify must remain single-line");
+});
+
+summary();
