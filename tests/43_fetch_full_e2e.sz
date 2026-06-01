@@ -1,0 +1,21 @@
+// E2E: fetch full-mode (status + headers as a structured object).
+// Network-tolerant: works if reachable, fails gracefully otherwise.
+
+native fn any fetch(string url, any options);
+
+let status = "unknown";
+let opts <string, any> = ({"full", true});
+
+try {
+    let r = fetch("https://httpbin.org/get", opts);
+    // full mode returns a dict { status, ok, statusText, headers, body }
+    // and does NOT throw on HTTP status.
+    if (r["status"] >= 200 && r["ok"] == true) {
+        status = "ok";
+    }
+} catch (e) {
+    // Network unavailable or service down — acceptable
+    status = "network_error";
+}
+
+out status == "ok" || status == "network_error";

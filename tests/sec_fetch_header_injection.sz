@@ -1,0 +1,5 @@
+// Security: fetch must reject CRLF / control chars injected via header values
+native fn any fetch(string url, any method, any body, any options);
+let hdrs <string, string> = ({"X-Evil", "a\r\nInjected: 1"});
+let opts <string, any> = ({"headers", hdrs});
+fetch("https://example.com", "GET", "", opts);

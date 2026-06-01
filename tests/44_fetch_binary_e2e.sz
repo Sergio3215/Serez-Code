@@ -1,0 +1,20 @@
+// E2E: fetch binary-mode (response body as a byte array [int]).
+// Network-tolerant: works if reachable, fails gracefully otherwise.
+
+native fn any fetch(string url, any options);
+
+let status = "unknown";
+let opts <string, any> = ({"binary", true});
+
+try {
+    let bytes = fetch("https://httpbin.org/image/png", opts);
+    // PNG magic number: 137 80 78 71  (\x89 P N G)
+    if (bytes[0] == 137 && bytes[1] == 80 && bytes[2] == 78 && bytes[3] == 71) {
+        status = "ok";
+    }
+} catch (e) {
+    // Network unavailable or service down — acceptable
+    status = "network_error";
+}
+
+out status == "ok" || status == "network_error";

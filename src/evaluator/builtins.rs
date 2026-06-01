@@ -336,17 +336,25 @@ impl super::Evaluator {
 
     // ── Native: fetch ─────────────────────────────────────────────────────────
 
+    // fetch(url, [method], [body], [options]) — general-purpose HTTP client.
+    //   method/body are the string arguments after url; options is a dict:
+    //     { headers: <dict>, timeout: <int secs>, full: <bool>, binary: <bool> }
+    //   Default: returns the body (string), throws on HTTP status >= 400.
+    //   { full: true }   → returns Dict<string, any> { status, ok, statusText, headers, body }
+    //                      and does NOT throw on status.
+    //   { binary: true } → body is returned as a byte array [int] instead of a string.
     pub(super) fn eval_fetch(&mut self, args: &[ast::Expression]) -> EvalResult {
-        if args.is_empty() || args.len() > 3 {
-            eprintln!("❌ ERROR: fetch(url) or fetch(url, method) or fetch(url, method, body)");
+        if args.is_empty() || args.len() > 4 {
+            eprintln!("❌ ERROR: fetch(url, [method], [body], [options])");
             return EvalResult::Error;
         }
 
+        // ── arg[0]: url (required, string) ────────────────────────────────────
         let url = match self.eval_expression(&args[0]) {
             EvalResult::Value(r) => match self.resolve(r).cloned() {
                 Some(ObjectData::Str(s)) => s,
                 _ => {
-                    let msg = self.alloc(ObjectData::Str("fetch: url must be a string".to_string()));
+                    let msg = self.alloc(ObjectData::Str("❌ fetch: url must be a string".to_string()));
                     return EvalResult::Throw(msg);
                 }
             },
@@ -354,31 +362,78 @@ impl super::Evaluator {
             _ => return EvalResult::Error,
         };
 
-        let method = if args.len() >= 2 {
-            match self.eval_expression(&args[1]) {
-                EvalResult::Value(r) => match self.resolve(r).cloned() {
-                    Some(ObjectData::Str(s)) => s.to_uppercase(),
-                    _ => "GET".to_string(),
-                },
+        // ── args[1..]: 1st string = method, 2nd string = body, dict = options ──
+        let mut method: Option<String> = None;
+        let mut body_str = String::new();
+        let mut body_set = false;
+        let mut options: Option<ObjectData> = None;
+        for arg in &args[1..] {
+            let r = match self.eval_expression(arg) {
+                EvalResult::Value(r) => r,
                 EvalResult::Throw(v) => return EvalResult::Throw(v),
                 _ => return EvalResult::Error,
+            };
+            match self.resolve(r).cloned() {
+                Some(ObjectData::Str(s)) => {
+                    if method.is_none() {
+                        method = Some(s.to_uppercase());
+                    } else if !body_set {
+                        body_str = s;
+                        body_set = true;
+                    } else {
+                        let msg = self.alloc(ObjectData::Str(
+                            "❌ fetch: too many string arguments (expected method, body)".to_string()));
+                        return EvalResult::Throw(msg);
+                    }
+                }
+                Some(d @ ObjectData::Dict { .. }) => {
+                    if options.is_some() {
+                        let msg = self.alloc(ObjectData::Str(
+                            "❌ fetch: options dict provided more than once".to_string()));
+                        return EvalResult::Throw(msg);
+                    }
+                    options = Some(d);
+                }
+                _ => {
+                    let msg = self.alloc(ObjectData::Str(
+                        "❌ fetch: arguments after url must be strings (method/body) or a dict (options)".to_string()));
+                    return EvalResult::Throw(msg);
+                }
             }
-        } else {
-            "GET".to_string()
-        };
+        }
+        let method = method.unwrap_or_else(|| "GET".to_string());
 
-        let body_str = if args.len() >= 3 {
-            match self.eval_expression(&args[2]) {
-                EvalResult::Value(r) => match self.resolve(r).cloned() {
-                    Some(ObjectData::Str(s)) => s,
-                    _ => String::new(),
-                },
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                _ => return EvalResult::Error,
+        // ── parse options ─────────────────────────────────────────────────────
+        let mut headers: Vec<(String, String)> = Vec::new();
+        let mut timeout_secs: u64 = 60;
+        let mut full = false;
+        let mut binary = false;
+        if let Some(ObjectData::Dict { entries, .. }) = &options {
+            if let Some(OwnedValue::Dict { entries: hentries, .. }) = Self::fetch_dict_get(entries, "headers") {
+                for (k, v) in hentries {
+                    let name = match k {
+                        OwnedValue::Str(s) => s.clone(),
+                        _ => {
+                            let msg = self.alloc(ObjectData::Str(
+                                "❌ fetch: header names must be strings".to_string()));
+                            return EvalResult::Throw(msg);
+                        }
+                    };
+                    let value = v.display_str();
+                    if name.chars().chain(value.chars()).any(|c| matches!(c, '\n' | '\r' | '\0')) {
+                        let msg = self.alloc(ObjectData::Str(
+                            format!("❌ fetch: illegal control character in header '{}'", name)));
+                        return EvalResult::Throw(msg);
+                    }
+                    headers.push((name, value));
+                }
             }
-        } else {
-            String::new()
-        };
+            if let Some(OwnedValue::Integer(n)) = Self::fetch_dict_get(entries, "timeout") {
+                if *n > 0 { timeout_secs = *n as u64; }
+            }
+            if let Some(OwnedValue::Boolean(b)) = Self::fetch_dict_get(entries, "full") { full = *b; }
+            if let Some(OwnedValue::Boolean(b)) = Self::fetch_dict_get(entries, "binary") { binary = *b; }
+        }
 
         // ── Security validation ───────────────────────────────────────────────
         let lower = url.to_lowercase();
@@ -405,63 +460,143 @@ impl super::Evaluator {
             return EvalResult::Throw(msg);
         }
 
-        // ── HTTP request ──────────────────────────────────────────────────────
-        let timeout = std::time::Duration::from_secs(10);
+        // Reject malformed methods (spaces / control chars would be header smuggling)
+        if method.is_empty() || method.chars().any(|c| c.is_control() || c == ' ') {
+            let msg = self.alloc(ObjectData::Str(
+                format!("❌ fetch: invalid HTTP method '{}'", method)
+            ));
+            return EvalResult::Throw(msg);
+        }
+
+        // ── Build request ─────────────────────────────────────────────────────
         let agent = ureq::AgentBuilder::new()
-            .timeout_connect(timeout)
-            .timeout(timeout)
+            .timeout_connect(std::time::Duration::from_secs(timeout_secs.min(30)))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
             .build();
 
-        let response_result = match method.as_str() {
-            "GET"    => agent.get(&url).call(),
-            "DELETE" => agent.delete(&url).call(),
-            "POST"   => agent.post(&url)
-                .set("Content-Type", "application/json")
-                .send_string(&body_str),
-            "PUT"    => agent.put(&url)
-                .set("Content-Type", "application/json")
-                .send_string(&body_str),
-            "PATCH"  => agent.request("PATCH", &url)
-                .set("Content-Type", "application/json")
-                .send_string(&body_str),
-            other => {
-                let msg = self.alloc(ObjectData::Str(
-                    format!("❌ fetch: unsupported HTTP method '{}'", other)
-                ));
-                return EvalResult::Throw(msg);
-            }
+        let mut req = agent.request(&method, &url);
+        // Default JSON content-type only when a body is sent and the user didn't set one.
+        let has_ct = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+        if !body_str.is_empty() && !has_ct {
+            req = req.set("Content-Type", "application/json");
+        }
+        for (k, v) in &headers {
+            req = req.set(k, v);
+        }
+        let response_result = if body_str.is_empty() {
+            req.call()
+        } else {
+            req.send_string(&body_str)
         };
 
+        // ── Handle response ───────────────────────────────────────────────────
         match response_result {
-            Ok(resp) => {
-                let status = resp.status();
-                match resp.into_string() {
-                    Ok(body) => {
-                        // Return body as string; status >= 400 throws
-                        if status >= 400 {
-                            let msg = self.alloc(ObjectData::Str(
-                                format!("❌ fetch: HTTP error {}", status)
-                            ));
-                            EvalResult::Throw(msg)
-                        } else {
-                            EvalResult::Value(self.alloc(ObjectData::Str(body)))
-                        }
-                    }
-                    Err(e) => {
-                        let msg = self.alloc(ObjectData::Str(
-                            format!("❌ fetch: failed to read response body: {}", e)
-                        ));
-                        EvalResult::Throw(msg)
-                    }
+            Ok(resp) => self.fetch_make_value(resp, full, binary),
+            // ureq returns 4xx/5xx as Err(Status). In `full` mode build the response
+            // object anyway; otherwise throw, embedding the body so the error detail
+            // isn't lost.
+            Err(ureq::Error::Status(code, resp)) => {
+                if full {
+                    self.fetch_make_value(resp, true, binary)
+                } else {
+                    let detail = if binary { None } else { resp.into_string().ok() };
+                    let msg = match detail {
+                        Some(b) => format!("❌ fetch: HTTP {}: {}", code, b),
+                        None => format!("❌ fetch: HTTP {}", code),
+                    };
+                    let m = self.alloc(ObjectData::Str(msg));
+                    EvalResult::Throw(m)
                 }
             }
             Err(e) => {
-                let msg = self.alloc(ObjectData::Str(
+                let m = self.alloc(ObjectData::Str(
                     format!("❌ fetch: request failed: {}", e)
                 ));
-                EvalResult::Throw(msg)
+                EvalResult::Throw(m)
             }
         }
+    }
+
+    // Build a serez value from a ureq Response. With `full`, returns a
+    // Dict<string, any> { status, ok, statusText, headers, body }; otherwise just
+    // the body (string, or a byte array [int] when `binary`). Never throws on status.
+    fn fetch_make_value(&mut self, resp: ureq::Response, full: bool, binary: bool) -> EvalResult {
+        use std::io::Read;
+        let status = resp.status() as i64;
+        let status_text = resp.status_text().to_string();
+        // Collect response headers before the body consumes `resp`.
+        let header_pairs: Vec<(String, String)> = if full {
+            resp.headers_names()
+                .iter()
+                .filter_map(|n| resp.header(n).map(|v| (n.to_lowercase(), v.to_string())))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let body_val: OwnedValue = if binary {
+            let mut buf: Vec<u8> = Vec::new();
+            if let Err(e) = resp.into_reader().read_to_end(&mut buf) {
+                let m = self.alloc(ObjectData::Str(
+                    format!("❌ fetch: failed to read response body: {}", e)));
+                return EvalResult::Throw(m);
+            }
+            OwnedValue::Array {
+                element_type: Some("int".to_string()),
+                elements: buf.into_iter().map(|b| OwnedValue::Integer(b as i64)).collect(),
+            }
+        } else {
+            match resp.into_string() {
+                Ok(s) => OwnedValue::Str(s),
+                Err(e) => {
+                    let m = self.alloc(ObjectData::Str(
+                        format!("❌ fetch: failed to read response body: {}", e)));
+                    return EvalResult::Throw(m);
+                }
+            }
+        };
+
+        if !full {
+            // Containers (the binary byte array) must live in the global arena to
+            // survive scope pops; a plain string can stay scoped like before.
+            return EvalResult::Value(if binary {
+                self.plant_global(body_val)
+            } else {
+                self.plant(body_val)
+            });
+        }
+
+        let headers_dict = OwnedValue::Dict {
+            key_type: "string".to_string(),
+            value_type: "any".to_string(),
+            entries: header_pairs
+                .into_iter()
+                .map(|(k, v)| (OwnedValue::Str(k), OwnedValue::Str(v)))
+                .collect(),
+        };
+        let resp_dict = OwnedValue::Dict {
+            key_type: "string".to_string(),
+            value_type: "any".to_string(),
+            entries: vec![
+                (OwnedValue::Str("status".to_string()), OwnedValue::Integer(status)),
+                (OwnedValue::Str("ok".to_string()), OwnedValue::Boolean(status < 400)),
+                (OwnedValue::Str("statusText".to_string()), OwnedValue::Str(status_text)),
+                (OwnedValue::Str("headers".to_string()), headers_dict),
+                (OwnedValue::Str("body".to_string()), body_val),
+            ],
+        };
+        EvalResult::Value(self.plant_global(resp_dict))
+    }
+
+    // Look up a string key in dict entries (used to read fetch options).
+    fn fetch_dict_get<'a>(
+        entries: &'a [(OwnedValue, OwnedValue)],
+        key: &str,
+    ) -> Option<&'a OwnedValue> {
+        entries
+            .iter()
+            .find(|(k, _)| matches!(k, OwnedValue::Str(s) if s.as_str() == key))
+            .map(|(_, v)| v)
     }
 
     // ── time() — milliseconds since UNIX epoch ─────────────────────────────────
