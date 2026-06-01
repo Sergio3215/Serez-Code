@@ -480,6 +480,12 @@ impl super::Evaluator {
         if !body_str.is_empty() && !has_ct {
             req = req.set("Content-Type", "application/json");
         }
+        // Send an identifiable User-Agent unless the caller set one. Without it
+        // ureq sends "ureq/x.y", which many CDNs/WAFs answer with a 503.
+        let has_ua = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
+        if !has_ua {
+            req = req.set("User-Agent", concat!("Serez-Code/", env!("CARGO_PKG_VERSION")));
+        }
         for (k, v) in &headers {
             req = req.set(k, v);
         }

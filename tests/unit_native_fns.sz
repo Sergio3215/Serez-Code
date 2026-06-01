@@ -93,12 +93,37 @@ test("fetch with valid https URL either returns string or throws gracefully", ()
 test("fetch POST either returns string or throws gracefully", () => {
     let ok = false;
     try {
-        let body = fetch("https://httpbin.org/post", "POST", "{\"key\":\"value\"}");
+        let body = fetch("https://httpbin.org/post", "POST", "\{\"key\":\"value\"}");
         ok = body.length() > 0;
     } catch (e) {
         ok = true;
     }
     assert(ok, "fetch POST should either succeed or throw gracefully");
+});
+
+test("fetch sends a default Serez-Code User-Agent", () => {
+    let ok = false;
+    try {
+        // httpbin echoes back the User-Agent it received
+        let r = fetch("https://httpbin.org/user-agent");
+        ok = r.includes("Serez-Code");
+    } catch (e) {
+        ok = true;   // network unavailable — acceptable
+    }
+    assert(ok, "default User-Agent should be Serez-Code (or network down)");
+});
+
+test("fetch lets the caller override the User-Agent", () => {
+    let ok = false;
+    try {
+        let hs <string, string> = ({"User-Agent", "CustomUA/1"});
+        let opts <string, any> = ({"headers", hs});
+        let r = fetch("https://httpbin.org/user-agent", opts);
+        ok = r.includes("CustomUA/1");
+    } catch (e) {
+        ok = true;   // network unavailable — acceptable
+    }
+    assert(ok, "a caller-provided User-Agent should win (or network down)");
 });
 
 summary();
