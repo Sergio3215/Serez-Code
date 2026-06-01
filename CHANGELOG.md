@@ -5,7 +5,7 @@ Order: most recent to oldest.
 
 ---
 
-## [Unreleased] — branch `improve`
+## [4.0.0] — branch `improve`
 
 ### Networking / stdlib
 
