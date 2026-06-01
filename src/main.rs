@@ -123,6 +123,18 @@ fn run() {
             return;
         }
 
+        // ── `sz run <script>` subcommand ──────────────────────────────────────
+        if args[1] == "run" {
+            if args.len() >= 3 {
+                if let Err(e) = package_manager::run_script(&args[2]) {
+                    eprintln!("❌ ERROR: {}", e);
+                }
+            } else {
+                eprintln!("❌ ERROR: Usage: sz run <script-name>");
+            }
+            return;
+        }
+
         let mut is_check = false;
         let mut is_watch = false;
         let mut file_path = String::new();

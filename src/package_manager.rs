@@ -35,6 +35,7 @@ pub struct SerezManifest {
     pub author: String,
     pub dependencies: HashMap<String, String>,
     pub permissions: Vec<String>,
+    pub scripts: HashMap<String, String>,
 }
 
 impl SerezManifest {
@@ -58,6 +59,7 @@ impl SerezManifest {
         let mut author = String::new();
         let mut dependencies: HashMap<String, String> = HashMap::new();
         let mut permissions: Vec<String> = Vec::new();
+        let mut scripts: HashMap<String, String> = HashMap::new();
 
         // Extract top-level string fields and the dependencies object.
         let inner = &raw[1..raw.len() - 1];
@@ -93,6 +95,8 @@ impl SerezManifest {
                 Some('{') => {
                     if key == "dependencies" {
                         dependencies = parse_string_map(&mut chars)?;
+                    } else if key == "scripts" {
+                        scripts = parse_string_map(&mut chars)?;
                     } else {
                         skip_value(&mut chars);
                     }
@@ -114,7 +118,7 @@ impl SerezManifest {
         if version.is_empty() {
             return Err("serez.json: 'version' field is required".to_string());
         }
-        Ok(SerezManifest { name, version, description, author, dependencies, permissions })
+        Ok(SerezManifest { name, version, description, author, dependencies, permissions, scripts })
     }
 }
 
@@ -191,6 +195,47 @@ pub fn install_package(pkg_spec: &str) -> Result<(), String> {
         download_package(&pkg_name, &version)?;
     }
 
+    Ok(())
+}
+
+/// Execute a script defined in serez.json's "scripts" section.
+pub fn run_script(script_name: &str) -> Result<(), String> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let manifest = SerezManifest::load(&cwd)?;
+
+    let cmd = manifest.scripts.get(script_name).cloned().ok_or_else(|| {
+        let available: Vec<&String> = manifest.scripts.keys().collect();
+        if available.is_empty() {
+            format!("No scripts defined in serez.json")
+        } else {
+            format!(
+                "Script '{}' not found. Available: {}",
+                script_name,
+                available.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            )
+        }
+    })?;
+
+    println!("▶ {}", cmd);
+
+    let status = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", &cmd])
+            .current_dir(&cwd)
+            .status()
+    } else {
+        std::process::Command::new("sh")
+            .args(["-c", &cmd])
+            .current_dir(&cwd)
+            .status()
+    }
+    .map_err(|e| format!("Failed to execute script '{}': {}", script_name, e))?;
+
+    if !status.success() {
+        let code = status.code().unwrap_or(1);
+        return Err(format!("Script '{}' exited with code {}", script_name, code));
+    }
     Ok(())
 }
 
