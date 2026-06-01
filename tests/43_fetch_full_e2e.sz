@@ -8,13 +8,18 @@ let opts <string, any> = ({"full", true});
 
 try {
     let r = fetch("https://httpbin.org/get", opts);
-    // full mode returns a dict { status, ok, statusText, headers, body }
-    // and does NOT throw on HTTP status.
-    if (r["status"] >= 200 && r["ok"] == true) {
+    // full mode returns a dict { status, ok, statusText, headers, body } and
+    // does NOT throw on HTTP status. The contract is the structured response
+    // itself — ANY well-formed HTTP reply (incl. a 4xx/5xx from a degraded
+    // server) proves full mode works, so we don't depend on httpbin being up.
+    if (r["status"] >= 100
+        && r["statusText"] != null
+        && r["headers"] != null
+        && r["body"] != null) {
         status = "ok";
     }
 } catch (e) {
-    // Network unavailable or service down — acceptable
+    // Network unavailable (no HTTP reply at all) — also acceptable
     status = "network_error";
 }
 
