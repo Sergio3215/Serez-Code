@@ -22,10 +22,11 @@ pub enum TapeOp {
     Scale  { in_id: u64, scalar: f64 },
     Neg    { in_id: u64 },
     BroadcastAdd { mat_id: u64, bias_id: u64, rows: usize, cols: usize },
-    BroadcastMul { mat_id: u64, rhs_id: u64, rows: usize, cols: usize },
+    BroadcastMul { mat_id: u64, rhs_id: u64, rows: usize, cols: usize, mat_data: Vec<f64>, rhs_data: Vec<f64> },
     Relu   { in_id: u64, cached_input: Vec<f64> },
     Sigmoid { in_id: u64, cached_output: Vec<f64> },
     Tanh   { in_id: u64, cached_output: Vec<f64> },
+    Gelu   { in_id: u64, cached_input: Vec<f64> },
     Sum    { in_id: u64, in_len: usize },
     Mean   { in_id: u64, in_len: usize },
     Conv2d {
@@ -94,7 +95,7 @@ pub enum TapeOp {
     CrossEntropyLoss { logits_id: u64, probs: Vec<f64>, target_indices: Vec<usize>, batch: usize, classes: usize },
     // ── Phase 2: Activations ─────────────────────────────────────────────────
     Elu   { in_id: u64, cached_input: Vec<f64>, alpha: f64 },
-    Swish { in_id: u64, cached_sigmoid: Vec<f64> },
+    Swish { in_id: u64, cached_input: Vec<f64>, cached_sigmoid: Vec<f64> },
     Mish  { in_id: u64, cached_input: Vec<f64> },
     // ── Phase 2: Normalization & Regularization ───────────────────────────────
     BatchNorm {
@@ -108,7 +109,7 @@ pub enum TapeOp {
     },
     Dropout { in_id: u64, mask: Vec<f64>, keep_prob: f64 },
     // ── Phase 2: Embedding ───────────────────────────────────────────────────
-    Embedding { w_id: u64, indices: Vec<usize>, seq_len: usize, emb_dim: usize },
+    Embedding { w_id: u64, indices: Vec<usize>, seq_len: usize, emb_dim: usize, vocab_size: usize },
     // ── Phase 2: Pooling ─────────────────────────────────────────────────────
     AvgPool2d {
         in_id: u64,
@@ -223,13 +224,16 @@ impl super::Evaluator {
                             for row in 0..r { for col in 0..c { bias_grad[col] += out_grad[row * c + col]; } }
                             Self::accum_grad(&mut self.ad_grads, *bias_id, bias_grad);
                         }
-                        TapeOp::BroadcastMul { mat_id, rhs_id, rows, cols } => {
+                        TapeOp::BroadcastMul { mat_id, rhs_id, rows, cols, mat_data, rhs_data } => {
                             let (r, c) = (*rows, *cols);
-                            // d_mat[i,j] = out_grad[i,j] * rhs[j]  (need rhs values — not saved, skip for now)
+                            // d_mat[i,j] = out_grad[i,j] * rhs[j]
+                            let mut dmat = vec![0.0f64; r * c];
+                            for i in 0..r { for j in 0..c { dmat[i*c+j] = out_grad[i*c+j] * rhs_data[j]; } }
+                            Self::accum_grad(&mut self.ad_grads, *mat_id, dmat);
                             // d_rhs[j] = sum_i(out_grad[i,j] * mat[i,j])
-                            // Without saved inputs we can only propagate to mat_id (times 1.0)
-                            Self::accum_grad(&mut self.ad_grads, *mat_id, out_grad.clone());
-                            let _ = (r, c, rhs_id); // rhs gradient requires saved inputs
+                            let mut drhs = vec![0.0f64; c];
+                            for i in 0..r { for j in 0..c { drhs[j] += out_grad[i*c+j] * mat_data[i*c+j]; } }
+                            Self::accum_grad(&mut self.ad_grads, *rhs_id, drhs);
                         }
                         TapeOp::MatMul { a_id, b_id, a_rows, a_cols, b_cols, a_data, b_data } => {
                             let (m, k, n) = (*a_rows, *a_cols, *b_cols);
@@ -618,27 +622,29 @@ impl super::Evaluator {
                                 }).collect();
                             Self::accum_grad(&mut self.ad_grads, *in_id, g);
                         }
-                        TapeOp::Swish { in_id, cached_sigmoid } => {
+                        TapeOp::Swish { in_id, cached_input, cached_sigmoid } => {
                             // swish(x) = x * sigmoid(x)
-                            // d/dx = sigmoid(x) * (1 + x*(1-sigmoid(x)))
-                            // = sigmoid(x) + x*sigmoid(x)*(1-sigmoid(x))
-                            // We stored sigmoid(x), but not x itself.
-                            // Reconstruct from sigmoid: x = log(s/(1-s)) -- unstable.
-                            // Instead cache both x and sigmoid in forward. Here we stored
-                            // only sigmoid -- use approximation: we need to also store input.
-                            // Fix: We now store cached_input_for_swish too (see TapeOp definition).
-                            // For now use: d/dx ≈ swish_out/x * (x_contrib)
-                            // This is actually computed correctly with cached_sigmoid:
-                            // Let s = sigmoid(x). swish = x*s.
-                            // d_swish/dx = s + x*s*(1-s) = s*(1 + x*(1-s))
-                            // We need x. Since we only stored s, we must reconstruct x = logit(s).
-                            // Better: store (s, x) in forward. The TapeOp field is Vec<f64> for sigmoid.
-                            // We'll use cached_sigmoid as sigmoid values and recover x from logit.
-                            let g: Vec<f64> = out_grad.iter().zip(cached_sigmoid.iter())
-                                .map(|(dout, &s)| {
-                                    let s = s.clamp(1e-7, 1.0 - 1e-7);
-                                    let x = (s / (1.0 - s)).ln(); // logit
+                            // d/dx = sigmoid(x) + x * sigmoid(x) * (1 - sigmoid(x))
+                            //      = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+                            let g: Vec<f64> = out_grad.iter()
+                                .zip(cached_input.iter())
+                                .zip(cached_sigmoid.iter())
+                                .map(|((dout, &x), &s)| {
                                     let d = s * (1.0 + x * (1.0 - s));
+                                    dout * d
+                                }).collect();
+                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                        }
+                        TapeOp::Gelu { in_id, cached_input } => {
+                            // GELU(x) = 0.5*x*(1 + tanh(c*(x + 0.044715*x³)))  where c = sqrt(2/π)
+                            // d/dx = 0.5*(1 + tanh(inner)) + 0.5*x*(1-tanh²(inner))*c*(1 + 3*0.044715*x²)
+                            let c = (2.0_f64 / std::f64::consts::PI).sqrt();
+                            let g: Vec<f64> = out_grad.iter().zip(cached_input.iter())
+                                .map(|(dout, &x)| {
+                                    let inner = c * (x + 0.044715 * x * x * x);
+                                    let t = inner.tanh();
+                                    let sech2 = 1.0 - t * t;
+                                    let d = 0.5 * (1.0 + t) + 0.5 * x * sech2 * c * (1.0 + 3.0 * 0.044715 * x * x);
                                     dout * d
                                 }).collect();
                             Self::accum_grad(&mut self.ad_grads, *in_id, g);
@@ -709,20 +715,12 @@ impl super::Evaluator {
                             Self::accum_grad(&mut self.ad_grads, *in_id, g);
                         }
                         // ── Phase 2: Embedding backward ───────────────────────
-                        TapeOp::Embedding { w_id, indices, seq_len, emb_dim } => {
-                            let (sl, ed) = (*seq_len, *emb_dim);
-                            // Infer vocab size from existing gradient or from out_grad shape
-                            let vocab_from_grad = self.ad_grads.get(w_id)
-                                .map(|g| g.len() / ed)
-                                .unwrap_or(0);
-                            let vocab = if vocab_from_grad > 0 { vocab_from_grad } else {
-                                // fallback: can't know without vocab, emit what we have
-                                indices.iter().copied().max().map(|m| m + 1).unwrap_or(1)
-                            };
-                            let mut dw = vec![0.0f64; vocab * ed];
+                        TapeOp::Embedding { w_id, indices, seq_len, emb_dim, vocab_size } => {
+                            let (sl, ed, vs) = (*seq_len, *emb_dim, *vocab_size);
+                            let mut dw = vec![0.0f64; vs * ed];
                             for (i, &idx) in indices.iter().enumerate() {
                                 if i >= sl { break; }
-                                if idx < vocab {
+                                if idx < vs {
                                     for k in 0..ed {
                                         dw[idx * ed + k] += out_grad[i * ed + k];
                                     }
@@ -1484,7 +1482,7 @@ impl super::Evaluator {
                 let out_ref = self.alloc_tensor(vec![seq_len, emb_dim], out_data);
                 if self.ad_recording {
                     let w_id = self.ad_tensor_id_from_tid(w_tid);
-                    self.ad_push(out_ref, TapeOp::Embedding { w_id, indices, seq_len, emb_dim });
+                    self.ad_push(out_ref, TapeOp::Embedding { w_id, indices, seq_len, emb_dim, vocab_size });
                 }
                 EvalResult::Value(out_ref)
             }

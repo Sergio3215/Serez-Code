@@ -613,9 +613,13 @@ impl super::Evaluator {
                 }
                 let out_ref = self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0});
                 if self.ad_recording && dot_call.method == "broadcastMul" {
-                    let mat_id = self.ad_tensor_id(tensor_ref);
-                    let rhs_id = self.ad_tensor_id(rhs_ref);
-                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::BroadcastMul { mat_id, rhs_id, rows, cols });
+                    let mat_id  = self.ad_tensor_id(tensor_ref);
+                    let rhs_id  = self.ad_tensor_id(rhs_ref);
+                    let mat_saved = data.clone();
+                    let rhs_saved = rhs_data.clone();
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::BroadcastMul {
+                        mat_id, rhs_id, rows, cols, mat_data: mat_saved, rhs_data: rhs_saved,
+                    });
                 }
                 EvalResult::Value(out_ref)
             }
@@ -808,17 +812,29 @@ impl super::Evaluator {
                     Some(ObjectData::Decimal(d)) => d,
                     _ => { eprintln!("❌ ERROR: Tensor.leaky_relu() alpha must be a number"); return EvalResult::Error; }
                 };
+                let cached_input = data.clone();
                 let new_data: Vec<f64> = data.iter().map(|&x| if x >= 0.0 { x } else { alpha * x }).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
+                let out_ref = self.alloc_tensor(shape, new_data);
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::LeakyRelu { in_id, cached_input, alpha });
+                }
+                EvalResult::Value(out_ref)
             }
 
             "gelu" => {
                 // Gaussian Error Linear Unit: x * Φ(x) approximated via tanh
-                let sqrt2_over_pi = (2.0f64 / std::f64::consts::PI).sqrt();
+                let c = (2.0f64 / std::f64::consts::PI).sqrt();
+                let cached_input = data.clone();
                 let new_data: Vec<f64> = data.iter().map(|&x| {
-                    0.5 * x * (1.0 + (sqrt2_over_pi * (x + 0.044715 * x * x * x)).tanh())
+                    0.5 * x * (1.0 + (c * (x + 0.044715 * x * x * x)).tanh())
                 }).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
+                let out_ref = self.alloc_tensor(shape, new_data);
+                if self.ad_recording {
+                    let in_id = self.ad_tensor_id(tensor_ref);
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Gelu { in_id, cached_input });
+                }
+                EvalResult::Value(out_ref)
             }
 
             // ── Phase 1-2: New activations (tracked) ─────────────────────────
@@ -847,6 +863,7 @@ impl super::Evaluator {
 
             "swish" | "silu" => {
                 // swish(x) = x * sigmoid(x)  — also known as SiLU
+                let cached_input = data.clone();
                 let cached_sigmoid: Vec<f64> = data.iter()
                     .map(|&x| 1.0 / (1.0 + (-x).exp())).collect();
                 let new_data: Vec<f64> = data.iter().zip(cached_sigmoid.iter())
@@ -854,7 +871,9 @@ impl super::Evaluator {
                 let out_ref = self.alloc_tensor(shape, new_data);
                 if self.ad_recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
-                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Swish { in_id, cached_sigmoid });
+                    self.ad_push(out_ref, crate::evaluator::namespaces_autodiff::TapeOp::Swish {
+                        in_id, cached_input, cached_sigmoid,
+                    });
                 }
                 EvalResult::Value(out_ref)
             }
