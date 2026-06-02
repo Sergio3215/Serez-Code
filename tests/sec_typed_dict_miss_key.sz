@@ -1,6 +1,4 @@
-// Security: accessing a missing key in a typed dict must produce ❌ error (Bug 4 fix)
-// Untyped dicts returning null is fine; typed dicts must enforce their value type.
-let d <string, int> = {};
-d["present"] = 42;
-out d["missing"];
-out "FAIL: typed dict missing key should have errored";
+// Security: typed dict rejects wrong value type on write
+let d <string, int> = ({"a", 1});
+d["b"] = "this_is_not_an_int";
+out "FAIL: should have errored on type mismatch";

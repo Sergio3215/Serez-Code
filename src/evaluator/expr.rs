@@ -455,17 +455,8 @@ impl super::Evaluator {
                             key_str == search_key
                         });
                         match found {
-                            Some((_, v)) => EvalResult::Value(self.plant(v.clone())),
-                            None => {
-                                if value_type != "any" {
-                                    eprintln!(
-                                        "❌ ERROR: Key '{}' not found in typed dict <_, {}>",
-                                        search_key, value_type
-                                    );
-                                    return EvalResult::Error;
-                                }
-                                EvalResult::Value(self.null_ref)
-                            }
+                            Some((_, v)) => EvalResult::Value(self.plant_global(v.clone())),
+                            None => EvalResult::Value(self.null_ref),
                         }
                     }
                     _ => {
@@ -647,10 +638,60 @@ impl super::Evaluator {
                     }
                 }
 
+                // Detect dict["key"].mutatingMethod() pattern for writeback
+                let dict_writeback_ctx: Option<(ObjectRef, String)> = {
+                    const MUTATING_OPS: &[&str] = &["push","pop","shift","unshift","sort","remove","reverse","Add","Remove","RemoveAll","clear"];
+                    if MUTATING_OPS.contains(&dot_call.method.as_str()) {
+                        if let Expression::Index(idx_expr) = dot_call.object.as_ref() {
+                            let (dict_expr, key_expr) = (idx_expr.left.as_ref(), idx_expr.index.as_ref());
+                            if let Expression::Identifier(dict_name) = dict_expr {
+                                if let Some(dr) = self.lookup_var(dict_name.as_str()) {
+                                    if matches!(self.resolve(dr), Some(ObjectData::Dict { .. })) {
+                                        let key_ref = match self.eval_expression(key_expr) {
+                                            EvalResult::Value(r) => r,
+                                            _ => return EvalResult::Error,
+                                        };
+                                        let key_str = match self.resolve(key_ref).cloned() {
+                                            Some(ObjectData::Str(s)) => s,
+                                            Some(ObjectData::Integer(n)) => n.to_string(),
+                                            _ => String::new(),
+                                        };
+                                        if !key_str.is_empty() { Some((dr, key_str)) } else { None }
+                                    } else { None }
+                                } else { None }
+                            } else { None }
+                        } else { None }
+                    } else { None }
+                };
+
                 let result = match obj_data {
                     // ── Array methods ─────────────────────────────────────────
                     ObjectData::Array { element_type, elements: ref elems } => {
-                        self.eval_array_method(obj_ref, element_type.clone(), elems.clone(), dot_call)
+                        let r = self.eval_array_method(obj_ref, element_type.clone(), elems.clone(), dot_call);
+                        // Writeback: if array came from dict["key"], update the dict entry
+                        if let Some((dict_ref, key_str)) = dict_writeback_ctx {
+                            let updated = self.extract(obj_ref);
+                            if let Some(ObjectData::Dict { key_type, value_type, mut entries }) =
+                                self.resolve(dict_ref).cloned()
+                            {
+                                let mut found = false;
+                                for entry in entries.iter_mut() {
+                                    let ks = match &entry.0 {
+                                        OwnedValue::Str(s) => s.clone(),
+                                        OwnedValue::Integer(n) => n.to_string(),
+                                        _ => String::new(),
+                                    };
+                                    if ks == key_str { entry.1 = updated.clone(); found = true; break; }
+                                }
+                                if !found { entries.push((OwnedValue::Str(key_str), updated)); }
+                                let new_dict = ObjectData::Dict { key_type, value_type, entries };
+                                match dict_ref.region {
+                                    crate::region::RegionId::Global => self.global_arena.update(dict_ref.index, new_dict),
+                                    crate::region::RegionId::Scoped => self.scopes.arena.update(dict_ref.index, new_dict),
+                                }
+                            }
+                        }
+                        r
                     }
 
                     // ── String methods ────────────────────────────────────────

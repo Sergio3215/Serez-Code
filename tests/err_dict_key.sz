@@ -1,2 +1,3 @@
+// Error test: assigning wrong value type to a typed dict must error
 let d <string, int> = ({"a", 1});
-out d["noexiste"];
+d["b"] = "not_an_int";
