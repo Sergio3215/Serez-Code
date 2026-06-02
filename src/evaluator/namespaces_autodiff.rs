@@ -1487,6 +1487,75 @@ impl super::Evaluator {
                 EvalResult::Value(out_ref)
             }
 
+            // ── Weight persistence ────────────────────────────────────────────
+            "saveWeights" => {
+                // Autodiff.saveWeights(path, tensors_array)
+                // Saves an array of tensors to a .szw binary file.
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Autodiff.saveWeights(path, tensors) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let path_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let arr_ref  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
+                let path = match self.resolve(path_ref).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: Autodiff.saveWeights path must be a string"); return EvalResult::Error; }
+                };
+                let elements = match self.resolve(arr_ref).cloned() {
+                    Some(ObjectData::Array { elements, .. }) => elements,
+                    _ => { eprintln!("❌ ERROR: Autodiff.saveWeights tensors must be an Array"); return EvalResult::Error; }
+                };
+                // Collect tensor data
+                let mut tensors: Vec<(Vec<usize>, Vec<f64>)> = Vec::new();
+                for elem in &elements {
+                    match elem {
+                        crate::region::OwnedValue::Tensor { shape, data, .. } => {
+                            tensors.push((shape.clone(), data.clone()));
+                        }
+                        _ => { eprintln!("❌ ERROR: Autodiff.saveWeights all elements must be Tensors"); return EvalResult::Error; }
+                    }
+                }
+                // Write binary file
+                match Self::write_weights_file(&path, &tensors) {
+                    Ok(()) => {
+                        println!("✅ Saved {} tensors to '{}'", tensors.len(), path);
+                        EvalResult::Value(self.null_ref)
+                    }
+                    Err(e) => {
+                        eprintln!("❌ ERROR: Autodiff.saveWeights failed: {}", e);
+                        EvalResult::Error
+                    }
+                }
+            }
+
+            "loadWeights" => {
+                // Autodiff.loadWeights(path) → Array of Tensors
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Autodiff.loadWeights(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let path_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
+                let path = match self.resolve(path_ref).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: Autodiff.loadWeights path must be a string"); return EvalResult::Error; }
+                };
+                match Self::read_weights_file(&path) {
+                    Ok(tensors) => {
+                        let n = tensors.len();
+                        let owned: Vec<crate::region::OwnedValue> = tensors.into_iter()
+                            .map(|(shape, data)| crate::region::OwnedValue::Tensor { shape, data, tid: 0 })
+                            .collect();
+                        let arr = ObjectData::Array { element_type: None, elements: owned };
+                        println!("✅ Loaded {} tensors from '{}'", n, path);
+                        EvalResult::Value(self.alloc(arr))
+                    }
+                    Err(e) => {
+                        eprintln!("❌ ERROR: Autodiff.loadWeights failed: {}", e);
+                        EvalResult::Error
+                    }
+                }
+            }
+
             // ── Phase 3: stopGrad / detach ────────────────────────────────────
             "stopGrad" | "detach" => {
                 if dot_call.arguments.len() != 1 {
@@ -1569,6 +1638,73 @@ impl super::Evaluator {
         }
         out.truncate(n);
         out
+    }
+
+    /// Write tensors to a .szw binary file.
+    /// Format: magic(4) + version(1) + count(u32 LE) + [ndim(u8) + shape(u64 LE × ndim) + len(u64 LE) + data(f64 LE × len)]*
+    fn write_weights_file(path: &str, tensors: &[(Vec<usize>, Vec<f64>)]) -> Result<(), String> {
+        use std::io::Write;
+        let mut buf: Vec<u8> = Vec::new();
+        // Magic + version
+        buf.extend_from_slice(b"SZWT");
+        buf.push(1u8);
+        // Tensor count
+        buf.extend_from_slice(&(tensors.len() as u32).to_le_bytes());
+        // Each tensor
+        for (shape, data) in tensors {
+            buf.push(shape.len() as u8);
+            for &dim in shape {
+                buf.extend_from_slice(&(dim as u64).to_le_bytes());
+            }
+            buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
+            for &v in data {
+                buf.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        std::fs::write(path, &buf).map_err(|e| format!("cannot write '{}': {}", path, e))
+    }
+
+    /// Read tensors from a .szw binary file.
+    fn read_weights_file(path: &str) -> Result<Vec<(Vec<usize>, Vec<f64>)>, String> {
+        let buf = std::fs::read(path)
+            .map_err(|e| format!("cannot read '{}': {}", path, e))?;
+        if buf.len() < 9 {
+            return Err(format!("'{}' is too short to be a valid .szw file", path));
+        }
+        if &buf[..4] != b"SZWT" {
+            return Err(format!("'{}' is not a valid .szw file (bad magic)", path));
+        }
+        let version = buf[4];
+        if version != 1 {
+            return Err(format!("unsupported .szw version {}", version));
+        }
+        let count = u32::from_le_bytes([buf[5], buf[6], buf[7], buf[8]]) as usize;
+        let mut pos = 9usize;
+        let mut tensors = Vec::with_capacity(count);
+        for _ in 0..count {
+            if pos >= buf.len() { return Err("unexpected end of file reading tensor header".to_string()); }
+            let ndim = buf[pos] as usize;
+            pos += 1;
+            let mut shape = Vec::with_capacity(ndim);
+            for _ in 0..ndim {
+                if pos + 8 > buf.len() { return Err("unexpected end of file reading shape".to_string()); }
+                let d = u64::from_le_bytes(buf[pos..pos+8].try_into().unwrap()) as usize;
+                shape.push(d);
+                pos += 8;
+            }
+            if pos + 8 > buf.len() { return Err("unexpected end of file reading data length".to_string()); }
+            let data_len = u64::from_le_bytes(buf[pos..pos+8].try_into().unwrap()) as usize;
+            pos += 8;
+            if pos + data_len * 8 > buf.len() { return Err("unexpected end of file reading tensor data".to_string()); }
+            let mut data = Vec::with_capacity(data_len);
+            for i in 0..data_len {
+                let v = f64::from_le_bytes(buf[pos + i*8..pos + i*8 + 8].try_into().unwrap());
+                data.push(v);
+            }
+            pos += data_len * 8;
+            tensors.push((shape, data));
+        }
+        Ok(tensors)
     }
 
     /// Compute fan_in and fan_out from a weight shape.
