@@ -156,7 +156,7 @@ impl super::Evaluator {
                         return EvalResult::Error;
                     }
                 };
-                let addr = format!("127.0.0.1:{}", port);
+                let addr = format!("0.0.0.0:{}", port);
                 match std::net::TcpListener::bind(&addr) {
                     Ok(listener) => {
                         let id = self.socket_next_id;
@@ -207,6 +207,61 @@ impl super::Evaluator {
                 }
             }
 
+            "recvWsFrame" => {
+                // Socket.recvWsFrame(conn_id) → string | null
+                // Reads one WebSocket frame from an established connection.
+                // Returns the decoded text payload, or null on close frame / connection end.
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Socket.recvWsFrame(conn_id) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let id = match self.eval_socket_id(&dot_call.arguments[0], "Socket.recvWsFrame") {
+                    Ok(v) => v, Err(e) => return e,
+                };
+                match self.socket_registry.get_mut(&id) {
+                    Some(stream) => match ws_recv_frame(stream) {
+                        Ok(Some(msg)) => EvalResult::Value(self.alloc(ObjectData::Str(msg))),
+                        Ok(None)      => EvalResult::Value(self.null_ref),
+                        Err(e) => {
+                            eprintln!("❌ ERROR: Socket.recvWsFrame: {}", e);
+                            EvalResult::Value(self.null_ref)
+                        }
+                    },
+                    None => {
+                        eprintln!("❌ ERROR: Socket.recvWsFrame: no socket with id {}", id);
+                        EvalResult::Error
+                    }
+                }
+            }
+
+            "sendWsFrame" => {
+                // Socket.sendWsFrame(conn_id, data) → null
+                // Encodes data as a WebSocket text frame and sends it.
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Socket.sendWsFrame(conn_id, data) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let id = match self.eval_socket_id(&dot_call.arguments[0], "Socket.sendWsFrame") {
+                    Ok(v) => v, Err(e) => return e,
+                };
+                let data = match self.eval_to_string(&dot_call.arguments[1], "Socket.sendWsFrame") {
+                    Ok(v) => v, Err(e) => return e,
+                };
+                match self.socket_registry.get_mut(&id) {
+                    Some(stream) => match ws_send_frame(stream, &data) {
+                        Ok(()) => EvalResult::Value(self.null_ref),
+                        Err(e) => {
+                            eprintln!("❌ ERROR: Socket.sendWsFrame: {}", e);
+                            EvalResult::Error
+                        }
+                    },
+                    None => {
+                        eprintln!("❌ ERROR: Socket.sendWsFrame: no socket with id {}", id);
+                        EvalResult::Error
+                    }
+                }
+            }
+
             _ => {
                 eprintln!("❌ ERROR: Unknown Socket method '{}'", dot_call.method);
                 EvalResult::Error
@@ -232,4 +287,77 @@ impl super::Evaluator {
             }
         }
     }
+}
+
+// ── WebSocket frame helpers (RFC 6455) ────────────────────────────────────────
+
+fn ws_recv_frame(stream: &mut std::net::TcpStream) -> Result<Option<String>, std::io::Error> {
+    use std::io::Read;
+
+    let mut header = [0u8; 2];
+    stream.read_exact(&mut header)?;
+
+    let opcode          = header[0] & 0x0F;
+    let masked          = (header[1] & 0x80) != 0;
+    let payload_len_raw = (header[1] & 0x7F) as usize;
+
+    // Close frame
+    if opcode == 8 { return Ok(None); }
+
+    let payload_len = if payload_len_raw == 126 {
+        let mut buf = [0u8; 2];
+        stream.read_exact(&mut buf)?;
+        u16::from_be_bytes(buf) as usize
+    } else if payload_len_raw == 127 {
+        let mut buf = [0u8; 8];
+        stream.read_exact(&mut buf)?;
+        u64::from_be_bytes(buf) as usize
+    } else {
+        payload_len_raw
+    };
+
+    let mask = if masked {
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf)?;
+        buf
+    } else {
+        [0u8; 4]
+    };
+
+    let mut payload = vec![0u8; payload_len];
+    stream.read_exact(&mut payload)?;
+
+    if masked {
+        for (i, byte) in payload.iter_mut().enumerate() {
+            *byte ^= mask[i % 4];
+        }
+    }
+
+    Ok(Some(String::from_utf8_lossy(&payload).into_owned()))
+}
+
+fn ws_send_frame(stream: &mut std::net::TcpStream, data: &str) -> Result<(), std::io::Error> {
+    use std::io::Write;
+
+    let payload = data.as_bytes();
+    let len     = payload.len();
+    let mut frame = Vec::with_capacity(len + 10);
+
+    // FIN=1, opcode=1 (text frame), no mask (server → client is unmasked per RFC 6455)
+    frame.push(0x81u8);
+
+    if len < 126 {
+        frame.push(len as u8);
+    } else if len < 65536 {
+        frame.push(126u8);
+        frame.extend_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        frame.push(127u8);
+        frame.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+
+    frame.extend_from_slice(payload);
+    stream.write_all(&frame)?;
+    stream.flush()?;
+    Ok(())
 }
