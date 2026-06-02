@@ -291,49 +291,123 @@ impl super::Evaluator {
 
 // ── WebSocket frame helpers (RFC 6455) ────────────────────────────────────────
 
+// Maximum accepted payload per frame. Rejects DoS attempts that claim huge sizes.
+const WS_MAX_PAYLOAD: usize = 16 * 1024 * 1024; // 16 MiB
+
 fn ws_recv_frame(stream: &mut std::net::TcpStream) -> Result<Option<String>, std::io::Error> {
-    use std::io::Read;
+    use std::io::{Read, Write};
 
-    let mut header = [0u8; 2];
-    stream.read_exact(&mut header)?;
+    loop {
+        let mut header = [0u8; 2];
+        stream.read_exact(&mut header)?;
 
-    let opcode          = header[0] & 0x0F;
-    let masked          = (header[1] & 0x80) != 0;
-    let payload_len_raw = (header[1] & 0x7F) as usize;
+        // BUG-FIX: validate RSV bits — must be zero unless an extension is negotiated.
+        // A non-zero RSV without a negotiated extension is a protocol error (RFC 6455 §5.2).
+        let rsv = header[0] & 0x70;
+        if rsv != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WS: non-zero RSV bits without negotiated extension",
+            ));
+        }
 
-    // Close frame
-    if opcode == 8 { return Ok(None); }
+        let opcode          = header[0] & 0x0F;
+        let masked          = (header[1] & 0x80) != 0;
+        let payload_len_raw = (header[1] & 0x7F) as usize;
 
-    let payload_len = if payload_len_raw == 126 {
-        let mut buf = [0u8; 2];
-        stream.read_exact(&mut buf)?;
-        u16::from_be_bytes(buf) as usize
-    } else if payload_len_raw == 127 {
-        let mut buf = [0u8; 8];
-        stream.read_exact(&mut buf)?;
-        u64::from_be_bytes(buf) as usize
-    } else {
-        payload_len_raw
-    };
+        // Parse extended payload length
+        let payload_len = if payload_len_raw == 126 {
+            let mut buf = [0u8; 2];
+            stream.read_exact(&mut buf)?;
+            u16::from_be_bytes(buf) as usize
+        } else if payload_len_raw == 127 {
+            let mut buf = [0u8; 8];
+            stream.read_exact(&mut buf)?;
+            let n = u64::from_be_bytes(buf);
+            // BUG-FIX: cap before casting to prevent usize overflow and DoS allocation.
+            if n > WS_MAX_PAYLOAD as u64 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WS: payload exceeds maximum allowed size (16 MiB)",
+                ));
+            }
+            n as usize
+        } else {
+            payload_len_raw
+        };
 
-    let mask = if masked {
-        let mut buf = [0u8; 4];
-        stream.read_exact(&mut buf)?;
-        buf
-    } else {
-        [0u8; 4]
-    };
+        // BUG-FIX: guard against DoS via 1-byte extended-length path claiming huge size.
+        if payload_len > WS_MAX_PAYLOAD {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WS: payload exceeds maximum allowed size (16 MiB)",
+            ));
+        }
 
-    let mut payload = vec![0u8; payload_len];
-    stream.read_exact(&mut payload)?;
+        // BUG-FIX: control frames (close/ping/pong) MUST have payload ≤ 125 bytes (RFC 6455 §5.5).
+        if opcode >= 8 && payload_len > 125 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WS: control frame payload exceeds 125 bytes",
+            ));
+        }
 
-    if masked {
-        for (i, byte) in payload.iter_mut().enumerate() {
-            *byte ^= mask[i % 4];
+        // Read masking key if present
+        let mask = if masked {
+            let mut buf = [0u8; 4];
+            stream.read_exact(&mut buf)?;
+            buf
+        } else {
+            [0u8; 4]
+        };
+
+        // Read payload
+        let mut payload = vec![0u8; payload_len];
+        stream.read_exact(&mut payload)?;
+
+        if masked {
+            for (i, byte) in payload.iter_mut().enumerate() {
+                *byte ^= mask[i % 4];
+            }
+        }
+
+        match opcode {
+            // BUG-FIX: close frame — payload is now fully consumed before returning None,
+            // preventing stream desync when the peer includes a close code + reason.
+            8 => return Ok(None),
+
+            // BUG-FIX: ping — must reply with pong carrying the same payload (RFC 6455 §5.5.2).
+            // Use a loop instead of recursion to avoid stack overflow on repeated pings.
+            9 => {
+                let mut pong = Vec::with_capacity(2 + payload.len());
+                pong.push(0x8Au8);              // FIN=1, opcode=10 (pong)
+                pong.push(payload.len() as u8); // length ≤ 125 — safe after the check above
+                pong.extend_from_slice(&payload);
+                stream.write_all(&pong)?;
+                stream.flush()?;
+                continue; // read the next actual data frame
+            }
+
+            // Pong — unsolicited, RFC 6455 §5.5.3 allows ignoring it.
+            10 => continue,
+
+            // Text frame (1)
+            1 => {
+                // BUG-FIX: RFC 6455 §5.7 — text frames MUST be valid UTF-8.
+                // Return an error instead of silently replacing invalid bytes with U+FFFD.
+                match String::from_utf8(payload) {
+                    Ok(s)  => return Ok(Some(s)),
+                    Err(_) => return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WS: text frame contains invalid UTF-8",
+                    )),
+                }
+            }
+
+            // Binary (2), continuation (0), or unknown — return as lossy string
+            _ => return Ok(Some(String::from_utf8_lossy(&payload).into_owned())),
         }
     }
-
-    Ok(Some(String::from_utf8_lossy(&payload).into_owned()))
 }
 
 fn ws_send_frame(stream: &mut std::net::TcpStream, data: &str) -> Result<(), std::io::Error> {
@@ -343,7 +417,8 @@ fn ws_send_frame(stream: &mut std::net::TcpStream, data: &str) -> Result<(), std
     let len     = payload.len();
     let mut frame = Vec::with_capacity(len + 10);
 
-    // FIN=1, opcode=1 (text frame), no mask (server → client is unmasked per RFC 6455)
+    // FIN=1, opcode=1 (text frame).
+    // Server → client frames are NOT masked per RFC 6455 §5.1.
     frame.push(0x81u8);
 
     if len < 126 {
@@ -360,4 +435,111 @@ fn ws_send_frame(stream: &mut std::net::TcpStream, data: &str) -> Result<(), std
     stream.write_all(&frame)?;
     stream.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod ws_frame_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+
+    fn loopback(port: u16) -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let client   = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (client, server)
+    }
+
+    // Craft a raw unmasked WS frame: [0x81, len, payload...]
+    fn make_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![0x80 | opcode];
+        f.push(payload.len() as u8);
+        f.extend_from_slice(payload);
+        f
+    }
+
+    #[test]
+    fn text_frame_roundtrip() {
+        let (mut cli, mut srv) = loopback(29900);
+        cli.write_all(&make_frame(1, b"hello")).unwrap();
+        assert_eq!(ws_recv_frame(&mut srv).unwrap(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn ping_triggers_pong_and_returns_next_data() {
+        let (mut cli, mut srv) = loopback(29901);
+        // send ping then text
+        cli.write_all(&make_frame(9, b"keepalive")).unwrap();
+        cli.write_all(&make_frame(1, b"data")).unwrap();
+        // server should send pong and return "data"
+        let msg = ws_recv_frame(&mut srv).unwrap();
+        assert_eq!(msg, Some("data".to_string()));
+        // verify pong was sent back to client
+        let mut pong_buf = [0u8; 11]; // 2 header + 9 payload
+        cli.read_exact(&mut pong_buf).unwrap();
+        assert_eq!(pong_buf[0], 0x8A, "pong opcode");
+        assert_eq!(&pong_buf[2..], b"keepalive");
+    }
+
+    #[test]
+    fn close_frame_returns_none_and_consumes_payload() {
+        let (mut cli, mut srv) = loopback(29902);
+        // close frame with 2-byte close code
+        cli.write_all(&make_frame(8, &[0x03, 0xE8])).unwrap();
+        // send another frame after close
+        cli.write_all(&make_frame(1, b"after")).unwrap();
+        assert_eq!(ws_recv_frame(&mut srv).unwrap(), None);
+        // second recvWsFrame should read "after" cleanly (stream not desynchronized)
+        assert_eq!(ws_recv_frame(&mut srv).unwrap(), Some("after".to_string()));
+    }
+
+    #[test]
+    fn oversized_payload_claim_rejected() {
+        let (mut cli, mut srv) = loopback(29903);
+        // frame claiming 2^32 bytes via 127 extended length
+        let mut evil = vec![0x81u8, 127u8];
+        evil.extend_from_slice(&(0x0000000100000000u64).to_be_bytes());
+        cli.write_all(&evil).unwrap();
+        assert!(ws_recv_frame(&mut srv).is_err());
+    }
+
+    #[test]
+    fn nonzero_rsv_rejected() {
+        let (mut cli, mut srv) = loopback(29904);
+        // FIN=1, RSV1=1, opcode=1 → first byte = 0xC1
+        let frame = vec![0xC1u8, 0x05, b'h', b'e', b'l', b'l', b'o'];
+        cli.write_all(&frame).unwrap();
+        assert!(ws_recv_frame(&mut srv).is_err());
+    }
+
+    #[test]
+    fn invalid_utf8_text_frame_rejected() {
+        let (mut cli, mut srv) = loopback(29905);
+        // 0xFF is not valid UTF-8
+        cli.write_all(&make_frame(1, &[0xFF, 0xFE])).unwrap();
+        assert!(ws_recv_frame(&mut srv).is_err());
+    }
+
+    #[test]
+    fn control_frame_exceeding_125_bytes_rejected() {
+        let (mut cli, mut srv) = loopback(29906);
+        // ping with 126-byte payload (must be rejected — control frames ≤ 125)
+        let payload = vec![b'x'; 126];
+        let mut frame = vec![0x89u8, 126u8]; // ping, extended-2-byte length marker
+        frame.extend_from_slice(&(126u16).to_be_bytes());
+        frame.extend_from_slice(&payload);
+        cli.write_all(&frame).unwrap();
+        assert!(ws_recv_frame(&mut srv).is_err());
+    }
+
+    #[test]
+    fn multiple_pings_before_data() {
+        let (mut cli, mut srv) = loopback(29907);
+        for _ in 0..5 {
+            cli.write_all(&make_frame(9, b"ping")).unwrap();
+        }
+        cli.write_all(&make_frame(1, b"final")).unwrap();
+        let msg = ws_recv_frame(&mut srv).unwrap();
+        assert_eq!(msg, Some("final".to_string()));
+    }
 }
