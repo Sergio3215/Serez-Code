@@ -1,0 +1,16 @@
+handshake: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+key_sha1_len: 40
+connected: true
+server got: hello server
+client got: hello client
+batch[0]: alpha
+batch[1]: beta
+batch[2]: gamma
+batch[3]: delta
+batch[4]: epsilon
+large_len: 138
+large_ok: true
+echo: echo-1
+echo: echo-2
+echo: echo-3
+closed: true

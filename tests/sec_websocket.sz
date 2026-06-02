@@ -1,0 +1,2 @@
+// SEC: Crypto.sha1 must reject non-string argument — must produce ❌
+Crypto.sha1(42);

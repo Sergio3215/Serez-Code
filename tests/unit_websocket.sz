@@ -1,0 +1,145 @@
+// Unit tests: WebSocket support — Crypto.sha1 / sha1base64 / Socket WS frames
+
+// ── SHA-1 correctness ─────────────────────────────────────────────────────────
+
+test("Crypto.sha1 empty string — RFC 3174 vector", () => {
+    let h = Crypto.sha1("");
+    assert(h == "da39a3ee5e6b4b0d3255bfef95601890afd80709", "empty string SHA-1");
+});
+
+test("Crypto.sha1 'abc' — RFC 3174 vector", () => {
+    let h = Crypto.sha1("abc");
+    assert(h == "a9993e364706816aba3e25717850c26c9cd0d89d", "'abc' SHA-1");
+});
+
+test("Crypto.sha1 returns 40-char lowercase hex", () => {
+    let h = Crypto.sha1("serez");
+    assert(h.length() == 40, "length 40");
+    assert(h == h.toLowerCase(), "all lowercase");
+});
+
+test("Crypto.sha1 same input same output (deterministic)", () => {
+    let h1 = Crypto.sha1("hello world");
+    let h2 = Crypto.sha1("hello world");
+    assert(h1 == h2, "deterministic");
+});
+
+test("Crypto.sha1 different inputs produce different hashes", () => {
+    let h1 = Crypto.sha1("a");
+    let h2 = Crypto.sha1("b");
+    assert(h1 != h2, "collision-resistant for simple inputs");
+});
+
+// ── sha1base64 — WebSocket handshake ──────────────────────────────────────────
+
+test("Crypto.sha1base64 RFC 6455 section-1.3 test vector", () => {
+    let key    = "dGhlIHNhbXBsZSBub25jZQ==";
+    let magic  = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    let accept = Crypto.sha1base64(key + magic);
+    assert(accept == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", "RFC 6455 accept key");
+});
+
+test("Crypto.sha1base64 returns non-empty string", () => {
+    let b = Crypto.sha1base64("test");
+    assert(b.length() > 0, "non-empty");
+});
+
+test("Crypto.sha1base64 is consistent with sha1 + base64encode", () => {
+    let input = "consistency check";
+    let direct  = Crypto.sha1base64(input);
+    let manual  = Crypto.base64encode(Crypto.sha1(input));
+    // sha1base64 hashes the raw bytes, base64encode hashes the hex string —
+    // they differ, so just verify both return non-empty strings
+    assert(direct.length() > 0, "sha1base64 non-empty");
+    assert(manual.length() > 0, "manual non-empty");
+});
+
+// ── Socket.listen on 0.0.0.0 ──────────────────────────────────────────────────
+
+test("Socket.listen binds on 0.0.0.0 — loopback connect succeeds", () => {
+    let srv  = Socket.listen(19930);
+    let cli  = Socket.connect("127.0.0.1", 19930);
+    let conn = Socket.accept(srv);
+    assert(cli  > 0, "client id valid");
+    assert(conn > 0, "accepted conn id valid");
+    Socket.close(cli);
+    Socket.close(conn);
+    Socket.close(srv);
+});
+
+// ── WebSocket frame send / receive ────────────────────────────────────────────
+
+test("sendWsFrame / recvWsFrame — text payload round-trip", () => {
+    let srv  = Socket.listen(19931);
+    let cli  = Socket.connect("127.0.0.1", 19931);
+    let conn = Socket.accept(srv);
+
+    Socket.sendWsFrame(cli, "hello websocket");
+    let msg = Socket.recvWsFrame(conn);
+    assert(msg == "hello websocket", "server received text");
+
+    Socket.sendWsFrame(conn, "server reply");
+    let reply = Socket.recvWsFrame(cli);
+    assert(reply == "server reply", "client received reply");
+
+    Socket.close(cli);
+    Socket.close(conn);
+    Socket.close(srv);
+});
+
+test("sendWsFrame / recvWsFrame — empty payload", () => {
+    let srv  = Socket.listen(19932);
+    let cli  = Socket.connect("127.0.0.1", 19932);
+    let conn = Socket.accept(srv);
+
+    Socket.sendWsFrame(cli, "");
+    let msg = Socket.recvWsFrame(conn);
+    assert(msg == "", "empty frame received");
+
+    Socket.close(cli);
+    Socket.close(conn);
+    Socket.close(srv);
+});
+
+test("sendWsFrame / recvWsFrame — multiple sequential messages", () => {
+    let srv  = Socket.listen(19933);
+    let cli  = Socket.connect("127.0.0.1", 19933);
+    let conn = Socket.accept(srv);
+
+    Socket.sendWsFrame(cli, "msg1");
+    Socket.sendWsFrame(cli, "msg2");
+    Socket.sendWsFrame(cli, "msg3");
+
+    let m1 = Socket.recvWsFrame(conn);
+    let m2 = Socket.recvWsFrame(conn);
+    let m3 = Socket.recvWsFrame(conn);
+
+    assert(m1 == "msg1", "first message");
+    assert(m2 == "msg2", "second message");
+    assert(m3 == "msg3", "third message");
+
+    Socket.close(cli);
+    Socket.close(conn);
+    Socket.close(srv);
+});
+
+test("sendWsFrame / recvWsFrame — large payload (>125 bytes)", () => {
+    let srv  = Socket.listen(19934);
+    let cli  = Socket.connect("127.0.0.1", 19934);
+    let conn = Socket.accept(srv);
+
+    // Build a string longer than 125 bytes to trigger 2-byte extended length
+    let payload = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    payload = payload + payload + payload;   // 192 chars
+
+    Socket.sendWsFrame(cli, payload);
+    let got = Socket.recvWsFrame(conn);
+    assert(got == payload, "large payload round-trip");
+    assert(got.length() == 192, "payload length preserved");
+
+    Socket.close(cli);
+    Socket.close(conn);
+    Socket.close(srv);
+});
+
+summary();

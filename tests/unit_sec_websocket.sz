@@ -1,0 +1,104 @@
+// Unit-security tests: WebSocket input validation and error isolation
+
+// ── Crypto.sha1 input validation ──────────────────────────────────────────────
+
+test("Crypto.sha1 rejects integer argument", () => {
+    let caught = false;
+    try { Crypto.sha1(42); } catch (e) { caught = true; }
+    assert(caught, "sha1(int) must throw");
+});
+
+test("Crypto.sha1 rejects null argument", () => {
+    let caught = false;
+    try { Crypto.sha1(null); } catch (e) { caught = true; }
+    assert(caught, "sha1(null) must throw");
+});
+
+test("Crypto.sha1 rejects array argument", () => {
+    let caught = false;
+    try { Crypto.sha1([1, 2, 3]); } catch (e) { caught = true; }
+    assert(caught, "sha1(array) must throw");
+});
+
+test("Crypto.sha1 rejects zero arguments", () => {
+    let caught = false;
+    try { Crypto.sha1(); } catch (e) { caught = true; }
+    assert(caught, "sha1() must throw");
+});
+
+// ── Crypto.sha1base64 input validation ────────────────────────────────────────
+
+test("Crypto.sha1base64 rejects integer argument", () => {
+    let caught = false;
+    try { Crypto.sha1base64(0); } catch (e) { caught = true; }
+    assert(caught, "sha1base64(int) must throw");
+});
+
+test("Crypto.sha1base64 rejects null argument", () => {
+    let caught = false;
+    try { Crypto.sha1base64(null); } catch (e) { caught = true; }
+    assert(caught, "sha1base64(null) must throw");
+});
+
+test("Crypto.sha1base64 rejects zero arguments", () => {
+    let caught = false;
+    try { Crypto.sha1base64(); } catch (e) { caught = true; }
+    assert(caught, "sha1base64() must throw");
+});
+
+// ── Socket.sendWsFrame input validation ───────────────────────────────────────
+
+test("Socket.sendWsFrame rejects non-string data", () => {
+    let caught = false;
+    try {
+        let srv  = Socket.listen(19935);
+        let cli  = Socket.connect("127.0.0.1", 19935);
+        let conn = Socket.accept(srv);
+        Socket.sendWsFrame(conn, 123);
+        Socket.close(cli); Socket.close(conn); Socket.close(srv);
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "sendWsFrame(int) must throw");
+});
+
+test("Socket.sendWsFrame rejects missing data argument", () => {
+    let caught = false;
+    try {
+        let srv  = Socket.listen(19936);
+        let cli  = Socket.connect("127.0.0.1", 19936);
+        let conn = Socket.accept(srv);
+        Socket.sendWsFrame(conn);
+        Socket.close(cli); Socket.close(conn); Socket.close(srv);
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "sendWsFrame() must throw");
+});
+
+// ── Error isolation — sha1 error does not corrupt state ───────────────────────
+
+test("sha1 error is isolated — subsequent valid calls succeed", () => {
+    let h1 = "";
+    try { Crypto.sha1(false); } catch (e) {}
+    // After the error, sha1 must still work correctly
+    h1 = Crypto.sha1("abc");
+    assert(h1 == "a9993e364706816aba3e25717850c26c9cd0d89d", "sha1 still correct after error");
+});
+
+test("sha1base64 error is isolated — subsequent valid calls succeed", () => {
+    try { Crypto.sha1base64(99); } catch (e) {}
+    let b = Crypto.sha1base64("serez");
+    assert(b.length() > 0, "sha1base64 still works after error");
+});
+
+// ── SHA-1 correctness after error path ────────────────────────────────────────
+
+test("sha1 empty string is stable (idempotent)", () => {
+    let h1 = Crypto.sha1("");
+    let h2 = Crypto.sha1("");
+    assert(h1 == h2, "idempotent");
+    assert(h1 == "da39a3ee5e6b4b0d3255bfef95601890afd80709", "correct value");
+});
+
+summary();

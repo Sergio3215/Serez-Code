@@ -1,0 +1,66 @@
+// Integral: WebSocket full-stack — handshake simulation + multi-message exchange
+// Simulates the complete WS lifecycle: upgrade key derivation, frame exchange,
+// multiple message sizes, bidirectional communication.
+
+// ── Step 1: Handshake key derivation (Crypto) ─────────────────────────────────
+let client_key = "dGhlIHNhbXBsZSBub25jZQ==";
+let magic      = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+let accept     = Crypto.sha1base64(client_key + magic);
+out "handshake: " + accept;
+
+// Verify SHA-1 of key matches expected (integrity check)
+let key_hash = Crypto.sha1(client_key);
+out "key_sha1_len: " + key_hash.length();
+
+// ── Step 2: Connection setup ──────────────────────────────────────────────────
+let srv  = Socket.listen(19950);
+let cli  = Socket.connect("127.0.0.1", 19950);
+let conn = Socket.accept(srv);
+out "connected: true";
+
+// ── Step 3: Bidirectional text frames ─────────────────────────────────────────
+Socket.sendWsFrame(cli, "hello server");
+out "server got: " + Socket.recvWsFrame(conn);
+
+Socket.sendWsFrame(conn, "hello client");
+out "client got: " + Socket.recvWsFrame(cli);
+
+// ── Step 4: Multiple rapid messages ───────────────────────────────────────────
+let messages = ["alpha", "beta", "gamma", "delta", "epsilon"];
+let i = 0;
+while (i < messages.length()) {
+    Socket.sendWsFrame(cli, messages[i]);
+    i = i + 1;
+}
+i = 0;
+while (i < messages.length()) {
+    let msg = Socket.recvWsFrame(conn);
+    out "batch[" + i + "]: " + msg;
+    i = i + 1;
+}
+
+// ── Step 5: Large payload (extended 2-byte length header) ─────────────────────
+let chunk = "serez-agentai-websocket-integral-test-payload-";
+let large = chunk + chunk + chunk;   // ~141 chars > 125
+Socket.sendWsFrame(cli, large);
+let got = Socket.recvWsFrame(conn);
+out "large_len: " + got.length();
+out "large_ok: " + (got == large);
+
+// ── Step 6: Echo server pattern ───────────────────────────────────────────────
+let echo_inputs = ["echo-1", "echo-2", "echo-3"];
+let j = 0;
+while (j < echo_inputs.length()) {
+    Socket.sendWsFrame(cli, echo_inputs[j]);
+    let received = Socket.recvWsFrame(conn);
+    Socket.sendWsFrame(conn, received);         // echo back
+    let echoed = Socket.recvWsFrame(cli);
+    out "echo: " + echoed;
+    j = j + 1;
+}
+
+// ── Step 7: Teardown ──────────────────────────────────────────────────────────
+Socket.close(cli);
+Socket.close(conn);
+Socket.close(srv);
+out "closed: true";
