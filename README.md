@@ -47,12 +47,14 @@ out fibonacci(10);   // → 55
    - [File](#file)
    - [JSON](#json)
    - [Networking (fetch)](#networking-fetch)
+   - [Autodiff & Tensors](#autodiff--tensors)
    - [Terminal](#terminal)
    - [OS](#os)
    - [Env](#env)
    - [Time](#time)
    - [System](#system)
    - [Permissions](#permissions)
+   - [Package Manager](#package-manager)
    - [Classes & Interfaces](#classes--interfaces)
    - [Type Conversions](#type-conversions)
    - [Output](#output)
@@ -1820,6 +1822,86 @@ try {
     out body.length();
 } catch (e) {
     out "request failed: " + e;
+}
+```
+
+---
+
+### Autodiff & Tensors
+
+Serez-Code has a built-in reverse-mode automatic differentiation engine and multi-dimensional tensor type. No imports needed.
+
+```serez
+// Weight initialization
+let w = Autodiff.heNormal([128, 64])
+let b = Tensor.zeros([1, 64])
+let m = Tensor.zeros([128, 64])
+let v = Tensor.zeros([128, 64])
+
+// Training loop
+let step = 0
+while step < 1000 {
+    step++
+    Autodiff.tape()
+    let out = x.matmul(w).broadcastAdd(b).relu()
+    let loss = Autodiff.crossEntropyLoss(out, targets)
+    Autodiff.backward(loss)
+
+    let grad_w = Autodiff.gradient(w)
+    let grad_b = Autodiff.gradient(b)
+
+    // Adam optimizer
+    let rw = Autodiff.adamStep(w, grad_w, m, v, step, 0.001)
+    w = rw[0]; m = rw[1]; v = rw[2]
+}
+
+// Save trained weights
+Autodiff.saveWeights("model.szw", [w, b])
+
+// Load later
+let weights = Autodiff.loadWeights("model.szw")
+```
+
+**Optimizers:** `adamStep`, `adamwStep`, `sgdStep`, `rmspropStep`
+
+**Loss functions:** `mseLoss`, `maeLoss`, `bceLoss`, `crossEntropyLoss`
+
+**Weight init:** `xavierUniform`, `xavierNormal`, `heUniform`, `heNormal`
+
+**Layers:** `batchNorm`, `dropout`, `embedding`
+
+**Gradient utils:** `clipGrad`, `clipGradNorm`, `stopGrad`
+
+**Tensor activations (all tracked):** `relu`, `sigmoid`, `tanh`, `softmax`, `gelu`, `leaky_relu`, `elu`, `swish`, `silu`, `mish`
+
+**Tensor N-D ops:** `permute`, `unsqueeze`, `squeeze`, `broadcastTo`, `broadcastAddNd`, `broadcastMulNd`, `bmm`, `reduceSum`, `reduceMean`, `reduceMax`
+
+---
+
+### Package Manager
+
+```bash
+sz init          # create serez.json interactively
+sz init --y      # create serez.json using folder name (no prompts)
+sz install pkg   # install package into ./packages/
+sz uninstall pkg # remove package
+sz run dev       # execute script from serez.json
+sz run build     # execute build script
+```
+
+`serez.json` supports a `scripts` field:
+
+```json
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "sz index.sz",
+    "build": "sz apipack build"
+  },
+  "dependencies": {
+    "serez-ai": "1.0.0"
+  }
 }
 ```
 

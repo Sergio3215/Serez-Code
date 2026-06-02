@@ -5,6 +5,84 @@ Order: most recent to oldest.
 
 ---
 
+## [4.3.2] — branch `ai-deep` → merged to `improve`
+
+### AI / Autodiff — Phase 1: Core training infrastructure
+
+- **Optimizers** — `Autodiff.adamStep`, `adamwStep`, `sgdStep`, `rmspropStep`. All are pure functions that take current params + state and return `[new_param, new_state...]`. No tape side-effects.
+- **Loss functions** — `Autodiff.mseLoss`, `maeLoss`, `bceLoss`, `crossEntropyLoss`. All tracked on the tape with correct backward passes.
+- **Weight initialization** — `Autodiff.xavierUniform`, `xavierNormal`, `heUniform`, `heNormal`. Fan-in/fan-out computed automatically from shape (2D: `[out, in]`; 4D conv: `[cout, cin, kH, kW]`).
+- **Gradient clipping** — `Autodiff.clipGrad(grad, max_norm)` per-tensor; `clipGradNorm(grads_array, max_norm)` global norm across a list of tensors.
+
+### AI / Autodiff — Phase 2: Regularization & modern layers
+
+- **BatchNorm** — `Autodiff.batchNorm(x, gamma, beta, training, [eps])`. Full backward: per-feature gradient for `gamma`, `beta`, and input. Input must be `[N, C]`.
+- **Dropout** — `Autodiff.dropout(x, p, [training])`. Inverted dropout (divides by keep_prob in forward). Mask saved for backward. `training=false` → no-op.
+- **Embedding** — `Autodiff.embedding(indices, weight)`. Gathers rows from `[vocab, emb_dim]` weight. Backward scatters gradients back to touched rows. `vocab_size` stored in `TapeOp` to avoid inference issues.
+- **New activations (all tracked):**
+  - `t.elu([alpha])` — ELU with correct `alpha * exp(x)` backward
+  - `t.swish()` / `t.silu()` — swish with `(sigmoid + x*sigmoid*(1-sigmoid))` backward; stores both `x` and `sigmoid(x)`
+  - `t.mish()` — mish with `tanh(sp) + x*sech²(sp)*sigmoid(x)` backward
+  - `t.gelu()` — GELU now tracked with full `d/dx` backward (was untracked before)
+  - `t.leaky_relu(alpha)` — now tracked (was untracked before)
+- **AvgPool2d** — `t.avg_pool2d(kernel, stride)`. Uniform gradient distribution in backward.
+- **Tensor utilities** — `.variance()`, `.std()`, `.cumsum()`, `.softplus()`, `.hardsigmoid()`, `.hardswish()`
+
+### AI / Autodiff — Phase 3: N-D operations & performance
+
+- **Shape manipulation** — `t.unsqueeze(dim)`, `t.squeeze()`, `t.squeeze(dim)`, `t.permute([axes])` (full N-D generalized transpose)
+- **N-D broadcasting** — `t.broadcastTo([shape])`, `t.broadcastAddNd(other)`, `t.broadcastMulNd(other)`. Full numpy semantics for arbitrary dimensions.
+- **Batch matmul** — `t.bmm(other)`: `[B,N,M] @ [B,M,K] → [B,N,K]`
+- **N-D reduce** — `t.reduceSum(axis)`, `t.reduceMean(axis)`, `t.reduceMax(axis)` for any tensor dimension
+- **Element-wise ops** — `t.sign()`, `t.reciprocal()`, `t.sin()`, `t.cos()`, `t.round()`, `t.floor()`, `t.ceil()`, `t.maximum(other)`, `t.minimum(other)`
+- **stopGrad / detach** — `t.stopGrad()`, `t.detach()`, `Autodiff.stopGrad(tensor)` — returns a copy disconnected from the tape
+
+### AI / Autodiff — Weight persistence
+
+- **`Autodiff.saveWeights(path, tensors)`** — saves an array of tensors to a `.szw` binary file (magic `SZWT` + version + count + per-tensor: ndim, shape, data as f64 LE)
+- **`Autodiff.loadWeights(path)`** — reads `.szw` and returns `Array` of tensors in the same order. Full round-trip precision (float64).
+
+### Autodiff bug fixes
+
+- **`TapeOp::BroadcastMul` backward** — was incomplete (only accumulated gradient to `mat_id`, skipped `rhs_id`). Now saves both `mat_data` and `rhs_data` in forward, computes `d_mat` and `d_rhs` correctly.
+- **`TapeOp::Swish` backward** — was reconstructing `x` from `sigmoid(x)` via logit (numerically unstable). Now stores `cached_input` alongside `cached_sigmoid`.
+- **`TapeOp::Gelu`** — GELU was not tracked at all. Added `TapeOp::Gelu` with correct backward.
+- **`leaky_relu`** — was not recorded on the tape. Now records `TapeOp::LeakyRelu`.
+- **`TapeOp::Embedding`** — backward was inferring vocab size heuristically. Now stores `vocab_size` explicitly in the op.
+- **`TapeOp::Swish` shape** — added `cached_input: Vec<f64>` field to the variant.
+
+### Dict bug fix (B-31 complete)
+
+- **Typed dict missing-key access** — `d["missing"]` on a `<string, int>` dict was still throwing `❌ ERROR: Key not found in typed dict` instead of returning `null`. The B-31 fix was only applied to `value_type == "any"` dicts. Now all dicts return `null` for missing keys regardless of type annotation.
+- **`dict["key"].push(val)` writeback** — calling mutating array methods on a value retrieved from a dict (`grupos["pares"].push(n)`) now writes the modified array back to the dict automatically. Previously the modification was silently discarded.
+- **`plant` → `plant_global`** for dict value access — prevents dangling refs when the dict lives in an outer scope.
+
+### Package manager
+
+- **`sz init`** — creates a `serez.json` interactively in the current directory. Prompts for name (default: folder name), version, description, author.
+- **`sz init --y`** — non-interactive: uses folder name as project name, all defaults, no prompts.
+- **`sz run <script>`** — reads `serez.json` and executes the named script entry (e.g. `sz run dev` → runs `sz index.sz`). Reports error with available scripts if name not found.
+- **`scripts` field in `serez.json`** — new manifest field, parsed alongside `dependencies` and `permissions`.
+
+### stdout flush fix
+
+- **`stdout` buffer** — `run_file()` now explicitly flushes `stdout` before returning. On Windows, large output from the spawned interpreter thread could appear after the shell prompt due to unflushed buffered writes. Regression test: `49_stdout_flush` (200 output lines).
+
+### Test count
+
+- **321 passing** (0 failing) across E2E, unit, error, security, AI, CLI, and package manager tests.
+- New test files: `ai_phase1_training.sz`, `ai_phase2_layers.sz`, `ai_phase3_ops.sz`, `ai_weights_persistence.sz`, `49_stdout_flush.sz`.
+
+---
+
+## [4.1.2] — branch `improve`
+
+### Package manager
+
+- `sz init` / `sz run` / `scripts` field (see v4.3.2 above — backfilled from ai-deep merge)
+
+---
+
 ## [4.0.1] — branch `improve`
 
 ### Networking / stdlib
