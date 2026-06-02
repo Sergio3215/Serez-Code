@@ -5,6 +5,30 @@ Order: most recent to oldest.
 
 ---
 
+## [4.5.0] — branch `core-websocket` → merged to `improve`
+
+### WebSocket support (RFC 6455)
+
+- **`Crypto.sha1(s)`** — SHA-1 hash, returns 40-char lowercase hex. Pure-Rust implementation, no external crates. Validated against RFC 3174 test vectors.
+- **`Crypto.sha1base64(s)`** — SHA-1 followed by base64 encode of the raw digest. Used for the WebSocket handshake `Sec-WebSocket-Accept` key. Validated against the RFC 6455 §1.3 vector.
+- **`Socket.recvWsFrame(conn_id)`** → `string | null` — decodes one WebSocket frame (RFC 6455): parses header, extended length, unmasks payload. Returns `null` on close frame.
+- **`Socket.sendWsFrame(conn_id, data)`** → `null` — encodes `data` as an unmasked text frame (server → client) with correct 1-byte / 2-byte / 8-byte length encoding.
+- **`Socket.listen(port)`** — now binds to `0.0.0.0` instead of `127.0.0.1`, allowing external connections (e.g. inside Docker via serez-apipack).
+
+### WebSocket protocol hardening (5 bugs fixed)
+
+- **DoS — unbounded payload** — a frame claiming `payload_len = 2^63` would allocate `vec![0; huge]` and crash. Now capped at `WS_MAX_PAYLOAD` (16 MiB), enforced on both the 1-byte and 8-byte extended-length paths before allocation.
+- **Ping not answered** — `opcode=9` (ping) was returned as data. Real browsers close the connection on missing pong. Now auto-replies with `opcode=10` (pong) carrying the same payload, then loops to read the next data frame. Loop (not recursion) avoids stack overflow on repeated pings.
+- **Close frame stream desync** — `opcode=8` returned before reading the close code + reason, leaving bytes in the TCP buffer that corrupted the next read. Now the payload is fully consumed before returning `null`.
+- **RSV bits not validated** — RFC 6455 §5.2 requires RSV1/2/3 = 0 without a negotiated extension. Now rejects frames with any RSV bit set.
+- **Invalid UTF-8 silently mangled** — text frames used `from_utf8_lossy` (replacing bad bytes with U+FFFD). RFC 6455 §5.7 requires an error. Now returns an error on invalid UTF-8. Control frames with payload > 125 bytes are also rejected (§5.5).
+
+### Tests
+
+- `unit_websocket` (13), `unit_sec_websocket` (13), `sec_websocket`, `54_websocket_e2e`, `55_websocket_integral`, `62_websocket_full_integral` (33 assertions), plus 8 Rust `ws_frame_tests`. Full suite: 327 `.sz` tests, 0 failures.
+
+---
+
 ## [4.3.2] — branch `ai-deep` → merged to `improve`
 
 ### AI / Autodiff — Phase 1: Core training infrastructure
