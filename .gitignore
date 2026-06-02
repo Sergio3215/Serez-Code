@@ -5,6 +5,9 @@ AUDIT.md
 implementacion_clases.md
 ANALISIS_MEMORIA_RENDIMIENTO.md
 *.sz
+*.szw
+*.szx
+*.szs
 *.txt
 *.json
 *.bin
