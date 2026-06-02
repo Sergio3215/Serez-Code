@@ -21,7 +21,7 @@ llvm = ["inkwell"]
 [dependencies]
 notify = "8"
 ureq = "2"
-zip = "2"
+zip = "8"
 crossterm = "0.29"
 minifb = "0.27"
 font8x8 = "0.3"
