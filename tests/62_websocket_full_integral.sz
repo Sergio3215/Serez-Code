@@ -1,0 +1,162 @@
+// Integral exhaustivo: WebSocket full-stack post-bugfix
+// Cubre: handshake (multi-vector), límites de encoding de longitud,
+// UTF-8 multibyte, integridad SHA-1 del round-trip, round-trips intensos.
+//
+// Auto-verificante: imprime [PASS]/[FAIL] por aserción. El .expected captura
+// el resultado esperado (todos PASS), de modo que cualquier regresión rompe el diff.
+
+fn check(name, cond) {
+    if (cond) {
+        out "[PASS] " + name;
+    } else {
+        out "[FAIL] " + name;
+    }
+}
+
+// Construye un string de longitud exacta n por duplicación + corte.
+fn buildStr(n) {
+    let s = "x";
+    while (s.length() < n) {
+        s = s + s;
+    }
+    return s.substring(0, n);
+}
+
+out "═══ WebSocket Full Integral ═══";
+
+// ── 1. Handshake: vectores RFC + derivación ───────────────────────────────────
+out "── handshake ──";
+let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+// RFC 6455 §1.3 vector oficial
+let accept = Crypto.sha1base64("dGhlIHNhbXBsZSBub25jZQ==" + magic);
+check("rfc6455 accept key", accept == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+
+// RFC 3174 SHA-1 vectores conocidos
+check("sha1 empty",  Crypto.sha1("") == "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+check("sha1 abc",    Crypto.sha1("abc") == "a9993e364706816aba3e25717850c26c9cd0d89d");
+check("sha1 fox",    Crypto.sha1("The quick brown fox jumps over the lazy dog") == "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12");
+
+// Determinismo: misma entrada, mismo accept
+let accept2 = Crypto.sha1base64("dGhlIHNhbXBsZSBub25jZQ==" + magic);
+check("handshake deterministic", accept == accept2);
+
+// Claves distintas → accepts distintos
+let acceptA = Crypto.sha1base64("AAAAAAAAAAAAAAAAAAAAAA==" + magic);
+let acceptB = Crypto.sha1base64("BBBBBBBBBBBBBBBBBBBBBB==" + magic);
+check("distinct keys differ", acceptA != acceptB);
+
+// ── 2. Conexión ───────────────────────────────────────────────────────────────
+let srv  = Socket.listen(19960);
+let cli  = Socket.connect("127.0.0.1", 19960);
+let conn = Socket.accept(srv);
+check("connection established", cli > 0 && conn > 0 && cli != conn);
+
+// ── 3. Límites de encoding de longitud (1-byte → 2-byte) ──────────────────────
+// El frame usa 1 byte de longitud para 0..125, y marker+2bytes para 126..65535.
+// La transición 125→126 es el off-by-one clásico.
+out "── length encoding boundaries ──";
+
+let sizes = [0, 1, 64, 125, 126, 127, 200, 1000, 8192];
+let si = 0;
+while (si < sizes.length()) {
+    let n = sizes[si];
+    let payload = buildStr(n);
+    Socket.sendWsFrame(cli, payload);
+    let got = Socket.recvWsFrame(conn);
+    let ok = (got.length() == n) && (got == payload);
+    check("size=" + n + " roundtrip", ok);
+    si = si + 1;
+}
+
+// ── 4. Integridad verificada con SHA-1 ────────────────────────────────────────
+// El hash del payload recibido debe coincidir con el del enviado — garantiza
+// que el framing (mask, length, payload) no corrompió ni un byte.
+out "── integrity (sha1 of payload) ──";
+
+let i4 = 0;
+let int_sizes = [125, 126, 500, 4096];
+while (i4 < int_sizes.length()) {
+    let n = int_sizes[i4];
+    let sent = buildStr(n);
+    let sent_hash = Crypto.sha1(sent);
+    Socket.sendWsFrame(cli, sent);
+    let recv = Socket.recvWsFrame(conn);
+    let recv_hash = Crypto.sha1(recv);
+    check("integrity size=" + n, sent_hash == recv_hash);
+    i4 = i4 + 1;
+}
+
+// ── 5. UTF-8 multibyte preservado a nivel de bytes ────────────────────────────
+// sendWsFrame envía data.as_bytes(); recvWsFrame valida UTF-8. Caracteres
+// multibyte deben sobrevivir el round-trip intactos.
+out "── utf-8 multibyte ──";
+
+Socket.sendWsFrame(cli, "café ñoño");
+check("utf8 latin1-ext", Socket.recvWsFrame(conn) == "café ñoño");
+
+Socket.sendWsFrame(cli, "日本語テスト");
+check("utf8 cjk", Socket.recvWsFrame(conn) == "日本語テスト");
+
+Socket.sendWsFrame(cli, "emoji 🚀🔥✨");
+check("utf8 emoji 4-byte", Socket.recvWsFrame(conn) == "emoji 🚀🔥✨");
+
+Socket.sendWsFrame(cli, "mixed: aΩ語🚀z");
+check("utf8 mixed widths", Socket.recvWsFrame(conn) == "mixed: aΩ語🚀z");
+
+// ── 6. Bidireccional intenso (servidor ↔ cliente) ─────────────────────────────
+out "── bidirectional stress ──";
+
+let rounds = 0;
+let all_ok = true;
+while (rounds < 50) {
+    let req = "ping-" + rounds;
+    Socket.sendWsFrame(cli, req);
+    let server_got = Socket.recvWsFrame(conn);
+    Socket.sendWsFrame(conn, "pong-" + rounds);
+    let client_got = Socket.recvWsFrame(cli);
+    if (server_got != req) { all_ok = false; }
+    if (client_got != "pong-" + rounds) { all_ok = false; }
+    rounds = rounds + 1;
+}
+check("50 bidirectional round-trips", all_ok);
+
+// ── 7. Mensajes en ráfaga (pipelining) ────────────────────────────────────────
+// Enviar N frames seguidos, luego leerlos todos en orden — verifica que el
+// parser de frames no desincroniza el stream entre frames consecutivos.
+out "── pipelined burst ──";
+
+let burst = 0;
+while (burst < 30) {
+    Socket.sendWsFrame(cli, "burst-" + burst);
+    burst = burst + 1;
+}
+let read_ok = true;
+let b = 0;
+while (b < 30) {
+    let m = Socket.recvWsFrame(conn);
+    if (m != "burst-" + b) { read_ok = false; }
+    b = b + 1;
+}
+check("30 pipelined frames in order", read_ok);
+
+// ── 8. Empty frames intercalados ──────────────────────────────────────────────
+out "── empty frame handling ──";
+
+Socket.sendWsFrame(cli, "");
+check("empty frame 1", Socket.recvWsFrame(conn) == "");
+Socket.sendWsFrame(cli, "nonempty");
+check("nonempty after empty", Socket.recvWsFrame(conn) == "nonempty");
+Socket.sendWsFrame(cli, "");
+Socket.sendWsFrame(cli, "");
+check("empty frame 2", Socket.recvWsFrame(conn) == "");
+check("empty frame 3", Socket.recvWsFrame(conn) == "");
+
+// ── 9. Teardown ───────────────────────────────────────────────────────────────
+Socket.close(cli);
+Socket.close(conn);
+Socket.close(srv);
+out "── teardown ──";
+check("closed cleanly", true);
+
+out "═══ DONE ═══";

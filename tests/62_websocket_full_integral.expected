@@ -1,0 +1,41 @@
+═══ WebSocket Full Integral ═══
+── handshake ──
+[PASS] rfc6455 accept key
+[PASS] sha1 empty
+[PASS] sha1 abc
+[PASS] sha1 fox
+[PASS] handshake deterministic
+[PASS] distinct keys differ
+[PASS] connection established
+── length encoding boundaries ──
+[PASS] size=0 roundtrip
+[PASS] size=1 roundtrip
+[PASS] size=64 roundtrip
+[PASS] size=125 roundtrip
+[PASS] size=126 roundtrip
+[PASS] size=127 roundtrip
+[PASS] size=200 roundtrip
+[PASS] size=1000 roundtrip
+[PASS] size=8192 roundtrip
+── integrity (sha1 of payload) ──
+[PASS] integrity size=125
+[PASS] integrity size=126
+[PASS] integrity size=500
+[PASS] integrity size=4096
+── utf-8 multibyte ──
+[PASS] utf8 latin1-ext
+[PASS] utf8 cjk
+[PASS] utf8 emoji 4-byte
+[PASS] utf8 mixed widths
+── bidirectional stress ──
+[PASS] 50 bidirectional round-trips
+── pipelined burst ──
+[PASS] 30 pipelined frames in order
+── empty frame handling ──
+[PASS] empty frame 1
+[PASS] nonempty after empty
+[PASS] empty frame 2
+[PASS] empty frame 3
+── teardown ──
+[PASS] closed cleanly
+═══ DONE ═══
