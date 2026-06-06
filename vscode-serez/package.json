@@ -1,8 +1,8 @@
 {
   "name": "serez-code-formatter",
   "displayName": "Serez-Code Formatter",
-  "description": "Syntax highlighting and formatter for Serez-Code (.sz) files",
-  "version": "1.1.0",
+  "description": "Syntax highlighting and formatter for Serez-Code — .sz, .szx (JSX) and .szs (styles)",
+  "version": "1.5.0",
   "icon": "icon.png",
   "license": "MIT",
   "publisher": "sd-tools",
@@ -19,7 +19,9 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:serez-code"
+    "onLanguage:serez-code",
+    "onLanguage:serez-code-jsx",
+    "onLanguage:serez-style"
   ],
   "contributes": {
     "languages": [
@@ -35,6 +37,28 @@
           ".sz"
         ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "serez-code-jsx",
+        "aliases": [
+          "Serez-Code JSX",
+          "serez-jsx"
+        ],
+        "extensions": [
+          ".szx"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "serez-style",
+        "aliases": [
+          "Serez Style",
+          "serez-szs"
+        ],
+        "extensions": [
+          ".szs"
+        ],
+        "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
@@ -42,12 +66,30 @@
         "language": "serez-code",
         "scopeName": "source.serez",
         "path": "./syntaxes/serez.tmLanguage.json"
+      },
+      {
+        "language": "serez-code-jsx",
+        "scopeName": "source.serez.jsx",
+        "path": "./syntaxes/serez-jsx.tmLanguage.json"
+      },
+      {
+        "language": "serez-style",
+        "scopeName": "source.serez.style",
+        "path": "./syntaxes/serez-style.tmLanguage.json"
       }
     ],
     "configurationDefaults": {
       "[serez-code]": {
         "editor.defaultFormatter": "sd-tools.serez-code-formatter",
         "editor.formatOnSave": true,
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      },
+      "[serez-code-jsx]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      },
+      "[serez-style]": {
         "editor.tabSize": 4,
         "editor.insertSpaces": true
       }

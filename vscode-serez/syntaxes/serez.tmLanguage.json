@@ -8,6 +8,7 @@
     { "include": "#numbers" },
     { "include": "#keywords" },
     { "include": "#types" },
+    { "include": "#namespaces" },
     { "include": "#constants" },
     { "include": "#operators" },
     { "include": "#functions" },
@@ -90,6 +91,10 @@
           "match": "\\b(public|private|static|abstract|sealed|get|set)\\b"
         },
         {
+          "name": "keyword.control.import.serez",
+          "match": "\\b(import|export)\\b"
+        },
+        {
           "name": "keyword.other.serez",
           "match": "\\b(out|super|this)\\b"
         }
@@ -98,6 +103,10 @@
     "types": {
       "name": "support.type.serez",
       "match": "\\b(int|decimal|string|bool|any|void|null)\\b"
+    },
+    "namespaces": {
+      "name": "support.class.builtin.serez",
+      "match": "\\b(Math|JSON|File|Terminal|OS|Env|Time|System|Random|Tensor|Autodiff|Gui|Crypto|Socket|Set)\\b"
     },
     "constants": {
       "patterns": [
