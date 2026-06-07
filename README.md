@@ -1827,6 +1827,43 @@ try {
 
 ---
 
+### Socket (TCP & WebSocket)
+
+Raw TCP client/server sockets over `std::net`, plus RFC 6455 WebSocket text frames. These are the low-level networking primitives — for a full HTTP/WebSocket server with routing, use the `serez-http` package. No permission declaration is required.
+
+```serez
+// TCP client
+let sock = Socket.connect("example.com", 80);   // → socket id (int)
+Socket.send(sock, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n");
+let reply = Socket.recv(sock, 4096);            // read up to 4096 bytes → string
+Socket.close(sock);
+
+// TCP server
+let server = Socket.listen(8080);   // → listener id
+let conn   = Socket.accept(server); // blocks until a client connects → socket id
+let msg    = Socket.recv(conn, 1024);
+Socket.send(conn, "echo: " + msg);
+Socket.close(conn);
+Socket.close(server);
+
+// WebSocket text frames (after a connection is established)
+Socket.sendWsFrame(conn, "ping");        // encode + send a text frame → null
+let frame = Socket.recvWsFrame(conn);    // → text payload, or null on close
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Socket.connect(host, port)` | `int` | Open a TCP connection → socket id |
+| `Socket.send(id, data)` | `int` | Send a string → bytes written |
+| `Socket.recv(id, max_bytes)` | `string` | Read up to `max_bytes` |
+| `Socket.listen(port)` | `int` | Bind + listen → listener id |
+| `Socket.accept(listener_id)` | `int` | Accept a connection (blocks) → socket id |
+| `Socket.close(id)` | `null` | Close a socket or listener |
+| `Socket.sendWsFrame(id, data)` | `null` | Send a WebSocket text frame |
+| `Socket.recvWsFrame(id)` | `string \| null` | Read one WebSocket text frame (null on close); frames > 16 MiB are rejected |
+
+---
+
 ### Autodiff & Tensors
 
 Serez-Code has a built-in reverse-mode automatic differentiation engine and multi-dimensional tensor type. No imports needed.
@@ -1904,6 +1941,45 @@ sz run build     # execute build script
   }
 }
 ```
+
+---
+
+### GPU
+
+CPU-backed compute buffers with a GPU-shaped API. Buffers are flat `decimal` arrays; the create / upload / dispatch / readback / free pattern mirrors real GPU compute so a future backend can swap the CPU implementation for actual GPU calls. Buffers are **not** garbage-collected — free them with `GPU.freeBuffer` when done. No permission declaration is required.
+
+```serez
+let src     = GPU.createBufferFromArray([1.0, 2.0, 3.0, 4.0]);  // → buffer id
+let doubled = GPU.map(src, x => x * 2.0);                 // element-wise → new buffer
+let sum     = GPU.reduce(src, (acc, x) => acc + x, 0.0);  // → 10.0
+let product = GPU.reduce(src, (acc, x) => acc * x, 1.0);  // → 24.0
+
+let d = GPU.dot(src, doubled);          // dot product → decimal
+let r = GPU.axpy(2.0, src, doubled);    // 2*src + doubled → new buffer
+
+// Matrix multiply: [2×2] @ [2×2]
+let I = GPU.createBufferFromArray([1.0, 0.0, 0.0, 1.0]);
+let M = GPU.createBufferFromArray([5.0, 6.0, 7.0, 8.0]);
+let C = GPU.matmul(I, 2, 2, M, 2, 2);
+out GPU.readBuffer(C);   // → [5.0, 6.0, 7.0, 8.0]
+
+GPU.freeBuffer(src);
+GPU.freeBuffer(doubled);
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `GPU.createBuffer(size)` | `int` | Allocate a zero-filled buffer → id |
+| `GPU.createBufferFromArray(arr)` | `int` | Allocate from a Serez array → id |
+| `GPU.readBuffer(id)` | `[decimal]` | Copy a buffer back to a Serez array |
+| `GPU.freeBuffer(id)` | `null` | Release a buffer |
+| `GPU.fill(id, value)` | `null` | Set every element to `value` |
+| `GPU.size(id)` | `int` | Number of elements |
+| `GPU.map(id, fn)` | `int` | Element-wise `fn` → new buffer |
+| `GPU.reduce(id, fn, initial)` | `decimal` | Fold over the buffer → scalar |
+| `GPU.dot(id_a, id_b)` | `decimal` | Dot product of two buffers |
+| `GPU.axpy(alpha, id_x, id_y)` | `int` | `alpha*x + y` → new buffer |
+| `GPU.matmul(id_a, ra, ca, id_b, rb, cb)` | `int` | Matrix multiply → new buffer |
 
 ---
 
@@ -3326,6 +3402,8 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] Default parameters — `fn int f(int x = 10)` with fallback when argument is omitted
 - [x] Security test suite — 17 error tests (`sec_*.sz`) + 6 unit test files (`unit_sec_*.sz`) covering arithmetic, null safety, type safety, error isolation, injection, and resource limits
 - [x] OS/hardware namespaces — `Terminal` (raw mode, keyboard, mouse, cursor), `OS` (platform, pid, exec, kill), `Env` (get, set, args), `Time` (now, sleep), `System` (cpuCount, totalMemory, freeMemory, hostname, uptime)
+- [x] Socket namespace — TCP client/server (`connect`, `send`, `recv`, `listen`, `accept`, `close`) + RFC 6455 WebSocket text frames (`sendWsFrame`, `recvWsFrame`)
+- [x] GPU namespace — CPU-backed compute buffers (`createBuffer`, `createBufferFromArray`, `map`, `reduce`, `dot`, `axpy`, `matmul`, `fill`, `readBuffer`, `freeBuffer`)
 - [x] File extended — `listDir`, `mkdir`, `stat`, `delete`, `rename`
 - [x] Permission system — three-level model: `serez.json` (project-wide) → `use permissions {}` (file-level) → `unsafe {}` (operation-level)
 - [x] `use permissions {}` keyword — grants namespace access at file scope
