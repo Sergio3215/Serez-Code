@@ -67,7 +67,7 @@ fn run() {
         if args[1] == "install" {
             if args.len() >= 3 {
                 let spec = &args[2];
-                if let Err(e) = package_manager::install_package(spec) {
+                if let Err(e) = package_manager::install_package(spec, true) {
                     eprintln!("❌ ERROR: {}", e);
                 }
             } else {

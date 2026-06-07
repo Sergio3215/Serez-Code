@@ -161,7 +161,10 @@ pub fn registry_url() -> String {
 
 /// Install a package from the local registry or HTTP registry into ./packages/.
 /// pkg_spec = "name" or "name@version".
-pub fn install_package(pkg_spec: &str) -> Result<(), String> {
+/// When `record` is true, the resolved dependency is written back into the
+/// project's serez.json (used by `sz install <pkg>`; skipped by `sz install`
+/// which already reads its list from the manifest).
+pub fn install_package(pkg_spec: &str, record: bool) -> Result<(), String> {
     let (pkg_name, pkg_version) = parse_pkg_spec(pkg_spec);
     let registry = registry_dir();
 
@@ -193,6 +196,17 @@ pub fn install_package(pkg_spec: &str) -> Result<(), String> {
         println!("✅ Installed {}@{} → ./packages/{}", pkg_name, version, pkg_name);
     } else {
         download_package(&pkg_name, &version)?;
+    }
+
+    // Record the resolved dependency in serez.json. The package is already on
+    // disk at this point, so a manifest write failure is a warning, not a hard
+    // error — we don't want the user to think the install itself failed.
+    if record {
+        if let Ok(cwd) = std::env::current_dir() {
+            if let Err(e) = record_dependency(&cwd, &pkg_name, &version) {
+                eprintln!("⚠ Installed, but could not update serez.json: {}", e);
+            }
+        }
     }
 
     Ok(())
@@ -303,6 +317,14 @@ pub fn uninstall_package(pkg_name: &str) -> Result<(), String> {
     std::fs::remove_dir_all(&dest)
         .map_err(|e| format!("Failed to uninstall '{}': {}", pkg_name, e))?;
     println!("✅ Uninstalled {}", pkg_name);
+
+    // Drop the dependency from serez.json if present (best-effort).
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Err(e) = remove_dependency(&cwd, pkg_name) {
+            eprintln!("⚠ Uninstalled, but could not update serez.json: {}", e);
+        }
+    }
+
     Ok(())
 }
 
@@ -319,9 +341,233 @@ pub fn install_all() -> Result<(), String> {
 
     for (name, version) in &manifest.dependencies {
         let spec = format!("{}@{}", name, version);
-        install_package(&spec)?;
+        // Don't rewrite the manifest: these deps already come from it.
+        install_package(&spec, false)?;
     }
     Ok(())
+}
+
+// ── Manifest write-back ─────────────────────────────────────────────────────────
+//
+// These helpers edit serez.json in place: only the "dependencies" object is
+// reformatted (canonical 2-space layout), the rest of the file — name, version,
+// scripts, permissions, comments-free formatting — is preserved verbatim.
+
+/// Insert or update a dependency in the project's serez.json.
+/// No-op (with a hint) if there is no manifest in `dir`.
+fn record_dependency(dir: &Path, name: &str, version: &str) -> Result<(), String> {
+    let path = dir.join("serez.json");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("ℹ No serez.json found — run `sz init` to track dependencies.");
+            return Ok(());
+        }
+    };
+    let updated = upsert_dependency(&raw, name, version)?;
+    std::fs::write(&path, &updated).map_err(|e| format!("Cannot write serez.json: {}", e))?;
+    println!("   added {}@{} to serez.json", name, version);
+    Ok(())
+}
+
+/// Remove a dependency from the project's serez.json if present.
+/// No-op if there is no manifest or the dependency isn't listed.
+fn remove_dependency(dir: &Path, name: &str) -> Result<(), String> {
+    let path = dir.join("serez.json");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Ok(()),
+    };
+    let (obj_start, obj_end) = match find_object_span(&raw, "dependencies") {
+        Some(span) => span,
+        None => return Ok(()),
+    };
+    let mut pairs = parse_ordered_pairs(&raw[obj_start + 1..obj_end])?;
+    let before = pairs.len();
+    pairs.retain(|(k, _)| k != name);
+    if pairs.len() == before {
+        return Ok(()); // dependency wasn't listed; leave the file untouched
+    }
+    let rendered = render_deps_object(&pairs);
+    let mut out = String::with_capacity(raw.len());
+    out.push_str(&raw[..obj_start]);
+    out.push_str(&rendered);
+    out.push_str(&raw[obj_end + 1..]);
+    std::fs::write(&path, &out).map_err(|e| format!("Cannot write serez.json: {}", e))?;
+    println!("   removed {} from serez.json", name);
+    Ok(())
+}
+
+/// Insert or update `name`→`version` inside the raw serez.json text. Splices a
+/// freshly rendered "dependencies" object in place; if the manifest has no
+/// "dependencies" key, one is appended before the closing brace.
+fn upsert_dependency(raw: &str, name: &str, version: &str) -> Result<String, String> {
+    if let Some((obj_start, obj_end)) = find_object_span(raw, "dependencies") {
+        let mut pairs = parse_ordered_pairs(&raw[obj_start + 1..obj_end])?;
+        upsert_pair(&mut pairs, name, version);
+        let rendered = render_deps_object(&pairs);
+        let mut out = String::with_capacity(raw.len() + name.len() + version.len() + 16);
+        out.push_str(&raw[..obj_start]);
+        out.push_str(&rendered);
+        out.push_str(&raw[obj_end + 1..]);
+        Ok(out)
+    } else {
+        insert_deps_key(raw, name, version)
+    }
+}
+
+/// Locate the `{ ... }` value of a top-level object key. Returns the byte index
+/// of the opening and matching closing brace (inclusive), or None if the key or
+/// its object value is absent.
+fn find_object_span(raw: &str, key: &str) -> Option<(usize, usize)> {
+    let bytes = raw.as_bytes();
+    let needle = format!("\"{}\"", key);
+    let mut from = 0;
+    while let Some(rel) = raw[from..].find(&needle) {
+        let key_at = from + rel;
+        // Skip whitespace then expect ':'.
+        let mut i = key_at + needle.len();
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() { i += 1; }
+        if i >= bytes.len() || bytes[i] != b':' {
+            from = key_at + needle.len();
+            continue;
+        }
+        i += 1;
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() { i += 1; }
+        if i < bytes.len() && bytes[i] == b'{' {
+            if let Some(close) = match_braces(bytes, i) {
+                return Some((i, close));
+            }
+        }
+        from = key_at + needle.len();
+    }
+    None
+}
+
+/// Given `bytes[open] == b'{'`, return the index of the matching `}`, honoring
+/// quoted strings and escapes. None if unbalanced.
+fn match_braces(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut i = open;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+        } else {
+            match c {
+                b'"' => in_str = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse the body of a string→string object (text between its braces) into an
+/// ordered list, preserving the original key order.
+fn parse_ordered_pairs(body: &str) -> Result<Vec<(String, String)>, String> {
+    let mut chars = body.chars().peekable();
+    let mut pairs = Vec::new();
+    loop {
+        while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
+            chars.next();
+        }
+        match chars.peek() {
+            Some('"') => {}
+            _ => break,
+        }
+        let key = read_json_string(&mut chars)?;
+        skip_ws_and(&mut chars, ':');
+        let val = read_json_string(&mut chars)?;
+        pairs.push((key, val));
+    }
+    Ok(pairs)
+}
+
+/// Set `name`→`version`, updating in place if present or appending otherwise.
+fn upsert_pair(pairs: &mut Vec<(String, String)>, name: &str, version: &str) {
+    for p in pairs.iter_mut() {
+        if p.0 == name {
+            p.1 = version.to_string();
+            return;
+        }
+    }
+    pairs.push((name.to_string(), version.to_string()));
+}
+
+/// Render a dependencies object in canonical layout (2-space base indent,
+/// 4-space entries). Empty maps render as `{}`.
+fn render_deps_object(pairs: &[(String, String)]) -> String {
+    if pairs.is_empty() {
+        return "{}".to_string();
+    }
+    let mut s = String::from("{\n");
+    for (i, (k, v)) in pairs.iter().enumerate() {
+        s.push_str("    \"");
+        s.push_str(&json_escape(k));
+        s.push_str("\": \"");
+        s.push_str(&json_escape(v));
+        s.push('"');
+        if i + 1 < pairs.len() {
+            s.push(',');
+        }
+        s.push('\n');
+    }
+    s.push_str("  }");
+    s
+}
+
+/// Append a `"dependencies"` key (with the single entry) just before the
+/// manifest's final closing brace, adding a separating comma when needed.
+fn insert_deps_key(raw: &str, name: &str, version: &str) -> Result<String, String> {
+    let close = raw
+        .rfind('}')
+        .ok_or_else(|| "serez.json: malformed (no closing brace)".to_string())?;
+    let head = raw[..close].trim_end();
+    let needs_comma = !head.ends_with('{');
+    let deps = render_deps_object(&[(name.to_string(), version.to_string())]);
+    let mut out = String::with_capacity(raw.len() + deps.len() + 24);
+    out.push_str(head);
+    if needs_comma {
+        out.push(',');
+    }
+    out.push_str("\n  \"dependencies\": ");
+    out.push_str(&deps);
+    out.push('\n');
+    out.push_str(&raw[close..]);
+    Ok(out)
+}
+
+/// Escape a string for embedding in a JSON double-quoted value.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 // ── HTTP registry ─────────────────────────────────────────────────────────────
@@ -951,5 +1197,75 @@ mod tests {
         let (name, ver) = parse_pkg_spec("foo");
         assert_eq!(name, "foo");
         assert_eq!(ver, None);
+    }
+
+    #[test]
+    fn test_upsert_into_empty_deps() {
+        let raw = "{\n  \"name\": \"app\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": {},\n  \"permissions\": []\n}\n";
+        let out = upsert_dependency(raw, "serez-http", "1.2.0").unwrap();
+        let m = SerezManifest::parse(&out).unwrap();
+        assert_eq!(m.dependencies["serez-http"], "1.2.0");
+        // The rest of the manifest survives untouched.
+        assert_eq!(m.name, "app");
+        assert_eq!(m.version, "1.0.0");
+        assert!(out.contains("\"permissions\": []"));
+    }
+
+    #[test]
+    fn test_upsert_appends_to_existing_deps() {
+        let raw = "{\n  \"name\": \"app\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": {\n    \"a\": \"0.1.0\"\n  }\n}\n";
+        let out = upsert_dependency(raw, "b", "2.0.0").unwrap();
+        let m = SerezManifest::parse(&out).unwrap();
+        assert_eq!(m.dependencies["a"], "0.1.0");
+        assert_eq!(m.dependencies["b"], "2.0.0");
+    }
+
+    #[test]
+    fn test_upsert_updates_existing_version() {
+        let raw = "{\"name\":\"app\",\"version\":\"1.0.0\",\"dependencies\":{\"a\":\"0.1.0\"}}";
+        let out = upsert_dependency(raw, "a", "0.2.0").unwrap();
+        let m = SerezManifest::parse(&out).unwrap();
+        assert_eq!(m.dependencies["a"], "0.2.0");
+        assert_eq!(m.dependencies.len(), 1);
+    }
+
+    #[test]
+    fn test_upsert_inserts_missing_deps_key() {
+        let raw = "{\n  \"name\": \"app\",\n  \"version\": \"1.0.0\"\n}\n";
+        let out = upsert_dependency(raw, "a", "1.0.0").unwrap();
+        let m = SerezManifest::parse(&out).unwrap();
+        assert_eq!(m.name, "app");
+        assert_eq!(m.dependencies["a"], "1.0.0");
+    }
+
+    #[test]
+    fn test_upsert_preserves_scripts_block() {
+        let raw = "{\n  \"name\": \"app\",\n  \"version\": \"1.0.0\",\n  \"scripts\": {\n    \"dev\": \"sz index.sz\"\n  },\n  \"dependencies\": {}\n}\n";
+        let out = upsert_dependency(raw, "serez-ui", "1.1.0").unwrap();
+        let m = SerezManifest::parse(&out).unwrap();
+        assert_eq!(m.scripts["dev"], "sz index.sz");
+        assert_eq!(m.dependencies["serez-ui"], "1.1.0");
+    }
+
+    #[test]
+    fn test_find_object_span_ignores_braces_in_strings() {
+        // A string value containing '{' must not confuse brace matching.
+        let raw = "{\"description\":\"a { brace\",\"dependencies\":{\"x\":\"1.0.0\"}}";
+        let (start, end) = find_object_span(raw, "dependencies").unwrap();
+        let body = &raw[start..=end];
+        assert_eq!(body, "{\"x\":\"1.0.0\"}");
+    }
+
+    #[test]
+    fn test_remove_pair_roundtrip() {
+        let raw = "{\"name\":\"app\",\"version\":\"1.0.0\",\"dependencies\":{\"a\":\"1.0.0\",\"b\":\"2.0.0\"}}";
+        let (start, end) = find_object_span(raw, "dependencies").unwrap();
+        let mut pairs = parse_ordered_pairs(&raw[start + 1..end]).unwrap();
+        pairs.retain(|(k, _)| k != "a");
+        let rendered = render_deps_object(&pairs);
+        let out = format!("{}{}{}", &raw[..start], rendered, &raw[end + 1..]);
+        let m = SerezManifest::parse(&out).unwrap();
+        assert!(!m.dependencies.contains_key("a"));
+        assert_eq!(m.dependencies["b"], "2.0.0");
     }
 }
