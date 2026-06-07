@@ -5,6 +5,22 @@ Order: most recent to oldest.
 
 ---
 
+## [4.6.0] — branch `improve`
+
+### Package manager — dependency write-back
+
+- **`sz install <pkg>`** now records the resolved dependency in `serez.json` (insert or update), so installing by command keeps the manifest in sync — matching the behavior of `npm install <pkg>` / `cargo add`. Previously the manifest was read-only and only `sz install` (no args) consumed it.
+- **`sz uninstall <pkg>`** now removes the dependency from `serez.json` as well.
+- The manifest edit is **surgical**: only the `dependencies` object is rewritten (canonical 2-space layout); `name`, `version`, `scripts`, `permissions` and the rest of the file's formatting are preserved verbatim. Brace matching honors `{`/`}` inside string values.
+- `sz install` (no args, installs from the manifest) does **not** rewrite `serez.json`, so hand-written version specs are never clobbered.
+- Manifest write failures are non-fatal: the package is already on disk, so the install/uninstall reports a warning instead of failing. With no `serez.json` present, `sz install` hints to run `sz init`.
+
+### Tests
+
+- 7 new Rust unit tests in `package_manager` (upsert into empty deps, append, update-in-place, insert missing `dependencies` key, preserve `scripts` block, brace-in-string handling, remove round-trip). Module suite: 14/14 pass.
+
+---
+
 ## [4.5.0] — branch `core-websocket` → merged to `improve`
 
 ### WebSocket support (RFC 6455)
