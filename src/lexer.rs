@@ -266,7 +266,10 @@ impl Lexer {
                     let start_line = self.line;
                     let start_column = self.column;
                     let literal = self.read_number();
-                    let token_type = if literal.contains('.') {
+                    let token_type = if literal.contains('.')
+                        || literal.contains('e')
+                        || literal.contains('E')
+                    {
                         TokenType::Decimal
                     } else {
                         TokenType::Int
@@ -392,6 +395,27 @@ impl Lexer {
                 .is_some_and(is_digit);
             if next_is_digit {
                 self.read_char(); // consume '.'
+                while is_digit(self.ch) || self.ch == '_' {
+                    self.read_char();
+                }
+            }
+        }
+        // Consume exponent part: e[+-]?digits (scientific notation: 1e-7, 2.5E3, 6e23).
+        // Only when a digit (optionally after a sign) follows, otherwise the 'e' is left
+        // alone so it can be lexed as an identifier.
+        if self.ch == 'e' || self.ch == 'E' {
+            let mut after = self.input[self.read_position..].chars();
+            let c1 = after.next().unwrap_or('\0');
+            let exp_ok = if c1 == '+' || c1 == '-' {
+                after.next().is_some_and(is_digit)
+            } else {
+                is_digit(c1)
+            };
+            if exp_ok {
+                self.read_char(); // consume 'e'/'E'
+                if self.ch == '+' || self.ch == '-' {
+                    self.read_char(); // consume sign
+                }
                 while is_digit(self.ch) || self.ch == '_' {
                     self.read_char();
                 }
