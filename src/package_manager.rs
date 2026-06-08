@@ -36,6 +36,9 @@ pub struct SerezManifest {
     pub dependencies: HashMap<String, String>,
     pub permissions: Vec<String>,
     pub scripts: HashMap<String, String>,
+    /// Executable commands a package exposes: command name -> entry `.sz` file
+    /// (relative to the package dir). Lets `sz run <command>` launch a package.
+    pub bin: HashMap<String, String>,
 }
 
 impl SerezManifest {
@@ -60,6 +63,7 @@ impl SerezManifest {
         let mut dependencies: HashMap<String, String> = HashMap::new();
         let mut permissions: Vec<String> = Vec::new();
         let mut scripts: HashMap<String, String> = HashMap::new();
+        let mut bin: HashMap<String, String> = HashMap::new();
 
         // Extract top-level string fields and the dependencies object.
         let inner = &raw[1..raw.len() - 1];
@@ -97,6 +101,8 @@ impl SerezManifest {
                         dependencies = parse_string_map(&mut chars)?;
                     } else if key == "scripts" {
                         scripts = parse_string_map(&mut chars)?;
+                    } else if key == "bin" {
+                        bin = parse_string_map(&mut chars)?;
                     } else {
                         skip_value(&mut chars);
                     }
@@ -118,7 +124,7 @@ impl SerezManifest {
         if version.is_empty() {
             return Err("serez.json: 'version' field is required".to_string());
         }
-        Ok(SerezManifest { name, version, description, author, dependencies, permissions, scripts })
+        Ok(SerezManifest { name, version, description, author, dependencies, permissions, scripts, bin })
     }
 }
 
@@ -268,44 +274,183 @@ fn prompt(label: &str, default: &str) -> String {
 }
 
 /// Execute a script defined in serez.json's "scripts" section.
-pub fn run_script(script_name: &str) -> Result<(), String> {
+/// `sz run <name> [args...]` — resolves `<name>` in priority order:
+///   1. a script declared in the project's serez.json (`scripts`)
+///   2. a command declared by an installed package (`bin`), local then global
+/// Extra args are forwarded to whichever target is run.
+pub fn run_script(name: &str, extra_args: &[String]) -> Result<(), String> {
     let cwd = std::env::current_dir()
         .map_err(|e| format!("Cannot get current directory: {}", e))?;
-    let manifest = SerezManifest::load(&cwd)?;
 
-    let cmd = manifest.scripts.get(script_name).cloned().ok_or_else(|| {
-        let available: Vec<&String> = manifest.scripts.keys().collect();
-        if available.is_empty() {
-            format!("No scripts defined in serez.json")
-        } else {
-            format!(
-                "Script '{}' not found. Available: {}",
-                script_name,
-                available.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
-            )
+    // 1. Project script takes precedence (only if a project manifest exists).
+    if let Ok(manifest) = SerezManifest::load(&cwd) {
+        if let Some(cmd) = manifest.scripts.get(name).cloned() {
+            return run_project_script(name, &cmd, &cwd, extra_args);
         }
-    })?;
+    }
 
-    println!("▶ {}", cmd);
+    // 2. A command exposed by an installed package's `bin`.
+    if let Some((pkg_dir, entry)) = resolve_package_bin(&cwd, name)? {
+        return run_package_bin(name, &pkg_dir, &entry, &cwd, extra_args);
+    }
+
+    // 3. Nothing matched — list what is available to help the user.
+    Err(run_not_found_error(&cwd, name))
+}
+
+/// Run a project `scripts` entry through the shell, forwarding extra args.
+fn run_project_script(name: &str, cmd: &str, cwd: &Path, extra_args: &[String]) -> Result<(), String> {
+    let full = if extra_args.is_empty() {
+        cmd.to_string()
+    } else {
+        format!("{} {}", cmd, extra_args.join(" "))
+    };
+    println!("▶ {}", full);
 
     let status = if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd")
-            .args(["/C", &cmd])
-            .current_dir(&cwd)
-            .status()
+        std::process::Command::new("cmd").args(["/C", &full]).current_dir(cwd).status()
     } else {
-        std::process::Command::new("sh")
-            .args(["-c", &cmd])
-            .current_dir(&cwd)
-            .status()
+        std::process::Command::new("sh").args(["-c", &full]).current_dir(cwd).status()
     }
-    .map_err(|e| format!("Failed to execute script '{}': {}", script_name, e))?;
+    .map_err(|e| format!("Failed to execute script '{}': {}", name, e))?;
 
     if !status.success() {
-        let code = status.code().unwrap_or(1);
-        return Err(format!("Script '{}' exited with code {}", script_name, code));
+        return Err(format!("Script '{}' exited with code {}", name, status.code().unwrap_or(1)));
     }
     Ok(())
+}
+
+/// Launch a package's `bin` entry as `sz <pkgdir>/<entry> <args>` with CWD kept
+/// at the project root, so the entry's imports/permissions resolve from the
+/// package dir while `project=.` still points at the user's app.
+fn run_package_bin(name: &str, pkg_dir: &Path, entry: &str, cwd: &Path, extra_args: &[String]) -> Result<(), String> {
+    if !entry.ends_with(".sz") {
+        return Err(format!("Command '{}': bin entry '{}' must be a .sz file", name, entry));
+    }
+    let entry_path = pkg_dir.join(entry);
+    if !entry_path.exists() {
+        return Err(format!("Command '{}': entry not found at {}", name, entry_path.display()));
+    }
+    let sz_exe = std::env::current_exe()
+        .map_err(|e| format!("Cannot locate the sz executable: {}", e))?;
+
+    println!("▶ {} ({})", name, entry_path.display());
+    let status = std::process::Command::new(sz_exe)
+        .arg(&entry_path)
+        .args(extra_args)
+        .current_dir(cwd) // project root → `project=.` stays the user's app
+        .status()
+        .map_err(|e| format!("Failed to run command '{}': {}", name, e))?;
+
+    if !status.success() {
+        return Err(format!("Command '{}' exited with code {}", name, status.code().unwrap_or(1)));
+    }
+    Ok(())
+}
+
+/// Find a package that declares `command` in its `bin`. Searches local
+/// `./packages` first, then the global packages dir (local shadows global for
+/// the same package folder). Supports explicit `pkg:command` disambiguation.
+/// Returns the package dir and entry file, or an error if two different
+/// packages declare the same command.
+fn resolve_package_bin(cwd: &Path, command: &str) -> Result<Option<(PathBuf, String)>, String> {
+    let (pkg_filter, cmd_name) = match command.split_once(':') {
+        Some((p, c)) => (Some(p.to_string()), c.to_string()),
+        None => (None, command.to_string()),
+    };
+
+    let roots = [cwd.join("packages"), packages_dir()];
+    let mut matches: Vec<(String, PathBuf, String)> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+
+    for root in &roots {
+        let dir_iter = match std::fs::read_dir(root) {
+            Ok(d) => d,
+            Err(_) => continue, // root may not exist; that's fine
+        };
+        for entry in dir_iter.flatten() {
+            let pkg_dir = entry.path();
+            if !pkg_dir.is_dir() {
+                continue;
+            }
+            let folder = match pkg_dir.file_name().and_then(|s| s.to_str()) {
+                Some(f) => f.to_string(),
+                None => continue,
+            };
+            if seen.contains(&folder) {
+                continue; // already taken from a higher-priority root (local)
+            }
+            seen.push(folder.clone());
+
+            let manifest = match SerezManifest::load(&pkg_dir) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if let Some(ref pf) = pkg_filter {
+                if pf != &folder && pf != &manifest.name {
+                    continue;
+                }
+            }
+            if let Some(entry_file) = manifest.bin.get(&cmd_name) {
+                matches.push((folder, pkg_dir, entry_file.clone()));
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => Ok(None),
+        1 => {
+            let (_folder, dir, entry) = matches.into_iter().next().unwrap();
+            Ok(Some((dir, entry)))
+        }
+        _ => {
+            let opts: Vec<String> =
+                matches.iter().map(|(f, _, _)| format!("{}:{}", f, cmd_name)).collect();
+            Err(format!(
+                "Command '{}' is provided by multiple packages. Disambiguate with: sz run {}",
+                cmd_name,
+                opts.join(" | sz run ")
+            ))
+        }
+    }
+}
+
+/// Build a helpful "not found" message listing project scripts and the package
+/// commands that `sz run` could have matched.
+fn run_not_found_error(cwd: &Path, name: &str) -> String {
+    let mut scripts: Vec<String> = Vec::new();
+    if let Ok(manifest) = SerezManifest::load(cwd) {
+        scripts = manifest.scripts.keys().cloned().collect();
+    }
+    let mut commands: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for root in [cwd.join("packages"), packages_dir()] {
+        let dir_iter = match std::fs::read_dir(&root) { Ok(d) => d, Err(_) => continue };
+        for entry in dir_iter.flatten() {
+            let pkg_dir = entry.path();
+            let folder = match pkg_dir.file_name().and_then(|s| s.to_str()) {
+                Some(f) => f.to_string(), None => continue,
+            };
+            if seen.contains(&folder) { continue; }
+            seen.push(folder.clone());
+            if let Ok(m) = SerezManifest::load(&pkg_dir) {
+                for cmd in m.bin.keys() {
+                    commands.push(format!("{} (from {})", cmd, folder));
+                }
+            }
+        }
+    }
+    scripts.sort();
+    commands.sort();
+
+    let mut msg = format!("'{}' not found — not a project script or a package command.", name);
+    if !scripts.is_empty() {
+        msg.push_str(&format!("\n  Project scripts: {}", scripts.join(", ")));
+    }
+    if !commands.is_empty() {
+        msg.push_str(&format!("\n  Package commands: {}", commands.join(", ")));
+    }
+    msg
 }
 
 /// Remove a package from the local project packages directory.
@@ -1139,6 +1284,26 @@ mod tests {
         assert_eq!(m.version, "1.2.3");
         assert_eq!(m.dependencies["pkg-a"], "0.1.0");
         assert_eq!(m.dependencies["pkg-b"], "2.0.0");
+    }
+
+    #[test]
+    fn test_manifest_parse_bin() {
+        let json = r#"{
+          "name": "serez-apipack",
+          "version": "1.1.0",
+          "permissions": ["OS", "File", "Env"],
+          "bin": { "apipack": "pack.sz" }
+        }"#;
+        let m = SerezManifest::parse(json).unwrap();
+        assert_eq!(m.bin["apipack"], "pack.sz");
+        assert_eq!(m.permissions, vec!["OS", "File", "Env"]);
+    }
+
+    #[test]
+    fn test_manifest_no_bin_is_empty() {
+        let json = r#"{"name":"x","version":"1.0.0"}"#;
+        let m = SerezManifest::parse(json).unwrap();
+        assert!(m.bin.is_empty());
     }
 
     #[test]

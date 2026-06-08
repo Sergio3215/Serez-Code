@@ -132,14 +132,14 @@ fn run() {
             return;
         }
 
-        // ── `sz run <script>` subcommand ──────────────────────────────────────
+        // ── `sz run <script-or-command> [args...]` subcommand ─────────────────
         if args[1] == "run" {
             if args.len() >= 3 {
-                if let Err(e) = package_manager::run_script(&args[2]) {
+                if let Err(e) = package_manager::run_script(&args[2], &args[3..]) {
                     eprintln!("❌ ERROR: {}", e);
                 }
             } else {
-                eprintln!("❌ ERROR: Usage: sz run <script-name>");
+                eprintln!("❌ ERROR: Usage: sz run <script-or-command> [args...]");
             }
             return;
         }
