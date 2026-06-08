@@ -53,6 +53,9 @@ pub struct Parser {
     current_token: Token,
     peek_token: Token,
     source_lines: Vec<String>,
+    /// Set whenever any parse error is reported. `Cell` so `parser_error(&self)`
+    /// can flip it. Lets callers (main) fail with a non-zero exit code.
+    had_error: std::cell::Cell<bool>,
 }
 
 impl Parser {
@@ -64,7 +67,13 @@ impl Parser {
             current_token,
             peek_token,
             source_lines: Vec::new(),
+            had_error: std::cell::Cell::new(false),
         }
+    }
+
+    /// Whether any parse error was reported while building the program.
+    pub fn has_errors(&self) -> bool {
+        self.had_error.get()
     }
 
     pub fn set_source(&mut self, lines: Vec<String>) {
@@ -72,6 +81,7 @@ impl Parser {
     }
 
     fn parser_error(&self, msg: &str) {
+        self.had_error.set(true);
         let line = self.current_token.line;
         let col  = self.current_token.column;
         eprintln!("❌ PARSER ERROR [line {}:{}]: {}", line, col, msg);
@@ -367,6 +377,7 @@ impl Parser {
         use crate::ast::NativeFnDeclaration;
         // native fn [return_type] name(params);
         if self.peek_token.token_type != TokenType::Function {
+            self.had_error.set(true);
             eprintln!("❌ PARSE ERROR: expected 'fn' after 'native'");
             return None;
         }
@@ -381,6 +392,7 @@ impl Parser {
 
         // Disambiguate: native fn ClassName funcName  vs  native fn funcName
         if self.peek_token.token_type != TokenType::Ident {
+            self.had_error.set(true);
             eprintln!("❌ PARSE ERROR: expected function name after 'native fn'");
             return None;
         }
@@ -395,6 +407,7 @@ impl Parser {
         };
 
         if self.peek_token.token_type != TokenType::LParen {
+            self.had_error.set(true);
             eprintln!("❌ PARSE ERROR: expected '(' after native function name");
             return None;
         }
@@ -594,6 +607,7 @@ impl Parser {
     fn parse_sizeof_expression(&mut self) -> Option<Expression> {
         use crate::ast::{SizeOfTarget};
         if self.peek_token.token_type != TokenType::LParen {
+            self.had_error.set(true);
             eprintln!("❌ PARSE ERROR: expected '(' after 'sizeof'");
             return None;
         }
@@ -620,6 +634,7 @@ impl Parser {
         };
 
         if self.current_token.token_type != TokenType::RParen {
+            self.had_error.set(true);
             eprintln!("❌ PARSE ERROR: expected ')' to close sizeof");
             return None;
         }
@@ -628,6 +643,7 @@ impl Parser {
 
     fn parse_unsafe_statement(&mut self) -> Option<Statement> {
         if self.peek_token.token_type != TokenType::LBrace {
+            self.had_error.set(true);
             eprintln!("❌ PARSE ERROR: expected '{{' after 'unsafe'");
             return None;
         }
@@ -1798,7 +1814,11 @@ impl Parser {
             TokenType::String => {
                 let s = self.current_token.literal.clone();
                 if s.contains('{') {
-                    parse_interpolated_string(&s)
+                    let parsed = parse_interpolated_string(&s);
+                    if parsed.is_none() {
+                        self.had_error.set(true);
+                    }
+                    parsed
                 } else {
                     // Replace \{ sentinel (\x01) with literal { in non-interpolated strings
                     Some(Expression::String(s.replace('\x01', "{")))
@@ -1978,6 +1998,7 @@ impl Parser {
             TokenType::KwUnsafe => {
                 self.next_token(); // consume 'unsafe'
                 if self.current_token.token_type != TokenType::LBrace {
+                    self.had_error.set(true);
                     eprintln!("❌ PARSE ERROR: expected '{{' after 'unsafe'");
                     return None;
                 }
@@ -2434,6 +2455,7 @@ impl Parser {
                             continue;
                         }
                     }
+                    self.had_error.set(true);
                     eprintln!(
                         "❌ PARSER ERROR: Expected 'public' or 'private' for class member, got '{}'",
                         self.current_token.literal
@@ -2619,6 +2641,7 @@ impl Parser {
                 }
             }
             _ => {
+                self.had_error.set(true);
                 eprintln!(
                     "❌ PARSER ERROR: Expected 'class' or 'interface' after visibility modifier"
                 );
