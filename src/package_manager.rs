@@ -170,7 +170,7 @@ pub fn registry_url() -> String {
 /// When `record` is true, the resolved dependency is written back into the
 /// project's serez.json (used by `sz install <pkg>`; skipped by `sz install`
 /// which already reads its list from the manifest).
-pub fn install_package(pkg_spec: &str, record: bool) -> Result<(), String> {
+pub fn install_package(pkg_spec: &str, record: bool, global: bool) -> Result<(), String> {
     let (pkg_name, pkg_version) = parse_pkg_spec(pkg_spec);
     let registry = registry_dir();
 
@@ -187,7 +187,7 @@ pub fn install_package(pkg_spec: &str, record: bool) -> Result<(), String> {
         }
     };
 
-    let dest = local_packages_dir().join(&pkg_name);
+    let dest = if global { packages_dir() } else { local_packages_dir() }.join(&pkg_name);
     if dest.exists() {
         println!("Package '{}' already installed, updating...", pkg_name);
         std::fs::remove_dir_all(&dest)
@@ -199,15 +199,19 @@ pub fn install_package(pkg_spec: &str, record: bool) -> Result<(), String> {
     if src.exists() {
         copy_dir_recursive(&src, &dest)
             .map_err(|e| format!("Failed to install '{}@{}': {}", pkg_name, version, e))?;
-        println!("✅ Installed {}@{} → ./packages/{}", pkg_name, version, pkg_name);
+        if global {
+            println!("✅ Installed {}@{} → {} (global)", pkg_name, version, dest.display());
+        } else {
+            println!("✅ Installed {}@{} → ./packages/{}", pkg_name, version, pkg_name);
+        }
     } else {
-        download_package(&pkg_name, &version)?;
+        download_package(&pkg_name, &version, global)?;
     }
 
-    // Record the resolved dependency in serez.json. The package is already on
-    // disk at this point, so a manifest write failure is a warning, not a hard
-    // error — we don't want the user to think the install itself failed.
-    if record {
+    // Record the resolved dependency in serez.json (local installs only — a
+    // global package is not a project dependency). Manifest write failure is a
+    // warning, not a hard error, since the package is already on disk.
+    if record && !global {
         if let Ok(cwd) = std::env::current_dir() {
             if let Err(e) = record_dependency(&cwd, &pkg_name, &version) {
                 eprintln!("⚠ Installed, but could not update serez.json: {}", e);
@@ -454,22 +458,103 @@ fn run_not_found_error(cwd: &Path, name: &str) -> String {
 }
 
 /// Remove a package from the local project packages directory.
-pub fn uninstall_package(pkg_name: &str) -> Result<(), String> {
-    let dest = local_packages_dir().join(pkg_name);
+pub fn uninstall_package(pkg_name: &str, global: bool) -> Result<(), String> {
+    let dest = if global { packages_dir() } else { local_packages_dir() }.join(pkg_name);
     if !dest.exists() {
-        return Err(format!("Package '{}' is not installed in ./packages/", pkg_name));
+        let scope = if global { "the global store" } else { "./packages/" };
+        return Err(format!("Package '{}' is not installed in {}", pkg_name, scope));
     }
     std::fs::remove_dir_all(&dest)
         .map_err(|e| format!("Failed to uninstall '{}': {}", pkg_name, e))?;
-    println!("✅ Uninstalled {}", pkg_name);
+    println!("✅ Uninstalled {}{}", pkg_name, if global { " (global)" } else { "" });
 
-    // Drop the dependency from serez.json if present (best-effort).
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Err(e) = remove_dependency(&cwd, pkg_name) {
-            eprintln!("⚠ Uninstalled, but could not update serez.json: {}", e);
+    // Drop the dependency from the project serez.json only for local uninstalls
+    // (a global package is not a project dependency).
+    if !global {
+        if let Ok(cwd) = std::env::current_dir() {
+            if let Err(e) = remove_dependency(&cwd, pkg_name) {
+                eprintln!("⚠ Uninstalled, but could not update serez.json: {}", e);
+            }
         }
     }
 
+    Ok(())
+}
+
+/// Remove every package from the global store (~/.serez/packages).
+/// Used by `sz uninstall -g` with no package name.
+pub fn uninstall_all_global() -> Result<(), String> {
+    let dir = packages_dir();
+    if !dir.is_dir() {
+        println!("No global packages installed.");
+        return Ok(());
+    }
+    let mut count = 0;
+    for entry in std::fs::read_dir(&dir)
+        .map_err(|e| format!("Cannot read global packages dir: {}", e))?
+        .flatten()
+    {
+        let p = entry.path();
+        if p.is_dir() {
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string();
+            std::fs::remove_dir_all(&p)
+                .map_err(|e| format!("Failed to remove global '{}': {}", name, e))?;
+            println!("  removed {}", name);
+            count += 1;
+        }
+    }
+    println!("✅ Uninstalled {} global package(s) from {}", count, dir.display());
+    Ok(())
+}
+
+/// Update a package to the latest PUBLISHED version. Unlike `install`, this
+/// always queries the remote registry for the latest version (so a stale
+/// local-registry copy never shadows a newer release). Local by default,
+/// global with `global=true`.
+pub fn update_package(name: &str, global: bool) -> Result<(), String> {
+    let version = fetch_latest_version(name)?;
+    println!("Updating {} → {} ...", name, version);
+    install_package(&format!("{}@{}", name, version), !global, global)
+}
+
+/// Update every package: the project's serez.json dependencies (local), or
+/// every package in the global store (when `global=true`).
+pub fn update_all(global: bool) -> Result<(), String> {
+    if global {
+        let dir = packages_dir();
+        if !dir.is_dir() {
+            println!("No global packages installed.");
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(&dir)
+            .map_err(|e| format!("Cannot read global packages dir: {}", e))?
+            .flatten()
+        {
+            let p = entry.path();
+            if p.is_dir() {
+                if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                    if let Err(e) = update_package(name, true) {
+                        eprintln!("⚠ {}: {}", name, e);
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let manifest = SerezManifest::load(&cwd)?;
+    if manifest.dependencies.is_empty() {
+        println!("No dependencies to update.");
+        return Ok(());
+    }
+    let names: Vec<String> = manifest.dependencies.keys().cloned().collect();
+    for name in names {
+        if let Err(e) = update_package(&name, false) {
+            eprintln!("⚠ {}: {}", name, e);
+        }
+    }
     Ok(())
 }
 
@@ -486,8 +571,8 @@ pub fn install_all() -> Result<(), String> {
 
     for (name, version) in &manifest.dependencies {
         let spec = format!("{}@{}", name, version);
-        // Don't rewrite the manifest: these deps already come from it.
-        install_package(&spec, false)?;
+        // Don't rewrite the manifest: these deps already come from it. Local.
+        install_package(&spec, false, false)?;
     }
     Ok(())
 }
@@ -739,7 +824,7 @@ fn fetch_latest_version(pkg_name: &str) -> Result<String, String> {
 }
 
 /// Download a package zip from the HTTP registry and extract it to ./packages/<name>/.
-fn download_package(pkg_name: &str, version: &str) -> Result<(), String> {
+fn download_package(pkg_name: &str, version: &str, global: bool) -> Result<(), String> {
     let url = format!("{}/api/packages/{}/{}.zip", registry_url(), pkg_name, version);
     println!("Downloading {}@{} from {}...", pkg_name, version, registry_url());
 
@@ -757,11 +842,15 @@ fn download_package(pkg_name: &str, version: &str) -> Result<(), String> {
         .read_to_end(&mut bytes)
         .map_err(|e| format!("Failed to read download for '{}@{}': {}", pkg_name, version, e))?;
 
-    let dest = local_packages_dir().join(pkg_name);
+    let dest = if global { packages_dir() } else { local_packages_dir() }.join(pkg_name);
     extract_zip(&bytes, &dest)
         .map_err(|e| format!("Failed to extract '{}@{}': {}", pkg_name, version, e))?;
 
-    println!("✅ Installed {}@{} → ./packages/{} (remote)", pkg_name, version, pkg_name);
+    if global {
+        println!("✅ Installed {}@{} → {} (global, remote)", pkg_name, version, dest.display());
+    } else {
+        println!("✅ Installed {}@{} → ./packages/{} (remote)", pkg_name, version, pkg_name);
+    }
     Ok(())
 }
 

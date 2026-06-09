@@ -173,22 +173,43 @@ fn run() -> i32 {
     let args: Vec<String> = env::args().collect();
 
     if args.len() > 1 {
-        // ── `sz install [pkg@version]` subcommand ─────────────────────────────
+        // ── `sz install [pkg@version] [-g/--global]` subcommand ───────────────
         if args[1] == "install" {
-            return subcommand_code(if args.len() >= 3 {
-                package_manager::install_package(&args[2], true)
-            } else {
-                package_manager::install_all()
+            let global = args.iter().any(|a| a == "-g" || a == "--global");
+            let spec = args.iter().skip(2).find(|a| !a.starts_with('-')).map(|s| s.as_str());
+            return subcommand_code(match spec {
+                Some(s) => package_manager::install_package(s, !global, global),
+                None => package_manager::install_all(),
             });
         }
 
-        // ── `sz uninstall <pkg>` subcommand ───────────────────────────────────
+        // ── `sz uninstall [<pkg>] [-g/--global]` subcommand ───────────────────
+        // `sz uninstall <pkg>`     → remove from ./packages (and serez.json)
+        // `sz uninstall <pkg> -g`  → remove from the global store
+        // `sz uninstall -g`        → remove ALL global packages
         if args[1] == "uninstall" {
-            if args.len() >= 3 {
-                return subcommand_code(package_manager::uninstall_package(&args[2]));
+            let global = args.iter().any(|a| a == "-g" || a == "--global");
+            let name = args.iter().skip(2).find(|a| !a.starts_with('-')).map(|s| s.as_str());
+            if let Some(n) = name {
+                return subcommand_code(package_manager::uninstall_package(n, global));
             }
-            eprintln!("❌ ERROR: Usage: sz uninstall <package-name>");
+            if global {
+                return subcommand_code(package_manager::uninstall_all_global());
+            }
+            eprintln!("❌ ERROR: Usage: sz uninstall <package-name> [-g]  (or `sz uninstall -g` to remove all global packages)");
             return 1;
+        }
+
+        // ── `sz update [<pkg>] [-g/--global]` subcommand ──────────────────────
+        // Updates to the latest PUBLISHED version (queries the remote registry).
+        // No name → updates all project deps (or all global packages with -g).
+        if args[1] == "update" {
+            let global = args.iter().any(|a| a == "-g" || a == "--global");
+            let name = args.iter().skip(2).find(|a| !a.starts_with('-')).map(|s| s.as_str());
+            return subcommand_code(match name {
+                Some(n) => package_manager::update_package(n, global),
+                None => package_manager::update_all(global),
+            });
         }
 
         // ── `sz publish` subcommand ───────────────────────────────────────────
