@@ -21,3 +21,4 @@ tests/_*.sz
 merge.ps1
 mergeFromMain.ps1
 PROPUESTA_SZ_RUN_PKG.md
+GUI_WINIT_MIGRATION.md

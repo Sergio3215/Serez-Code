@@ -23,8 +23,11 @@ notify = "8"
 ureq = "2"
 zip = "2"
 crossterm = "0.28"
-minifb = "0.27"
-font8x8 = "0.3"
+winit = "0.30.13"
+softbuffer = "0.4.8"
+cosmic-text = "0.17.0"
+image = "0.25.9"
+arboard = "3.6.1"
 
 [dependencies.inkwell]
 version = "0.4"

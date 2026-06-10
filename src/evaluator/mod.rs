@@ -18,7 +18,7 @@ mod namespaces_memory;
 mod namespaces_random;
 mod namespaces_autodiff;
 mod namespaces_os;
-mod namespaces_gui;
+pub(crate) mod namespaces_gui;
 
 use crate::ast::{self, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
@@ -125,7 +125,9 @@ pub struct Evaluator {
     // Monotonically increasing counter for stable tensor identity (tid)
     tensor_id_counter: u64,
     // ── GUI ───────────────────────────────────────────────────────────────────
-    // Native pixel-window state (minifb): None until Gui.open() is called
+    // Estado GUI del lado del intérprete (canvas + texto + input snapshot). La
+    // ventana/EventLoop de winit viven en el HILO PRINCIPAL (ver main.rs y
+    // namespaces_gui::gui_host_main_loop); se comunican por GUI_HOST. None hasta open.
     gui_state: Option<namespaces_gui::GuiState>,
 }
 

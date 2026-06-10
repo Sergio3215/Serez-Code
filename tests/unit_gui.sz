@@ -1,0 +1,50 @@
+// unit_gui.sz — tests headless del namespace Gui (backend winit+cosmic-text).
+// No abren ventana: cubren measureText (rejilla monoespaciada) y las lecturas de
+// input sin ventana (deben devolver defaults seguros, no error).
+use permissions { Gui }
+
+test("measureText: 'hello' scale 2 = 80x16", () => {
+    let m = Gui.measureText("hello", 2)
+    assert(m[0] == 80, "ancho = 5*8*2 = 80")
+    assert(m[1] == 16, "alto = 8*2 = 16")
+})
+
+test("measureText: vacio = 0 ancho, alto 8", () => {
+    let m = Gui.measureText("", 1)
+    assert(m[0] == 0, "ancho vacio 0")
+    assert(m[1] == 8, "alto 8*1")
+})
+
+test("measureText: Unicode cuenta codepoints, no bytes", () => {
+    assert(Gui.measureText("ñ", 2)[0] == 16, "ñ = 1 char * 16")
+    assert(Gui.measureText("áé", 2)[0] == 32, "2 acentos * 16")
+    assert(Gui.measureText("→", 2)[0] == 16, "flecha = 1 char * 16")
+})
+
+test("measureText: scale se acota a >= 1", () => {
+    assert(Gui.measureText("x", 0)[0] == 8, "scale 0 -> 1 -> 8")
+})
+
+test("lecturas de input sin ventana = defaults seguros", () => {
+    assert(Gui.keysPressed().length() == 0, "sin teclas presionadas")
+    assert(Gui.keysRepeated().length() == 0, "sin teclas repetidas")
+    assert(Gui.keysReleased().length() == 0, "sin teclas soltadas")
+    assert(Gui.charsTyped() == "", "sin texto")
+    assert(Gui.mouseDown() == false, "boton izq arriba")
+    assert(Gui.mouseRightDown() == false, "boton der arriba")
+    assert(Gui.mouseMiddleDown() == false, "boton medio arriba")
+    assert(Gui.mousePressed() == false, "sin clic este frame")
+    assert(Gui.mouse()[0] == 0, "mouse x 0")
+    assert(Gui.mouse()[1] == 0, "mouse y 0")
+    assert(Gui.scroll()[0] == 0, "scroll x 0")
+    assert(Gui.scroll()[1] == 0, "scroll y 0")
+})
+
+test("keyDown sin ventana = false (teclas y modificadores)", () => {
+    assert(Gui.keyDown("Shift") == false, "shift arriba")
+    assert(Gui.keyDown("Ctrl") == false, "ctrl arriba")
+    assert(Gui.keyDown("a") == false, "a arriba")
+    assert(Gui.keyDown("Enter") == false, "enter arriba")
+})
+
+summary()

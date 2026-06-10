@@ -323,9 +323,29 @@ fn run() -> i32 {
 }
 
 fn main() {
-    // Run on a thread with 64 MB stack to support deep recursion in user programs
+    use std::sync::Arc;
+
+    // El intérprete corre en un hilo de 64 MB (recursión profunda). winit EXIGE que
+    // el EventLoop viva en el hilo PRINCIPAL (obligatorio en macOS; correcto en
+    // Windows/Linux). Por eso el hilo principal hospeda la GUI (gui_host_main_loop) y
+    // el intérprete se comunica con la ventana por GUI_HOST. Ver namespaces_gui.rs.
+    let host = Arc::new(evaluator::namespaces_gui::GuiHost::new());
+    let _ = evaluator::namespaces_gui::GUI_HOST.set(host.clone());
+
     let builder = std::thread::Builder::new().stack_size(64 * 1024 * 1024);
-    let handler = builder.spawn(run).expect("Failed to spawn interpreter thread");
-    let code = handler.join().expect("Interpreter thread panicked");
-    std::process::exit(code);
+    let h2 = host.clone();
+    let handler = builder
+        .spawn(move || {
+            // catch_unwind para que un panic del intérprete no cuelgue al host main.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+            let code = result.unwrap_or(101);
+            h2.signal_interp_done(code);
+        })
+        .expect("Failed to spawn interpreter thread");
+
+    // Hilo principal: hospeda el EventLoop de winit. Sale cuando el intérprete acaba.
+    evaluator::namespaces_gui::gui_host_main_loop(host.clone());
+
+    let _ = handler.join();
+    std::process::exit(host.exit_code());
 }

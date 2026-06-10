@@ -1,138 +1,843 @@
 #![allow(unused_imports)]
-// namespaces_gui.rs — `Gui` namespace: backend nativo de ventana de píxeles (GUI real, no TUI)
+// namespaces_gui.rs — `Gui` namespace: backend nativo de ventana de píxeles.
 //
-// Abre una ventana del SO y dibuja sobre un framebuffer u32 (0x00RRGGBB). El
-// compositor de alto nivel (serez-ui) recorre el árbol VNode y llama estas fns
-// en un loop: clear → dibujar → present, leyendo entrada entre frames.
+// Backend: winit (ventana + input + IME, cross-platform) + softbuffer (presentar un
+// framebuffer CPU u32) + cosmic-text (texto real, Unicode) + image (imágenes) +
+// arboard (portapapeles). Sustituye al backend minifb/font8x8.
 //
-//   use permissions { Gui }
-//   Gui.open("Mi App", 640, 480)
-//   while (Gui.isOpen()) {
-//       Gui.clear(0x101418)
-//       Gui.fillRect(20, 20, 120, 40, 0x3b82f6)
-//       Gui.drawText(28, 30, "Guardar", 2, 0xffffff)
-//       Gui.present()
-//       let chars = Gui.charsTyped()      // texto escrito este frame
-//       let keys  = Gui.keysPressed()     // ["Enter","Backspace",...] (edge)
-//       if (Gui.mousePressed()) { ... }   // clic en este frame
-//   }
+// ── ARQUITECTURA DE DOS HILOS (cross-platform: Windows/macOS/Linux) ──────────────
+// winit EXIGE que el EventLoop viva en el HILO PRINCIPAL (en macOS es obligatorio).
+// Pero el intérprete de serez-code corre en un hilo aparte de 64 MB (recursión).
+// Solución: el hilo MAIN posee el EventLoop+ventana+surface (`GuiMain`); el hilo del
+// intérprete dibuja en un canvas LOCAL (`GuiState`) y se comunican por `GUI_HOST`
+// (un `Arc<GuiHost>` con `Mutex<SharedInner>` + `Condvar`):
+//   - El intérprete dibuja libre en su canvas local (sin locks).
+//   - `Gui.present()` copia el canvas → estado compartido, pide un frame (present_seq++)
+//     y espera (Condvar) a que el main lo sirva (blit + present) y le devuelva el input.
+//   - El hilo MAIN bombea eventos con `pump_app_events` (llena el input compartido) y
+//     atiende los present (blit del canvas compartido a la surface). Ver gui_host_main_loop.
 //
-// Backend: minifb (CPU) + font8x8 (fuente bitmap pública). Texto vectorial
-// (cosmic-text) y layout (taffy) son cortes posteriores; con esto ya se puede
-// componer una UI completa: cajas, texto, clics, tecleo y scroll.
+// El modelo de uso de serez-ui NO cambia: `Gui.open` / `while(isOpen){clear;..;present()}`.
+//
+// drawText dibuja en rejilla monoespaciada de 8*scale px/char con glifos reales de
+// cosmic-text → serez-ui (cursor = 8*scale) no cambia y se ven ñ/acentos/Unicode.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::num::NonZeroU32;
+use std::rc::Rc;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
+
+use winit::application::ApplicationHandler;
+use winit::dpi::LogicalSize;
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::platform::pump_events::EventLoopExtPumpEvents;
+use winit::window::{CursorIcon, Window, WindowId};
+
+use softbuffer::{Context, Surface};
+use cosmic_text::{Attrs, Buffer as TextBuffer, Color as TextColor, Family, FontSystem, Metrics, Shaping, SwashCache};
 
 use crate::ast::{self};
-use crate::region::{ObjectData, ObjectRef, OwnedValue};
+use crate::region::{ObjectData, OwnedValue};
 use super::EvalResult;
 
-use minifb::{Window, WindowOptions, Key, KeyRepeat, MouseMode, MouseButton};
-use font8x8::{UnicodeFonts, BASIC_FONTS};
+// ── Estado compartido entre el hilo intérprete y el hilo main ─────────────────────
 
-/// Estado persistente de la ventana GUI, almacenado en el Evaluator.
+/// Snapshot de input que el hilo main produce y el intérprete lee cada frame.
+#[derive(Clone, Default)]
+struct InputSnapshot {
+    keys_down: HashSet<String>,
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    sup: bool,
+    mouse_x: i32,
+    mouse_y: i32,
+    mouse_l: bool,
+    mouse_r: bool,
+    mouse_m: bool,
+    mouse_pressed: bool,
+    keys_pressed: Vec<String>,
+    keys_repeated: Vec<String>,
+    keys_released: Vec<String>,
+    chars_typed: String,
+    scroll_x: i64,
+    scroll_y: i64,
+}
+
+/// Comandos del intérprete → hilo main.
+enum GuiCmd {
+    Open { title: String, w: u32, h: u32 },
+    Close,
+    SetTitle(String),
+    SetCursor(String),
+}
+
+struct SharedInner {
+    cmds: VecDeque<GuiCmd>,
+    // interp → main
+    present_seq: u64,
+    canvas: Vec<u32>,
+    canvas_w: usize,
+    canvas_h: usize,
+    interp_done: bool,
+    exit_code: i32,
+    // main → interp
+    done_seq: u64,
+    window_ready: bool,
+    window_open: bool,
+    should_close: bool,
+    open_failed: bool,
+    win_w: usize,
+    win_h: usize,
+    input: InputSnapshot,
+}
+
+impl SharedInner {
+    fn new() -> Self {
+        SharedInner {
+            cmds: VecDeque::new(),
+            present_seq: 0,
+            canvas: Vec::new(),
+            canvas_w: 0,
+            canvas_h: 0,
+            interp_done: false,
+            exit_code: 0,
+            done_seq: 0,
+            window_ready: false,
+            window_open: false,
+            should_close: false,
+            open_failed: false,
+            win_w: 0,
+            win_h: 0,
+            input: InputSnapshot::default(),
+        }
+    }
+}
+
+/// Canal compartido global GUI. Lo inicializa `main` antes de lanzar el intérprete.
+pub struct GuiHost {
+    inner: Mutex<SharedInner>,
+    cv: Condvar,
+}
+
+impl GuiHost {
+    pub fn new() -> Self {
+        GuiHost { inner: Mutex::new(SharedInner::new()), cv: Condvar::new() }
+    }
+    /// Llamado por el hilo intérprete al terminar, para que el hilo main salga.
+    pub fn signal_interp_done(&self, code: i32) {
+        let mut g = self.inner.lock().unwrap();
+        g.interp_done = true;
+        g.exit_code = code;
+        self.cv.notify_all();
+    }
+    pub fn exit_code(&self) -> i32 {
+        self.inner.lock().unwrap().exit_code
+    }
+}
+
+pub static GUI_HOST: OnceLock<Arc<GuiHost>> = OnceLock::new();
+
+fn host() -> Option<&'static Arc<GuiHost>> {
+    GUI_HOST.get()
+}
+
+// ── Recursos del lado intérprete ──────────────────────────────────────────────────
+
+struct ImageData {
+    w: usize,
+    h: usize,
+    px: Vec<u32>,
+}
+
+struct Glyph {
+    cells: Vec<(i32, i32, u8)>,
+}
+
+/// Estado GUI del lado del intérprete: canvas local + texto + snapshot de input.
 pub struct GuiState {
-    pub window: Window,
-    pub buffer: Vec<u32>,
-    pub width:  usize,
-    pub height: usize,
-    /// Estado del botón izquierdo en el frame anterior (para detectar clic edge).
-    pub prev_mouse_down: bool,
+    open: bool,
+    canvas: Vec<u32>,
+    width: usize,
+    height: usize,
+    win_w: usize,
+    win_h: usize,
+    bg: u32,
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+    glyphs: HashMap<(char, i32), Glyph>,
+    clip: (i32, i32, i32, i32),
+    clip_stack: Vec<(i32, i32, i32, i32)>,
+    images: HashMap<i64, ImageData>,
+    next_image: i64,
+    clipboard: Option<arboard::Clipboard>,
+    input: InputSnapshot,
 }
 
-/// Mapea un nombre de tecla (serez-code) a `minifb::Key`.
-fn map_key(name: &str) -> Option<Key> {
-    let k = match name {
-        "A" | "a" => Key::A, "B" | "b" => Key::B, "C" | "c" => Key::C,
-        "D" | "d" => Key::D, "E" | "e" => Key::E, "F" | "f" => Key::F,
-        "G" | "g" => Key::G, "H" | "h" => Key::H, "I" | "i" => Key::I,
-        "J" | "j" => Key::J, "K" | "k" => Key::K, "L" | "l" => Key::L,
-        "M" | "m" => Key::M, "N" | "n" => Key::N, "O" | "o" => Key::O,
-        "P" | "p" => Key::P, "Q" | "q" => Key::Q, "R" | "r" => Key::R,
-        "S" | "s" => Key::S, "T" | "t" => Key::T, "U" | "u" => Key::U,
-        "V" | "v" => Key::V, "W" | "w" => Key::W, "X" | "x" => Key::X,
-        "Y" | "y" => Key::Y, "Z" | "z" => Key::Z,
-        "0" => Key::Key0, "1" => Key::Key1, "2" => Key::Key2, "3" => Key::Key3,
-        "4" => Key::Key4, "5" => Key::Key5, "6" => Key::Key6, "7" => Key::Key7,
-        "8" => Key::Key8, "9" => Key::Key9,
-        "Enter" => Key::Enter, "Esc" => Key::Escape, "Space" => Key::Space,
-        "Backspace" => Key::Backspace, "Tab" => Key::Tab, "Delete" => Key::Delete,
-        "Left" => Key::Left, "Right" => Key::Right, "Up" => Key::Up, "Down" => Key::Down,
-        "Home" => Key::Home, "End" => Key::End,
+impl GuiState {
+    fn new(w: usize, h: usize) -> Self {
+        GuiState {
+            open: true,
+            canvas: vec![0u32; w.max(1) * h.max(1)],
+            width: w.max(1),
+            height: h.max(1),
+            win_w: w.max(1),
+            win_h: h.max(1),
+            bg: 0,
+            font_system: FontSystem::new(),
+            swash_cache: SwashCache::new(),
+            glyphs: HashMap::new(),
+            clip: (0, 0, w.max(1) as i32, h.max(1) as i32),
+            clip_stack: Vec::new(),
+            images: HashMap::new(),
+            next_image: 1,
+            clipboard: None,
+            input: InputSnapshot::default(),
+        }
+    }
+
+    /// Envía el canvas al hilo main, pide un frame y espera el handshake; refresca
+    /// el snapshot de input y el tamaño de ventana.
+    fn present(&mut self, host: &GuiHost) {
+        let mut g = host.inner.lock().unwrap();
+        g.canvas.clear();
+        g.canvas.extend_from_slice(&self.canvas);
+        g.canvas_w = self.width;
+        g.canvas_h = self.height;
+        g.present_seq += 1;
+        let want = g.present_seq;
+        host.cv.notify_all();
+        while g.done_seq < want && g.window_open && !g.should_close {
+            g = host.cv.wait(g).unwrap();
+        }
+        self.input = g.input.clone();
+        self.win_w = g.win_w.max(1);
+        self.win_h = g.win_h.max(1);
+        self.open = g.window_open && !g.should_close;
+    }
+
+    // ── Dibujo (canvas local, honra clip) ──────────────────────────────────────
+    #[inline]
+    fn put(&mut self, x: i32, y: i32, color: u32) {
+        let (cx0, cy0, cx1, cy1) = self.clip;
+        if x < cx0 || y < cy0 || x >= cx1 || y >= cy1 {
+            return;
+        }
+        if x < 0 || y < 0 || x as usize >= self.width || y as usize >= self.height {
+            return;
+        }
+        self.canvas[(y as usize) * self.width + x as usize] = color;
+    }
+
+    #[inline]
+    fn blend(&mut self, x: i32, y: i32, r: u8, g: u8, b: u8, a: u32) {
+        if a == 0 {
+            return;
+        }
+        if a >= 255 {
+            self.put(x, y, ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
+            return;
+        }
+        let (cx0, cy0, cx1, cy1) = self.clip;
+        if x < cx0 || y < cy0 || x >= cx1 || y >= cy1 {
+            return;
+        }
+        if x < 0 || y < 0 || x as usize >= self.width || y as usize >= self.height {
+            return;
+        }
+        let idx = (y as usize) * self.width + x as usize;
+        let dst = self.canvas[idx];
+        let inv = 255 - a;
+        let dr = (dst >> 16) & 0xff;
+        let dg = (dst >> 8) & 0xff;
+        let db = dst & 0xff;
+        let nr = (r as u32 * a + dr * inv) / 255;
+        let ng = (g as u32 * a + dg * inv) / 255;
+        let nb = (b as u32 * a + db * inv) / 255;
+        self.canvas[idx] = (nr << 16) | (ng << 8) | nb;
+    }
+
+    fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
+        let (cx0, cy0, cx1, cy1) = self.clip;
+        let x0 = x.max(0).max(cx0);
+        let y0 = y.max(0).max(cy0);
+        let x1 = (x + w).min(self.width as i32).min(cx1);
+        let y1 = (y + h).min(self.height as i32).min(cy1);
+        let mut yy = y0;
+        while yy < y1 {
+            let row = (yy as usize) * self.width;
+            let mut xx = x0;
+            while xx < x1 {
+                self.canvas[row + xx as usize] = color;
+                xx += 1;
+            }
+            yy += 1;
+        }
+    }
+
+    fn blend_rect(&mut self, x: i32, y: i32, w: i32, h: i32, r: u8, g: u8, b: u8, a: u32) {
+        let mut yy = y;
+        while yy < y + h {
+            let mut xx = x;
+            while xx < x + w {
+                self.blend(xx, yy, r, g, b, a);
+                xx += 1;
+            }
+            yy += 1;
+        }
+    }
+
+    fn draw_line(&mut self, mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: u32) {
+        let dx = (x1 - x0).abs();
+        let dy = -(y1 - y0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+        loop {
+            self.put(x0, y0, color);
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x0 += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    }
+
+    fn ensure_glyph(&mut self, ch: char, scale: i32) {
+        let key = (ch, scale);
+        if self.glyphs.contains_key(&key) {
+            return;
+        }
+        let size = (8 * scale).max(8) as f32;
+        let metrics = Metrics::new(size, size * 1.25);
+        let mut buf = TextBuffer::new(&mut self.font_system, metrics);
+        buf.set_size(&mut self.font_system, Some(size * 2.0), Some(size * 2.0));
+        let attrs = Attrs::new().family(Family::Monospace);
+        buf.set_text(&mut self.font_system, &ch.to_string(), &attrs, Shaping::Advanced, None);
+        buf.shape_until_scroll(&mut self.font_system, false);
+        let mut cells: Vec<(i32, i32, u8)> = Vec::new();
+        buf.draw(
+            &mut self.font_system,
+            &mut self.swash_cache,
+            TextColor::rgb(255, 255, 255),
+            |gx, gy, gw, gh, col| {
+                let a = col.a();
+                if a == 0 {
+                    return;
+                }
+                let mut yy = 0;
+                while yy < gh as i32 {
+                    let mut xx = 0;
+                    while xx < gw as i32 {
+                        cells.push((gx + xx, gy + yy, a));
+                        xx += 1;
+                    }
+                    yy += 1;
+                }
+            },
+        );
+        self.glyphs.insert(key, Glyph { cells });
+    }
+
+    fn draw_text(&mut self, x: i32, y: i32, text: &str, scale: i32, rgb: u32) {
+        let scale = scale.max(1);
+        let cell = 8 * scale;
+        let r = ((rgb >> 16) & 0xff) as u8;
+        let g = ((rgb >> 8) & 0xff) as u8;
+        let b = (rgb & 0xff) as u8;
+        for ch in text.chars() {
+            if ch != ' ' && !ch.is_control() {
+                self.ensure_glyph(ch, scale);
+            }
+        }
+        let mut i: i32 = 0;
+        for ch in text.chars() {
+            if ch != ' ' && !ch.is_control() {
+                let cellx = x + i * cell;
+                let cells = self.glyphs.get(&(ch, scale)).map(|gl| gl.cells.clone());
+                if let Some(cells) = cells {
+                    for (gx, gy, a) in cells {
+                        self.blend(cellx + gx, y + gy, r, g, b, a as u32);
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    fn draw_image(&mut self, x: i32, y: i32, handle: i64) {
+        let img = match self.images.get(&handle) {
+            Some(im) => (im.w, im.h, im.px.clone()),
+            None => return,
+        };
+        let (iw, ih, px) = img;
+        let mut yy = 0;
+        while yy < ih as i32 {
+            let mut xx = 0;
+            while xx < iw as i32 {
+                let p = px[(yy as usize) * iw + xx as usize];
+                let a = (p >> 24) & 0xff;
+                let r = ((p >> 16) & 0xff) as u8;
+                let g = ((p >> 8) & 0xff) as u8;
+                let b = (p & 0xff) as u8;
+                self.blend(x + xx, y + yy, r, g, b, a);
+                xx += 1;
+            }
+            yy += 1;
+        }
+    }
+}
+
+// ── Lado del hilo MAIN: ventana + EventLoop ───────────────────────────────────────
+
+struct GuiMain {
+    host: Arc<GuiHost>,
+    window: Option<Rc<Window>>,
+    context: Option<Context<Rc<Window>>>,
+    surface: Option<Surface<Rc<Window>, Rc<Window>>>,
+    session_active: bool,
+    close_requested: bool,
+    // input — nivel
+    keys_down: HashSet<String>,
+    mods: ModifiersState,
+    mouse_x: i32,
+    mouse_y: i32,
+    mouse_l: bool,
+    mouse_r: bool,
+    mouse_m: bool,
+    prev_serviced_mouse_l: bool,
+    // input — acumuladores por frame
+    keys_pressed: Vec<String>,
+    keys_repeated: Vec<String>,
+    keys_released: Vec<String>,
+    chars_typed: String,
+    scroll_x: f32,
+    scroll_y: f32,
+    last_present: u64,
+}
+
+impl GuiMain {
+    fn new(host: Arc<GuiHost>) -> Self {
+        GuiMain {
+            host,
+            window: None,
+            context: None,
+            surface: None,
+            session_active: false,
+            close_requested: false,
+            keys_down: HashSet::new(),
+            mods: ModifiersState::empty(),
+            mouse_x: -1,
+            mouse_y: -1,
+            mouse_l: false,
+            mouse_r: false,
+            mouse_m: false,
+            prev_serviced_mouse_l: false,
+            keys_pressed: Vec::new(),
+            keys_repeated: Vec::new(),
+            keys_released: Vec::new(),
+            chars_typed: String::new(),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            last_present: 0,
+        }
+    }
+
+    /// Crea la ventana + surface a partir de un comando Open pendiente.
+    fn ensure_window(&mut self, el: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let open = {
+            let mut g = self.host.inner.lock().unwrap();
+            let pos = g.cmds.iter().position(|c| matches!(c, GuiCmd::Open { .. }));
+            match pos {
+                Some(p) => match g.cmds.remove(p) {
+                    Some(GuiCmd::Open { title, w, h }) => Some((title, w, h)),
+                    _ => None,
+                },
+                None => None,
+            }
+        };
+        let (title, w, h) = match open {
+            Some(v) => v,
+            None => return,
+        };
+        let attrs = Window::default_attributes()
+            .with_title(title)
+            .with_inner_size(LogicalSize::new(w as f64, h as f64));
+        let window = match el.create_window(attrs) {
+            Ok(win) => Rc::new(win),
+            Err(_) => {
+                let mut g = self.host.inner.lock().unwrap();
+                g.open_failed = true;
+                self.host.cv.notify_all();
+                return;
+            }
+        };
+        window.set_ime_allowed(true);
+        let context = match Context::new(window.clone()) {
+            Ok(c) => c,
+            Err(_) => {
+                let mut g = self.host.inner.lock().unwrap();
+                g.open_failed = true;
+                self.host.cv.notify_all();
+                return;
+            }
+        };
+        let surface = match Surface::new(&context, window.clone()) {
+            Ok(s) => s,
+            Err(_) => {
+                let mut g = self.host.inner.lock().unwrap();
+                g.open_failed = true;
+                self.host.cv.notify_all();
+                return;
+            }
+        };
+        let size = window.inner_size();
+        self.context = Some(context);
+        self.surface = Some(surface);
+        self.window = Some(window);
+        let mut g = self.host.inner.lock().unwrap();
+        g.window_ready = true;
+        g.window_open = true;
+        g.should_close = false;
+        g.win_w = size.width.max(1) as usize;
+        g.win_h = size.height.max(1) as usize;
+        self.host.cv.notify_all();
+    }
+
+    /// Atiende comandos + present pendientes (llamado tras cada pump).
+    fn service(&mut self) {
+        let host = self.host.clone();
+        let mut canvas_to_blit: Option<(Vec<u32>, usize, usize)> = None;
+        {
+            let mut g = host.inner.lock().unwrap();
+            // Comandos (Open lo maneja ensure_window).
+            let mut keep: VecDeque<GuiCmd> = VecDeque::new();
+            while let Some(cmd) = g.cmds.pop_front() {
+                match cmd {
+                    GuiCmd::Open { .. } => keep.push_back(cmd),
+                    GuiCmd::Close => self.close_requested = true,
+                    GuiCmd::SetTitle(t) => {
+                        if let Some(win) = &self.window { win.set_title(&t); }
+                    }
+                    GuiCmd::SetCursor(c) => {
+                        if let Some(win) = &self.window { win.set_cursor(cursor_icon(&c)); }
+                    }
+                }
+            }
+            g.cmds = keep;
+            // Present pendiente → blit.
+            if g.present_seq > self.last_present {
+                canvas_to_blit = Some((g.canvas.clone(), g.canvas_w, g.canvas_h));
+                self.last_present = g.present_seq;
+                g.done_seq = g.present_seq;
+                g.input = self.take_input();
+            }
+            // Tamaño de ventana → compartido.
+            if let Some(win) = &self.window {
+                let s = win.inner_size();
+                g.win_w = s.width.max(1) as usize;
+                g.win_h = s.height.max(1) as usize;
+            }
+            // Cierre.
+            if self.close_requested || g.interp_done {
+                g.should_close = true;
+                g.window_open = false;
+                self.session_active = false;
+            }
+            host.cv.notify_all();
+        }
+        if let Some((canvas, cw, ch)) = canvas_to_blit {
+            self.blit(&canvas, cw, ch);
+        }
+        if !self.session_active {
+            self.window = None;
+            self.surface = None;
+            self.context = None;
+            self.close_requested = false;
+        }
+    }
+
+    fn take_input(&mut self) -> InputSnapshot {
+        let pressed = self.mouse_l && !self.prev_serviced_mouse_l;
+        self.prev_serviced_mouse_l = self.mouse_l;
+        let snap = InputSnapshot {
+            keys_down: self.keys_down.clone(),
+            shift: self.mods.shift_key(),
+            ctrl: self.mods.control_key(),
+            alt: self.mods.alt_key(),
+            sup: self.mods.super_key(),
+            mouse_x: self.mouse_x,
+            mouse_y: self.mouse_y,
+            mouse_l: self.mouse_l,
+            mouse_r: self.mouse_r,
+            mouse_m: self.mouse_m,
+            mouse_pressed: pressed,
+            keys_pressed: std::mem::take(&mut self.keys_pressed),
+            keys_repeated: std::mem::take(&mut self.keys_repeated),
+            keys_released: std::mem::take(&mut self.keys_released),
+            chars_typed: std::mem::take(&mut self.chars_typed),
+            scroll_x: self.scroll_x as i64,
+            scroll_y: self.scroll_y as i64,
+        };
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
+        snap
+    }
+
+    fn blit(&mut self, canvas: &[u32], cw: usize, ch: usize) {
+        let window = match self.window.as_ref() {
+            Some(w) => w,
+            None => return,
+        };
+        let size = window.inner_size();
+        let (bw, bh) = (size.width as usize, size.height as usize);
+        if bw == 0 || bh == 0 {
+            return;
+        }
+        let surface = match self.surface.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+        if let (Some(nw), Some(nh)) = (NonZeroU32::new(bw as u32), NonZeroU32::new(bh as u32)) {
+            let _ = surface.resize(nw, nh);
+        }
+        let mut buffer = match surface.buffer_mut() {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        for y in 0..bh {
+            let brow = y * bw;
+            if y < ch {
+                let crow = y * cw;
+                let n = bw.min(cw);
+                buffer[brow..brow + n].copy_from_slice(&canvas[crow..crow + n]);
+                for x in n..bw {
+                    buffer[brow + x] = 0;
+                }
+            } else {
+                for x in 0..bw {
+                    buffer[brow + x] = 0;
+                }
+            }
+        }
+        let _ = buffer.present();
+    }
+}
+
+impl ApplicationHandler for GuiMain {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.ensure_window(event_loop);
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.ensure_window(event_loop);
+    }
+
+    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                self.close_requested = true;
+            }
+            WindowEvent::ModifiersChanged(m) => {
+                self.mods = m.state();
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let name = key_name(&event.logical_key);
+                match event.state {
+                    ElementState::Pressed => {
+                        if let Some(n) = name.clone() {
+                            if !event.repeat {
+                                self.keys_pressed.push(n.clone());
+                                self.keys_down.insert(n.clone());
+                            }
+                            self.keys_repeated.push(n);
+                        }
+                        if let Some(t) = &event.text {
+                            for c in t.chars() {
+                                if !c.is_control() {
+                                    self.chars_typed.push(c);
+                                }
+                            }
+                        }
+                    }
+                    ElementState::Released => {
+                        if let Some(n) = name {
+                            self.keys_released.push(n.clone());
+                            self.keys_down.remove(&n);
+                        }
+                    }
+                }
+            }
+            WindowEvent::Ime(Ime::Commit(s)) => {
+                for c in s.chars() {
+                    if !c.is_control() {
+                        self.chars_typed.push(c);
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.mouse_x = position.x as i32;
+                self.mouse_y = position.y as i32;
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let down = state == ElementState::Pressed;
+                match button {
+                    MouseButton::Left => self.mouse_l = down,
+                    MouseButton::Right => self.mouse_r = down,
+                    MouseButton::Middle => self.mouse_m = down,
+                    _ => {}
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => match delta {
+                MouseScrollDelta::LineDelta(dx, dy) => {
+                    self.scroll_x += dx;
+                    self.scroll_y += dy;
+                }
+                MouseScrollDelta::PixelDelta(p) => {
+                    self.scroll_x += (p.x as f32) / 12.0;
+                    self.scroll_y += (p.y as f32) / 12.0;
+                }
+            },
+            _ => {}
+        }
+    }
+}
+
+/// Bucle del hilo MAIN: idle hasta un Open o interp_done; por sesión, bombea winit
+/// y atiende los present hasta que la ventana se cierre. El EventLoop se crea una
+/// sola vez (en el hilo principal — válido en Windows/macOS/Linux) y se reutiliza.
+pub fn gui_host_main_loop(host: Arc<GuiHost>) {
+    let mut event_loop: Option<EventLoop<()>> = None;
+    let mut app = GuiMain::new(host.clone());
+
+    loop {
+        // ── Idle: esperar un comando Open o que el intérprete termine ──────────
+        {
+            let mut g = host.inner.lock().unwrap();
+            loop {
+                if g.interp_done {
+                    return;
+                }
+                if g.cmds.iter().any(|c| matches!(c, GuiCmd::Open { .. })) {
+                    break;
+                }
+                // Descartar comandos sueltos (no-Open) mientras no hay ventana.
+                g.cmds.retain(|c| matches!(c, GuiCmd::Open { .. }));
+                g = host.cv.wait(g).unwrap();
+            }
+        }
+
+        // ── Crear el EventLoop una sola vez (en el hilo principal) ─────────────
+        if event_loop.is_none() {
+            match EventLoop::new() {
+                Ok(el) => event_loop = Some(el),
+                Err(_) => {
+                    let mut g = host.inner.lock().unwrap();
+                    g.open_failed = true;
+                    g.cmds.clear();
+                    host.cv.notify_all();
+                    continue;
+                }
+            }
+        }
+
+        // ── Sesión: bombear + atender hasta cerrar la ventana ──────────────────
+        app.session_active = true;
+        app.close_requested = false;
+        app.last_present = 0;
+        {
+            let mut g = host.inner.lock().unwrap();
+            g.window_ready = false;
+            g.done_seq = 0;
+            g.present_seq = 0;
+        }
+        let el = event_loop.as_mut().unwrap();
+        let mut guard = 0u32;
+        while app.session_active {
+            let _ = el.pump_app_events(Some(Duration::from_millis(4)), &mut app);
+            app.service();
+            // Salvaguarda: si la ventana no se creó (open_failed), no girar para siempre.
+            if app.window.is_none() {
+                guard += 1;
+                let failed = host.inner.lock().unwrap().open_failed;
+                if failed || guard > 250 {
+                    app.session_active = false;
+                }
+            } else {
+                guard = 0;
+            }
+        }
+    }
+}
+
+/// Mapea una tecla lógica de winit a su nombre canónico de serez-code.
+fn key_name(key: &Key) -> Option<String> {
+    let s = match key {
+        Key::Named(nk) => match nk {
+            NamedKey::Enter => "Enter",
+            NamedKey::Escape => "Esc",
+            NamedKey::Space => "Space",
+            NamedKey::Backspace => "Backspace",
+            NamedKey::Tab => "Tab",
+            NamedKey::Delete => "Delete",
+            NamedKey::ArrowLeft => "Left",
+            NamedKey::ArrowRight => "Right",
+            NamedKey::ArrowUp => "Up",
+            NamedKey::ArrowDown => "Down",
+            NamedKey::Home => "Home",
+            NamedKey::End => "End",
+            NamedKey::PageUp => "PageUp",
+            NamedKey::PageDown => "PageDown",
+            NamedKey::Shift => "Shift",
+            NamedKey::Control => "Ctrl",
+            NamedKey::Alt => "Alt",
+            NamedKey::Super => "Super",
+            _ => return None,
+        }
+        .to_string(),
+        Key::Character(c) => {
+            let lower = c.to_lowercase();
+            if lower.is_empty() {
+                return None;
+            }
+            lower
+        }
         _ => return None,
     };
-    Some(k)
+    Some(s)
 }
 
-/// Nombre canónico de una tecla (para `Gui.keysPressed()`).
-fn key_name(k: Key) -> Option<String> {
-    let s = match k {
-        Key::A => "a", Key::B => "b", Key::C => "c", Key::D => "d", Key::E => "e",
-        Key::F => "f", Key::G => "g", Key::H => "h", Key::I => "i", Key::J => "j",
-        Key::K => "k", Key::L => "l", Key::M => "m", Key::N => "n", Key::O => "o",
-        Key::P => "p", Key::Q => "q", Key::R => "r", Key::S => "s", Key::T => "t",
-        Key::U => "u", Key::V => "v", Key::W => "w", Key::X => "x", Key::Y => "y",
-        Key::Z => "z",
-        Key::Key0 => "0", Key::Key1 => "1", Key::Key2 => "2", Key::Key3 => "3",
-        Key::Key4 => "4", Key::Key5 => "5", Key::Key6 => "6", Key::Key7 => "7",
-        Key::Key8 => "8", Key::Key9 => "9",
-        Key::Enter => "Enter", Key::Escape => "Esc", Key::Space => "Space",
-        Key::Backspace => "Backspace", Key::Tab => "Tab", Key::Delete => "Delete",
-        Key::Left => "Left", Key::Right => "Right", Key::Up => "Up", Key::Down => "Down",
-        Key::Home => "Home", Key::End => "End",
-        _ => return None,
-    };
-    Some(s.to_string())
-}
-
-/// Convierte una tecla a su carácter imprimible (layout US), respetando shift.
-fn key_to_char(k: Key, shift: bool) -> Option<char> {
-    let c = match k {
-        Key::A => if shift {'A'} else {'a'}, Key::B => if shift {'B'} else {'b'},
-        Key::C => if shift {'C'} else {'c'}, Key::D => if shift {'D'} else {'d'},
-        Key::E => if shift {'E'} else {'e'}, Key::F => if shift {'F'} else {'f'},
-        Key::G => if shift {'G'} else {'g'}, Key::H => if shift {'H'} else {'h'},
-        Key::I => if shift {'I'} else {'i'}, Key::J => if shift {'J'} else {'j'},
-        Key::K => if shift {'K'} else {'k'}, Key::L => if shift {'L'} else {'l'},
-        Key::M => if shift {'M'} else {'m'}, Key::N => if shift {'N'} else {'n'},
-        Key::O => if shift {'O'} else {'o'}, Key::P => if shift {'P'} else {'p'},
-        Key::Q => if shift {'Q'} else {'q'}, Key::R => if shift {'R'} else {'r'},
-        Key::S => if shift {'S'} else {'s'}, Key::T => if shift {'T'} else {'t'},
-        Key::U => if shift {'U'} else {'u'}, Key::V => if shift {'V'} else {'v'},
-        Key::W => if shift {'W'} else {'w'}, Key::X => if shift {'X'} else {'x'},
-        Key::Y => if shift {'Y'} else {'y'}, Key::Z => if shift {'Z'} else {'z'},
-        Key::Key0 => if shift {')'} else {'0'}, Key::Key1 => if shift {'!'} else {'1'},
-        Key::Key2 => if shift {'@'} else {'2'}, Key::Key3 => if shift {'#'} else {'3'},
-        Key::Key4 => if shift {'$'} else {'4'}, Key::Key5 => if shift {'%'} else {'5'},
-        Key::Key6 => if shift {'^'} else {'6'}, Key::Key7 => if shift {'&'} else {'7'},
-        Key::Key8 => if shift {'*'} else {'8'}, Key::Key9 => if shift {'('} else {'9'},
-        Key::Space => ' ',
-        Key::Minus => if shift {'_'} else {'-'}, Key::Equal => if shift {'+'} else {'='},
-        Key::Comma => if shift {'<'} else {','}, Key::Period => if shift {'>'} else {'.'},
-        Key::Slash => if shift {'?'} else {'/'}, Key::Semicolon => if shift {':'} else {';'},
-        Key::Apostrophe => if shift {'"'} else {'\''},
-        _ => return None,
-    };
-    Some(c)
-}
-
-/// Mezcla `src` sobre `dst` con alfa 0..=255 (255 = opaco).
-fn blend(dst: u32, src: u32, a: u32) -> u32 {
-    let a = a.min(255);
-    let inv = 255 - a;
-    let dr = (dst >> 16) & 0xff; let dg = (dst >> 8) & 0xff; let db = dst & 0xff;
-    let sr = (src >> 16) & 0xff; let sg = (src >> 8) & 0xff; let sb = src & 0xff;
-    let r = (sr * a + dr * inv) / 255;
-    let g = (sg * a + dg * inv) / 255;
-    let b = (sb * a + db * inv) / 255;
-    (r << 16) | (g << 8) | b
+fn cursor_icon(name: &str) -> CursorIcon {
+    match name {
+        "text" | "ibeam" => CursorIcon::Text,
+        "hand" | "pointer" => CursorIcon::Pointer,
+        "crosshair" => CursorIcon::Crosshair,
+        "wait" | "progress" => CursorIcon::Progress,
+        "move" | "all-scroll" => CursorIcon::Move,
+        "ew-resize" | "col-resize" => CursorIcon::EwResize,
+        "ns-resize" | "row-resize" => CursorIcon::NsResize,
+        "not-allowed" => CursorIcon::NotAllowed,
+        _ => CursorIcon::Default,
+    }
 }
 
 impl super::Evaluator {
 
     // ── Gui ─────────────────────────────────────────────────────────────────────
 
-    // `limit_update_rate` está deprecada en minifb pero sigue siendo la API estable
-    // en 0.27; se silencia el warning sin cambiar de método.
-    #[allow(deprecated)]
     pub(super) fn eval_gui_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
         if !self.permissions.contains("Gui") {
             eprintln!(
@@ -154,38 +859,60 @@ impl super::Evaluator {
                     None => { eprintln!("❌ ERROR: Gui.open title must be a string"); return EvalResult::Error; }
                 };
                 let w = match self.gui_int_arg(&dot_call.arguments[1]) {
-                    Some(v) if v > 0 => v as usize,
+                    Some(v) if v > 0 => v as u32,
                     _ => { eprintln!("❌ ERROR: Gui.open width must be a positive integer"); return EvalResult::Error; }
                 };
                 let h = match self.gui_int_arg(&dot_call.arguments[2]) {
-                    Some(v) if v > 0 => v as usize,
+                    Some(v) if v > 0 => v as u32,
                     _ => { eprintln!("❌ ERROR: Gui.open height must be a positive integer"); return EvalResult::Error; }
                 };
-                let mut window = match Window::new(&title, w, h, WindowOptions {
-                    resize: true,
-                    ..WindowOptions::default()
-                }) {
-                    Ok(win) => win,
-                    Err(e) => { eprintln!("❌ ERROR: Gui.open failed: {}", e); return EvalResult::Error; }
+                let host = match host() {
+                    Some(h) => h.clone(),
+                    None => { eprintln!("❌ ERROR: Gui.open: GUI host not initialized"); return EvalResult::Error; }
                 };
-                window.limit_update_rate(Some(std::time::Duration::from_micros(16_600)));
-                self.gui_state = Some(GuiState {
-                    window, buffer: vec![0u32; w * h], width: w, height: h, prev_mouse_down: false,
-                });
+                let (ww, wh) = {
+                    let mut g = host.inner.lock().unwrap();
+                    g.open_failed = false;
+                    g.window_ready = false;
+                    g.should_close = false;
+                    g.cmds.push_back(GuiCmd::Open { title, w, h });
+                    host.cv.notify_all();
+                    while !g.window_ready && !g.open_failed {
+                        g = host.cv.wait(g).unwrap();
+                    }
+                    if g.open_failed {
+                        drop(g);
+                        eprintln!("❌ ERROR: Gui.open: failed to create window");
+                        return EvalResult::Error;
+                    }
+                    (g.win_w.max(1), g.win_h.max(1))
+                };
+                self.gui_state = Some(GuiState::new(ww, wh));
                 EvalResult::Value(self.null_ref)
             }
 
             "isOpen" => {
-                let open = self.gui_state.as_ref().map(|s| s.window.is_open()).unwrap_or(false);
+                let open = host().map(|h| {
+                    let g = h.inner.lock().unwrap();
+                    g.window_open && !g.should_close
+                }).unwrap_or(false) && self.gui_state.is_some();
                 EvalResult::Value(if open { self.true_ref } else { self.false_ref })
             }
 
             "size" => {
-                let (w, h) = self.gui_state.as_ref().map(|s| (s.width as i64, s.height as i64)).unwrap_or((0, 0));
+                let (w, h) = self.gui_state.as_ref().map(|s| (s.win_w as i64, s.win_h as i64)).unwrap_or((0, 0));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
                 }))
+            }
+
+            "present" => {
+                let host = match host() { Some(h) => h.clone(), None => { eprintln!("❌ ERROR: Gui.present: no GUI host"); return EvalResult::Error; } };
+                match self.gui_state.as_mut() {
+                    Some(st) => { st.present(&host); EvalResult::Value(self.null_ref) }
+                    None => { eprintln!("❌ ERROR: Gui.present: no window open"); EvalResult::Error }
+                }
             }
 
             "clear" => {
@@ -199,14 +926,16 @@ impl super::Evaluator {
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => {
-                        // Reconciliar el framebuffer con el tamaño actual de la ventana (resize)
-                        let (cw, ch) = st.window.get_size();
-                        if cw != st.width || ch != st.height {
-                            st.width = cw; st.height = ch;
-                            st.buffer = vec![color; cw * ch];
-                        } else {
-                            for px in st.buffer.iter_mut() { *px = color; }
+                        // Reconciliar el canvas con el tamaño de ventana del último present.
+                        if st.win_w != st.width || st.win_h != st.height {
+                            st.width = st.win_w.max(1);
+                            st.height = st.win_h.max(1);
+                            st.canvas = vec![color; st.width * st.height];
                         }
+                        st.bg = color;
+                        for px in st.canvas.iter_mut() { *px = color; }
+                        st.clip = (0, 0, st.width as i32, st.height as i32);
+                        st.clip_stack.clear();
                         EvalResult::Value(self.null_ref)
                     }
                     None => { eprintln!("❌ ERROR: Gui.clear: no window open (call Gui.open first)"); EvalResult::Error }
@@ -218,7 +947,7 @@ impl super::Evaluator {
                     Some(v) => v, None => return EvalResult::Error,
                 };
                 match self.gui_state.as_mut() {
-                    Some(st) => { fill_rect(st, x, y, w, h, color); EvalResult::Value(self.null_ref) }
+                    Some(st) => { st.fill_rect(x as i32, y as i32, w as i32, h as i32, color); EvalResult::Value(self.null_ref) }
                     None => { eprintln!("❌ ERROR: Gui.fillRect: no window open"); EvalResult::Error }
                 }
             }
@@ -236,25 +965,15 @@ impl super::Evaluator {
                 let a = self.gui_int_arg(&dot_call.arguments[5]);
                 let (x, y, w, h, color, alpha) = match (x, y, w, h, c, a) {
                     (Some(x), Some(y), Some(w), Some(h), Some(c), Some(a)) =>
-                        (x, y, w, h, (c as u32) & 0x00FF_FFFF, a.clamp(0, 255) as u32),
+                        (x as i32, y as i32, w as i32, h as i32, (c as u32) & 0x00FF_FFFF, a.clamp(0, 255) as u32),
                     _ => { eprintln!("❌ ERROR: Gui.fillRectAlpha requires 6 integers"); return EvalResult::Error; }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => {
-                        let bw = st.width as i64; let bh = st.height as i64;
-                        let (x0, y0) = (x.max(0), y.max(0));
-                        let (x1, y1) = ((x + w).min(bw), (y + h).min(bh));
-                        let mut yy = y0;
-                        while yy < y1 {
-                            let row = (yy as usize) * st.width;
-                            let mut xx = x0;
-                            while xx < x1 {
-                                let idx = row + xx as usize;
-                                st.buffer[idx] = blend(st.buffer[idx], color, alpha);
-                                xx += 1;
-                            }
-                            yy += 1;
-                        }
+                        let r = ((color >> 16) & 0xff) as u8;
+                        let g = ((color >> 8) & 0xff) as u8;
+                        let b = (color & 0xff) as u8;
+                        st.blend_rect(x, y, w, h, r, g, b, alpha);
                         EvalResult::Value(self.null_ref)
                     }
                     None => { eprintln!("❌ ERROR: Gui.fillRectAlpha: no window open"); EvalResult::Error }
@@ -270,16 +989,11 @@ impl super::Evaluator {
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
                 let c = self.gui_int_arg(&dot_call.arguments[2]);
                 let (x, y, color) = match (x, y, c) {
-                    (Some(x), Some(y), Some(c)) => (x, y, (c as u32) & 0x00FF_FFFF),
+                    (Some(x), Some(y), Some(c)) => (x as i32, y as i32, (c as u32) & 0x00FF_FFFF),
                     _ => { eprintln!("❌ ERROR: Gui.setPixel requires 3 integers"); return EvalResult::Error; }
                 };
                 match self.gui_state.as_mut() {
-                    Some(st) => {
-                        if x >= 0 && y >= 0 && (x as usize) < st.width && (y as usize) < st.height {
-                            st.buffer[(y as usize) * st.width + x as usize] = color;
-                        }
-                        EvalResult::Value(self.null_ref)
-                    }
+                    Some(st) => { st.put(x, y, color); EvalResult::Value(self.null_ref) }
                     None => { eprintln!("❌ ERROR: Gui.setPixel: no window open"); EvalResult::Error }
                 }
             }
@@ -294,29 +1008,12 @@ impl super::Evaluator {
                 let x1 = self.gui_int_arg(&dot_call.arguments[2]);
                 let y1 = self.gui_int_arg(&dot_call.arguments[3]);
                 let c  = self.gui_int_arg(&dot_call.arguments[4]);
-                let (mut x0, mut y0, x1, y1, color) = match (x0, y0, x1, y1, c) {
-                    (Some(a), Some(b), Some(c), Some(d), Some(e)) => (a, b, c, d, (e as u32) & 0x00FF_FFFF),
+                let (x0, y0, x1, y1, color) = match (x0, y0, x1, y1, c) {
+                    (Some(a), Some(b), Some(c), Some(d), Some(e)) => (a as i32, b as i32, c as i32, d as i32, (e as u32) & 0x00FF_FFFF),
                     _ => { eprintln!("❌ ERROR: Gui.drawLine requires 5 integers"); return EvalResult::Error; }
                 };
                 match self.gui_state.as_mut() {
-                    Some(st) => {
-                        // Bresenham
-                        let dx = (x1 - x0).abs();
-                        let dy = -(y1 - y0).abs();
-                        let sx = if x0 < x1 { 1 } else { -1 };
-                        let sy = if y0 < y1 { 1 } else { -1 };
-                        let mut err = dx + dy;
-                        loop {
-                            if x0 >= 0 && y0 >= 0 && (x0 as usize) < st.width && (y0 as usize) < st.height {
-                                st.buffer[(y0 as usize) * st.width + x0 as usize] = color;
-                            }
-                            if x0 == x1 && y0 == y1 { break; }
-                            let e2 = 2 * err;
-                            if e2 >= dy { err += dy; x0 += sx; }
-                            if e2 <= dx { err += dx; y0 += sy; }
-                        }
-                        EvalResult::Value(self.null_ref)
-                    }
+                    Some(st) => { st.draw_line(x0, y0, x1, y1, color); EvalResult::Value(self.null_ref) }
                     None => { eprintln!("❌ ERROR: Gui.drawLine: no window open"); EvalResult::Error }
                 }
             }
@@ -333,11 +1030,11 @@ impl super::Evaluator {
                 let c     = self.gui_int_arg(&dot_call.arguments[4]);
                 let (x, y, text, scale, color) = match (x, y, text, scale, c) {
                     (Some(x), Some(y), Some(t), Some(s), Some(c)) =>
-                        (x, y, t, s.max(1), (c as u32) & 0x00FF_FFFF),
+                        (x as i32, y as i32, t, s.max(1) as i32, (c as u32) & 0x00FF_FFFF),
                     _ => { eprintln!("❌ ERROR: Gui.drawText requires (int, int, string, int, int)"); return EvalResult::Error; }
                 };
                 match self.gui_state.as_mut() {
-                    Some(st) => { draw_text(st, x, y, &text, scale, color); EvalResult::Value(self.null_ref) }
+                    Some(st) => { st.draw_text(x, y, &text, scale, color); EvalResult::Value(self.null_ref) }
                     None => { eprintln!("❌ ERROR: Gui.drawText: no window open"); EvalResult::Error }
                 }
             }
@@ -362,51 +1059,39 @@ impl super::Evaluator {
                 }))
             }
 
-            "present" => {
-                match self.gui_state.as_mut() {
-                    Some(st) => {
-                        let w = st.width; let h = st.height;
-                        let res = st.window.update_with_buffer(&st.buffer, w, h);
-                        // Frame boundary: registrar estado del mouse para el edge de mousePressed
-                        st.prev_mouse_down = st.window.get_mouse_down(MouseButton::Left);
-                        match res {
-                            Ok(_) => EvalResult::Value(self.null_ref),
-                            Err(e) => { eprintln!("❌ ERROR: Gui.present failed: {}", e); EvalResult::Error }
-                        }
-                    }
-                    None => { eprintln!("❌ ERROR: Gui.present: no window open"); EvalResult::Error }
-                }
-            }
-
             "mouse" => {
-                let (mx, my) = self.gui_state.as_ref()
-                    .and_then(|s| s.window.get_mouse_pos(MouseMode::Clamp))
-                    .unwrap_or((0.0, 0.0));
+                let (mx, my) = self.gui_state.as_ref().map(|s| (s.input.mouse_x as i64, s.input.mouse_y as i64)).unwrap_or((0, 0));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
-                    elements: vec![OwnedValue::Integer(mx as i64), OwnedValue::Integer(my as i64)],
+                    elements: vec![OwnedValue::Integer(mx), OwnedValue::Integer(my)],
                 }))
             }
 
             "mouseDown" => {
-                let down = self.gui_state.as_ref().map(|s| s.window.get_mouse_down(MouseButton::Left)).unwrap_or(false);
+                let down = self.gui_state.as_ref().map(|s| s.input.mouse_l).unwrap_or(false);
+                EvalResult::Value(if down { self.true_ref } else { self.false_ref })
+            }
+
+            "mouseRightDown" => {
+                let down = self.gui_state.as_ref().map(|s| s.input.mouse_r).unwrap_or(false);
+                EvalResult::Value(if down { self.true_ref } else { self.false_ref })
+            }
+
+            "mouseMiddleDown" => {
+                let down = self.gui_state.as_ref().map(|s| s.input.mouse_m).unwrap_or(false);
                 EvalResult::Value(if down { self.true_ref } else { self.false_ref })
             }
 
             "mousePressed" => {
-                let pressed = self.gui_state.as_ref()
-                    .map(|s| s.window.get_mouse_down(MouseButton::Left) && !s.prev_mouse_down)
-                    .unwrap_or(false);
+                let pressed = self.gui_state.as_ref().map(|s| s.input.mouse_pressed).unwrap_or(false);
                 EvalResult::Value(if pressed { self.true_ref } else { self.false_ref })
             }
 
             "scroll" => {
-                let (dx, dy) = self.gui_state.as_ref()
-                    .and_then(|s| s.window.get_scroll_wheel())
-                    .unwrap_or((0.0, 0.0));
+                let (dx, dy) = self.gui_state.as_ref().map(|s| (s.input.scroll_x, s.input.scroll_y)).unwrap_or((0, 0));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
-                    elements: vec![OwnedValue::Integer(dx as i64), OwnedValue::Integer(dy as i64)],
+                    elements: vec![OwnedValue::Integer(dx), OwnedValue::Integer(dy)],
                 }))
             }
 
@@ -419,40 +1104,189 @@ impl super::Evaluator {
                     Some(s) => s,
                     None => { eprintln!("❌ ERROR: Gui.keyDown name must be a string"); return EvalResult::Error; }
                 };
-                let down = match (map_key(&name), self.gui_state.as_ref()) {
-                    (Some(k), Some(st)) => st.window.is_key_down(k),
-                    _ => false,
+                let down = match self.gui_state.as_ref() {
+                    Some(st) => match name.as_str() {
+                        "Shift" => st.input.shift,
+                        "Ctrl" | "Control" => st.input.ctrl,
+                        "Alt" => st.input.alt,
+                        "Super" => st.input.sup,
+                        _ => st.input.keys_down.contains(&name),
+                    },
+                    None => false,
                 };
                 EvalResult::Value(if down { self.true_ref } else { self.false_ref })
             }
 
-            "keysPressed" => {
-                let names: Vec<String> = match self.gui_state.as_ref() {
-                    Some(st) => st.window.get_keys_pressed(KeyRepeat::No).into_iter()
-                        .filter_map(key_name).collect(),
-                    None => Vec::new(),
-                };
-                let mut elems: Vec<OwnedValue> = Vec::with_capacity(names.len());
-                for n in names { elems.push(OwnedValue::Str(n)); }
-                EvalResult::Value(self.alloc(ObjectData::Array {
-                    element_type: Some("string".to_string()),
-                    elements: elems,
-                }))
-            }
+            "keysPressed" => { let v = self.gui_state.as_ref().map(|s| s.input.keys_pressed.clone()).unwrap_or_default(); self.gui_str_array(v) }
+            "keysRepeated" => { let v = self.gui_state.as_ref().map(|s| s.input.keys_repeated.clone()).unwrap_or_default(); self.gui_str_array(v) }
+            "keysReleased" => { let v = self.gui_state.as_ref().map(|s| s.input.keys_released.clone()).unwrap_or_default(); self.gui_str_array(v) }
 
             "charsTyped" => {
-                let s: String = match self.gui_state.as_ref() {
-                    Some(st) => {
-                        let shift = st.window.is_key_down(Key::LeftShift) || st.window.is_key_down(Key::RightShift);
-                        st.window.get_keys_pressed(KeyRepeat::Yes).into_iter()
-                            .filter_map(|k| key_to_char(k, shift)).collect()
-                    }
-                    None => String::new(),
-                };
+                let s = self.gui_state.as_ref().map(|s| s.input.chars_typed.clone()).unwrap_or_default();
                 EvalResult::Value(self.alloc(ObjectData::Str(s)))
             }
 
+            "clipboardGet" => {
+                let text = match self.gui_state.as_mut() {
+                    Some(st) => {
+                        if st.clipboard.is_none() { st.clipboard = arboard::Clipboard::new().ok(); }
+                        st.clipboard.as_mut().and_then(|c| c.get_text().ok()).unwrap_or_default()
+                    }
+                    None => String::new(),
+                };
+                EvalResult::Value(self.alloc(ObjectData::Str(text)))
+            }
+
+            "clipboardSet" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.clipboardSet(text) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let text = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
+                if let Some(st) = self.gui_state.as_mut() {
+                    if st.clipboard.is_none() { st.clipboard = arboard::Clipboard::new().ok(); }
+                    if let Some(c) = st.clipboard.as_mut() { let _ = c.set_text(text); }
+                }
+                EvalResult::Value(self.null_ref)
+            }
+
+            "loadImage" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.loadImage(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let path = match self.gui_str_arg(&dot_call.arguments[0]) {
+                    Some(s) => s,
+                    None => { eprintln!("❌ ERROR: Gui.loadImage path must be a string"); return EvalResult::Error; }
+                };
+                let decoded = match image::open(&path) {
+                    Ok(img) => img.to_rgba8(),
+                    Err(e) => { eprintln!("❌ ERROR: Gui.loadImage: {}", e); return EvalResult::Error; }
+                };
+                let (w, h) = (decoded.width() as usize, decoded.height() as usize);
+                let mut px = Vec::with_capacity(w * h);
+                for pixel in decoded.pixels() {
+                    let [r, g, b, a] = pixel.0;
+                    px.push(((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
+                }
+                match self.gui_state.as_mut() {
+                    Some(st) => {
+                        let id = st.next_image;
+                        st.next_image += 1;
+                        st.images.insert(id, ImageData { w, h, px });
+                        EvalResult::Value(self.int_ref(id))
+                    }
+                    None => { eprintln!("❌ ERROR: Gui.loadImage: no window open"); EvalResult::Error }
+                }
+            }
+
+            "drawImage" => {
+                if dot_call.arguments.len() != 3 {
+                    eprintln!("❌ ERROR: Gui.drawImage(x, y, handle) requires 3 arguments");
+                    return EvalResult::Error;
+                }
+                let x = self.gui_int_arg(&dot_call.arguments[0]);
+                let y = self.gui_int_arg(&dot_call.arguments[1]);
+                let hnd = self.gui_int_arg(&dot_call.arguments[2]);
+                let (x, y, hnd) = match (x, y, hnd) {
+                    (Some(x), Some(y), Some(h)) => (x as i32, y as i32, h),
+                    _ => { eprintln!("❌ ERROR: Gui.drawImage requires 3 integers"); return EvalResult::Error; }
+                };
+                match self.gui_state.as_mut() {
+                    Some(st) => { st.draw_image(x, y, hnd); EvalResult::Value(self.null_ref) }
+                    None => { eprintln!("❌ ERROR: Gui.drawImage: no window open"); EvalResult::Error }
+                }
+            }
+
+            "imageSize" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.imageSize(handle) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let hnd = match self.gui_int_arg(&dot_call.arguments[0]) {
+                    Some(h) => h,
+                    None => { eprintln!("❌ ERROR: Gui.imageSize handle must be an integer"); return EvalResult::Error; }
+                };
+                let (w, h) = self.gui_state.as_ref()
+                    .and_then(|s| s.images.get(&hnd))
+                    .map(|im| (im.w as i64, im.h as i64))
+                    .unwrap_or((0, 0));
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: Some("int".to_string()),
+                    elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
+                }))
+            }
+
+            "pushClip" => {
+                if dot_call.arguments.len() != 4 {
+                    eprintln!("❌ ERROR: Gui.pushClip(x, y, w, h) requires 4 arguments");
+                    return EvalResult::Error;
+                }
+                let x = self.gui_int_arg(&dot_call.arguments[0]);
+                let y = self.gui_int_arg(&dot_call.arguments[1]);
+                let w = self.gui_int_arg(&dot_call.arguments[2]);
+                let h = self.gui_int_arg(&dot_call.arguments[3]);
+                let (x, y, w, h) = match (x, y, w, h) {
+                    (Some(x), Some(y), Some(w), Some(h)) => (x as i32, y as i32, w as i32, h as i32),
+                    _ => { eprintln!("❌ ERROR: Gui.pushClip requires 4 integers"); return EvalResult::Error; }
+                };
+                if let Some(st) = self.gui_state.as_mut() {
+                    st.clip_stack.push(st.clip);
+                    let (cx0, cy0, cx1, cy1) = st.clip;
+                    let nx0 = x.max(cx0);
+                    let ny0 = y.max(cy0);
+                    let nx1 = (x + w).min(cx1);
+                    let ny1 = (y + h).min(cy1);
+                    st.clip = (nx0, ny0, nx1.max(nx0), ny1.max(ny0));
+                }
+                EvalResult::Value(self.null_ref)
+            }
+
+            "popClip" => {
+                if let Some(st) = self.gui_state.as_mut() {
+                    if let Some(prev) = st.clip_stack.pop() {
+                        st.clip = prev;
+                    } else {
+                        st.clip = (0, 0, st.width as i32, st.height as i32);
+                    }
+                }
+                EvalResult::Value(self.null_ref)
+            }
+
+            "setTitle" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.setTitle(text) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let t = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
+                if let Some(h) = host() {
+                    let mut g = h.inner.lock().unwrap();
+                    g.cmds.push_back(GuiCmd::SetTitle(t));
+                    h.cv.notify_all();
+                }
+                EvalResult::Value(self.null_ref)
+            }
+
+            "setCursor" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.setCursor(style) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let name = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
+                if let Some(h) = host() {
+                    let mut g = h.inner.lock().unwrap();
+                    g.cmds.push_back(GuiCmd::SetCursor(name));
+                    h.cv.notify_all();
+                }
+                EvalResult::Value(self.null_ref)
+            }
+
             "close" => {
+                if let Some(h) = host() {
+                    let mut g = h.inner.lock().unwrap();
+                    g.cmds.push_back(GuiCmd::Close);
+                    h.cv.notify_all();
+                }
                 self.gui_state = None;
                 EvalResult::Value(self.null_ref)
             }
@@ -483,7 +1317,15 @@ impl super::Evaluator {
         }
     }
 
-    /// Evalúa los 5 args de fillRect: (x, y, w, h, color).
+    fn gui_str_array(&mut self, names: Vec<String>) -> EvalResult {
+        let mut elems: Vec<OwnedValue> = Vec::with_capacity(names.len());
+        for n in names { elems.push(OwnedValue::Str(n)); }
+        EvalResult::Value(self.alloc(ObjectData::Array {
+            element_type: Some("string".to_string()),
+            elements: elems,
+        }))
+    }
+
     fn gui_rect_args(&mut self, dot_call: &ast::DotCallExpression) -> Option<(i64, i64, i64, i64, u32)> {
         if dot_call.arguments.len() != 5 {
             eprintln!("❌ ERROR: Gui.fillRect(x, y, w, h, color) requires 5 arguments");
@@ -498,43 +1340,5 @@ impl super::Evaluator {
             (Some(x), Some(y), Some(w), Some(h), Some(c)) => Some((x, y, w, h, (c as u32) & 0x00FF_FFFF)),
             _ => { eprintln!("❌ ERROR: Gui.fillRect requires 5 integers"); None }
         }
-    }
-}
-
-// ── Funciones de dibujo (operan sobre el framebuffer) ─────────────────────────
-
-fn fill_rect(st: &mut GuiState, x: i64, y: i64, w: i64, h: i64, color: u32) {
-    let bw = st.width as i64;
-    let bh = st.height as i64;
-    let (x0, y0) = (x.max(0), y.max(0));
-    let (x1, y1) = ((x + w).min(bw), (y + h).min(bh));
-    let mut yy = y0;
-    while yy < y1 {
-        let row = (yy as usize) * st.width;
-        let mut xx = x0;
-        while xx < x1 {
-            st.buffer[row + xx as usize] = color;
-            xx += 1;
-        }
-        yy += 1;
-    }
-}
-
-fn draw_text(st: &mut GuiState, x: i64, y: i64, text: &str, scale: i64, color: u32) {
-    let mut cx = x;
-    for ch in text.chars() {
-        if let Some(glyph) = BASIC_FONTS.get(ch) {
-            // glyph: [u8; 8], una fila por byte, bit LSB = columna izquierda
-            for (row, bits) in glyph.iter().enumerate() {
-                for col in 0..8 {
-                    if bits & (1 << col) != 0 {
-                        let px = cx + col as i64 * scale;
-                        let py = y + row as i64 * scale;
-                        fill_rect(st, px, py, scale, scale, color);
-                    }
-                }
-            }
-        }
-        cx += 8 * scale;
     }
 }
