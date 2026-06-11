@@ -47,6 +47,10 @@ test("keyDown sin ventana = false (teclas y modificadores)", () => {
     assert(Gui.keyDown("Enter") == false, "enter arriba")
 })
 
+test("time sin ventana = 0", () => {
+    assert(Gui.time() == 0, "time() sin ventana = 0")
+})
+
 test("fuentes: setFont y medida default intacta", () => {
     assert(Gui.setFont("__familia_que_no_existe__") == false, "familia inexistente -> false")
     assert(Gui.setFont("") == true, "reset a default -> true")

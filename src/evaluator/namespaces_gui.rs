@@ -73,6 +73,7 @@ enum GuiCmd {
     Close,
     SetTitle(String),
     SetCursor(String),
+    SetImePosition(i32, i32),
 }
 
 struct SharedInner {
@@ -313,6 +314,7 @@ pub struct GuiState {
     next_image: i64,
     clipboard: Option<arboard::Clipboard>,
     input: InputSnapshot,
+    open_time: std::time::Instant,   // para Gui.time()
 }
 
 impl GuiState {
@@ -331,6 +333,7 @@ impl GuiState {
             next_image: 1,
             clipboard: None,
             input: InputSnapshot::default(),
+            open_time: std::time::Instant::now(),
         }
     }
 
@@ -517,6 +520,35 @@ impl GuiState {
         }
     }
 
+    /// Rectángulo de solo contorno (1px, clipeado).
+    fn draw_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
+        self.fill_rect(x,         y,         w,     1,     color);
+        self.fill_rect(x,         y + h - 1, w,     1,     color);
+        self.fill_rect(x,         y + 1,     1,     h - 2, color);
+        self.fill_rect(x + w - 1, y + 1,     1,     h - 2, color);
+    }
+
+    /// Círculo relleno antialiased (scanline + AA en el borde).
+    fn fill_circle(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
+        if r <= 0 { return; }
+        let cr = ((color >> 16) & 0xff) as u8;
+        let cg = ((color >> 8) & 0xff) as u8;
+        let cb = (color & 0xff) as u8;
+        let rf = r as f32;
+        let mut dy = -r;
+        while dy <= r {
+            let mut dx = -r;
+            while dx <= r {
+                let dist = ((dx * dx + dy * dy) as f32).sqrt();
+                let cov = (rf - dist + 0.5).clamp(0.0, 1.0);
+                let a = (cov * 255.0) as u32;
+                if a > 0 { self.blend(cx + dx, cy + dy, cr, cg, cb, a); }
+                dx += 1;
+            }
+            dy += 1;
+        }
+    }
+
     fn draw_image(&mut self, x: i32, y: i32, handle: i64) {
         let img = match self.images.get(&handle) {
             Some(im) => (im.w, im.h, im.px.clone()),
@@ -676,6 +708,15 @@ impl GuiMain {
                     }
                     GuiCmd::SetCursor(c) => {
                         if let Some(win) = &self.window { win.set_cursor(cursor_icon(&c)); }
+                    }
+                    GuiCmd::SetImePosition(x, y) => {
+                        if let Some(win) = &self.window {
+                            use winit::dpi::PhysicalPosition;
+                            win.set_ime_cursor_area(
+                                PhysicalPosition::new(x, y),
+                                winit::dpi::PhysicalSize::new(2, 16),
+                            );
+                        }
                     }
                 }
             }
@@ -1273,6 +1314,71 @@ impl super::Evaluator {
                     }
                     None => { eprintln!("❌ ERROR: Gui.fillRoundRect: no window open"); EvalResult::Error }
                 }
+            }
+
+            "time" => {
+                // Milisegundos desde que se abrió la ventana — para animaciones y blink del caret.
+                // Devuelve 0 si no hay ventana abierta.
+                let ms = self.gui_state.as_ref()
+                    .map(|s| s.open_time.elapsed().as_millis() as i64)
+                    .unwrap_or(0);
+                EvalResult::Value(self.int_ref(ms))
+            }
+
+            "drawRect" => {
+                if dot_call.arguments.len() != 5 {
+                    eprintln!("❌ ERROR: Gui.drawRect(x, y, w, h, color) requires 5 arguments");
+                    return EvalResult::Error;
+                }
+                let mut vals = [0i64; 5];
+                for (i, slot) in vals.iter_mut().enumerate() {
+                    match self.gui_int_arg(&dot_call.arguments[i]) {
+                        Some(v) => *slot = v,
+                        None => { eprintln!("❌ ERROR: Gui.drawRect requires 5 integers"); return EvalResult::Error; }
+                    }
+                }
+                let color = (vals[4] as u32) & 0x00FF_FFFF;
+                match self.gui_state.as_mut() {
+                    Some(st) => { st.draw_rect(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, color); EvalResult::Value(self.null_ref) }
+                    None => { eprintln!("❌ ERROR: Gui.drawRect: no window open"); EvalResult::Error }
+                }
+            }
+
+            "fillCircle" => {
+                if dot_call.arguments.len() != 4 {
+                    eprintln!("❌ ERROR: Gui.fillCircle(cx, cy, radius, color) requires 4 arguments");
+                    return EvalResult::Error;
+                }
+                let mut vals = [0i64; 4];
+                for (i, slot) in vals.iter_mut().enumerate() {
+                    match self.gui_int_arg(&dot_call.arguments[i]) {
+                        Some(v) => *slot = v,
+                        None => { eprintln!("❌ ERROR: Gui.fillCircle requires 4 integers"); return EvalResult::Error; }
+                    }
+                }
+                let color = (vals[3] as u32) & 0x00FF_FFFF;
+                match self.gui_state.as_mut() {
+                    Some(st) => { st.fill_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color); EvalResult::Value(self.null_ref) }
+                    None => { eprintln!("❌ ERROR: Gui.fillCircle: no window open"); EvalResult::Error }
+                }
+            }
+
+            "setImePosition" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Gui.setImePosition(x, y) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let x = self.gui_int_arg(&dot_call.arguments[0]);
+                let y = self.gui_int_arg(&dot_call.arguments[1]);
+                let (x, y) = match (x, y) {
+                    (Some(x), Some(y)) => (x as i32, y as i32),
+                    _ => { eprintln!("❌ ERROR: Gui.setImePosition requires 2 integers"); return EvalResult::Error; }
+                };
+                if let Some(host) = host() {
+                    let mut g = host.inner.lock().unwrap();
+                    g.cmds.push_back(GuiCmd::SetImePosition(x, y));
+                }
+                EvalResult::Value(self.null_ref)
             }
 
             "mouse" => {

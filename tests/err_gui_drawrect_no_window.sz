@@ -1,0 +1,3 @@
+// err_gui_drawrect_no_window.sz — drawRect sin ventana debe emitir ❌ (no panic).
+use permissions { Gui }
+Gui.drawRect(0, 0, 10, 10, 0xffffff)

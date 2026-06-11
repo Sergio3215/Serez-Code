@@ -1,0 +1,3 @@
+// err_gui_fillcircle_no_window.sz — fillCircle sin ventana debe emitir ❌ (no panic).
+use permissions { Gui }
+Gui.fillCircle(50, 50, 10, 0xff0000)
