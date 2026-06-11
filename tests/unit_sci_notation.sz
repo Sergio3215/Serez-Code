@@ -1,0 +1,47 @@
+// Notación científica en el lexer (P2): 1e-7, 2.5e3, 1E+10, 6e23.
+// Regresión del bug que rompía BCE en la guía de serez-ai (1e-7 no lexeaba).
+
+test("1e-7 lexea como decimal", () => {
+    let lr = 1e-7;
+    assert(lr > 0.0, "1e-7 es positivo");
+    assert(lr < 0.000001, "1e-7 < 1e-6");
+    assert(lr * 10000000.0 == 1.0, "1e-7 * 1e7 == 1");
+});
+
+test("mantisa decimal: 2.5e3", () => {
+    assert(2.5e3 == 2500.0, "2.5e3 == 2500");
+    assert(1.5e2 == 150.0, "1.5e2 == 150");
+});
+
+test("E mayúscula y signo +: 1E+10", () => {
+    assert(1E+10 == 10000000000.0, "1E+10");
+    assert(2E2 == 200.0, "2E2 sin signo");
+});
+
+test("exponente negativo en expresión", () => {
+    let x = 1e-3 + 1e-3;
+    assert(x == 0.002, "1e-3 + 1e-3 == 0.002");
+});
+
+test("notación científica en aritmética con enteros", () => {
+    assert(1e3 + 1 == 1001.0, "1e3 + 1 == 1001");
+    assert(1e2 * 2 == 200.0, "1e2 * 2");
+});
+
+test("'e' suelto sigue siendo identificador", () => {
+    let e = 42;
+    assert(e == 42, "variable e funciona");
+    let e2 = e + 1;
+    assert(e2 == 43, "e2 (identificador con dígito) funciona");
+});
+
+test("BCE clamp estilo serez-ai con 1e-7", () => {
+    let eps = 1e-7;
+    let p = 0.0;
+    if (p < eps) { p = eps; }
+    let bce = 0.0 - Math.log(p);
+    assert(bce > 15.0, "BCE de p~0 clampeado es ~16.1");
+    assert(bce < 17.0, "BCE acotado");
+});
+
+summary();
