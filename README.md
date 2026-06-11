@@ -2138,7 +2138,7 @@ out System.uptime()        // → 168517  (seconds)
 
 ### Gui
 
-`Gui` opens a native OS window and draws on a CPU pixel framebuffer (`0xRRGGBB`). It is a **real graphical interface** (not the terminal): pixels, mouse, and keyboard. Backed by `minifb` (windowing) and `font8x8` (bitmap text). **Requires `use permissions { Gui }`.** No `unsafe` needed.
+`Gui` opens a native OS window and draws on a CPU pixel framebuffer (`0xRRGGBB`). It is a **real graphical interface** (not the terminal): pixels, mouse, and keyboard. Backed by `winit` (windowing), `softbuffer` (presentation) and `cosmic-text` (real glyph rasterization — accents, `ñ`, Unicode). **Requires `use permissions { Gui }`.** No `unsafe` needed.
 
 The model is poll/present: each frame you `clear`, draw, `present`, then read input. Call these in a loop driven by `Gui.isOpen()`.
 
@@ -2149,24 +2149,35 @@ The model is poll/present: each frame you `clear`, draw, `present`, then read in
 | `Gui.close()` | Closes the window and frees its state. |
 | `Gui.size()` | Returns `[w, h]` — current framebuffer size (tracks resizes). |
 | `Gui.present()` | Pushes the framebuffer to the window and pumps input events. |
+| `Gui.setTitle(title)` | Changes the window title. |
+| `Gui.setCursor(name)` | Sets the mouse cursor (`"default"`, `"text"`, `"hand"`, `"crosshair"`, `"wait"`, `"not-allowed"`). |
 | `Gui.clear(color)` | Fills the whole buffer with `color`; reallocates on window resize. |
 | `Gui.fillRect(x, y, w, h, color)` | Fills a rectangle (clipped to the buffer). |
 | `Gui.fillRectAlpha(x, y, w, h, color, alpha)` | Alpha-blended rectangle (`alpha` 0–255). |
+| `Gui.fillRoundRect(x, y, w, h, radius, color)` | Filled rectangle with antialiased rounded corners. |
 | `Gui.setPixel(x, y, color)` | Sets a single pixel. |
 | `Gui.drawLine(x0, y0, x1, y1, color)` | Draws a line (Bresenham). |
-| `Gui.drawText(x, y, text, scale, color)` | Draws bitmap text; each glyph is 8×8 × `scale` px. |
-| `Gui.measureText(text, scale)` | Returns `[w, h]` in pixels for the given text. |
+| `Gui.drawText(x, y, text, scale, color)` | Draws text with the current font (see fonts below). |
+| `Gui.measureText(text, scale)` | Returns `[w, h]` in pixels for the given text with the current font. |
+| `Gui.loadFont(path)` | Loads a `.ttf`/`.otf` file and returns its **family name**. Works before `open`. |
+| `Gui.setFont(family)` | Selects a font family (loaded or system-installed). `""`/`"default"`/`"monospace"` resets. Returns `bool` (family found). |
+| `Gui.font()` | Returns the current family name (`""` = default). |
+| `Gui.pushClip(x, y, w, h)` / `Gui.popClip()` | Nestable clip rectangles for drawing. |
+| `Gui.loadImage(path)` | Loads a PNG/JPG; returns an `int` handle. |
+| `Gui.drawImage(x, y, handle)` | Blits a loaded image (alpha-blended). |
+| `Gui.imageSize(handle)` | Returns `[w, h]` of a loaded image. |
 | `Gui.mouse()` | Returns `[x, y]` — mouse position (clamped to the window). |
-| `Gui.mouseDown()` | Returns `bool` — left button held. |
+| `Gui.mouseDown()` / `Gui.mouseRightDown()` / `Gui.mouseMiddleDown()` | `bool` — button held. |
 | `Gui.mousePressed()` | Returns `bool` — left button **clicked this frame** (edge). |
 | `Gui.scroll()` | Returns `[dx, dy]` — scroll wheel delta this frame. |
-| `Gui.keyDown(name)` | Returns `bool` — named key currently held. |
-| `Gui.keysPressed()` | Returns `[name]` — keys **pressed this frame** (edge): `"Enter"`, `"Backspace"`, `"Left"`, etc. |
-| `Gui.charsTyped()` | Returns the `string` of printable characters typed this frame (with key-repeat). |
+| `Gui.keyDown(name)` | `bool` — named key or modifier (`"Shift"`, `"Ctrl"`, `"Alt"`) currently held. |
+| `Gui.keysPressed()` / `Gui.keysRepeated()` / `Gui.keysReleased()` | `[name]` — key edges this frame (with auto-repeat in `keysRepeated`). |
+| `Gui.charsTyped()` | Returns the `string` of characters typed this frame — native OS keyboard layout and IME (accents work). |
+| `Gui.clipboardGet()` / `Gui.clipboardSet(text)` | Read / write the system clipboard. |
 
 `color` is an `int` in `0xRRGGBB` form. Key names match `Terminal`: characters (`"a"`), digits, and `"Enter"`, `"Esc"`, `"Space"`, `"Backspace"`, `"Tab"`, `"Delete"`, `"Left"`/`"Right"`/`"Up"`/`"Down"`, `"Home"`, `"End"`.
 
-> **Note:** `charsTyped()` maps keys to characters using a US-ASCII layout. Bitmap text is fixed-grid (8×8 scaled) — pixelated but dependency-light. Vector typography (TrueType, antialiasing) is a planned upgrade.
+> **Fonts:** the default font draws on a fixed monospace grid of `8 × scale` px per character (`measureText` = chars × 8 × scale — stable for layout math). After `Gui.setFont(family)` with a loaded (`Gui.loadFont`) or system-installed family, `drawText`/`measureText` switch to **real proportional rendering** with per-glyph advances. Reset with `Gui.setFont("")`.
 
 ```serez
 use permissions { Gui }

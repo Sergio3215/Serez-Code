@@ -129,6 +129,9 @@ pub struct Evaluator {
     // ventana/EventLoop de winit viven en el HILO PRINCIPAL (ver main.rs y
     // namespaces_gui::gui_host_main_loop); se comunican por GUI_HOST. None hasta open.
     gui_state: Option<namespaces_gui::GuiState>,
+    // Tipografía GUI (loadFont/setFont + cache de glifos). Vive fuera de gui_state
+    // para sobrevivir abrir/cerrar ventana y servir measureText sin ventana.
+    gui_fonts: Option<namespaces_gui::GuiFonts>,
 }
 
 // ── Free-identifier collection (for consistent lambda capture, B-83) ──────────
@@ -271,6 +274,7 @@ impl Evaluator {
             ad_tensor_ids: HashMap::new(),
             tensor_id_counter: 1,
             gui_state: None,
+            gui_fonts: None,
         }
     }
 

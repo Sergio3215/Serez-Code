@@ -155,9 +155,150 @@ struct ImageData {
 
 struct Glyph {
     cells: Vec<(i32, i32, u8)>,
+    advance: i32,
 }
 
-/// Estado GUI del lado del intérprete: canvas local + texto + snapshot de input.
+/// Tipografía a nivel intérprete (independiente de la ventana): carga de .ttf/.otf,
+/// familia actual y cache de glifos por (familia, char, escala). La familia 0 es la
+/// monoespaciada por defecto y conserva la rejilla fija de 8*scale px/char (compat
+/// con serez-ui); las familias custom usan el **advance real** del glifo → texto
+/// proporcional de verdad.
+pub struct GuiFonts {
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+    glyphs: HashMap<(u32, char, i32), Glyph>,
+    families: Vec<String>, // [0] = "" (default monospace)
+    current: u32,
+}
+
+impl GuiFonts {
+    fn new() -> Self {
+        GuiFonts {
+            font_system: FontSystem::new(),
+            swash_cache: SwashCache::new(),
+            glyphs: HashMap::new(),
+            families: vec![String::new()],
+            current: 0,
+        }
+    }
+
+    /// ¿Existe la familia (instalada en el sistema o cargada con loadFont)?
+    fn has_family(&self, name: &str) -> bool {
+        self.font_system
+            .db()
+            .faces()
+            .any(|f| f.families.iter().any(|(n, _)| n == name))
+    }
+
+    /// Activa una familia ("" / "default" / "monospace" = la default). false si no existe.
+    fn set_family(&mut self, name: &str) -> bool {
+        if name.is_empty() || name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("monospace") {
+            self.current = 0;
+            return true;
+        }
+        if !self.has_family(name) {
+            return false;
+        }
+        if let Some(idx) = self.families.iter().position(|f| f == name) {
+            self.current = idx as u32;
+        } else {
+            self.families.push(name.to_string());
+            self.current = (self.families.len() - 1) as u32;
+        }
+        true
+    }
+
+    /// Carga un .ttf/.otf y devuelve el nombre real de familia, o None si falló.
+    fn load_font_file(&mut self, path: &str) -> Option<String> {
+        let bytes = std::fs::read(path).ok()?;
+        let before = self.font_system.db().faces().count();
+        self.font_system.db_mut().load_font_data(bytes);
+        let db = self.font_system.db();
+        if db.faces().count() == before {
+            return None;
+        }
+        db.faces()
+            .nth(before)
+            .and_then(|f| f.families.first().map(|(n, _)| n.clone()))
+    }
+
+    fn ensure_glyph(&mut self, ch: char, scale: i32) {
+        let key = (self.current, ch, scale);
+        if self.glyphs.contains_key(&key) {
+            return;
+        }
+        let size = (8 * scale).max(8) as f32;
+        let metrics = Metrics::new(size, size * 1.25);
+        let mut buf = TextBuffer::new(&mut self.font_system, metrics);
+        buf.set_size(&mut self.font_system, Some(size * 4.0), Some(size * 2.0));
+        let family_name;
+        let attrs = if self.current == 0 {
+            Attrs::new().family(Family::Monospace)
+        } else {
+            family_name = self.families[self.current as usize].clone();
+            Attrs::new().family(Family::Name(&family_name))
+        };
+        buf.set_text(&mut self.font_system, &ch.to_string(), &attrs, Shaping::Advanced, None);
+        buf.shape_until_scroll(&mut self.font_system, false);
+        // Advance real (suma de anchos de layout); la familia default fija la rejilla.
+        let mut adv = 0.0f32;
+        for run in buf.layout_runs() {
+            for g in run.glyphs.iter() {
+                adv += g.w;
+            }
+        }
+        let advance = if self.current == 0 {
+            8 * scale
+        } else if adv > 0.0 {
+            adv.round() as i32
+        } else {
+            ((size * 0.5).round() as i32).max(1)
+        };
+        let mut cells: Vec<(i32, i32, u8)> = Vec::new();
+        buf.draw(
+            &mut self.font_system,
+            &mut self.swash_cache,
+            TextColor::rgb(255, 255, 255),
+            |gx, gy, gw, gh, col| {
+                let a = col.a();
+                if a == 0 {
+                    return;
+                }
+                let mut yy = 0;
+                while yy < gh as i32 {
+                    let mut xx = 0;
+                    while xx < gw as i32 {
+                        cells.push((gx + xx, gy + yy, a));
+                        xx += 1;
+                    }
+                    yy += 1;
+                }
+            },
+        );
+        self.glyphs.insert(key, Glyph { cells, advance });
+    }
+
+    /// Ancho en px de `text` con la familia actual (proporcional si es custom).
+    fn measure(&mut self, text: &str, scale: i32) -> i64 {
+        let scale = scale.max(1);
+        if self.current == 0 {
+            return text.chars().count() as i64 * 8 * scale as i64;
+        }
+        let mut w: i64 = 0;
+        for ch in text.chars() {
+            if ch.is_control() {
+                continue;
+            }
+            self.ensure_glyph(ch, scale);
+            if let Some(gl) = self.glyphs.get(&(self.current, ch, scale)) {
+                w += gl.advance as i64;
+            }
+        }
+        w
+    }
+}
+
+/// Estado GUI del lado del intérprete: canvas local + snapshot de input.
 pub struct GuiState {
     open: bool,
     canvas: Vec<u32>,
@@ -166,9 +307,6 @@ pub struct GuiState {
     win_w: usize,
     win_h: usize,
     bg: u32,
-    font_system: FontSystem,
-    swash_cache: SwashCache,
-    glyphs: HashMap<(char, i32), Glyph>,
     clip: (i32, i32, i32, i32),
     clip_stack: Vec<(i32, i32, i32, i32)>,
     images: HashMap<i64, ImageData>,
@@ -187,9 +325,6 @@ impl GuiState {
             win_w: w.max(1),
             win_h: h.max(1),
             bg: 0,
-            font_system: FontSystem::new(),
-            swash_cache: SwashCache::new(),
-            glyphs: HashMap::new(),
             clip: (0, 0, w.max(1) as i32, h.max(1) as i32),
             clip_stack: Vec::new(),
             images: HashMap::new(),
@@ -313,65 +448,72 @@ impl GuiState {
         }
     }
 
-    fn ensure_glyph(&mut self, ch: char, scale: i32) {
-        let key = (ch, scale);
-        if self.glyphs.contains_key(&key) {
-            return;
-        }
-        let size = (8 * scale).max(8) as f32;
-        let metrics = Metrics::new(size, size * 1.25);
-        let mut buf = TextBuffer::new(&mut self.font_system, metrics);
-        buf.set_size(&mut self.font_system, Some(size * 2.0), Some(size * 2.0));
-        let attrs = Attrs::new().family(Family::Monospace);
-        buf.set_text(&mut self.font_system, &ch.to_string(), &attrs, Shaping::Advanced, None);
-        buf.shape_until_scroll(&mut self.font_system, false);
-        let mut cells: Vec<(i32, i32, u8)> = Vec::new();
-        buf.draw(
-            &mut self.font_system,
-            &mut self.swash_cache,
-            TextColor::rgb(255, 255, 255),
-            |gx, gy, gw, gh, col| {
-                let a = col.a();
-                if a == 0 {
-                    return;
-                }
-                let mut yy = 0;
-                while yy < gh as i32 {
-                    let mut xx = 0;
-                    while xx < gw as i32 {
-                        cells.push((gx + xx, gy + yy, a));
-                        xx += 1;
-                    }
-                    yy += 1;
-                }
-            },
-        );
-        self.glyphs.insert(key, Glyph { cells });
-    }
-
-    fn draw_text(&mut self, x: i32, y: i32, text: &str, scale: i32, rgb: u32) {
+    fn draw_text(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, scale: i32, rgb: u32) {
         let scale = scale.max(1);
-        let cell = 8 * scale;
         let r = ((rgb >> 16) & 0xff) as u8;
         let g = ((rgb >> 8) & 0xff) as u8;
         let b = (rgb & 0xff) as u8;
+        let fam = fonts.current;
+        let mut pen = x;
         for ch in text.chars() {
-            if ch != ' ' && !ch.is_control() {
-                self.ensure_glyph(ch, scale);
+            if ch.is_control() {
+                if fam == 0 {
+                    pen += 8 * scale; // compat: la rejilla siempre avanza una celda
+                }
+                continue;
             }
-        }
-        let mut i: i32 = 0;
-        for ch in text.chars() {
-            if ch != ' ' && !ch.is_control() {
-                let cellx = x + i * cell;
-                let cells = self.glyphs.get(&(ch, scale)).map(|gl| gl.cells.clone());
-                if let Some(cells) = cells {
+            if ch == ' ' && fam == 0 {
+                pen += 8 * scale;
+                continue;
+            }
+            fonts.ensure_glyph(ch, scale);
+            if let Some(gl) = fonts.glyphs.get(&(fam, ch, scale)) {
+                let advance = gl.advance;
+                if ch != ' ' {
+                    let cells = gl.cells.clone();
                     for (gx, gy, a) in cells {
-                        self.blend(cellx + gx, y + gy, r, g, b, a as u32);
+                        self.blend(pen + gx, y + gy, r, g, b, a as u32);
                     }
                 }
+                pen += advance;
+            } else if fam == 0 {
+                pen += 8 * scale;
             }
-            i += 1;
+        }
+    }
+
+    /// Rectángulo relleno con esquinas redondeadas antialiased (radio en px).
+    fn fill_round_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32) {
+        let r = radius.min(w / 2).min(h / 2).max(0);
+        if r == 0 {
+            self.fill_rect(x, y, w, h, color);
+            return;
+        }
+        self.fill_rect(x, y + r, w, h - 2 * r, color);
+        self.fill_rect(x + r, y, w - 2 * r, r, color);
+        self.fill_rect(x + r, y + h - r, w - 2 * r, r, color);
+        let cr = ((color >> 16) & 0xff) as u8;
+        let cg = ((color >> 8) & 0xff) as u8;
+        let cb = (color & 0xff) as u8;
+        let rf = r as f32;
+        let mut dy = 0;
+        while dy < r {
+            let mut dx = 0;
+            while dx < r {
+                let fx = rf - (dx as f32 + 0.5);
+                let fy = rf - (dy as f32 + 0.5);
+                let dist = (fx * fx + fy * fy).sqrt();
+                let cov = (rf - dist + 0.5).clamp(0.0, 1.0);
+                let a = (cov * 255.0) as u32;
+                if a > 0 {
+                    self.blend(x + dx, y + dy, cr, cg, cb, a);
+                    self.blend(x + w - 1 - dx, y + dy, cr, cg, cb, a);
+                    self.blend(x + dx, y + h - 1 - dy, cr, cg, cb, a);
+                    self.blend(x + w - 1 - dx, y + h - 1 - dy, cr, cg, cb, a);
+                }
+                dx += 1;
+            }
+            dy += 1;
         }
     }
 
@@ -1033,10 +1175,15 @@ impl super::Evaluator {
                         (x as i32, y as i32, t, s.max(1) as i32, (c as u32) & 0x00FF_FFFF),
                     _ => { eprintln!("❌ ERROR: Gui.drawText requires (int, int, string, int, int)"); return EvalResult::Error; }
                 };
-                match self.gui_state.as_mut() {
-                    Some(st) => { st.draw_text(x, y, &text, scale, color); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.drawText: no window open"); EvalResult::Error }
+                if self.gui_state.is_none() {
+                    eprintln!("❌ ERROR: Gui.drawText: no window open");
+                    return EvalResult::Error;
                 }
+                if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
+                let fonts = self.gui_fonts.as_mut().unwrap();
+                let st = self.gui_state.as_mut().unwrap();
+                st.draw_text(fonts, x, y, &text, scale, color);
+                EvalResult::Value(self.null_ref)
             }
 
             "measureText" => {
@@ -1050,13 +1197,82 @@ impl super::Evaluator {
                     (Some(t), Some(s)) => (t, s.max(1)),
                     _ => { eprintln!("❌ ERROR: Gui.measureText requires (string, int)"); return EvalResult::Error; }
                 };
-                let count = text.chars().count() as i64;
-                let w = count * 8 * scale;
+                // Familia default → aritmética de rejilla (sin tocar FontSystem);
+                // familia custom → ancho real por advances (proporcional).
+                let w = match self.gui_fonts.as_mut() {
+                    Some(f) if f.current != 0 => f.measure(&text, scale as i32),
+                    _ => text.chars().count() as i64 * 8 * scale,
+                };
                 let h = 8 * scale;
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
                 }))
+            }
+
+            "loadFont" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.loadFont(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let path = match self.gui_str_arg(&dot_call.arguments[0]) {
+                    Some(s) => s,
+                    None => { eprintln!("❌ ERROR: Gui.loadFont path must be a string"); return EvalResult::Error; }
+                };
+                if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
+                match self.gui_fonts.as_mut().unwrap().load_font_file(&path) {
+                    Some(family) => EvalResult::Value(self.alloc(ObjectData::Str(family))),
+                    None => { eprintln!("❌ ERROR: Gui.loadFont: could not load font file '{}'", path); EvalResult::Error }
+                }
+            }
+
+            "setFont" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.setFont(family) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let name = match self.gui_str_arg(&dot_call.arguments[0]) {
+                    Some(s) => s,
+                    None => { eprintln!("❌ ERROR: Gui.setFont family must be a string"); return EvalResult::Error; }
+                };
+                if self.gui_fonts.is_none() {
+                    // Sin FontSystem todavía: el reset a default no necesita crearlo.
+                    if name.is_empty() || name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("monospace") {
+                        return EvalResult::Value(self.true_ref);
+                    }
+                    self.gui_fonts = Some(GuiFonts::new());
+                }
+                let ok = self.gui_fonts.as_mut().unwrap().set_family(&name);
+                EvalResult::Value(if ok { self.true_ref } else { self.false_ref })
+            }
+
+            "font" => {
+                let name = self.gui_fonts.as_ref()
+                    .map(|f| f.families[f.current as usize].clone())
+                    .unwrap_or_default();
+                EvalResult::Value(self.alloc(ObjectData::Str(name)))
+            }
+
+            "fillRoundRect" => {
+                if dot_call.arguments.len() != 6 {
+                    eprintln!("❌ ERROR: Gui.fillRoundRect(x, y, w, h, radius, color) requires 6 arguments");
+                    return EvalResult::Error;
+                }
+                let mut vals = [0i64; 6];
+                for (i, slot) in vals.iter_mut().enumerate() {
+                    match self.gui_int_arg(&dot_call.arguments[i]) {
+                        Some(v) => *slot = v,
+                        None => { eprintln!("❌ ERROR: Gui.fillRoundRect requires 6 integers"); return EvalResult::Error; }
+                    }
+                }
+                let color = (vals[5] as u32) & 0x00FF_FFFF;
+                match self.gui_state.as_mut() {
+                    Some(st) => {
+                        st.fill_round_rect(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, vals[4] as i32, color);
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => { eprintln!("❌ ERROR: Gui.fillRoundRect: no window open"); EvalResult::Error }
+                }
             }
 
             "mouse" => {

@@ -47,4 +47,13 @@ test("keyDown sin ventana = false (teclas y modificadores)", () => {
     assert(Gui.keyDown("Enter") == false, "enter arriba")
 })
 
+test("fuentes: setFont y medida default intacta", () => {
+    assert(Gui.setFont("__familia_que_no_existe__") == false, "familia inexistente -> false")
+    assert(Gui.setFont("") == true, "reset a default -> true")
+    assert(Gui.setFont("default") == true, "alias default -> true")
+    assert(Gui.setFont("monospace") == true, "alias monospace -> true")
+    assert(Gui.font() == "", "font() default = vacio")
+    assert(Gui.measureText("hola", 2)[0] == 64, "medida default sigue 4*8*2")
+})
+
 summary()
