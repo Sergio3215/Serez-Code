@@ -1,0 +1,54 @@
+// Crypto: CSPRNG (randomBytes) y firmas Ed25519 (keypair/sign/verify).
+// Implementados sobre crates vetados (getrandom, ed25519-dalek).
+
+test("randomBytes devuelve n bytes en rango 0..255", () => {
+    let b = Crypto.randomBytes(16);
+    assert(b.length() == 16, "longitud 16");
+    let ok = true;
+    for (let i = 0; i < b.length(); i = i + 1) {
+        if (b[i] < 0 || b[i] > 255) { ok = false; }
+    }
+    assert(ok, "todos los bytes en 0..255");
+});
+
+test("randomBytes no es determinista", () => {
+    let a = Crypto.hexEncode(Crypto.randomBytes(32));
+    let b = Crypto.hexEncode(Crypto.randomBytes(32));
+    assert(a != b, "dos tiradas de 32 bytes no coinciden");
+});
+
+test("ed25519Keypair: claves hex de 32 bytes", () => {
+    let kp = Crypto.ed25519Keypair();
+    assert(kp["private"].length() == 64, "privada = 64 hex chars");
+    assert(kp["public"].length() == 64, "pública = 64 hex chars");
+    assert(kp["private"] != kp["public"], "privada != pública");
+});
+
+test("sign/verify: roundtrip válido", () => {
+    let kp = Crypto.ed25519Keypair();
+    let sig = Crypto.ed25519Sign(kp["private"], "mensaje firmado");
+    assert(sig.length() == 128, "firma = 128 hex chars (64 bytes)");
+    assert(Crypto.ed25519Verify(kp["public"], "mensaje firmado", sig), "verifica ok");
+});
+
+test("verify rechaza mensaje alterado", () => {
+    let kp = Crypto.ed25519Keypair();
+    let sig = Crypto.ed25519Sign(kp["private"], "original");
+    assert(!Crypto.ed25519Verify(kp["public"], "alterado", sig), "mensaje cambiado -> false");
+});
+
+test("verify rechaza clave ajena", () => {
+    let kp1 = Crypto.ed25519Keypair();
+    let kp2 = Crypto.ed25519Keypair();
+    let sig = Crypto.ed25519Sign(kp1["private"], "msg");
+    assert(!Crypto.ed25519Verify(kp2["public"], "msg", sig), "otra clave -> false");
+});
+
+test("firma determinista (Ed25519 es determinista por diseño)", () => {
+    let kp = Crypto.ed25519Keypair();
+    let s1 = Crypto.ed25519Sign(kp["private"], "x");
+    let s2 = Crypto.ed25519Sign(kp["private"], "x");
+    assert(s1 == s2, "misma clave + mismo mensaje = misma firma");
+});
+
+summary();

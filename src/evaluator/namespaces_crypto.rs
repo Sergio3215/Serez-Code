@@ -1,5 +1,8 @@
-// Crypto namespace: sha256, md5, base64, hmacSha256, hexEncode, hexDecode
-// All algorithms implemented in pure Rust — no external crates required.
+// Crypto namespace: sha256, md5, base64, hmacSha256, hexEncode, hexDecode,
+// randomBytes (CSPRNG), ed25519Keypair/Sign/Verify (firmas).
+// Hashes/encodings en Rust puro. Las primitivas con implicaciones de seguridad
+// real usan crates vetados: `getrandom` (entropía del OS) y `ed25519-dalek`
+// (RustCrypto/dalek) — NUNCA reimplementar firmas o CSPRNG a mano.
 
 use crate::ast;
 use crate::region::{ObjectData, ObjectRef, OwnedValue};
@@ -129,6 +132,135 @@ impl super::Evaluator {
                 let hash = sha1(s.as_bytes());
                 let b64 = base64_encode(&hash);
                 EvalResult::Value(self.alloc(ObjectData::Str(b64)))
+            }
+            "randomBytes" => {
+                // CSPRNG real (entropía del OS vía getrandom). NO usar Random.* para
+                // tokens/claves: Random es un LCG predecible.
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Crypto.randomBytes(n) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let n = match self.eval_int_arg(&dot_call.arguments[0]) {
+                    Some(v) => v,
+                    None => return EvalResult::Error,
+                };
+                const MAX_RANDOM_BYTES: i64 = 1_048_576; // 1 MB: evita DoS por asignación gigante
+                if n < 1 || n > MAX_RANDOM_BYTES {
+                    let msg = self.alloc(ObjectData::Str(format!(
+                        "Crypto.randomBytes: n must be between 1 and {}", MAX_RANDOM_BYTES)));
+                    return EvalResult::Throw(msg);
+                }
+                let mut buf = vec![0u8; n as usize];
+                if getrandom::getrandom(&mut buf).is_err() {
+                    let msg = self.alloc(ObjectData::Str(
+                        "Crypto.randomBytes: OS entropy source unavailable".to_string()));
+                    return EvalResult::Throw(msg);
+                }
+                let owned: Vec<OwnedValue> = buf.iter().map(|&b| OwnedValue::Integer(b as i64)).collect();
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: Some("int".to_string()),
+                    elements: owned,
+                }))
+            }
+            "ed25519Keypair" => {
+                if !dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: Crypto.ed25519Keypair() takes no arguments");
+                    return EvalResult::Error;
+                }
+                let mut seed = [0u8; 32];
+                if getrandom::getrandom(&mut seed).is_err() {
+                    let msg = self.alloc(ObjectData::Str(
+                        "Crypto.ed25519Keypair: OS entropy source unavailable".to_string()));
+                    return EvalResult::Throw(msg);
+                }
+                let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+                let public = signing.verifying_key();
+                let entries = vec![
+                    (OwnedValue::Str("private".to_string()), OwnedValue::Str(to_hex(&seed))),
+                    (OwnedValue::Str("public".to_string()),  OwnedValue::Str(to_hex(public.as_bytes()))),
+                ];
+                EvalResult::Value(self.alloc(ObjectData::Dict {
+                    key_type: "string".to_string(),
+                    value_type: "string".to_string(),
+                    entries,
+                }))
+            }
+            "ed25519Sign" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Crypto.ed25519Sign(privateHex, message) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let priv_hex = match self.eval_to_string(&dot_call.arguments[0], "Crypto.ed25519Sign privateHex") {
+                    Ok(v) => v, Err(e) => return e,
+                };
+                let message = match self.eval_to_string(&dot_call.arguments[1], "Crypto.ed25519Sign message") {
+                    Ok(v) => v, Err(e) => return e,
+                };
+                let seed: [u8; 32] = match hex_decode(&priv_hex) {
+                    Ok(b) if b.len() == 32 => {
+                        let mut s = [0u8; 32];
+                        s.copy_from_slice(&b);
+                        s
+                    }
+                    _ => {
+                        let msg = self.alloc(ObjectData::Str(
+                            "Crypto.ed25519Sign: privateHex must be 64 hex chars (32 bytes)".to_string()));
+                        return EvalResult::Throw(msg);
+                    }
+                };
+                use ed25519_dalek::Signer;
+                let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+                let sig = signing.sign(message.as_bytes());
+                EvalResult::Value(self.alloc(ObjectData::Str(to_hex(&sig.to_bytes()))))
+            }
+            "ed25519Verify" => {
+                if dot_call.arguments.len() != 3 {
+                    eprintln!("❌ ERROR: Crypto.ed25519Verify(publicHex, message, signatureHex) requires 3 arguments");
+                    return EvalResult::Error;
+                }
+                let pub_hex = match self.eval_to_string(&dot_call.arguments[0], "Crypto.ed25519Verify publicHex") {
+                    Ok(v) => v, Err(e) => return e,
+                };
+                let message = match self.eval_to_string(&dot_call.arguments[1], "Crypto.ed25519Verify message") {
+                    Ok(v) => v, Err(e) => return e,
+                };
+                let sig_hex = match self.eval_to_string(&dot_call.arguments[2], "Crypto.ed25519Verify signatureHex") {
+                    Ok(v) => v, Err(e) => return e,
+                };
+                // Hex malformado / longitud incorrecta = error de programación → throw.
+                // Clave/firma bien formadas pero inválidas = resultado → false.
+                let pub_bytes: [u8; 32] = match hex_decode(&pub_hex) {
+                    Ok(b) if b.len() == 32 => {
+                        let mut s = [0u8; 32];
+                        s.copy_from_slice(&b);
+                        s
+                    }
+                    _ => {
+                        let msg = self.alloc(ObjectData::Str(
+                            "Crypto.ed25519Verify: publicHex must be 64 hex chars (32 bytes)".to_string()));
+                        return EvalResult::Throw(msg);
+                    }
+                };
+                let sig_bytes: [u8; 64] = match hex_decode(&sig_hex) {
+                    Ok(b) if b.len() == 64 => {
+                        let mut s = [0u8; 64];
+                        s.copy_from_slice(&b);
+                        s
+                    }
+                    _ => {
+                        let msg = self.alloc(ObjectData::Str(
+                            "Crypto.ed25519Verify: signatureHex must be 128 hex chars (64 bytes)".to_string()));
+                        return EvalResult::Throw(msg);
+                    }
+                };
+                let verifying = match ed25519_dalek::VerifyingKey::from_bytes(&pub_bytes) {
+                    Ok(k) => k,
+                    Err(_) => return EvalResult::Value(self.alloc(ObjectData::Boolean(false))),
+                };
+                let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+                // verify_strict: rechaza claves/firmas no canónicas (malleability).
+                let ok = verifying.verify_strict(message.as_bytes(), &sig).is_ok();
+                EvalResult::Value(self.alloc(ObjectData::Boolean(ok)))
             }
             _ => {
                 eprintln!("❌ ERROR: Unknown Crypto method '{}'", dot_call.method);

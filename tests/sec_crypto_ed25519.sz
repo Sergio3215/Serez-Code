@@ -1,0 +1,60 @@
+// Security: validación de entradas de randomBytes y Ed25519.
+
+test("randomBytes(0) lanza (fuera de rango)", () => {
+    let caught = false;
+    try { Crypto.randomBytes(0); } catch (e) { caught = true; }
+    assert(caught, "n=0 debe lanzar");
+});
+
+test("randomBytes con n gigante lanza (cap anti-DoS 1MB)", () => {
+    let caught = false;
+    try { Crypto.randomBytes(99999999); } catch (e) { caught = true; }
+    assert(caught, "n > 1MB debe lanzar");
+});
+
+test("randomBytes negativo lanza", () => {
+    let caught = false;
+    try { Crypto.randomBytes(0 - 5); } catch (e) { caught = true; }
+    assert(caught, "n negativo debe lanzar");
+});
+
+test("ed25519Sign con hex malformado lanza", () => {
+    let caught = false;
+    try { Crypto.ed25519Sign("no-es-hex", "msg"); } catch (e) { caught = true; }
+    assert(caught, "privada inválida debe lanzar");
+});
+
+test("ed25519Sign con privada corta lanza", () => {
+    let caught = false;
+    try { Crypto.ed25519Sign("abcd", "msg"); } catch (e) { caught = true; }
+    assert(caught, "32 bytes exactos requeridos");
+});
+
+test("ed25519Verify con pública malformada lanza", () => {
+    let kp = Crypto.ed25519Keypair();
+    let sig = Crypto.ed25519Sign(kp["private"], "m");
+    let caught = false;
+    try { Crypto.ed25519Verify("zz", "m", sig); } catch (e) { caught = true; }
+    assert(caught, "pública inválida debe lanzar");
+});
+
+test("ed25519Verify con firma de longitud incorrecta lanza", () => {
+    let kp = Crypto.ed25519Keypair();
+    let caught = false;
+    try { Crypto.ed25519Verify(kp["public"], "m", "abcdef"); } catch (e) { caught = true; }
+    assert(caught, "firma debe ser 64 bytes hex");
+});
+
+test("verify de firma corrupta (bien formada) devuelve false, no lanza", () => {
+    let kp = Crypto.ed25519Keypair();
+    let sig = Crypto.ed25519Sign(kp["private"], "m");
+    // Corromper la firma manteniendo el largo: invertir el primer byte
+    let first = sig.substring(0, 2);
+    let flipped = "00";
+    if (first == "00") { flipped = "ff"; }
+    let bad = flipped + sig.substring(2, sig.length());
+    let r = Crypto.ed25519Verify(kp["public"], "m", bad);
+    assert(r == false, "firma corrupta -> false (sin throw)");
+});
+
+summary();

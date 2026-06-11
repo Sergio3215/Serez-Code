@@ -28,6 +28,8 @@ softbuffer = "0.4.8"
 cosmic-text = "0.17.0"
 image = "0.25.9"
 arboard = "3.6.1"
+ed25519-dalek = "2"
+getrandom = "0.2"
 
 [dependencies.inkwell]
 version = "0.4"
