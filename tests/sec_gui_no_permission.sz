@@ -1,0 +1,2 @@
+// sec_gui_no_permission.sz — usar Gui sin el permiso 'Gui' debe ser rechazado.
+Gui.measureText("x", 1)
