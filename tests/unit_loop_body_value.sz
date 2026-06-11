@@ -1,0 +1,92 @@
+// Regresión de eval_block_discard (fuga #1 residual): los cuerpos de loop
+// descartan el valor del último statement SIN copiarlo al frame del loop.
+// Estas pruebas fijan la semántica que debe sobrevivir a ese cambio:
+// reasignación de compuestos como último statement, return/throw desde el
+// cuerpo, break/continue, y mutación in-place.
+
+fn int __arr_rebuilt() {
+    let a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    for (let j = 0; j < 10; j = j + 1) {
+        a = a.map(x => x + 0);
+    }
+    let s = 0;
+    for (let i = 0; i < a.length(); i = i + 1) { s = s + a[i]; }
+    return s;
+}
+
+test("reasignar global compuesto como último statement del for", () => {
+    assert(__arr_rebuilt() == 55, "suma tras 10 rebuilds via map");
+});
+
+test("método mutante como último statement del while", () => {
+    let a = [1, 2, 3];
+    let n = 0;
+    while (n < 4) {
+        n = n + 1;
+        a.reverse();
+    }
+    assert(a[0] == 1, "4 reverses = identidad");
+    assert(a.length() == 3, "longitud intacta");
+});
+
+fn any __ret_from_loop() {
+    for (let i = 0; i < 10; i = i + 1) {
+        if (i == 3) {
+            let built = [];
+            for (let k = 0; k < 3; k = k + 1) { built.push(k); }
+            return built;
+        }
+    }
+    return [];
+}
+
+test("return de compuesto desde el cuerpo del loop", () => {
+    let r = __ret_from_loop();
+    assert(r.length() == 3, "array retornado desde dentro del for");
+    assert(r[2] == 2, "elementos correctos");
+});
+
+test("throw desde el cuerpo del loop conserva el valor", () => {
+    let caught = "";
+    try {
+        for (let i = 0; i < 5; i = i + 1) {
+            if (i == 2) { throw "boom-" + i; }
+        }
+    } catch (e) {
+        caught = e;
+    }
+    assert(caught == "boom-2", "throw propaga el valor desde el body");
+});
+
+test("break y continue intactos con compuestos en el cuerpo", () => {
+    let seen = [];
+    for (let i = 0; i < 10; i = i + 1) {
+        if (i == 3) { continue; }
+        if (i == 6) { break; }
+        seen.push(i);
+    }
+    assert(seen.length() == 5, "0,1,2,4,5");
+    assert(seen[3] == 4, "salta el 3");
+});
+
+test("do-while con asignación compuesta al final", () => {
+    let d <string, int> = ();
+    let n = 0;
+    do {
+        n = n + 1;
+        d["k" + n] = n;
+    } while (n < 3);
+    assert(d["k3"] == 3, "dict poblado en do-while");
+});
+
+test("foreach con push como último statement", () => {
+    let src = [10, 20, 30];
+    let dst = [];
+    for (let x in src) {
+        dst.push(x * 2);
+    }
+    assert(dst.length() == 3, "foreach completo");
+    assert(dst[2] == 60, "valores duplicados");
+});
+
+summary();

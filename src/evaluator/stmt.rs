@@ -207,7 +207,7 @@ impl super::Evaluator {
                     }
 
                     // 2. Evaluate body — body value is discarded (while is a statement, not expression)
-                    match self.eval_block(&while_stmt.body) {
+                    match self.eval_block_discard(&while_stmt.body) {
                         EvalResult::Value(_) => {}
                         EvalResult::Break    => break,
                         EvalResult::Continue => continue,
@@ -225,7 +225,7 @@ impl super::Evaluator {
             Statement::DoWhile(do_stmt) => {
                 loop {
                     // Execute body first
-                    match self.eval_block(&do_stmt.body) {
+                    match self.eval_block_discard(&do_stmt.body) {
                         EvalResult::Value(_) => {}
                         EvalResult::Break    => break,
                         EvalResult::Continue => {}
@@ -300,8 +300,8 @@ impl super::Evaluator {
                         break;
                     }
 
-                    // Execute body — eval_block handles its own push/pop
-                    match self.eval_block(&for_stmt.body) {
+                    // Execute body — eval_block_discard handles its own push/pop
+                    match self.eval_block_discard(&for_stmt.body) {
                         EvalResult::Value(_) => {}
                         EvalResult::Break => break,
                         EvalResult::Continue => {} // fall through to update
@@ -736,7 +736,7 @@ impl super::Evaluator {
                 }
             }
 
-            match self.eval_block(&stmt.body) {
+            match self.eval_block_discard(&stmt.body) {
                 EvalResult::Value(_) => {}
                 EvalResult::Break    => break,
                 EvalResult::Continue => continue,
@@ -852,6 +852,53 @@ impl super::Evaluator {
         let result = self.eval_block(block);
         self.in_unsafe_block = prev;
         result
+    }
+
+    /// Variante de eval_block para CUERPOS DE LOOP (posición de statement).
+    /// Todos los llamadores de un cuerpo de loop descartan el Value del bloque,
+    /// así que aquí NO se extrae ni se replanta el valor del último statement.
+    /// Sin esto, un loop cuyo último statement produce un compuesto (p.ej.
+    /// `arr = arr.map(...)` o `arr.reverse()`) plantaba una copia COMPLETA del
+    /// compuesto por iteración en el frame del loop, que solo se libera al
+    /// salir → retención M·N en loops largos (residuo de la fuga #1; medido:
+    /// 400 MB en 300 iteraciones sobre un array de 20k). Return/Throw sí
+    /// escapan del loop y se preservan igual que en eval_block.
+    pub(super) fn eval_block_discard(&mut self, block: &ast::BlockStatement) -> EvalResult {
+        self.scopes.push();
+        let mut result = EvalResult::Value(self.null_ref);
+
+        for s in &block.statements {
+            match self.eval_statement(s) {
+                EvalResult::Value(_)            => {} // descartado: ningún caller de cuerpo de loop lo usa
+                EvalResult::Return(v)           => { result = EvalResult::Return(v);           break; }
+                EvalResult::Break               => { result = EvalResult::Break;               break; }
+                EvalResult::Continue            => { result = EvalResult::Continue;             break; }
+                EvalResult::BreakLabel(l)       => { result = EvalResult::BreakLabel(l);       break; }
+                EvalResult::ContinueLabel(l)    => { result = EvalResult::ContinueLabel(l);    break; }
+                EvalResult::Error               => { result = EvalResult::Error;               break; }
+                EvalResult::Throw(v)            => { result = EvalResult::Throw(v);            break; }
+            }
+        }
+
+        // Solo Return/Throw escapan del bloque con un valor que el caller usa.
+        let owned = match &result {
+            EvalResult::Return(v) | EvalResult::Throw(v) => Some(self.extract(*v)),
+            _ => None,
+        };
+
+        self.scopes.pop();
+
+        match owned {
+            Some(val) => {
+                let promoted = self.plant(val);
+                match result {
+                    EvalResult::Return(_) => EvalResult::Return(promoted),
+                    EvalResult::Throw(_)  => EvalResult::Throw(promoted),
+                    _ => unreachable!(),
+                }
+            }
+            None => result,
+        }
     }
 
     pub(super) fn eval_block(&mut self, block: &ast::BlockStatement) -> EvalResult {
