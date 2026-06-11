@@ -47,6 +47,9 @@ out fibonacci(10);   // → 55
    - [File](#file)
    - [JSON](#json)
    - [Networking (fetch)](#networking-fetch)
+   - [Socket (TCP & WebSocket)](#socket-tcp--websocket)
+   - [GPU](#gpu)
+   - [Crypto](#crypto)
    - [Autodiff & Tensors](#autodiff--tensors)
    - [Terminal](#terminal)
    - [OS](#os)
@@ -1980,6 +1983,50 @@ GPU.freeBuffer(doubled);
 | `GPU.dot(id_a, id_b)` | `decimal` | Dot product of two buffers |
 | `GPU.axpy(alpha, id_x, id_y)` | `int` | `alpha*x + y` → new buffer |
 | `GPU.matmul(id_a, ra, ca, id_b, rb, cb)` | `int` | Matrix multiply → new buffer |
+
+---
+
+### Crypto
+
+Hashing, encodings, a real CSPRNG, and Ed25519 signatures. Pure compute — no
+permission declaration required. Hashes and encodings are implemented in pure
+Rust; the security-critical primitives use vetted crates (`getrandom` for OS
+entropy, `ed25519-dalek` for signatures).
+
+> ⚠️ **`Random.*` is a seedable LCG — predictable.** Fine for games and
+> simulations; never use it for tokens, salts, or keys. Use
+> `Crypto.randomBytes` for anything secret.
+
+```serez
+// Hashing & encodings
+out Crypto.sha256("hola");                  // hex digest
+out Crypto.hmacSha256("clave", "mensaje");  // HMAC hex
+out Crypto.base64encode("serez");           // "c2VyZXo="
+out Crypto.hexEncode([222, 173, 190, 239]); // "deadbeef"
+
+// CSPRNG: token de sesión de 32 bytes
+let token = Crypto.hexEncode(Crypto.randomBytes(32));
+
+// Firmas Ed25519
+let kp  = Crypto.ed25519Keypair();          // { private, public } en hex
+let sig = Crypto.ed25519Sign(kp["private"], "payload");
+out Crypto.ed25519Verify(kp["public"], "payload", sig);    // true
+out Crypto.ed25519Verify(kp["public"], "alterado", sig);   // false
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Crypto.sha256(s)` | `string` | SHA-256 hex digest |
+| `Crypto.sha1(s)` | `string` | SHA-1 hex digest (legacy interop, e.g. WebSocket handshake) |
+| `Crypto.sha1base64(s)` | `string` | SHA-1 + base64 (WebSocket `Sec-WebSocket-Accept`) |
+| `Crypto.md5(s)` | `string` | MD5 hex digest (legacy interop only — not for security) |
+| `Crypto.hmacSha256(key, data)` | `string` | HMAC-SHA256 hex |
+| `Crypto.base64encode(s)` / `base64decode(s)` | `string` | Base64; decode throws on invalid input |
+| `Crypto.hexEncode(bytes)` / `hexDecode(hex)` | `string` / `[int]` | Bytes ↔ hex; decode throws on invalid input |
+| `Crypto.randomBytes(n)` | `[int]` | **CSPRNG** — n bytes (0..255) from OS entropy. 1 ≤ n ≤ 1 MB, throws outside the range |
+| `Crypto.ed25519Keypair()` | `dict` | `{ private, public }` — 64-char hex strings (32 bytes each) |
+| `Crypto.ed25519Sign(privHex, msg)` | `string` | 128-char hex signature; deterministic. Throws on malformed key |
+| `Crypto.ed25519Verify(pubHex, msg, sigHex)` | `bool` | Strict verification. Throws on malformed hex/lengths; `false` on invalid signature |
 
 ---
 

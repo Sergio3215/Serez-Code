@@ -5,6 +5,112 @@ Order: most recent to oldest.
 
 ---
 
+## [Unreleased] — branch `improve` (2026-06-11)
+
+### Memory — loop-body value retention fixed (leak #1 residual)
+
+- **`eval_block_discard`**: loop bodies (`for`, `while`, `do-while`, `foreach`) no
+  longer deep-extract and re-plant the value of the body's **last statement** into
+  the loop's frame. Every loop caller discards that value, but the copy lived until
+  the loop exited — so any loop whose last statement produced a compound
+  (`arr = arr.map(...)`, `arr.reverse()`, …) retained one full copy **per
+  iteration**. Measured: 300 iterations over a 20k-element array went from
+  **~430 MB peak RSS to ~17 MB**. `return`/`throw` escaping the body keep the
+  exact same extract+plant semantics as before.
+- Probes refreshed (`mem_probe/`): the historic big leak (push-promotion in
+  helpers, probes `f`/`h`) was already killed by the element-embedding refactor
+  (`Array/Dict/Set` store `OwnedValue`, like `Instance`); global arena stays at
+  baseline (~262 slots). Known minor residual: one small global slot per lambda
+  **created** inside a loop (capture snapshot, ~24 bytes each).
+- New regression test `unit_loop_body_value` (7 asserts): compound reassign /
+  mutating method as last statement, return/throw from body, break/continue,
+  do-while and foreach intact.
+
+### Crypto — real signatures and CSPRNG (vetted crates)
+
+- **`Crypto.randomBytes(n)`** — cryptographically secure random bytes from the OS
+  entropy source (`getrandom` crate). Returns `[int]` (0..255). `n` capped at
+  1 MB (throws beyond it; throws on `n < 1`). Unlike `Random.*` (seedable LCG,
+  predictable — fine for games, never for secrets), this is safe for tokens,
+  salts and keys.
+- **`Crypto.ed25519Keypair()`** — generates an Ed25519 keypair
+  (`ed25519-dalek` crate); returns `{ private, public }` as 64-char hex strings.
+- **`Crypto.ed25519Sign(privateHex, message)`** — returns the 128-char hex
+  signature. Deterministic (Ed25519 by design). Malformed/short keys throw.
+- **`Crypto.ed25519Verify(publicHex, message, signatureHex)`** — `true`/`false`
+  via strict verification (rejects non-canonical signatures). Malformed hex or
+  wrong lengths throw; well-formed but invalid signatures return `false`.
+- New tests: `unit_crypto_ed25519` (7) and `sec_crypto_ed25519` (8 — caps,
+  malformed inputs, corrupted-signature behavior).
+
+### Lexer
+
+- New regression suite `unit_sci_notation` (7 asserts) cementing scientific
+  notation (`1e-7`, `2.5e3`, `1E+10`, bare `e` still an identifier) — the
+  feature itself shipped in 4.6.2.
+
+---
+
+## [5.0.0]
+
+### GUI
+
+- **`Gui.time()`**, **`Gui.drawRect(x, y, w, h, color)`**,
+  **`Gui.fillCircle(cx, cy, r, color)`**, **`Gui.setImePosition(x, y)`** — drawing
+  and IME surface for serez-ui (cursor blink timing, outlines, radio buttons,
+  IME composition placement).
+
+---
+
+## [4.9.0]
+
+### GUI
+
+- **Font loading and selection**: `Gui.loadFont(path)` + proportional text
+  rendering with real font metrics (replaces fixed-advance text).
+- **`Gui.fillRoundRect(x, y, w, h, radius, color)`**.
+- Error + security test coverage for the new Gui surface
+  (`err_gui_*`, `sec_gui_no_permission`).
+
+---
+
+## [4.8.0]
+
+### GUI — backend migration
+
+- Backend migrated **minifb → winit + softbuffer + cosmic-text**: proper window
+  lifecycle, IME support, real text shaping/rasterization, and the event model
+  serez-ui's self-driven loop (`app.runGui`) builds on.
+
+---
+
+## [4.7.0]
+
+### CLI
+
+- **Run `.szx` (serez-ui JSX) files directly**: `sz app.szx` transpiles and runs
+  without a separate step.
+
+---
+
+## [4.6.2]
+
+### Lexer
+
+- **Scientific notation in number literals**: `1e-7`, `2.5e3`, `1E+10`. The `e`
+  is only consumed when followed by `[+-]?digit`, so identifiers like `e` keep
+  lexing as before. (Unblocked BCE-style epsilon constants in serez-ai guides.)
+
+### CLI
+
+- **`sz run <name>` resolves package bin commands**: if `<name>` is not a script
+  in `serez.json`, it resolves the entry of an installed package and forwards
+  the remaining args (e.g. `sz run apipack build`).
+- **Non-zero exit codes** on parse errors, runtime errors, and subcommand
+  failures (CI-friendly).
+
+---
+
 ## [4.6.0] — branch `improve`
 
 ### Package manager — dependency write-back
