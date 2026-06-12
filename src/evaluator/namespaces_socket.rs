@@ -11,11 +11,25 @@ use crate::region::ObjectData;
 use super::EvalResult;
 use std::io::{Read, Write};
 
+macro_rules! require_perm {
+    ($self:expr, $ns:expr) => {
+        if !$self.permissions.contains($ns) {
+            eprintln!(
+                "❌ ERROR: '{}' requires permission '{}' — declare it in serez.json \
+                 (\"permissions\": [\"{}\", ...]) or with `use permissions {{ {} }}`",
+                $ns, $ns, $ns, $ns
+            );
+            return EvalResult::Error;
+        }
+    };
+}
+
 impl super::Evaluator {
     pub(super) fn eval_socket_namespace(
         &mut self,
         dot_call: &ast::DotCallExpression,
     ) -> EvalResult {
+        require_perm!(self, "Socket");
         match dot_call.method.as_str() {
             "connect" => {
                 if dot_call.arguments.len() != 2 {

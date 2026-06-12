@@ -1,0 +1,2 @@
+// sec_socket_no_permission.sz — usar Socket sin el permiso 'Socket' debe ser rechazado.
+Socket.listen(8080)

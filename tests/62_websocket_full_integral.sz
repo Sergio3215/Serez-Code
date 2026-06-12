@@ -1,4 +1,5 @@
 // Integral exhaustivo: WebSocket full-stack post-bugfix
+use permissions { Socket }
 // Cubre: handshake (multi-vector), límites de encoding de longitud,
 // UTF-8 multibyte, integridad SHA-1 del round-trip, round-trips intensos.
 //

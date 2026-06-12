@@ -1,4 +1,5 @@
 // E2E: Binary namespace — byte-array utilities
+use permissions { Socket }
 
 // ── fromHex / toHex ───────────────────────────────────────────────────────────
 let hex_str = Binary.toHex([0xDE, 0xAD, 0xBE, 0xEF]);

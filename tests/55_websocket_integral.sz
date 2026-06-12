@@ -1,4 +1,5 @@
 // Integral: WebSocket full-stack — handshake simulation + multi-message exchange
+use permissions { Socket }
 // Simulates the complete WS lifecycle: upgrade key derivation, frame exchange,
 // multiple message sizes, bidirectional communication.
 
