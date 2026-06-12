@@ -32,7 +32,7 @@ ed25519-dalek = "2"
 getrandom = "0.2"
 
 [dependencies.inkwell]
-version = "0.4"
+version = "0.9"
 optional = true
 features = ["llvm17-0"]
 
