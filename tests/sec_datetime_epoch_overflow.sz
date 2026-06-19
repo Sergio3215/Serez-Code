@@ -1,0 +1,3 @@
+// Security/robustness: an out-of-range epoch must be rejected, not silently
+// clamped to 1970.
+DateTime.fromEpoch(9223372036854775807);

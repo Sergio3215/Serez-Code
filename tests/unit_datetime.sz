@@ -145,7 +145,7 @@ test("object destructuring extracts calendar fields as ints", () => {
     let d = DateTime.from(2026, 6, 19, 14, 25, 30);
     const {day, month, year} = d;
     assert(year == 2026 && month == 6 && day == 19, "ymd");
-    assert(type(day) == "int", "fields are plain ints");
+    assert(type_of(day) == "int", "fields are plain ints");
     let {hour, minute, second} = d;
     assert(hour == 14 && minute == 25 && second == 30, "hms");
 });
@@ -184,17 +184,17 @@ test("weekday / dayOfYear / daysInMonth / isLeapYear", () => {
     assert(!DateTime.from(1900, 1, 1).isLeapYear(), "1900 not leap (div 100)");
 });
 
-// ── type() reporting ─────────────────────────────────────────────────────────────
-test("type() reports DateTime and int for a field", () => {
+// ── type_of() reporting ─────────────────────────────────────────────────────────────
+test("type_of() reports DateTime and int for a field", () => {
     let d = DateTime.from(2026, 1, 1);
-    assert(type(d) == "DateTime", "DateTime");
-    assert(type(d.day) == "int", "field acts as int");
+    assert(type_of(d) == "DateTime", "DateTime");
+    assert(type_of(d.day) == "int", "field acts as int");
 });
 
 // ── now() / utcNow() — structural only (no permission errors, sane values) ──────
 test("now() and utcNow() with Time permission", () => {
     let n = DateTime.now();
-    assert(type(n) == "DateTime", "now returns DateTime");
+    assert(type_of(n) == "DateTime", "now returns DateTime");
     assert(n.year >= 2026, "now year is current-ish");
     assert(n.month >= 1 && n.month <= 12, "now month in range");
     assert(!n.isUtc(), "now is local");

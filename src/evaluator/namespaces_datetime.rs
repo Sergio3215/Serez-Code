@@ -76,31 +76,38 @@ fn field_value(epoch_ms: i64, field: u8) -> i64 {
 }
 
 /// Add `delta` to one field of the datetime at `epoch_ms`, returning a new
-/// epoch-ms. day/hour/minute/second/ms shift the instant directly; month/year
-/// are computed field-wise and clamp the day to the last valid day of the month.
-fn add_to_field(epoch_ms: i64, field: u8, delta: i64) -> i64 {
-    match field {
-        F_MS => epoch_ms.saturating_add(delta),
-        F_SECOND => epoch_ms.saturating_add(delta.saturating_mul(1_000)),
-        F_MINUTE => epoch_ms.saturating_add(delta.saturating_mul(60_000)),
-        F_HOUR => epoch_ms.saturating_add(delta.saturating_mul(3_600_000)),
-        F_DAY => epoch_ms.saturating_add(delta.saturating_mul(86_400_000)),
+/// epoch-ms — or `None` if the result overflows the representable date range
+/// (rather than silently saturating to 1970). day/hour/minute/second/ms shift
+/// the instant directly; month/year are computed field-wise and clamp the day
+/// to the last valid day of the resulting month.
+fn add_to_field(epoch_ms: i64, field: u8, delta: i64) -> Option<i64> {
+    let new_epoch = match field {
+        F_MS => epoch_ms.checked_add(delta)?,
+        F_SECOND => epoch_ms.checked_add(delta.checked_mul(1_000)?)?,
+        F_MINUTE => epoch_ms.checked_add(delta.checked_mul(60_000)?)?,
+        F_HOUR => epoch_ms.checked_add(delta.checked_mul(3_600_000)?)?,
+        F_DAY => epoch_ms.checked_add(delta.checked_mul(86_400_000)?)?,
         F_MONTH | F_YEAR => {
             let ndt = parts(epoch_ms);
-            let delta_months = if field == F_YEAR { delta.saturating_mul(12) } else { delta };
-            let total = (ndt.year() as i64) * 12 + (ndt.month() as i64 - 1) + delta_months;
-            let new_y = total.div_euclid(12) as i32;
+            let delta_months = if field == F_YEAR { delta.checked_mul(12)? } else { delta };
+            let total = (ndt.year() as i64)
+                .checked_mul(12)?
+                .checked_add(ndt.month() as i64 - 1)?
+                .checked_add(delta_months)?;
+            let new_y_i64 = total.div_euclid(12);
+            if new_y_i64 < i32::MIN as i64 || new_y_i64 > i32::MAX as i64 { return None; }
+            let new_y = new_y_i64 as i32;
             let new_m = (total.rem_euclid(12) + 1) as u32;
             let new_d = (ndt.day()).min(days_in_month(new_y, new_m));
-            match NaiveDate::from_ymd_opt(new_y, new_m, new_d)
-                .and_then(|d| d.and_hms_milli_opt(ndt.hour(), ndt.minute(), ndt.second(), millis_of(&ndt)))
-            {
-                Some(out) => to_epoch(out),
-                None => epoch_ms,
-            }
+            let out = NaiveDate::from_ymd_opt(new_y, new_m, new_d)?
+                .and_hms_milli_opt(ndt.hour(), ndt.minute(), ndt.second(), millis_of(&ndt))?;
+            return Some(to_epoch(out));
         }
-        _ => epoch_ms,
-    }
+        _ => return Some(epoch_ms),
+    };
+    // Reject instants beyond chrono's representable calendar range.
+    if DateTime::<Utc>::from_timestamp_millis(new_epoch).is_none() { return None; }
+    Some(new_epoch)
 }
 
 /// Calendar fields exposed by object-destructuring of a DateTime.
@@ -114,8 +121,9 @@ pub(crate) fn datetime_field_entries(epoch_ms: i64) -> Vec<(OwnedValue, OwnedVal
         (OwnedValue::Str("minute".into()),    OwnedValue::Integer(ndt.minute() as i64)),
         (OwnedValue::Str("second".into()),    OwnedValue::Integer(ndt.second() as i64)),
         (OwnedValue::Str("ms".into()),        OwnedValue::Integer(millis_of(&ndt) as i64)),
-        (OwnedValue::Str("weekday".into()),   OwnedValue::Integer(ndt.weekday().number_from_monday() as i64)),
-        (OwnedValue::Str("dayOfYear".into()), OwnedValue::Integer(ndt.ordinal() as i64)),
+        (OwnedValue::Str("weekday".into()),     OwnedValue::Integer(ndt.weekday().number_from_monday() as i64)),
+        (OwnedValue::Str("dayOfYear".into()),   OwnedValue::Integer(ndt.ordinal() as i64)),
+        (OwnedValue::Str("daysInMonth".into()), OwnedValue::Integer(days_in_month(ndt.year(), ndt.month()) as i64)),
     ]
 }
 
@@ -239,6 +247,10 @@ impl super::Evaluator {
                     eprintln!("❌ ERROR: DateTime.fromEpoch(milliseconds) requires 1 integer");
                     return EvalResult::Error;
                 }
+                if DateTime::<Utc>::from_timestamp_millis(nums[0]).is_none() {
+                    eprintln!("❌ ERROR: DateTime.fromEpoch received an out-of-range timestamp (ms): {}", nums[0]);
+                    return EvalResult::Error;
+                }
                 EvalResult::Value(self.alloc(ObjectData::DateTime { epoch_ms: nums[0], utc: true }))
             }
             other => {
@@ -347,8 +359,14 @@ impl super::Evaluator {
                     eprintln!("❌ ERROR: DateField.{}(n) requires 1 integer", dot_call.method);
                     return EvalResult::Error;
                 }
-                let signed = if dot_call.method == "add" { nums[0] } else { -nums[0] };
-                let new_epoch = add_to_field(epoch_ms, field, signed);
+                let signed = if dot_call.method == "add" { nums[0] } else { nums[0].checked_neg().unwrap_or(i64::MAX) };
+                let new_epoch = match add_to_field(epoch_ms, field, signed) {
+                    Some(e) => e,
+                    None => {
+                        eprintln!("❌ ERROR: DateField.{}({}) overflowed the representable date range", dot_call.method, nums[0]);
+                        return EvalResult::Error;
+                    }
+                };
                 EvalResult::Value(self.alloc(ObjectData::DateTime { epoch_ms: new_epoch, utc }))
             }
             "value" | "toInt" => EvalResult::Value(self.alloc(ObjectData::Integer(value))),
