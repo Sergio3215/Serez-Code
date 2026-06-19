@@ -1,0 +1,2 @@
+// dec modulo by zero must error (with a modulo-specific message)
+out 5m % 0m;

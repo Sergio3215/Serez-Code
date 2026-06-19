@@ -82,7 +82,13 @@ impl super::Evaluator {
             "+" => l.checked_add(r),
             "-" => l.checked_sub(r),
             "*" => l.checked_mul(r),
-            "%" => l.checked_rem(r),
+            "%" => {
+                if r.is_zero() {
+                    eprintln!("❌ ERROR: Decimal modulo by zero - [{}:{}]", line, column);
+                    return EvalResult::Error;
+                }
+                l.checked_rem(r)
+            }
             "/" => {
                 if r.is_zero() {
                     eprintln!("❌ ERROR: Decimal division by zero - [{}:{}]", line, column);

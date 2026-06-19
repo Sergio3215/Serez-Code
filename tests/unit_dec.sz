@@ -86,6 +86,50 @@ test("JSON.stringify emits dec as an exact number literal", () => {
     assert(s.includes("15.1250"), "exact scale in json");
 });
 
+test("banker's rounding at the midpoint rounds to even", () => {
+    assert((0.5m).round(0) == 0m, "0.5 -> 0");
+    assert((1.5m).round(0) == 2m, "1.5 -> 2");
+    assert((2.5m).round(0) == 2m, "2.5 -> 2");
+    assert((3.5m).round(0) == 4m, "3.5 -> 4");
+    assert((-2.5m).round(0) == -2m, "-2.5 -> -2");
+});
+
+test("scale is preserved through declaration and arithmetic", () => {
+    assert((1.230m).scale() == 3, "trailing zero counts in scale");
+    assert((1.230m).toString() == "1.230", "toString keeps declared scale");
+    assert(1.230m == 1.23m, "but value compares equal");
+    assert((1.10m * 1.10m).toString() == "1.2100", "product scale = sum of scales");
+    assert(Dec.fromInt(0, 5).toString() == "0.00000", "fromInt pads zero");
+});
+
+test("parse accepts the usual numeric forms", () => {
+    assert(Dec.parse("  12.5  ") == 12.5m, "whitespace trimmed");
+    assert(Dec.parse("+5") == 5m, "leading plus");
+    assert(Dec.parse("-5.5") == -5.5m, "negative");
+    assert(Dec.parse(".5") == 0.5m, "leading dot");
+    assert(Dec.parse("5.") == 5m, "trailing dot");
+    assert(Dec.parse("1e-3") == 0.001m, "scientific");
+});
+
+test("power conventions and modulo", () => {
+    assert(2m ** 0 == 1m, "x^0 = 1");
+    assert(0m ** 0 == 1m, "0^0 = 1 by convention");
+    assert((-2m) ** 3 == -8m, "negative base, odd exponent");
+    assert(100m % 7m == 2m, "modulo");
+    assert(0m % 5m == 0m, "zero modulo");
+});
+
+test("dec drives a numeric for-loop and accumulates exactly", () => {
+    let total = 0m;
+    let n = 0;
+    for (let i = 0m; i < 10m; i += 0.1m) {
+        total = total + i;
+        n = n + 1;
+    }
+    assert(n == 100, "100 steps of 0.1 (no f64 drift in the counter)");
+    assert(total == 495m, "exact sum 0.0+0.1+...+9.9 = 495.0");
+});
+
 test("dec works in switch, sort and includes", () => {
     let m = 2m;
     let label = "none";

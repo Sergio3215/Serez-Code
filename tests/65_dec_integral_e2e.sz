@@ -1,0 +1,93 @@
+// 65_dec_integral_e2e — integration test: exact `dec` woven through classes,
+// arrays, dicts, functions, for-in loops and JSON in a realistic billing flow.
+// Fully deterministic (no clock / no permissions), so the golden is stable.
+
+class LineItem {
+    name: any = "";
+    qty: any = 0;
+    price: any = 0m;
+    public LineItem(any n, any q, any p) {
+        this.name = n;
+        this.qty = q;
+        this.price = p;
+    }
+    public any lineTotal() { return this.price * this.qty; }   // dec * int
+}
+
+// Money helper: COBOL PIC 9(n)V99 — always 2 decimals, ROUNDED (half-up).
+fn dec money(dec d) { return d.setScale(2, "half-up"); }
+
+let items = [
+    new LineItem("Widget", 3, 4.99m),
+    new LineItem("Gadget", 1, 19.95m),
+    new LineItem("Cable",  5, 2.50m)
+];
+
+out "── line items ──";
+let subtotal = 0m;
+for (let it in items) {
+    let lt = money(it.lineTotal());
+    out it.name + " x" + it.qty + " @ " + money(it.price) + " = " + lt;
+    subtotal = subtotal + lt;
+}
+out "Subtotal: " + money(subtotal);
+
+out "── adjustments ──";
+let discount = money(subtotal * 0.10m);   // 10% member discount
+let taxable  = subtotal - discount;
+let tax      = money(taxable * 0.21m);    // 21% VAT
+let total    = money(taxable + tax);
+out "Discount (10%): -" + discount;
+out "Taxable: " + money(taxable);
+out "Tax (21%): " + tax;
+out "TOTAL: " + total;
+
+out "── installments (must close exactly) ──";
+let n = 3;
+let base = (total / n).setScale(2, "down");
+let installments = [];
+let acc = 0m;
+for (let i = 0; i < n - 1; i = i + 1) {
+    installments.push(base);
+    acc = acc + base;
+}
+installments.push(money(total - acc));    // last absorbs the remainder
+
+let paid = 0m;
+let k = 1;
+for (let c in installments) {
+    out "  cuota " + k + ": " + c;
+    paid = paid + c;
+    k = k + 1;
+}
+out "sum == total: " + (paid == total);
+
+out "── classification by total (switch on a dec field) ──";
+let tier = money(total);
+let label = "standard";
+switch (tier.setScale(0, "down")) {
+    case 51m: { label = "fifty-something"; }
+    case 100m: { label = "century"; }
+}
+out "tier: " + label;
+
+out "── sorted unit prices ──";
+let prices = [];
+for (let it in items) { prices.push(it.price); }
+prices.sort();
+out "cheapest: " + prices[0] + "  dearest: " + prices[2];
+
+out "── reduce + average ──";
+let sumPrices = prices.reduce(0m, (a, p) => a + p);
+out "sum of prices: " + sumPrices;
+out "avg (2dp): " + (sumPrices / 3).setScale(2, "half-up");
+
+out "── JSON summary (exact numbers) ──";
+let summary <string, any> = (
+    {"subtotal", subtotal},
+    {"discount", discount},
+    {"tax", tax},
+    {"total", total},
+    {"installments", installments}
+);
+out JSON.stringify(summary);
