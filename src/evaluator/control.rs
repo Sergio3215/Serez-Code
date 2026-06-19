@@ -66,8 +66,14 @@ impl super::Evaluator {
     }
 
     pub(super) fn values_equal(&self, a: &ObjectData, b: &ObjectData) -> bool {
+        // A DateField compares as its integer value (e.g. switch on date.month).
+        let a_norm; let b_norm;
+        let a = match a { ObjectData::DateField { value, .. } => { a_norm = ObjectData::Integer(*value); &a_norm } _ => a };
+        let b = match b { ObjectData::DateField { value, .. } => { b_norm = ObjectData::Integer(*value); &b_norm } _ => b };
         match (a, b) {
             (ObjectData::Integer(x),  ObjectData::Integer(y))  => x == y,
+            // Two DateTimes are equal when they denote the same instant.
+            (ObjectData::DateTime { epoch_ms: x, .. }, ObjectData::DateTime { epoch_ms: y, .. }) => x == y,
             (ObjectData::Decimal(x),  ObjectData::Decimal(y))  => x == y,
             // Cross-type numeric: same coercion that == uses in infix expressions
             (ObjectData::Decimal(x),  ObjectData::Integer(y))  => *x == (*y as f64),

@@ -210,4 +210,59 @@ test("from()/arithmetic work without any clock permission", () => {
     assert(d.day.add(40).month == 6, "pure construction + arithmetic");
 });
 
+// ── Integration edges (a DateField must behave as an int everywhere) ────────────
+test("DateField works as an array index and a dict key", () => {
+    let d = DateTime.from(2026, 3, 12);
+    let a = [10, 20, 30, 40];
+    assert(a[d.month] == 40, "array index by field");          // month=3 -> a[3]
+    let names <int,string> = ({3, "mar"}, {12, "dic"});
+    assert(names[d.month] == "mar", "dict key by month");
+    assert(names[d.day] == "dic", "dict key by day");
+});
+
+test("DateField matches in a switch", () => {
+    let d = DateTime.from(2026, 3, 12);
+    let label = "none";
+    switch (d.month) {
+        case 1: { label = "jan"; }
+        case 3: { label = "mar"; }
+        case 12: { label = "dec"; }
+    }
+    assert(label == "mar", "switch matches on a field value");
+});
+
+test("string + DateTime concatenates the ISO form (both orders)", () => {
+    let d = DateTime.from(2026, 3, 12, 9, 5, 0);
+    assert(("at " + d) == "at 2026-03-12T09:05:00", "string + datetime");
+    assert((d + " end") == "2026-03-12T09:05:00 end", "datetime + string");
+});
+
+test("a DateField survives a function boundary and stays addable", () => {
+    let d = DateTime.from(2026, 3, 12);
+    let getDay = (x) => x.day;
+    let g = getDay(d);
+    assert(g + 0 == 12, "returned field coerces to int");
+    assert(g.add(5).day == 17, "returned field still carries methods");
+});
+
+test("negative / zero arguments to add and reduce", () => {
+    let d = DateTime.from(2026, 3, 12);
+    assert(d.day.add(-3).day == 9, "add negative subtracts");
+    assert(d.day.reduce(-5).day == 17, "reduce negative adds");
+    assert(d.day.add(0).timestamp() == d.timestamp(), "add zero is identity");
+});
+
+test("fromEpoch(0) and negative epochs", () => {
+    assert(DateTime.fromEpoch(0).toString() == "1970-01-01T00:00:00Z", "epoch zero");
+    let neg = DateTime.fromEpoch(-1000);
+    assert(neg.year == 1969 && neg.second == 59, "negative epoch decodes");
+});
+
+test("==/!= across types with a DateTime never throws", () => {
+    let d = DateTime.from(2026, 1, 1);
+    assert(!(d == 5), "datetime is not equal to an int");
+    assert(d != 5, "datetime != int");
+    assert(!(d == null), "datetime is not null");
+});
+
 summary();

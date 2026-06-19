@@ -369,6 +369,24 @@ impl super::Evaluator {
                     _ => { eprintln!("❌ ERROR: Operator '{}' not supported between Null and String", op); return EvalResult::Error; }
                 }
             }
+            // String concatenation with a DateTime renders its ISO 8601 form,
+            // matching how int/decimal/bool concatenate.
+            (ObjectData::Str(s), ObjectData::DateTime { epoch_ms, utc }) => {
+                match op {
+                    "==" => return EvalResult::Value(self.false_ref),
+                    "!=" => return EvalResult::Value(self.true_ref),
+                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, crate::region::format_datetime(epoch_ms, utc))))),
+                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between String and DateTime", op); return EvalResult::Error; }
+                }
+            }
+            (ObjectData::DateTime { epoch_ms, utc }, ObjectData::Str(s)) => {
+                match op {
+                    "==" => return EvalResult::Value(self.false_ref),
+                    "!=" => return EvalResult::Value(self.true_ref),
+                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", crate::region::format_datetime(epoch_ms, utc), s)))),
+                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between DateTime and String", op); return EvalResult::Error; }
+                }
+            }
             (ObjectData::Boolean(l), ObjectData::Boolean(r)) => {
                 match op {
                     "==" => return EvalResult::Value(self.bool_ref(l == r)),
