@@ -421,6 +421,11 @@ impl super::Evaluator {
 
                 let arr_data = self.resolve(arr_ref).unwrap().clone();
                 let idx_data = self.resolve(idx_ref).unwrap().clone();
+                // A DateField indexes as its integer value (e.g. arr[date.month] = x).
+                let idx_data = match idx_data {
+                    ObjectData::DateField { value, .. } => ObjectData::Integer(value),
+                    other => other,
+                };
 
                 match arr_data {
                     ObjectData::Array { element_type, mut elements } => {

@@ -265,4 +265,21 @@ test("==/!= across types with a DateTime never throws", () => {
     assert(!(d == null), "datetime is not null");
 });
 
+test("DateField behaves as int in write-index, bitwise, power, compound, HOFs", () => {
+    let d = DateTime.from(2026, 3, 12, 9, 5, 0);
+    let a = [0, 0, 0, 0, 0];
+    a[d.month] = 99;                            // index assignment by field
+    assert(a[3] == 99, "index assignment by field");
+    assert((d.month & 1) == 1, "bitwise and");
+    assert((d.month << 2) == 12, "left shift");
+    assert((d.month ** 2) == 9, "power");
+    assert((d.year % 4) == 2, "modulo");
+    let x = d.day; x += 5;
+    assert(x == 17, "compound assign on a field-valued var");
+    let mapped = [d.day, d.month].map((v) => v * 10);
+    assert(mapped[0] == 120, "map over fields");
+    assert([d.day, d.month, d.hour].reduce(0, (acc, v) => acc + v) == 24, "reduce over fields");
+    assert(d.day.add(d.month).day == 15, "add() accepts a DateField argument");
+});
+
 summary();
