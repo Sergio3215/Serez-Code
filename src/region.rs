@@ -55,6 +55,8 @@ pub enum OwnedValue {
         data: Vec<f64>,
         tid: u64,        // stable identity — assigned at creation, survives extract/plant
     },
+    DateTime { epoch_ms: i64, utc: bool },
+    DateField { epoch_ms: i64, utc: bool, field: u8, value: i64 },
     Ptr(String), // pointer to a named variable
     Null,
 }
@@ -95,6 +97,8 @@ impl OwnedValue {
                 format!("Set[{}]", inner.join(", "))
             }
             OwnedValue::Tensor { shape, data, .. } => format_tensor(shape, data),
+            OwnedValue::DateTime { epoch_ms, utc } => format_datetime(*epoch_ms, *utc),
+            OwnedValue::DateField { value, .. } => format!("{}", value),
             OwnedValue::Ptr(name) => format!("&{}", name),
             OwnedValue::Null => "null".to_string(),
         }
@@ -140,6 +144,16 @@ pub enum ObjectData {
         data: Vec<f64>,
         tid: u64,        // stable identity — assigned at creation, survives extract/plant
     },
+    /// Internal date/time value. `epoch_ms` is the wall-clock instant frozen as
+    /// milliseconds-since-epoch on the UTC timeline (deterministic, DST-free);
+    /// `utc` records whether it originated as UTC (utcNow) or local (now/from) —
+    /// used only for display labeling.
+    DateTime { epoch_ms: i64, utc: bool },
+    /// A single field of a DateTime (year/month/day/hour/minute/second/ms). Acts
+    /// as an int under operators (coerced in eval_infix) but carries
+    /// `.add/.reduce/.remove` methods that return a new DateTime. `field` is the
+    /// field code: 0=year 1=month 2=day 3=hour 4=minute 5=second 6=ms.
+    DateField { epoch_ms: i64, utc: bool, field: u8, value: i64 },
     Ptr(String), // pointer to a named variable
     Null,
 }
@@ -161,6 +175,8 @@ impl std::fmt::Display for ObjectData {
             ObjectData::EnumVariant { enum_name, variant } => write!(f, "{}.{}", enum_name, variant),
             ObjectData::Set { .. } => write!(f, "Set{{...}}"),
             ObjectData::Tensor { shape, data, .. } => write!(f, "{}", format_tensor(shape, data)),
+            ObjectData::DateTime { epoch_ms, utc } => write!(f, "DateTime({})", format_datetime(*epoch_ms, *utc)),
+            ObjectData::DateField { value, .. } => write!(f, "DateField({})", value),
             ObjectData::Ptr(name) => write!(f, "Ptr(&{})", name),
             ObjectData::Null => write!(f, "Null"),
         }
@@ -199,6 +215,23 @@ impl Arena {
     pub fn reset_to(&mut self, mark: usize) {
         self.storage.truncate(mark);
     }
+}
+
+/// Render a DateTime as ISO 8601: `YYYY-MM-DDTHH:MM:SS` (with `.mmm` when the
+/// millisecond component is non-zero), suffixed with `Z` when it is a UTC value.
+/// `epoch_ms` is interpreted on the UTC timeline (the value was frozen that way
+/// at construction), so this is deterministic regardless of the host timezone.
+pub fn format_datetime(epoch_ms: i64, utc: bool) -> String {
+    use chrono::{DateTime, Utc, Datelike, Timelike};
+    let dt: DateTime<Utc> = DateTime::<Utc>::from_timestamp_millis(epoch_ms)
+        .unwrap_or_else(|| DateTime::<Utc>::from_timestamp_millis(0).unwrap());
+    let ms = dt.timestamp_subsec_millis();
+    let base = format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), dt.second()
+    );
+    let base = if ms != 0 { format!("{}.{:03}", base, ms) } else { base };
+    if utc { format!("{}Z", base) } else { base }
 }
 
 pub fn format_tensor(shape: &[usize], data: &[f64]) -> String {
@@ -242,6 +275,9 @@ impl ObjectData {
             ObjectData::EnumVariant { enum_name, .. } => enum_name.as_str(),
             ObjectData::Set { .. } => "Set",
             ObjectData::Tensor { .. } => "Tensor",
+            ObjectData::DateTime { .. } => "DateTime",
+            // DateField acts as an int under operators, so report it as such.
+            ObjectData::DateField { .. } => "int",
             ObjectData::Ptr(_) => "ptr",
             ObjectData::Null => "null",
         }

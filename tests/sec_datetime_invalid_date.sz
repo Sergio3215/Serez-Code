@@ -1,0 +1,3 @@
+// Security/robustness: a non-existent calendar date (Feb 30) must be rejected
+// rather than rolled over into March.
+DateTime.from(2026, 2, 30);

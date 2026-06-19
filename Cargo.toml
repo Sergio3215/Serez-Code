@@ -1,6 +1,6 @@
 [package]
 name = "serez-code"
-version = "5.1.0"
+version = "5.2.0"
 edition = "2024"
 description = "Serez Code - The programming language for AI, UI, systems, and GPU in a single runtime"
 license = "MIT"
@@ -30,6 +30,7 @@ image = "0.25.9"
 arboard = "3.6.1"
 ed25519-dalek = "2"
 getrandom = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dependencies.inkwell]
 version = "0.4"

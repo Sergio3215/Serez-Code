@@ -1,0 +1,3 @@
+// Security: DateTime.now() reads the clock and must be gated by the Time
+// permission. Without it, this must error.
+DateTime.now();

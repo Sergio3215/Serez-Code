@@ -1,0 +1,213 @@
+// unit_datetime.sz — DateTime namespace: construction, fields, immutable
+// arithmetic, formatting, destructuring, operators, conversions.
+//
+// All assertions use DateTime.from()/fromEpoch() (UTC-based, deterministic and
+// permission-free) except a few structural checks on now()/utcNow().
+
+use permissions { Time }
+
+// ── Construction & fields ─────────────────────────────────────────────────────
+test("from(y,m,d) defaults time to zero", () => {
+    let d = DateTime.from(2026, 6, 19);
+    assert(d.year == 2026, "year");
+    assert(d.month == 6, "month");
+    assert(d.day == 19, "day");
+    assert(d.hour == 0 && d.minute == 0 && d.second == 0 && d.ms == 0, "time zeroed");
+});
+
+test("from with full time components", () => {
+    let d = DateTime.from(2026, 1, 12, 9, 30, 15, 500);
+    assert(d.hour == 9, "hour");
+    assert(d.minute == 30, "minute");
+    assert(d.second == 15, "second");
+    assert(d.ms == 500, "ms");
+    assert(d.millisecond == 500, "millisecond alias");
+});
+
+// ── Formatting ────────────────────────────────────────────────────────────────
+test("format — ISO date and time tokens", () => {
+    let d = DateTime.from(2026, 1, 12, 9, 30, 15, 500);
+    assert(d.format("YYYY-MM-DD") == "2026-01-12", "date");
+    assert(d.format("HH:mm:ss") == "09:30:15", "time 24h");
+    assert(d.format("YYYY-MM-DDTHH:mm:ss.SSS") == "2026-01-12T09:30:15.500", "full");
+});
+
+test("format — 12-hour clock and AM/PM, single-digit tokens, literals", () => {
+    let am = DateTime.from(2026, 3, 5, 9, 7, 0);
+    assert(am.format("D/M/YYYY h:mm A") == "5/3/2026 9:07 AM", "am single-digit");
+    let pm = DateTime.from(2026, 3, 5, 15, 0, 0);
+    assert(pm.format("hh A") == "03 PM", "pm two-digit 12h");
+    assert(pm.format("[at] HH") == "at 15", "literal escape drops brackets");
+    assert(pm.format("[Mar] D") == "Mar 5", "letters inside [] stay literal");
+});
+
+test("toString / iso render ISO 8601", () => {
+    let d = DateTime.from(2026, 1, 12, 9, 30, 15);
+    assert(d.toString() == "2026-01-12T09:30:15", "no ms when zero");
+    assert(d.iso() == d.toString(), "iso alias");
+});
+
+// ── Instant-based arithmetic (day/hour/minute/second/ms) ───────────────────────
+test("day arithmetic with carry across months and years", () => {
+    let d = DateTime.from(2026, 1, 12);
+    let back = d.day.reduce(20);          // 12-Jan-2026 - 20d -> 23-Dec-2025
+    assert(back.year == 2025 && back.month == 12 && back.day == 23, "reduce carry");
+    let fwd = d.day.add(400);             // +400 days -> 16-Feb-2027
+    assert(fwd.year == 2027 && fwd.month == 2 && fwd.day == 16, "add 400 carry");
+});
+
+test("time arithmetic carries between units", () => {
+    let d = DateTime.from(2026, 1, 12, 9, 30, 0);
+    let m = d.minute.add(90);             // 9:30 + 90min -> 11:00
+    assert(m.hour == 11 && m.minute == 0, "minute->hour carry");
+    let h = d.hour.add(20);               // 9h + 20h -> next day 5:30
+    assert(h.day == 13 && h.hour == 5, "hour->day carry");
+    let s = d.second.add(3600);           // +3600s -> +1h
+    assert(s.hour == 10 && s.minute == 30, "second->hour");
+    let ms = DateTime.from(2026, 1, 12, 0, 0, 0, 0).ms.add(1500);
+    assert(ms.second == 1 && ms.ms == 500, "ms->second carry");
+});
+
+// ── Field-wise arithmetic (month/year) with end-of-month clamp ─────────────────
+test("month.add clamps day to end of month", () => {
+    let jan31 = DateTime.from(2026, 1, 31);
+    let feb = jan31.month.add(1);         // -> 28-Feb-2026 (non-leap)
+    assert(feb.year == 2026 && feb.month == 2 && feb.day == 28, "clamp 31->28");
+});
+
+test("month arithmetic carries across year boundaries", () => {
+    let d = DateTime.from(2026, 6, 15);
+    let plus = d.month.add(13);           // +13 months -> Jul 2027
+    assert(plus.year == 2027 && plus.month == 7 && plus.day == 15, "add 13 months");
+    let minus = d.month.reduce(8);        // -8 months -> Oct 2025
+    assert(minus.year == 2025 && minus.month == 10, "reduce across year");
+});
+
+test("year arithmetic clamps leap day", () => {
+    let leap = DateTime.from(2024, 2, 29);
+    let next = leap.year.add(1);          // -> 28-Feb-2025
+    assert(next.year == 2025 && next.month == 2 && next.day == 28, "leap clamp");
+    let four = leap.year.add(4);          // -> 29-Feb-2028 (leap again)
+    assert(four.year == 2028 && four.month == 2 && four.day == 29, "stays 29 on leap");
+});
+
+test("remove is an alias of reduce", () => {
+    let d = DateTime.from(2026, 6, 15);
+    let a = d.day.reduce(5);
+    let b = d.day.remove(5);
+    assert(a.timestamp() == b.timestamp(), "remove == reduce");
+});
+
+// ── Immutability ───────────────────────────────────────────────────────────────
+test("arithmetic never mutates the source DateTime", () => {
+    let d = DateTime.from(2026, 1, 12, 9, 0, 0);
+    let _ = d.day.add(100);
+    let _2 = d.month.reduce(3);
+    assert(d.year == 2026 && d.month == 1 && d.day == 12 && d.hour == 9, "source intact");
+});
+
+// ── DateField behaves as an int under operators ────────────────────────────────
+test("DateField coerces to int in arithmetic and comparison", () => {
+    let d = DateTime.from(2026, 7, 4, 10, 0, 0);
+    assert(d.day + 5 == 9, "add");
+    assert(d.month * 2 == 14, "mul");
+    assert(d.year - 26 == 2000, "sub");
+    assert(d.month == 7, "eq");
+    assert(d.day != 1, "ne");
+    assert(d.hour < 12, "lt");
+    assert(d.year > 2000, "gt");
+    assert(d.day >= 4 && d.day <= 4, "ge/le");
+    let total = d.day + d.month + d.hour;   // 4 + 7 + 10
+    assert(total == 21, "field sum expression");
+});
+
+test("DateField .value / .toInt / .toString", () => {
+    let d = DateTime.from(2026, 7, 4);
+    assert(d.day.value() == 4, "value");
+    assert(d.day.toInt() == 4, "toInt");
+    assert(d.day.toString() == "4", "toString");
+});
+
+// ── DateTime comparison ─────────────────────────────────────────────────────────
+test("DateTime comparison by instant", () => {
+    let a = DateTime.from(2026, 1, 1);
+    let b = DateTime.from(2026, 12, 31);
+    assert(a < b, "lt");
+    assert(b > a, "gt");
+    assert(a <= a, "le equal");
+    assert(b >= b, "ge equal");
+    assert(a == DateTime.from(2026, 1, 1), "eq same fields");
+    assert(a != b, "ne");
+});
+
+// ── Destructuring ───────────────────────────────────────────────────────────────
+test("object destructuring extracts calendar fields as ints", () => {
+    let d = DateTime.from(2026, 6, 19, 14, 25, 30);
+    const {day, month, year} = d;
+    assert(year == 2026 && month == 6 && day == 19, "ymd");
+    assert(type(day) == "int", "fields are plain ints");
+    let {hour, minute, second} = d;
+    assert(hour == 14 && minute == 25 && second == 30, "hms");
+});
+
+test("destructuring supports aliases and missing-as-null", () => {
+    let d = DateTime.from(2026, 6, 19);
+    let {day: theDay, weekday: wd} = d;
+    assert(theDay == 19, "alias");
+    assert(wd >= 1 && wd <= 7, "weekday present");
+    let {nonexistent} = d;
+    assert(nonexistent == null, "unknown field is null");
+});
+
+// ── Conversions ─────────────────────────────────────────────────────────────────
+test("timestamp / fromEpoch round-trip", () => {
+    let d = DateTime.from(2026, 1, 12, 9, 30, 15, 500);
+    let ts = d.timestamp();
+    assert(ts == d.toEpoch(), "toEpoch alias");
+    assert(ts == d.epochMillis(), "epochMillis alias");
+    let r = DateTime.fromEpoch(ts);
+    assert(r.year == 2026 && r.month == 1 && r.day == 12, "round-trip date");
+    assert(r.hour == 9 && r.minute == 30 && r.second == 15 && r.ms == 500, "round-trip time");
+});
+
+// ── Derived read-only fields ─────────────────────────────────────────────────────
+test("weekday / dayOfYear / daysInMonth / isLeapYear", () => {
+    let d = DateTime.from(2026, 1, 12);
+    assert(d.weekday == 1, "2026-01-12 is Monday (1)");
+    assert(d.dayOfYear == 12, "day of year");
+    assert(d.daysInMonth == 31, "january has 31");
+    assert(DateTime.from(2024, 2, 1).daysInMonth == 29, "feb 2024 leap = 29");
+    assert(DateTime.from(2026, 2, 1).daysInMonth == 28, "feb 2026 = 28");
+    assert(DateTime.from(2024, 1, 1).isLeapYear(), "2024 leap");
+    assert(!DateTime.from(2026, 1, 1).isLeapYear(), "2026 not leap");
+    assert(DateTime.from(2000, 1, 1).isLeapYear(), "2000 leap (div 400)");
+    assert(!DateTime.from(1900, 1, 1).isLeapYear(), "1900 not leap (div 100)");
+});
+
+// ── type() reporting ─────────────────────────────────────────────────────────────
+test("type() reports DateTime and int for a field", () => {
+    let d = DateTime.from(2026, 1, 1);
+    assert(type(d) == "DateTime", "DateTime");
+    assert(type(d.day) == "int", "field acts as int");
+});
+
+// ── now() / utcNow() — structural only (no permission errors, sane values) ──────
+test("now() and utcNow() with Time permission", () => {
+    let n = DateTime.now();
+    assert(type(n) == "DateTime", "now returns DateTime");
+    assert(n.year >= 2026, "now year is current-ish");
+    assert(n.month >= 1 && n.month <= 12, "now month in range");
+    assert(!n.isUtc(), "now is local");
+    let u = DateTime.utcNow();
+    assert(u.isUtc(), "utcNow is utc");
+    assert(u.year >= 2026, "utcNow year sane");
+});
+
+// ── from() needs no permission (pure construction) ──────────────────────────────
+test("from()/arithmetic work without any clock permission", () => {
+    // No clock read happens here; constructing and computing is always allowed.
+    let d = DateTime.from(2026, 5, 1);
+    assert(d.day.add(40).month == 6, "pure construction + arithmetic");
+});
+
+summary();

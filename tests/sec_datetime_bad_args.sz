@@ -1,0 +1,2 @@
+// Security/robustness: non-integer arguments to DateTime.from must be rejected.
+DateTime.from("2026", 1, 1);

@@ -1,0 +1,62 @@
+// 63_datetime_e2e — integral end-to-end coverage of the DateTime namespace.
+// Deterministic by design: uses only DateTime.from()/fromEpoch() (UTC-based),
+// so the golden output is identical on any machine/timezone.
+
+out "── construction & fields ──";
+let d = DateTime.from(2026, 1, 12, 9, 30, 15, 500);
+out d.year;
+out d.month;
+out d.day;
+out d.hour;
+out d.minute;
+out d.second;
+out d.ms;
+out d.toString();
+
+out "── formatting ──";
+out d.format("YYYY-MM-DD HH:mm:ss.SSS");
+out d.format("D/M/YYYY h:mm A");
+out DateTime.from(2026, 3, 5, 15, 0, 0).format("[meeting at] hh A");
+
+out "── instant arithmetic ──";
+out d.day.reduce(20).format("YYYY-MM-DD");      // 2025-12-23
+out d.day.add(400).format("YYYY-MM-DD");        // 2027-02-16
+out d.minute.add(90).format("HH:mm");           // 11:00
+out d.hour.add(20).format("YYYY-MM-DD HH:mm");  // next day 05:30
+out DateTime.from(2026, 1, 1, 0, 0, 0, 0).ms.add(1500).format("ss.SSS"); // 01.500
+
+out "── calendar arithmetic with clamp ──";
+out DateTime.from(2026, 1, 31).month.add(1).format("YYYY-MM-DD");   // 2026-02-28
+out DateTime.from(2024, 2, 29).year.add(1).format("YYYY-MM-DD");    // 2025-02-28
+out DateTime.from(2026, 6, 15).month.reduce(8).format("YYYY-MM-DD"); // 2025-10-15
+
+out "── operators (DateField as int) ──";
+out (d.day + 5);
+out (d.month * 2);
+out (d.year > 2000);
+out (d.month == 1);
+
+out "── comparison ──";
+out (DateTime.from(2026, 1, 1) < DateTime.from(2026, 12, 31));
+out (DateTime.from(2026, 6, 1) == DateTime.from(2026, 6, 1));
+
+out "── destructuring ──";
+const {day, month, year} = d;
+out year + "/" + month + "/" + day;
+
+out "── derived fields ──";
+out d.weekday;
+out d.dayOfYear;
+out d.daysInMonth;
+out DateTime.from(2024, 1, 1).isLeapYear();
+out DateTime.from(1900, 1, 1).isLeapYear();
+
+out "── conversions ──";
+let ts = d.timestamp();
+out ts;
+out DateTime.fromEpoch(ts).format("YYYY-MM-DDTHH:mm:ss.SSS");
+
+out "── immutability ──";
+let snapshot = d.day.add(1000);
+out d.format("YYYY-MM-DD");   // unchanged: 2026-01-12
+out snapshot.year;            // derived value computed

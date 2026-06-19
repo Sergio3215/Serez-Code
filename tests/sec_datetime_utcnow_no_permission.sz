@@ -1,0 +1,3 @@
+// Security: DateTime.utcNow() reads the clock and must require the Time
+// permission. Without it, this must error.
+DateTime.utcNow();

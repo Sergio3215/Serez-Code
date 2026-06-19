@@ -1,0 +1,45 @@
+── construction & fields ──
+2026
+1
+12
+9
+30
+15
+500
+2026-01-12T09:30:15.500
+── formatting ──
+2026-01-12 09:30:15.500
+12/1/2026 9:30 AM
+meeting at 03 PM
+── instant arithmetic ──
+2025-12-23
+2027-02-16
+11:00
+2026-01-13 05:30
+01.500
+── calendar arithmetic with clamp ──
+2026-02-28
+2025-02-28
+2025-10-15
+── operators (DateField as int) ──
+17
+2
+true
+true
+── comparison ──
+true
+true
+── destructuring ──
+2026/1/12
+── derived fields ──
+1
+12
+31
+true
+false
+── conversions ──
+1768210215500
+2026-01-12T09:30:15.500
+── immutability ──
+2026-01-12
+2028

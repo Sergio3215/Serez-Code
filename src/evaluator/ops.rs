@@ -70,6 +70,27 @@ impl super::Evaluator {
         line: usize,
         column: usize,
     ) -> EvalResult {
+        // DateTime ordering/equality: compare two DateTimes by their instant.
+        // Arithmetic between dates is intentionally not supported (use fields).
+        if let (ObjectData::DateTime { epoch_ms: a, .. }, ObjectData::DateTime { epoch_ms: b, .. }) = (&left, &right) {
+            let (a, b) = (*a, *b);
+            match op {
+                "<"  => return EvalResult::Value(self.bool_ref(a < b)),
+                ">"  => return EvalResult::Value(self.bool_ref(a > b)),
+                "<=" => return EvalResult::Value(self.bool_ref(a <= b)),
+                ">=" => return EvalResult::Value(self.bool_ref(a >= b)),
+                "==" => return EvalResult::Value(self.bool_ref(a == b)),
+                "!=" => return EvalResult::Value(self.bool_ref(a != b)),
+                _ => {
+                    eprintln!("❌ ERROR: Operator '{}' cannot be applied to DateTime - [{}:{}]", op, line, column);
+                    return EvalResult::Error;
+                }
+            }
+        }
+        // A DateField acts as its integer value in every operator.
+        let left = match left { ObjectData::DateField { value, .. } => ObjectData::Integer(value), other => other };
+        let right = match right { ObjectData::DateField { value, .. } => ObjectData::Integer(value), other => other };
+
         // Null equality: any value can be compared to null with == / !=
         if matches!(left, ObjectData::Null) || matches!(right, ObjectData::Null) {
             // Allow string + null and null + string concatenation

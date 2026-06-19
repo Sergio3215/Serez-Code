@@ -17,6 +17,7 @@ mod namespaces_gpu;
 mod namespaces_memory;
 mod namespaces_random;
 mod namespaces_autodiff;
+pub(crate) mod namespaces_datetime;
 mod namespaces_os;
 pub(crate) mod namespaces_gui;
 
@@ -464,6 +465,8 @@ impl Evaluator {
                 format!("Set[{}]", elems.join(", "))
             }
             Some(ObjectData::Tensor { shape, data, .. }) => crate::region::format_tensor(shape, data),
+            Some(ObjectData::DateTime { epoch_ms, utc }) => crate::region::format_datetime(*epoch_ms, *utc),
+            Some(ObjectData::DateField { value, .. }) => format!("{}", value),
             Some(ObjectData::Ptr(name)) => format!("&{}", name),
             Some(ObjectData::Null) => "null".to_string(),
             None => "❌ Referencia inválida".to_string(),
@@ -556,6 +559,12 @@ impl Evaluator {
             Some(ObjectData::Tensor { shape, data, tid }) => {
                 OwnedValue::Tensor { shape: shape.clone(), data: data.clone(), tid: *tid }
             }
+            Some(ObjectData::DateTime { epoch_ms, utc }) => {
+                OwnedValue::DateTime { epoch_ms: *epoch_ms, utc: *utc }
+            }
+            Some(ObjectData::DateField { epoch_ms, utc, field, value }) => {
+                OwnedValue::DateField { epoch_ms: *epoch_ms, utc: *utc, field: *field, value: *value }
+            }
             Some(ObjectData::Ptr(name)) => OwnedValue::Ptr(name.clone()),
             Some(ObjectData::Null) | None => OwnedValue::Null,
         }
@@ -599,6 +608,12 @@ impl Evaluator {
             }
             OwnedValue::Tensor { shape, data, tid } => {
                 self.alloc(ObjectData::Tensor { shape, data, tid })
+            }
+            OwnedValue::DateTime { epoch_ms, utc } => {
+                self.alloc(ObjectData::DateTime { epoch_ms, utc })
+            }
+            OwnedValue::DateField { epoch_ms, utc, field, value } => {
+                self.alloc(ObjectData::DateField { epoch_ms, utc, field, value })
             }
             OwnedValue::Ptr(name) => self.alloc(ObjectData::Ptr(name)),
             OwnedValue::Null => self.null_ref,
@@ -670,6 +685,14 @@ impl Evaluator {
             }
             OwnedValue::Tensor { shape, data, tid } => {
                 let idx = self.global_arena.alloc(ObjectData::Tensor { shape, data, tid });
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::DateTime { epoch_ms, utc } => {
+                let idx = self.global_arena.alloc(ObjectData::DateTime { epoch_ms, utc });
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::DateField { epoch_ms, utc, field, value } => {
+                let idx = self.global_arena.alloc(ObjectData::DateField { epoch_ms, utc, field, value });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Ptr(name) => {
@@ -1057,6 +1080,8 @@ pub(super) fn owned_to_obj_data(owned: &OwnedValue) -> ObjectData {
         OwnedValue::Function { .. } => ObjectData::Null,
         OwnedValue::Instance { class_name, fields: _ } => ObjectData::Instance { class_name: class_name.clone(), fields: Vec::new() },
         OwnedValue::Tensor { shape, data, tid } => ObjectData::Tensor { shape: shape.clone(), data: data.clone(), tid: *tid },
+        OwnedValue::DateTime { epoch_ms, utc } => ObjectData::DateTime { epoch_ms: *epoch_ms, utc: *utc },
+        OwnedValue::DateField { epoch_ms, utc, field, value } => ObjectData::DateField { epoch_ms: *epoch_ms, utc: *utc, field: *field, value: *value },
         OwnedValue::EnumVariant { .. } => ObjectData::Null,
         OwnedValue::Ptr(_) => ObjectData::Null,
     }
@@ -1082,6 +1107,10 @@ fn type_matches(expected: &str, data: &ObjectData) -> bool {
             type_matches(base, d)
         }
         (t, ObjectData::Instance { class_name, .. }) => t == class_name.as_str(),
+        ("DateTime", ObjectData::DateTime { .. }) => true,
+        // A DateField behaves as an int, so it satisfies an `int` parameter.
+        ("int", ObjectData::DateField { .. }) => true,
+        ("DateTime", ObjectData::DateField { .. }) => false,
         _ => false,
     }
 }
@@ -1155,6 +1184,11 @@ fn json_stringify_owned(val: &OwnedValue) -> String {
         OwnedValue::EnumVariant { enum_name, variant } => {
             format!("\"{}\"", format!("{}.{}", enum_name, variant).replace('"', "\\\""))
         }
+        // A DateTime serializes as an ISO 8601 string; a DateField as its int.
+        OwnedValue::DateTime { epoch_ms, utc } => {
+            format!("\"{}\"", crate::region::format_datetime(*epoch_ms, *utc))
+        }
+        OwnedValue::DateField { value, .. } => format!("{}", value),
         OwnedValue::Function { .. } => "null".to_string(),
         OwnedValue::Ptr(name) => format!("\"&{}\"", name),
     }

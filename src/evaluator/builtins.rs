@@ -70,6 +70,9 @@ impl super::Evaluator {
             }
             Some(ObjectData::Set { .. }) => "Set",
             Some(ObjectData::Tensor { .. }) => "Tensor",
+            Some(ObjectData::DateTime { .. }) => "DateTime",
+            // A DateField behaves as an int under operators.
+            Some(ObjectData::DateField { .. }) => "int",
         };
         EvalResult::Value(self.alloc(ObjectData::Str(type_name.to_string())))
     }

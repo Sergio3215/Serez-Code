@@ -564,6 +564,9 @@ impl super::Evaluator {
                     if name == "Time" {
                         return self.eval_time_namespace(dot_call);
                     }
+                    if name == "DateTime" {
+                        return self.eval_datetime_namespace(dot_call);
+                    }
                     if name == "System" {
                         return self.eval_system_namespace(dot_call);
                     }
@@ -848,6 +851,16 @@ impl super::Evaluator {
                     // ── Tensor methods ────────────────────────────────────────
                     ObjectData::Tensor { shape, data, .. } => {
                         self.eval_tensor_method(obj_ref, shape, data, dot_call)
+                    }
+
+                    // ── DateTime field getters / methods ──────────────────────
+                    ObjectData::DateTime { epoch_ms, utc } => {
+                        self.eval_datetime_method(epoch_ms, utc, dot_call)
+                    }
+
+                    // ── DateField arithmetic (.add/.reduce/.remove) ───────────
+                    ObjectData::DateField { epoch_ms, utc, field, value } => {
+                        self.eval_datefield_method(epoch_ms, utc, field, value, dot_call)
                     }
 
                     // ── EnumVariant: no field access, just toString ────────────

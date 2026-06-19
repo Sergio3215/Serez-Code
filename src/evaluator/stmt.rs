@@ -820,6 +820,11 @@ impl super::Evaluator {
             Some(ObjectData::Instance { fields, .. }) => {
                 fields.iter().map(|(k, v)| (OwnedValue::Str(k.clone()), v.clone())).collect()
             }
+            // Object destructuring of a DateTime exposes its calendar fields as
+            // plain ints: `const {day, month, year} = DateTime.now();`
+            Some(ObjectData::DateTime { epoch_ms, utc: _ }) => {
+                crate::evaluator::namespaces_datetime::datetime_field_entries(epoch_ms)
+            }
             _ => {
                 eprintln!("❌ ERROR: Dict destructure requires a dict or object on the right side");
                 return EvalResult::Error;
