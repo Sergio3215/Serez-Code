@@ -1,0 +1,116 @@
+// unit_dec.sz — exact base-10 decimal type `dec` (literal suffix `m`).
+// Covers literals/scale, exact arithmetic, the int-mixes-but-f64-does-not rule,
+// value-vs-scale comparison, all rounding modes, conversions and methods.
+
+test("literals preserve scale", () => {
+    assert((12.50m).toString() == "12.50", "trailing zero kept");
+    assert((5m).toString() == "5", "integer dec");
+    assert((1e-7m).toString() == "0.0000001", "scientific");
+    assert(type_of(5m) == "dec", "type_of");
+    assert(5m is dec, "is dec");
+});
+
+test("arithmetic is exact (the f64 failure does not happen)", () => {
+    assert(!(0.1 + 0.2 == 0.3), "f64 0.1+0.2 != 0.3");
+    assert(0.1m + 0.2m == 0.3m, "dec 0.1+0.2 == 0.3");
+    assert(1.10m * 1.10m == 1.21m, "exact product");
+    assert(10m - 9.99m == 0.01m, "exact difference");
+});
+
+test("int mixes in (exact); comparison ignores scale", () => {
+    assert(1 + 1m == 2m, "int + dec");
+    assert(2m * 3 == 6m, "dec * int");
+    assert(1.50m == 1.5m, "value equal, scale differs");
+    assert(1.50m != 1.6m, "not equal");
+    assert(2m > 1m && 1m < 2m, "ordering");
+    assert(2m <= 2m && 2m >= 2m, "le/ge");
+});
+
+test("rounding modes", () => {
+    assert((2.345m).round(2) == 2.34m, "default half-even rounds to even");
+    assert((2.355m).round(2) == 2.36m, "half-even up to even");
+    assert((2.345m).round(2, "half-up") == 2.35m, "half-up");
+    assert((2.345m).round(2, "down") == 2.34m, "down/truncate");
+    assert((2.341m).round(2, "up") == 2.35m, "up away from zero");
+    assert((2.349m).round(2, "floor") == 2.34m, "floor");
+    assert((2.341m).round(2, "ceil") == 2.35m, "ceil");
+});
+
+test("setScale and truncate", () => {
+    assert((1m).setScale(2).toString() == "1.00", "pad scale");
+    assert((1.999m).setScale(2, "down").toString() == "1.99", "setScale down");
+    assert((1.999m).truncate(1).toString() == "1.9", "truncate to 1 dp");
+    assert((1.005m).setScale(2, "half-up") == 1.01m, "setScale half-up");
+});
+
+test("conversions", () => {
+    assert(Dec.parse("12.50").toString() == "12.50", "parse keeps scale");
+    assert(Dec.fromInt(1250, 2) == 12.50m, "fromInt scaled");
+    assert((12.99m).toInt() == 12, "toInt truncates");
+    assert((0.5m).toDecimal() == 0.5, "toDecimal (0.5 exact in f64)");
+    assert(Dec.MAX_SCALE == 28, "max scale");
+});
+
+test("value methods", () => {
+    assert((12.50m).scale() == 2, "scale");
+    assert((-5.5m).abs() == 5.5m, "abs");
+    assert((2.7m).floor() == 2m, "floor");
+    assert((2.1m).ceil() == 3m, "ceil");
+    assert((0m).isZero(), "isZero true");
+    assert(!(1m).isZero(), "isZero false");
+    assert((-3m).sign() == -1, "sign negative");
+    assert((3m).sign() == 1, "sign positive");
+    assert((0m).sign() == 0, "sign zero");
+    assert((2m).min(5m) == 2m, "min");
+    assert((2m).max(5m) == 5m, "max");
+});
+
+test("division rounds to 28 digits, exact terminating cases", () => {
+    assert(10m / 4m == 2.5m, "terminating division");
+    assert(1m / 8m == 0.125m, "exact eighths");
+    assert((1m / 3m).scale() == 28, "non-terminating rounds to 28 dp");
+});
+
+test("dec params/return in functions; arrays of dec", () => {
+    let addTax = (n, r) => n * (1m + r);
+    assert(addTax(100m, 0.21m) == 121m, "lambda dec arithmetic");
+    let xs = [1.5m, 2.5m, 3.0m];
+    assert(xs[0] + xs[1] == 4m, "dec array elements");
+    let sum = xs.reduce(0m, (acc, v) => acc + v);
+    assert(sum == 7m, "reduce over dec");
+});
+
+test("JSON.stringify emits dec as an exact number literal", () => {
+    let d <string, any> = ({"total", 15.1250m}, {"qty", 3});
+    let s = JSON.stringify(d);
+    assert(s.includes("15.1250"), "exact scale in json");
+});
+
+test("dec works in switch, sort and includes", () => {
+    let m = 2m;
+    let label = "none";
+    switch (m) {
+        case 1m: { label = "one"; }
+        case 2m: { label = "two"; }
+    }
+    assert(label == "two", "switch matches a dec case");
+    let ys = [3.5m, 1.5m, 2.5m];
+    ys.sort();
+    assert(ys[0] == 1.5m && ys[2] == 3.5m, "sort dec ascending");
+    assert([2m, 3m, 1m].includes(2m), "includes dec");
+});
+
+test("COBOL-style COMPUTE ... ROUNDED stays exact", () => {
+    // PIC 9(6)V99; COMPUTE IVA = NETO * 0.21 ROUNDED
+    let neto = 1000.00m;
+    let iva = (neto * 0.21m).setScale(2, "half-up");
+    assert(iva == 210.00m, "iva exact");
+    // three installments that must sum back to the total (classic f64 trap)
+    let total = 162.32m;
+    let cuota = (total / 3m).setScale(2, "down");      // 54.10
+    let ultima = (total - cuota * 2).setScale(2, "half-up"); // 54.12
+    assert(cuota == 54.10m, "installment truncated");
+    assert(cuota + cuota + ultima == total, "installments close exactly");
+});
+
+summary();

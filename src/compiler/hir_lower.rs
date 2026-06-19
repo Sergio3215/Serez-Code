@@ -359,6 +359,9 @@ impl HirLowerer {
         match expr {
             Expression::Integer(i)  => HirExpr::LitInt(*i),
             Expression::Decimal(d)  => HirExpr::LitDecimal(*d),
+            // The LLVM backend has no exact-decimal type; `dec` lowers to f64
+            // (lossy). Exact arithmetic is only guaranteed on the interpreter.
+            Expression::Dec(d)      => HirExpr::LitDecimal(d.to_string().parse::<f64>().unwrap_or(0.0)),
             Expression::Boolean(b)  => HirExpr::LitBool(*b),
             Expression::String(s)   => HirExpr::LitStr(s.clone()),
             Expression::Null        => HirExpr::Null,

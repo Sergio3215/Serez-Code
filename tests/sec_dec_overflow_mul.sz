@@ -1,0 +1,2 @@
+// Security: dec overflow is checked (no panic), surfaces a clean error.
+Dec.MAX * Dec.MAX;

@@ -1,0 +1,2 @@
+// dec ** with a non-integer exponent must error
+out 2m ** 1.5m;

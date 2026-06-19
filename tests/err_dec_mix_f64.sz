@@ -1,0 +1,2 @@
+// mixing exact dec with f64 decimal must be a type error
+out 1m + 0.5;

@@ -614,9 +614,9 @@ impl Parser {
         self.next_token(); // consume '('
         self.next_token(); // move to the argument
 
-        let type_names = ["int", "decimal", "bool", "string", "null", "void", "any"];
+        let type_names = ["int", "decimal", "dec", "bool", "string", "null", "void", "any"];
         let target = if matches!(self.current_token.token_type,
-            TokenType::KwInt | TokenType::KwDecimal | TokenType::KwBool |
+            TokenType::KwInt | TokenType::KwDecimal | TokenType::KwDec | TokenType::KwBool |
             TokenType::KwString | TokenType::KwNull | TokenType::KwVoid | TokenType::KwAny)
         {
             let name = self.current_token.literal.clone();
@@ -1811,6 +1811,13 @@ impl Parser {
                 }
             }
 
+            TokenType::Dec => {
+                match parse_dec_literal(&self.current_token.literal) {
+                    Some(d) => Some(Expression::Dec(d)),
+                    None => None,
+                }
+            }
+
             TokenType::String => {
                 let s = self.current_token.literal.clone();
                 if s.contains('{') {
@@ -1960,6 +1967,7 @@ impl Parser {
             TokenType::KwVoid
             | TokenType::KwInt
             | TokenType::KwDecimal
+            | TokenType::KwDec
             | TokenType::KwString
             | TokenType::KwBool
             | TokenType::KwAny => self.parse_arrow_function(),
@@ -2906,6 +2914,10 @@ impl Parser {
                 let n: f64 = self.current_token.literal.parse().ok()?;
                 Some(MatchPattern::Literal(Expression::Decimal(n)))
             }
+            TokenType::Dec => {
+                let d = parse_dec_literal(&self.current_token.literal)?;
+                Some(MatchPattern::Literal(Expression::Dec(d)))
+            }
             TokenType::String => Some(MatchPattern::Literal(Expression::String(self.current_token.literal.clone()))),
             TokenType::True  => Some(MatchPattern::Literal(Expression::Boolean(true))),
             TokenType::False => Some(MatchPattern::Literal(Expression::Boolean(false))),
@@ -3049,10 +3061,21 @@ fn is_type_keyword(token_type: &TokenType) -> bool {
         TokenType::KwVoid
             | TokenType::KwInt
             | TokenType::KwDecimal
+            | TokenType::KwDec
             | TokenType::KwString
             | TokenType::KwBool
             | TokenType::KwAny
     )
+}
+
+/// Parse a `dec` literal lexeme (the `m` suffix is already stripped). Handles
+/// both plain (`12.50`) and scientific (`1e-7`) forms via rust_decimal.
+fn parse_dec_literal(lit: &str) -> Option<rust_decimal::Decimal> {
+    if lit.contains('e') || lit.contains('E') {
+        rust_decimal::Decimal::from_scientific(lit).ok()
+    } else {
+        lit.parse::<rust_decimal::Decimal>().ok()
+    }
 }
 
 impl Parser {

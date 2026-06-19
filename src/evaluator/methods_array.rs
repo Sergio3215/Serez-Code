@@ -196,10 +196,11 @@ impl super::Evaluator {
 
                 let all_ints = owned_vals.iter().all(|v| matches!(v, OwnedValue::Integer(_)));
                 let all_decs = owned_vals.iter().all(|v| matches!(v, OwnedValue::Decimal(_)));
+                let all_exact = owned_vals.iter().all(|v| matches!(v, OwnedValue::Dec(_)));
                 let all_strs = owned_vals.iter().all(|v| matches!(v, OwnedValue::Str(_)));
 
-                if !all_ints && !all_decs && !all_strs {
-                    eprintln!("❌ ERROR: sort requires a homogeneous array (all int, decimal, or string)");
+                if !all_ints && !all_decs && !all_exact && !all_strs {
+                    eprintln!("❌ ERROR: sort requires a homogeneous array (all int, decimal, dec, or string)");
                     return EvalResult::Error;
                 }
 
@@ -208,6 +209,7 @@ impl super::Evaluator {
                         (OwnedValue::Integer(x), OwnedValue::Integer(y)) => x.cmp(y),
                         (OwnedValue::Decimal(x), OwnedValue::Decimal(y)) =>
                             x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+                        (OwnedValue::Dec(x), OwnedValue::Dec(y)) => x.cmp(y),
                         (OwnedValue::Str(x), OwnedValue::Str(y)) => x.cmp(y),
                         _ => std::cmp::Ordering::Equal,
                     };

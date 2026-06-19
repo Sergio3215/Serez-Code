@@ -266,6 +266,15 @@ impl Lexer {
                     let start_line = self.line;
                     let start_column = self.column;
                     let literal = self.read_number();
+                    // `dec` literal suffix `m` (12.50m, 5m, 1e-7m). Only when the
+                    // `m` stands alone — not when it begins an identifier (5meters).
+                    if self.ch == 'm' {
+                        let after = self.peek_char();
+                        if !is_letter(after) && !is_digit(after) {
+                            self.read_char(); // consume the 'm'
+                            return Token::new(TokenType::Dec, literal, start_line, start_column);
+                        }
+                    }
                     let token_type = if literal.contains('.')
                         || literal.contains('e')
                         || literal.contains('E')

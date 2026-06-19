@@ -1,0 +1,2 @@
+// dec division by zero must error
+out 1m / 0m;

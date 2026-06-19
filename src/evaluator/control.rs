@@ -74,6 +74,10 @@ impl super::Evaluator {
             (ObjectData::Integer(x),  ObjectData::Integer(y))  => x == y,
             // Two DateTimes are equal when they denote the same instant.
             (ObjectData::DateTime { epoch_ms: x, .. }, ObjectData::DateTime { epoch_ms: y, .. }) => x == y,
+            // Exact decimal, by value (scale ignored); int mixes in exactly.
+            (ObjectData::Dec(x), ObjectData::Dec(y)) => x == y,
+            (ObjectData::Dec(x), ObjectData::Integer(y)) => *x == rust_decimal::Decimal::from(*y),
+            (ObjectData::Integer(x), ObjectData::Dec(y)) => rust_decimal::Decimal::from(*x) == *y,
             (ObjectData::Decimal(x),  ObjectData::Decimal(y))  => x == y,
             // Cross-type numeric: same coercion that == uses in infix expressions
             (ObjectData::Decimal(x),  ObjectData::Integer(y))  => *x == (*y as f64),

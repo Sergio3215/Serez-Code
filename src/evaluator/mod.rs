@@ -17,6 +17,7 @@ mod namespaces_gpu;
 mod namespaces_memory;
 mod namespaces_random;
 mod namespaces_autodiff;
+mod methods_dec;
 pub(crate) mod namespaces_datetime;
 mod namespaces_os;
 pub(crate) mod namespaces_gui;
@@ -437,6 +438,7 @@ impl Evaluator {
                     s.trim_end_matches('0').trim_end_matches('.').to_string()
                 }
             }
+            Some(ObjectData::Dec(d)) => d.to_string(),
             Some(ObjectData::Boolean(b)) => format!("{}", b),
             Some(ObjectData::Str(s)) => format!("{}", s),
             Some(ObjectData::Array { elements, .. }) => {
@@ -519,6 +521,7 @@ impl Evaluator {
         match self.resolve(obj_ref) {
             Some(ObjectData::Integer(i)) => OwnedValue::Integer(*i),
             Some(ObjectData::Decimal(d)) => OwnedValue::Decimal(*d),
+            Some(ObjectData::Dec(d)) => OwnedValue::Dec(*d),
             Some(ObjectData::Boolean(b)) => OwnedValue::Boolean(*b),
             Some(ObjectData::Str(s)) => OwnedValue::Str(s.clone()),
             Some(ObjectData::Array { element_type, elements }) => {
@@ -576,6 +579,7 @@ impl Evaluator {
         match value {
             OwnedValue::Integer(i) => self.alloc(ObjectData::Integer(i)),
             OwnedValue::Decimal(d) => self.alloc(ObjectData::Decimal(d)),
+            OwnedValue::Dec(d) => self.alloc(ObjectData::Dec(d)),
             OwnedValue::Boolean(b) => self.alloc(ObjectData::Boolean(b)),
             OwnedValue::Str(s) => self.alloc(ObjectData::Str(s)),
             OwnedValue::Array { element_type, elements: items } => {
@@ -635,6 +639,10 @@ impl Evaluator {
         match value {
             OwnedValue::Integer(i) => {
                 let idx = self.global_arena.alloc(ObjectData::Integer(i));
+                ObjectRef { region: RegionId::Global, index: idx }
+            }
+            OwnedValue::Dec(d) => {
+                let idx = self.global_arena.alloc(ObjectData::Dec(d));
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Decimal(d) => {
@@ -1038,6 +1046,7 @@ fn obj_data_eq(a: &Option<ObjectData>, b: &Option<ObjectData>) -> bool {
     match (a, b) {
         (Some(ObjectData::Integer(x)),  Some(ObjectData::Integer(y)))  => x == y,
         (Some(ObjectData::Decimal(x)),  Some(ObjectData::Decimal(y)))  => x == y,
+        (Some(ObjectData::Dec(x)),      Some(ObjectData::Dec(y)))      => x == y,
         (Some(ObjectData::Boolean(x)),  Some(ObjectData::Boolean(y)))  => x == y,
         (Some(ObjectData::Str(x)),      Some(ObjectData::Str(y)))      => x == y,
         (Some(ObjectData::Null),        Some(ObjectData::Null))        => true,
@@ -1068,6 +1077,7 @@ pub(super) fn owned_to_obj_data(owned: &OwnedValue) -> ObjectData {
         OwnedValue::Null => ObjectData::Null,
         OwnedValue::Integer(i) => ObjectData::Integer(*i),
         OwnedValue::Decimal(d) => ObjectData::Decimal(*d),
+        OwnedValue::Dec(d) => ObjectData::Dec(*d),
         OwnedValue::Boolean(b) => ObjectData::Boolean(*b),
         OwnedValue::Str(s) => ObjectData::Str(s.clone()),
         OwnedValue::Array { element_type, elements: _ } => {
@@ -1091,6 +1101,7 @@ fn type_matches(expected: &str, data: &ObjectData) -> bool {
     match (expected, data) {
         ("int", ObjectData::Integer(_)) => true,
         ("decimal", ObjectData::Decimal(_)) => true,
+        ("dec", ObjectData::Dec(_)) => true,
         ("string", ObjectData::Str(_)) => true,
         ("bool", ObjectData::Boolean(_)) => true,
         ("null", ObjectData::Null) => true,
@@ -1122,6 +1133,8 @@ fn json_stringify_owned(val: &OwnedValue) -> String {
         OwnedValue::Null => "null".to_string(),
         OwnedValue::Boolean(b) => b.to_string(),
         OwnedValue::Integer(i) => i.to_string(),
+        // Exact decimal serializes as a JSON number literal preserving scale.
+        OwnedValue::Dec(d) => d.to_string(),
         OwnedValue::Decimal(d) => {
             if !d.is_finite() { return "null".to_string(); }
             if d.fract() == 0.0 { format!("{:.1}", d) }

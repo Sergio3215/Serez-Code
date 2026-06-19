@@ -21,6 +21,7 @@ impl super::Evaluator {
                     }
                 },
                 ObjectData::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(-d))),
+                ObjectData::Dec(d) => EvalResult::Value(self.alloc(ObjectData::Dec(-d))),
                 ObjectData::Instance { ref class_name, .. } => {
                     let cn = class_name.clone();
                     if self.find_method(&cn, "op_neg").is_some() {
@@ -59,6 +60,57 @@ impl super::Evaluator {
                 }
             },
             _ => EvalResult::Error,
+        }
+    }
+
+    // Exact base-10 arithmetic for `dec`. Comparisons are by value (scale
+    // ignored: 1.50m == 1.5m). Arithmetic is checked (overflow → ❌, like int);
+    // `/` rounds to 28 significant digits half-even (rust_decimal default);
+    // `**` requires a non-negative integer exponent.
+    pub(super) fn dec_binop(&mut self, op: &str, l: rust_decimal::Decimal, r: rust_decimal::Decimal, line: usize, column: usize) -> EvalResult {
+        use rust_decimal::prelude::*;
+        match op {
+            "<"  => return EvalResult::Value(self.bool_ref(l < r)),
+            ">"  => return EvalResult::Value(self.bool_ref(l > r)),
+            "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
+            ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
+            "==" => return EvalResult::Value(self.bool_ref(l == r)),
+            "!=" => return EvalResult::Value(self.bool_ref(l != r)),
+            _ => {}
+        }
+        let result = match op {
+            "+" => l.checked_add(r),
+            "-" => l.checked_sub(r),
+            "*" => l.checked_mul(r),
+            "%" => l.checked_rem(r),
+            "/" => {
+                if r.is_zero() {
+                    eprintln!("❌ ERROR: Decimal division by zero - [{}:{}]", line, column);
+                    return EvalResult::Error;
+                }
+                l.checked_div(r)
+            }
+            "**" => {
+                if r.is_sign_negative() || r.fract() != rust_decimal::Decimal::ZERO {
+                    eprintln!("❌ ERROR: '**' on dec requires a non-negative integer exponent - [{}:{}]", line, column);
+                    return EvalResult::Error;
+                }
+                let exp = match r.to_u64() {
+                    Some(e) => e,
+                    None => { eprintln!("❌ ERROR: dec exponent too large - [{}:{}]", line, column); return EvalResult::Error; }
+                };
+                let mut acc = rust_decimal::Decimal::ONE;
+                let mut overflow = false;
+                for _ in 0..exp {
+                    match acc.checked_mul(l) { Some(v) => acc = v, None => { overflow = true; break; } }
+                }
+                if overflow { None } else { Some(acc) }
+            }
+            _ => { eprintln!("❌ ERROR: Operator '{}' not supported for dec - [{}:{}]", op, line, column); return EvalResult::Error; }
+        };
+        match result {
+            Some(v) => EvalResult::Value(self.alloc(ObjectData::Dec(v))),
+            None => { eprintln!("❌ ERROR: Decimal overflow - [{}:{}]", line, column); EvalResult::Error }
         }
     }
 
@@ -199,6 +251,31 @@ impl super::Evaluator {
                     _ => { eprintln!("❌ ERROR: Unknown operator: {}", op); return EvalResult::Error; }
                 };
                 EvalResult::Value(self.int_ref(result))
+            }
+            // Exact base-10 `dec`. `int` mixes in (it is exact); f64 `decimal`
+            // is NEVER mixed implicitly — that would re-contaminate exactness.
+            (ObjectData::Dec(l), ObjectData::Dec(r)) => self.dec_binop(op, l, r, line, column),
+            (ObjectData::Dec(l), ObjectData::Integer(r)) => self.dec_binop(op, l, rust_decimal::Decimal::from(r), line, column),
+            (ObjectData::Integer(l), ObjectData::Dec(r)) => self.dec_binop(op, rust_decimal::Decimal::from(l), r, line, column),
+            (ObjectData::Dec(_), ObjectData::Decimal(_)) | (ObjectData::Decimal(_), ObjectData::Dec(_)) => {
+                eprintln!("❌ ERROR: cannot mix 'dec' (exact) and 'decimal' (f64) with '{}' — convert explicitly (d.toDecimal() / Dec.parse) - [{}:{}]", op, line, column);
+                EvalResult::Error
+            }
+            (ObjectData::Str(s), ObjectData::Dec(d)) => {
+                match op {
+                    "==" => return EvalResult::Value(self.false_ref),
+                    "!=" => return EvalResult::Value(self.true_ref),
+                    "+" => EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, d)))),
+                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between String and dec", op); EvalResult::Error }
+                }
+            }
+            (ObjectData::Dec(d), ObjectData::Str(s)) => {
+                match op {
+                    "==" => return EvalResult::Value(self.false_ref),
+                    "!=" => return EvalResult::Value(self.true_ref),
+                    "+" => EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", d, s)))),
+                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between dec and String", op); EvalResult::Error }
+                }
             }
             // Decimal arithmetic (decimal op decimal, int op decimal, decimal op int)
             (ObjectData::Decimal(l), ObjectData::Decimal(r)) => {

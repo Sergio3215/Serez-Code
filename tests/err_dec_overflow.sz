@@ -1,0 +1,2 @@
+// dec overflow must error (checked), not wrap or panic
+out Dec.MAX + 1m;

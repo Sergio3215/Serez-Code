@@ -270,6 +270,7 @@ pub enum Expression {
     Identifier(String),
     Integer(i64),
     Decimal(f64),
+    Dec(rust_decimal::Decimal),
     String(String),
     Boolean(bool),
     ArrayLiteral(ArrayLiteral),

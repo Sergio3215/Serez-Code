@@ -50,6 +50,7 @@ impl super::Evaluator {
         let type_name = match self.resolve(r) {
             Some(ObjectData::Integer(_))  => "int",
             Some(ObjectData::Decimal(_))  => "decimal",
+            Some(ObjectData::Dec(_))      => "dec",
             Some(ObjectData::Boolean(_))  => "bool",
             Some(ObjectData::Str(_))      => "string",
             Some(ObjectData::Array { .. }) => "array",

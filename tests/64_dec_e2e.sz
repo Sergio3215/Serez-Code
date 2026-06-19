@@ -1,0 +1,54 @@
+// 64_dec_e2e — exact decimal (`dec`) end-to-end. Deterministic by construction.
+
+out "── literals & scale ──";
+out 12.50m;          // 12.50
+out 5m;              // 5
+out 1e-7m;           // 0.0000001
+out type_of(0.21m);  // dec
+
+out "── exact arithmetic ──";
+out (0.1m + 0.2m);             // 0.3
+out (0.1m + 0.2m == 0.3m);     // true
+out (1.10m * 1.10m);           // 1.2100
+out (1 + 1m);                  // 2  (int mixes in)
+out (10m - 9.99m);             // 0.01
+
+out "── comparison (by value, scale ignored) ──";
+out (1.50m == 1.5m);           // true
+out (2m > 1m);                 // true
+
+out "── rounding ──";
+out (2.345m).round(2);              // 2.34 (half-even)
+out (2.345m).round(2, "half-up");   // 2.35
+out (2.345m).round(2, "down");      // 2.34
+out (1m).setScale(2);               // 1.00
+out (1.999m).truncate(1);           // 1.9
+
+out "── namespace & methods ──";
+out Dec.parse("99.99");        // 99.99
+out Dec.fromInt(1250, 2);      // 12.50
+out (12.50m).scale();          // 2
+out (-5.5m).abs();             // 5.5
+out (12.99m).toInt();          // 12
+out (-3m).sign();              // -1
+out (10m / 4m);                // 2.5
+
+out "── financial: invoice with ROUNDED ──";
+let neto = 1000.00m;
+let iva = (neto * 0.21m).setScale(2, "half-up");
+out iva;                       // 210.00
+let total = neto + iva;
+out total;                     // 1210.00
+
+out "── installments that must close exactly ──";
+let monto = 162.32m;
+let cuota = (monto / 3m).setScale(2, "down");
+let ultima = (monto - cuota * 2).setScale(2, "half-up");
+out cuota;                     // 54.10
+out ultima;                    // 54.12
+out (cuota + cuota + ultima);  // 162.32
+out (cuota + cuota + ultima == monto);  // true
+
+out "── JSON ──";
+let row <string, any> = ({"price", 15.1250m}, {"qty", 3});
+out JSON.stringify(row);       // {"price":15.1250,"qty":3}

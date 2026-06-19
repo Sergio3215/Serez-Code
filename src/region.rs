@@ -21,6 +21,7 @@ use std::rc::Rc;
 pub enum OwnedValue {
     Integer(i64),
     Decimal(f64),
+    Dec(rust_decimal::Decimal),
     Boolean(bool),
     Str(String),
     Array {
@@ -72,6 +73,8 @@ impl OwnedValue {
                     s.trim_end_matches('0').trim_end_matches('.').to_string()
                 }
             }
+            // Exact: rust_decimal's Display preserves the scale (12.50, not 12.5).
+            OwnedValue::Dec(d) => d.to_string(),
             OwnedValue::Boolean(b) => format!("{}", b),
             OwnedValue::Str(s) => s.clone(),
             OwnedValue::Array { elements, .. } => {
@@ -109,6 +112,7 @@ impl OwnedValue {
 pub enum ObjectData {
     Integer(i64),
     Decimal(f64),
+    Dec(rust_decimal::Decimal),
     Boolean(bool),
     Str(String),
     Array {
@@ -163,6 +167,7 @@ impl std::fmt::Display for ObjectData {
         match self {
             ObjectData::Integer(i) => write!(f, "Integer({})", i),
             ObjectData::Decimal(d) => write!(f, "Decimal({})", d),
+            ObjectData::Dec(d) => write!(f, "Dec({})", d),
             ObjectData::Boolean(b) => write!(f, "Boolean({})", b),
             ObjectData::Str(s) => write!(f, "String(\"{}\")", s),
             ObjectData::Array { element_type: Some(t), .. } => write!(f, "[{}]([...])", t),
@@ -266,6 +271,7 @@ impl ObjectData {
         match self {
             ObjectData::Integer(_) => "int",
             ObjectData::Decimal(_) => "decimal",
+            ObjectData::Dec(_) => "dec",
             ObjectData::Boolean(_) => "bool",
             ObjectData::Str(_) => "string",
             ObjectData::Array { .. } => "array",

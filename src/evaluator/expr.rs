@@ -14,6 +14,7 @@ impl super::Evaluator {
         match expr {
             Expression::Integer(i) => EvalResult::Value(self.int_ref(*i)),
             Expression::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(*d))),
+            Expression::Dec(d) => EvalResult::Value(self.alloc(ObjectData::Dec(*d))),
             Expression::String(s) => EvalResult::Value(self.alloc(ObjectData::Str(s.clone()))),
             Expression::Boolean(b) => EvalResult::Value(self.alloc(ObjectData::Boolean(*b))),
             Expression::Null => EvalResult::Value(self.null_ref),
@@ -572,6 +573,9 @@ impl super::Evaluator {
                     if name == "DateTime" {
                         return self.eval_datetime_namespace(dot_call);
                     }
+                    if name == "Dec" {
+                        return self.eval_dec_namespace(dot_call);
+                    }
                     if name == "System" {
                         return self.eval_system_namespace(dot_call);
                     }
@@ -856,6 +860,11 @@ impl super::Evaluator {
                     // ── Tensor methods ────────────────────────────────────────
                     ObjectData::Tensor { shape, data, .. } => {
                         self.eval_tensor_method(obj_ref, shape, data, dot_call)
+                    }
+
+                    // ── Exact decimal methods (round/setScale/abs/...) ─────────
+                    ObjectData::Dec(d) => {
+                        self.eval_dec_method(d, dot_call)
                     }
 
                     // ── DateTime field getters / methods ──────────────────────

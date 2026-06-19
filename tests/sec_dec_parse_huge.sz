@@ -1,0 +1,2 @@
+// Security: pathological >28-digit input is rejected, not panicked on.
+Dec.parse("99999999999999999999999999999999999999");

@@ -1,0 +1,38 @@
+── literals & scale ──
+12.50
+5
+0.0000001
+dec
+── exact arithmetic ──
+0.3
+true
+1.2100
+2
+0.01
+── comparison (by value, scale ignored) ──
+true
+true
+── rounding ──
+2.34
+2.35
+2.34
+1.00
+1.9
+── namespace & methods ──
+99.99
+12.50
+2
+5.5
+12
+-1
+2.50
+── financial: invoice with ROUNDED ──
+210.00
+1210.00
+── installments that must close exactly ──
+54.10
+54.12
+162.32
+true
+── JSON ──
+{"price":15.1250,"qty":3}

@@ -7,6 +7,7 @@ pub enum TokenType {
     Ident,
     Int,
     Decimal,
+    Dec,        // exact base-10 literal: 12.50m, 5m, 1e-7m
     String,
 
     // Operators
@@ -74,6 +75,7 @@ pub enum TokenType {
     KwVoid,
     KwInt,
     KwDecimal,
+    KwDec,       // exact base-10 decimal type
     KwString,
     KwBool,
     KwAny,
@@ -168,6 +170,7 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "void" => TokenType::KwVoid,
         "int" => TokenType::KwInt,
         "decimal" => TokenType::KwDecimal,
+        "dec" => TokenType::KwDec,
         "string" => TokenType::KwString,
         "bool" => TokenType::KwBool,
         "any" => TokenType::KwAny,

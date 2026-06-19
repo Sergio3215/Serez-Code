@@ -1,0 +1,2 @@
+// Dec.parse of a non-number must error
+Dec.parse("not-a-number");

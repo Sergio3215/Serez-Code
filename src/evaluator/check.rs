@@ -117,6 +117,7 @@ impl super::Evaluator {
         match expr {
             ast::Expression::Integer(_) => 8,
             ast::Expression::Decimal(_) => 8,
+            ast::Expression::Dec(_) => 16,
             ast::Expression::Boolean(_) => 1,
             ast::Expression::String(s) => 24 + s.len(),
             ast::Expression::Identifier(_) => 8,

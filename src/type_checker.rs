@@ -47,6 +47,7 @@ impl<'a> TypeChecker<'a> {
         match expr {
             Expression::Integer(_) => Some("int".to_string()),
             Expression::Decimal(_) => Some("decimal".to_string()),
+            Expression::Dec(_) => Some("dec".to_string()),
             Expression::String(_) | Expression::InterpolatedString(_) => Some("string".to_string()),
             Expression::Boolean(_) => Some("bool".to_string()),
             Expression::Null => Some("null".to_string()),
