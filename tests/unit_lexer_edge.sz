@@ -119,6 +119,19 @@ test("binary literals parse correctly", () => {
     assert(0b100  == 4,    "0b100 = 4");
 });
 
+test("raw strings r\"...\" — no interpolation, no escapes", () => {
+    let x = 5;
+    assert("{x}" == "5", "normal string still interpolates");
+    assert(r"{x}" == "\{x\}", "raw: braces literal, no interpolation");
+    assert(r"a{b}c" == "a\{b\}c", "raw braces in the middle");
+    assert(r"C:\temp" == "C:\\temp", "raw backslash is literal");
+    assert(r"a\nb".length() == 4, "raw \\n is two chars, not a newline");
+    assert(r"\d+\.\d{2}".length() == 10, "regex stays literal");
+    assert(("p=" + r"{v}") == "p=\{v\}", "raw in concatenation");
+    let identNotRaw = 7;     // a normal identifier starting with 'r'
+    assert(identNotRaw == 7, "'r' identifiers unaffected");
+});
+
 test("escaped braces \\{ and \\} are literal (B-78)", () => {
     assert("a\{b\}c" == "a{b}c", "both braces literal");
     assert("\{\}".length() == 2, "two chars, no leaked backslash");

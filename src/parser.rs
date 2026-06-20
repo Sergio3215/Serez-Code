@@ -1832,6 +1832,9 @@ impl Parser {
                 }
             }
 
+            // Raw string r"..." — already literal (braces not interpolated).
+            TokenType::RawString => Some(Expression::String(self.current_token.literal.clone())),
+
             TokenType::True => Some(Expression::Boolean(true)),
             TokenType::False => Some(Expression::Boolean(false)),
             TokenType::KwNull => Some(Expression::Null),
@@ -2919,6 +2922,7 @@ impl Parser {
                 Some(MatchPattern::Literal(Expression::Dec(d)))
             }
             TokenType::String => Some(MatchPattern::Literal(Expression::String(self.current_token.literal.clone()))),
+            TokenType::RawString => Some(MatchPattern::Literal(Expression::String(self.current_token.literal.clone()))),
             TokenType::True  => Some(MatchPattern::Literal(Expression::Boolean(true))),
             TokenType::False => Some(MatchPattern::Literal(Expression::Boolean(false))),
             TokenType::KwNull => Some(MatchPattern::Literal(Expression::Null)),

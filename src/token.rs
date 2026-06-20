@@ -9,6 +9,7 @@ pub enum TokenType {
     Decimal,
     Dec,        // exact base-10 literal: 12.50m, 5m, 1e-7m
     String,
+    RawString,  // r"..." — no interpolation, braces are literal
 
     // Operators
     Assign,

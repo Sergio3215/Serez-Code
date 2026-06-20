@@ -256,6 +256,17 @@ impl Lexer {
             }
             '\0' => Token::new(TokenType::Eof, "".to_string(), self.line, self.column),
             _ => {
+                // Raw string r"..." — no interpolation, braces are literal.
+                // Only when `r` is immediately followed by `"` (not an identifier
+                // like `result`/`range`).
+                if self.ch == 'r' && self.peek_char() == '"' {
+                    let start_line = self.line;
+                    let start_column = self.column;
+                    self.read_char(); // consume 'r' → self.ch == '"'
+                    let literal = self.read_raw_string(); // leaves ch at closing '"'
+                    self.read_char(); // consume closing '"'
+                    return Token::new(TokenType::RawString, literal, start_line, start_column);
+                }
                 if is_letter(self.ch) {
                     let literal = self.read_identifier();
                     let token_type = token::lookup_ident(&literal);
@@ -343,6 +354,24 @@ impl Lexer {
                     }
                 }
                 '"' => break, // closing quote at depth 0
+                c => result.push(c),
+            }
+        }
+        result
+    }
+
+    // Raw string body for r"...": everything is literal — no interpolation and
+    // no escape processing (so `\n`, `\t`, `\d`, `{`, `}` stay as written, ideal
+    // for Windows paths, regexes and literal braces). It cannot contain a `"`
+    // (the first `"` closes it) — use a normal string with `\"` for that.
+    fn read_raw_string(&mut self) -> String {
+        // self.ch == '"' (opening quote)
+        let mut result = String::new();
+        loop {
+            self.read_char();
+            match self.ch {
+                '\0' => break,
+                '"' => break, // closing quote
                 c => result.push(c),
             }
         }
