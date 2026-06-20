@@ -1,0 +1,40 @@
+// 71_net_gui_integral_e2e — integration of the networking and GUI subsystems
+// mixed with the core: a TCP loopback exchanges a JSON record (dec + DateTime),
+// a WebSocket frame carries a dec payload, and headless Gui.measureText is mixed
+// with string lengths. Deterministic (loopback + measureText are stable).
+use permissions { Socket, Gui }
+
+// ── TCP loopback carrying a JSON record with dec + DateTime ──
+let rec <string, any> = ({"total", 199.99m}, {"day", DateTime.from(2026, 6, 20).day});
+let payload = JSON.stringify(rec);
+
+let srv  = Socket.listen(19940);
+let cli  = Socket.connect("127.0.0.1", 19940);
+let conn = Socket.accept(srv);
+Socket.send(cli, payload);
+let received = Socket.recv(conn, 256);
+Socket.close(cli); Socket.close(conn); Socket.close(srv);
+
+out "1 roundtrip equal: " + (received == payload);          // true
+let parsed = JSON.parse(received);
+out "2 total: " + parsed["total"];                          // 199.99
+out "3 day: " + parsed["day"];                              // 20
+
+// ── WebSocket frame with a dec payload ──
+let s2   = Socket.listen(19941);
+let c2   = Socket.connect("127.0.0.1", 19941);
+let k2   = Socket.accept(s2);
+Socket.sendWsFrame(c2, "price=" + 42.50m);
+let frame = Socket.recvWsFrame(k2);
+Socket.close(c2); Socket.close(k2); Socket.close(s2);
+out "4 ws frame: " + frame;                                 // price=42.50
+
+// ── GUI headless metrics mixed with strings ──
+let label = "Total: " + 199.99m;                            // "Total: 199.99"
+let m = Gui.measureText(label, 2);
+out "5 label len: " + label.length();                       // 13
+out "6 measured width: " + m[0];                            // 13*8*2 = 208
+out "7 measured height: " + m[1];                           // 16
+out "8 unicode width: " + Gui.measureText("ñ", 2)[0];       // 16
+
+out "DONE";

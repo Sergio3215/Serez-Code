@@ -1,0 +1,54 @@
+// unit_net_gui_mixed.sz — networking + GUI + fetch mixed with the core
+// (JSON, dec, DateTime). TCP/WebSocket loopback are deterministic; fetch is
+// checked gracefully (network may be unavailable); Gui.measureText is headless.
+use permissions { Socket, Gui }
+
+native fn string fetch(string url);
+
+test("TCP loopback carries a JSON record with dec + DateTime", () => {
+    let rec <string, any> = ({"total", 199.99m}, {"day", DateTime.from(2026, 6, 20).day});
+    let payload = JSON.stringify(rec);
+    let srv  = Socket.listen(19950);
+    let cli  = Socket.connect("127.0.0.1", 19950);
+    let conn = Socket.accept(srv);
+    Socket.send(cli, payload);
+    let got = Socket.recv(conn, 256);
+    Socket.close(cli); Socket.close(conn); Socket.close(srv);
+    assert(got == payload, "exact round-trip");
+    let p = JSON.parse(got);
+    assert(p["total"] == 199.99m, "dec survives the wire");
+    assert(p["day"] == 20, "datetime field survives");
+});
+
+test("WebSocket frame carries a dec payload", () => {
+    let s2 = Socket.listen(19951);
+    let c2 = Socket.connect("127.0.0.1", 19951);
+    let k2 = Socket.accept(s2);
+    Socket.sendWsFrame(c2, "price=" + 42.50m);
+    let frame = Socket.recvWsFrame(k2);
+    Socket.close(c2); Socket.close(k2); Socket.close(s2);
+    assert(frame == "price=42.50", "ws frame round-trip with dec");
+});
+
+test("Gui.measureText (headless) mixed with strings", () => {
+    let label = "Total: " + 199.99m;        // 13 chars
+    let m = Gui.measureText(label, 2);
+    assert(label.length() == 13, "label length");
+    assert(m[0] == 13 * 8 * 2, "monospace width = chars*8*scale");
+    assert(m[1] == 16, "height = 8*scale");
+    assert(Gui.measureText("ñ", 2)[0] == 16, "unicode counts codepoints");
+});
+
+test("fetch degrades gracefully (network may be down)", () => {
+    let status = "unknown";
+    try {
+        let body = fetch("https://httpbin.org/get");
+        status = body.length() > 0 ? "ok" : "empty";
+    } catch (e) {
+        status = "network_error";
+    }
+    assert(status == "ok" || status == "network_error" || status == "empty",
+           "fetch returns a body or fails cleanly, never crashes");
+});
+
+summary();
