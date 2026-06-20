@@ -1,0 +1,87 @@
+// 69_stdlib_integral_e2e — integration across the standard library and runtime
+// subsystems: std/iter (range/zip/enumerate/chunk/take/skip/first/last/all/
+// flatten), std/result (Ok/Err with dec), std/collections (Stack/Queue holding
+// DateTime/dec), Tensor ops, interfaces, Time+DateTime, sizeof, advanced array/
+// string methods, and cross-subsystem mixes. Deterministic (clock checks are
+// boolean: >0 / year>=2026).
+import "std/iter";
+import "std/result";
+import "std/collections";
+use permissions { Time }
+
+enum Status { Open, Closed }
+
+// ── stdlib: iter ──
+out "1 " + range(1, 6, 1).reduce(0, (a, v) => a + v);          // 15
+let z = zip([1, 2, 3], ["a", "b", "c"]);
+out "2 " + z[1][0] + z[1][1];                                  // 2b
+let e = enumerate(["x", "y", "z"]);
+out "3 " + e[2][0] + e[2][1];                                  // 2z
+out "4 " + chunk([1, 2, 3, 4, 5], 2).length();                 // 3
+out "5 " + take([10, 20, 30, 40], 2).length() + "," + skip([10, 20, 30, 40], 2)[0]; // 2,30
+out "6 " + first([7, 8, 9]) + "," + last([7, 8, 9]);          // 7,9
+out "7 " + all([2, 4, 6], (n) => n % 2 == 0);                  // true
+out "8 " + flatten([[1, 2], [3], [4, 5]]).length();           // 5
+
+// ── stdlib: result (with dec) ──
+let ok = new Ok(9.99m);
+out "9 " + (ok.unwrap() + 0.01m);                              // 10.00
+let er = new Err("bad");
+out "10 " + er.isErr;                                          // true
+
+// ── stdlib: collections (with datetime/dec) ──
+let st = new Stack();
+st.push(DateTime.from(2026, 1, 1));
+st.push(DateTime.from(2026, 6, 20));
+out "11 " + st.pop().month;                                    // 6
+let q = new Queue();
+q.enqueue(1.5m); q.enqueue(2.5m);
+out "12 " + (q.dequeue() + q.dequeue());                       // 4.0
+
+// ── Tensor ──
+let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+out "13 " + t.sum();                                           // 10
+out "14 " + Tensor.ones([2, 3]).sum();                        // 6
+out "15 " + t.shape()[0] + "x" + t.shape()[1];               // 2x2
+out "16 " + t.transpose().sum();                              // 10
+let t2 = t.add(Tensor.ones([2, 2]));
+out "17 " + t2.sum();                                          // 14
+
+// ── interfaces ──
+interface Pt { x: int; y: int; }
+let p = new Pt({ x: 3, y: 4 });
+out "18 " + (p.x * p.x + p.y * p.y);                          // 25
+
+// ── Time + DateTime ──
+out "19 " + (Time.now() > 0);                                 // true
+out "20 " + (DateTime.fromEpoch(Time.now()).year >= 2026);   // true
+
+// ── sizeof ──
+out "21 " + sizeof(int);                                      // 8
+
+// ── advanced array methods ──
+out "22 " + [5, 12, 8, 3].find((n) => n > 10);               // 12
+out "23 " + [1, 2, 3, 4, 5].slice(1, 4).length();            // 3
+out "24 " + [2, 4, 6].every((n) => n % 2 == 0);             // true
+out "25 " + [1, 2, 3].some((n) => n > 2);                    // true
+
+// ── advanced string methods ──
+out "26 " + "7".padStart(3, "0");                            // 007
+out "27 " + "x".padEnd(3, ".");                              // x..
+
+// ── cross-subsystem mixes ──
+out "28 " + chunk([1.5m, 2.5m, 3.5m, 4.5m], 2).map((c) => c.reduce(0m, (a, v) => a + v))[0];  // 4.0
+let results <string, any> = ({"a", new Ok(1m)}, {"b", new Err("e")});
+out "29 " + results["a"].unwrap() + "," + results["b"].isErr;  // 1,true
+let dates = zip([DateTime.from(2026,1,1), DateTime.from(2026,12,31)], ["start", "end"]);
+out "30 " + dates[1][1] + ":" + dates[1][0].month;            // end:12
+out "31 " + range(1, 5, 1).map((i) => Dec.fromInt(i, 0) * 1.5m).reduce(0m, (a, v) => a + v);  // 1.5+3+4.5=9.0
+out "32 " + (match new Ok(5).isOk { true => "valid", false => "invalid" });  // valid
+let stk = new Stack();
+for (let i in range(1, 4, 1)) { stk.push(i * i); }
+out "33 " + stk.pop() + "," + stk.pop();                      // 9,4
+out "34 " + Tensor.from([1.0, 2.0, 3.0]).mul(Tensor.from([2.0, 2.0, 2.0])).sum();  // 12
+let arr35 = [new Ok(1m), new Err("x")];
+out "35 {arr35}";                                            // array of instances display
+
+out "DONE";

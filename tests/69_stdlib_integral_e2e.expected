@@ -1,0 +1,36 @@
+1 15
+2 2b
+3 2z
+4 3
+5 2,30
+6 7,9
+7 true
+8 5
+9 10.00
+10 true
+11 6
+12 4.0
+13 10.0
+14 6.0
+15 2x2
+16 10.0
+17 14.0
+18 25
+19 true
+20 true
+21 8
+22 12
+23 3
+24 true
+25 true
+26 007
+27 x..
+28 4.0
+29 1,true
+30 end:12
+31 15.0
+32 valid
+33 9,4
+34 12.0
+35 [Ok{ value: 1, isOk: true, isErr: false }, Err{ error: x, isOk: false, isErr: true }]
+DONE

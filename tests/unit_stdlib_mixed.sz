@@ -1,0 +1,89 @@
+// unit_stdlib_mixed.sz — cross-subsystem unit tests: the standard library
+// (iter/result/collections) woven together with dec, DateTime and Tensor.
+
+import "std/iter";
+import "std/result";
+import "std/collections";
+
+use permissions { Time }
+
+test("iter functions compose with dec values", () => {
+    let xs = range(1, 5, 1);                    // [1,2,3,4]
+    assert(xs.length() == 4, "range length");
+    let total = xs.map((i) => Dec.fromInt(i, 0) * 0.5m).reduce(0m, (a, v) => a + v);
+    assert(total == 5m, "0.5+1.0+1.5+2.0 = 5.0 exact");
+    assert(all([2m, 4m, 6m], (n) => n % 2m == 0m), "all even dec");
+});
+
+test("zip and enumerate over mixed types", () => {
+    let pairs = zip([1, 2, 3], ["a", "b", "c"]);
+    assert(pairs[1][0] == 2 && pairs[1][1] == "b", "zip pair");
+    let en = enumerate([10.5m, 20.5m]);
+    assert(en[1][0] == 1 && en[1][1] == 20.5m, "enumerate index + dec value");
+});
+
+test("chunk + reduce keeps dec exact", () => {
+    let groups = chunk([1.1m, 2.2m, 3.3m, 4.4m], 2);
+    assert(groups.length() == 2, "two chunks");
+    let sums = groups.map((g) => g.reduce(0m, (a, v) => a + v));
+    assert(sums[0] == 3.3m && sums[1] == 7.7m, "per-chunk dec sums");
+});
+
+test("Result carries dec and short-circuits", () => {
+    let ok = new Ok(9.99m);
+    assert(ok.isOk, "ok flag");
+    assert(ok.unwrap() + 0.01m == 10m, "unwrap dec + arithmetic");
+    let er = new Err("boom");
+    assert(er.isErr, "err flag");
+    let caught = "none";
+    try { er.unwrap(); } catch (e) { caught = "threw"; }
+    assert(caught == "threw", "unwrap on Err throws");
+});
+
+test("Stack/Queue hold DateTime and dec", () => {
+    let s = new Stack();
+    s.push(DateTime.from(2026, 1, 1));
+    s.push(DateTime.from(2026, 6, 20));
+    assert(s.pop().month == 6, "LIFO datetime");
+    assert(s.pop().month == 1, "next datetime");
+    let q = new Queue();
+    q.enqueue(1.5m); q.enqueue(2.5m);
+    assert(q.dequeue() == 1.5m, "FIFO dec");
+    assert(q.dequeue() == 2.5m, "next dec");
+});
+
+test("Tensor numeric ops", () => {
+    let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    assert(t.sum() == 10.0, "sum");
+    assert(t.shape()[0] == 2 && t.shape()[1] == 2, "shape");
+    assert(t.transpose().sum() == 10.0, "transpose preserves sum");
+    assert(Tensor.ones([2, 3]).sum() == 6.0, "ones sum");
+    assert(t.add(Tensor.ones([2, 2])).sum() == 14.0, "elementwise add");
+});
+
+test("interfaces instantiate and expose fields", () => {
+    interface Pt { x: int; y: int; }
+    let p = new Pt({ x: 3, y: 4 });
+    assert(p.x * p.x + p.y * p.y == 25, "pythagorean");
+});
+
+test("Time integrates with DateTime", () => {
+    assert(Time.now() > 0, "clock is positive");
+    let d = DateTime.fromEpoch(Time.now());
+    assert(d.year >= 2026, "epoch decodes to a sane year");
+});
+
+test("sizeof of primitives", () => {
+    assert(sizeof(int) == 8, "int is 8 bytes");
+});
+
+test("advanced array/string methods over mixed data", () => {
+    assert([5, 12, 8, 3].find((n) => n > 10) == 12, "find");
+    assert([1, 2, 3, 4, 5].slice(1, 4).length() == 3, "slice");
+    assert([2, 4, 6].every((n) => n % 2 == 0), "every");
+    assert([1, 2, 3].some((n) => n > 2), "some");
+    assert("7".padStart(3, "0") == "007", "padStart");
+    assert("x".padEnd(3, ".") == "x..", "padEnd");
+});
+
+summary();
