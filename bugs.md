@@ -86,6 +86,7 @@
 | [B-74](#b-74--invoke_method-rest-parameter-not-collected) | `invoke_method` rest parameter not collected in binding loop | 🟡 High | ✅ |
 | [B-75](#b-75--keyword-token-as-method-name-rejected-by-class-parser) | Keyword token (`get`/`set`/`static`) as method name rejected by class parser | 🟡 High | ✅ |
 | [B-76](#b-76--tensorsumon-empty-tensor-returns--00-instead-of-00) | `Tensor.sum()` on empty tensor returns `-0.0` instead of `0.0` | 🟢 Low | ✅ |
+| [B-77](#b-77--op_str-not-used-in-string-concatenation) | `op_str` not used in string `+` concatenation (only in interpolation/arrays) | 🟠 Medium | ✅ |
 
 ---
 
@@ -3510,3 +3511,51 @@ Added the same early-return guard before the sum computation:
 ### Lesson
 
 Any aggregation over a potentially empty iterator must handle the zero-element case explicitly before calling `sum()` / `product()` / similar — Rust's accumulator-based implementation returns negative zero for `f64` sums over empty ranges.
+
+---
+
+## B-77 — `op_str` not used in string concatenation
+
+**Date:** 2026-06-19
+**Files:** `src/evaluator/ops.rs`
+**Severity:** 🟠 Medium
+**Status:** ✅ Fixed
+
+### Symptom
+
+An instance defining `op_str()` rendered correctly via string interpolation and
+inside arrays (see B-57/B-58), but `+` concatenation with a string errored — in
+both operand orders:
+
+```serez
+class V { v: any = 0; public V(any x){ this.v = x; } public string op_str(){ return "V({this.v})"; } }
+let a = new V(5);
+out "{a}";            // V(5)        ✅ interpolation
+out "x=" + a;         // ❌ ERROR: operator '+' cannot be applied between 'string' and 'V'
+out a + "!";          // ❌ ERROR: operator '+' cannot be applied between 'V' and 'string'
+```
+
+This was inconsistent: `string + int/decimal/dec/bool/null` all concatenate, and
+`op_str` is the instance's string representation everywhere else.
+
+### Root cause
+
+In `eval_infix`, the catch-all arm only consulted operator-overload methods when
+the **left** operand was an `Instance` (e.g. `op_add`). For `string + instance`
+the left is a `Str`, so no overload was checked and it fell straight to the
+type-mismatch error. For `instance + string` it looked for `op_add` (not
+`op_str`), which either errored or was absent.
+
+### Fix
+
+Added a `+`-specific path in the catch-all, **before** the `op_add` lookup: when
+one operand is a `Str` and the other an `Instance` whose class defines `op_str`,
+call `op_str()` and concatenate (propagating any throw from `op_str`). Both
+orders are handled. `instance + instance` is untouched and still uses `op_add`,
+since the path only triggers when exactly one side is a string.
+
+### Lesson
+
+When a type has a canonical string form (`op_str`), every string-producing
+context must honor it — not just display/interpolation but the `+` operator too.
+Mirror the coercion rules already applied to the primitive numeric types.

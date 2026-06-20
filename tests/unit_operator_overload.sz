@@ -116,6 +116,16 @@ test("op_str throw se propaga", () => {
     assert(lanzó, "op_str throw propagado");
 });
 
+test("op_str used in string concatenation, both orders (B-77)", () => {
+    let v = new Vec(1.0, 2.0);
+    assert(("p=" + v) == "p=(1.0,2.0)", "string + instance");
+    assert((v + " end") == "(1.0,2.0) end", "instance + string");
+    assert(("[" + v + "]") == "[(1.0,2.0)]", "chained concat");
+    // op_add must still win when both sides are instances
+    let sum = v + new Vec(3.0, 4.0);
+    assert(sum.x == 4.0 && sum.y == 6.0, "instance + instance still uses op_add");
+});
+
 test("herencia hereda op_add", () => {
     public class Vec3 : Vec {
         public Vec3(decimal x, decimal y, decimal z) {

@@ -489,6 +489,42 @@ impl super::Evaluator {
             }
 
             (left, right) => {
+                // ── String + instance: use op_str (consistent with interpolation
+                // and array display, B-57/B-58). Checked before op_add so
+                // `money + "x"` formats instead of calling op_add with a string.
+                if op == "+" {
+                    let left_opstr = if let ObjectData::Instance { ref class_name, .. } = left {
+                        self.find_method(class_name, "op_str").map(|_| class_name.clone())
+                    } else { None };
+                    let right_opstr = if let ObjectData::Instance { ref class_name, .. } = right {
+                        self.find_method(class_name, "op_str").map(|_| class_name.clone())
+                    } else { None };
+
+                    if let (ObjectData::Str(s), Some(cn)) = (&left, &right_opstr) {
+                        let prefix = s.clone();
+                        let cn = cn.clone();
+                        let inst_ref = self.alloc(right);
+                        return match self.call_op_method(inst_ref, &cn, "op_str", vec![], line, column) {
+                            EvalResult::Value(r) => {
+                                let rs = self.display(r);
+                                EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", prefix, rs))))
+                            }
+                            other => other,
+                        };
+                    }
+                    if let (Some(cn), ObjectData::Str(s)) = (&left_opstr, &right) {
+                        let suffix = s.clone();
+                        let cn = cn.clone();
+                        let inst_ref = self.alloc(left);
+                        return match self.call_op_method(inst_ref, &cn, "op_str", vec![], line, column) {
+                            EvalResult::Value(r) => {
+                                let ls = self.display(r);
+                                EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", ls, suffix))))
+                            }
+                            other => other,
+                        };
+                    }
+                }
                 // ── Operator overloading ─────────────────────────────────────
                 // Check BEFORE the equality short-circuit so op_eq/op_ne get a chance.
                 let method_name = operator_to_method_name(op);
