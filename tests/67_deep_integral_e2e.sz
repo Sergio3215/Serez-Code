@@ -1,0 +1,103 @@
+// 67_deep_integral_e2e — deep cross-subsystem mixing: abstract polymorphism +
+// dec, getters returning dec, closures capturing this, closures in dicts, Set
+// dedup of dec by value, pointers to dec, generators (+throw), multi-level
+// optional chaining, dict<int,dec> iteration, labeled break, do-while with dec,
+// rest-destructuring of dec, and JSON round-trip with escaped literal braces.
+// Deterministic.
+abstract class Shape { public dec area() { return 0m; } public string describe() { return "area=" + this.area(); } }
+class Sq : Shape { public Sq(any s){ this.s = s; } public dec area() { return this.s * this.s; } }
+
+class Acc { _bal: any = 0m; public Acc(any b){ this._bal = b; } public get dec balance() { return this._bal.setScale(2); } public set balance(any v) { this._bal = v; } }
+
+class Maker { factor: any = 0m; public Maker(any f){ this.factor = f; } public any make() { let f = this.factor; return (x) => x * f; } }
+
+class Node { val: any = 0; next: any = null; public Node(any v){ this.val = v; } }
+
+fn* gen3() { let i = 1; while (i <= 3) { yield Dec.fromInt(i, 0) * 0.5m; i = i + 1; } }
+fn* genBoom() { yield 1; throw "gen boom"; }
+
+out "1 abstract poly + dec:";
+let shapes = [new Sq(2m), new Sq(3m)];
+let tot = 0m;
+for (let sh in shapes) { tot = tot + sh.area(); }
+out tot;                                  // 13
+out shapes[0].describe();                 // area=4
+
+out "2 getter returns dec, used in arithmetic:";
+let acc = new Acc(10m);
+out acc.balance;                          // 10.00
+out (acc.balance + 5m);                   // 15.00
+acc.balance = 7.5m;
+out acc.balance;                          // 7.50
+
+out "3 closure captures this field (dec):";
+let mk = new Maker(2.5m).make();
+out mk(4m);                               // 10.0
+
+out "4 closure stored in dict, called:";
+let ops <string, any> = ({"double", (x) => x * 2m}, {"inc", (x) => x + 1m});
+out ops["double"](5m);                    // 10
+out ops["inc"](5m);                       // 6
+
+out "5 Set dedup of dec by value:";
+let s = new Set();
+s.add(1.50m);
+s.add(1.5m);
+s.add(2m);
+out s.size();                             // 2 if by value, 3 if by scale
+
+out "6 pointer to dec, deref:";
+let d = 5.5m;
+let p = &d;
+out *p;                                   // 5.5
+
+out "7 generator of dec -> reduce:";
+out gen3().reduce(0m, (a, v) => a + v);   // 3.0  (0.5+1.0+1.5)
+
+out "8 throw inside generator caught:";
+let c = "none";
+try { let arr = genBoom(); } catch (e) { c = e; }
+out c;                                     // gen boom
+
+out "9 multi-level optional chaining:";
+let n = new Node(1);
+out (n?.next?.val ?? "end");               // end
+let n2 = new Node(10);
+n2.next = new Node(20);
+out (n2?.next?.val ?? "end");              // 20
+
+out "10 for-in over dict<int, dec>:";
+let prices <int, any> = ({1, 9.99m}, {2, 4.50m});
+let pt = 0m;
+for (let k in prices) { pt = pt + prices[k]; }
+out pt.setScale(2);                        // 14.49
+
+out "11 labeled break from nested loops:";
+let found = "";
+outer: for (let i = 0; i < 3; i = i + 1) {
+    for (let j = 0; j < 3; j = j + 1) {
+        if (i == 1 && j == 1) { found = "{i},{j}"; break outer; }
+    }
+}
+out found;                                 // 1,1
+
+out "12 do-while with dec counter:";
+let dw = 0m;
+do { dw = dw + 0.5m; } while (dw < 2m);
+out dw;                                    // 2.0
+
+out "13 destructuring rest over dec array:";
+let [first, ...rest] = [1.5m, 2.5m, 3.5m];
+out first;                                 // 1.5
+out rest.length();                         // 2
+out rest[1];                               // 3.5
+
+out "14 JSON round-trip nested:";
+let data = JSON.parse("\{\"items\":[\{\"price\":10\},\{\"price\":20\}],\"name\":\"cart\"\}");
+out data["name"];                          // cart
+out data["items"][1]["price"];             // 20
+
+out "15 mix: abstract+getter+dec+json+interp:";
+out "Shape {shapes[1].describe()} balance {acc.balance}";
+
+out "DONE";

@@ -1,0 +1,39 @@
+1 abstract poly + dec:
+13
+area=4
+2 getter returns dec, used in arithmetic:
+10.00
+15.00
+7.50
+3 closure captures this field (dec):
+10.0
+4 closure stored in dict, called:
+10
+6
+5 Set dedup of dec by value:
+2
+6 pointer to dec, deref:
+5.5
+7 generator of dec -> reduce:
+3.0
+8 throw inside generator caught:
+gen boom
+9 multi-level optional chaining:
+end
+20
+10 for-in over dict<int, dec>:
+14.49
+11 labeled break from nested loops:
+1,1
+12 do-while with dec counter:
+2.0
+13 destructuring rest over dec array:
+1.5
+2
+3.5
+14 JSON round-trip nested:
+cart
+20
+15 mix: abstract+getter+dec+json+interp:
+Shape area=9 balance 7.50
+DONE

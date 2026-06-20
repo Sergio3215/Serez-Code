@@ -87,6 +87,7 @@
 | [B-75](#b-75--keyword-token-as-method-name-rejected-by-class-parser) | Keyword token (`get`/`set`/`static`) as method name rejected by class parser | 🟡 High | ✅ |
 | [B-76](#b-76--tensorsumon-empty-tensor-returns--00-instead-of-00) | `Tensor.sum()` on empty tensor returns `-0.0` instead of `0.0` | 🟢 Low | ✅ |
 | [B-77](#b-77--op_str-not-used-in-string-concatenation) | `op_str` not used in string `+` concatenation (only in interpolation/arrays) | 🟠 Medium | ✅ |
+| [B-78](#b-78--escaped-closing-brace--leaks-the-backslash) | Escaped closing brace `\}` in string literals leaks the backslash | 🟠 Medium | ✅ |
 
 ---
 
@@ -3559,3 +3560,52 @@ since the path only triggers when exactly one side is a string.
 When a type has a canonical string form (`op_str`), every string-producing
 context must honor it — not just display/interpolation but the `+` operator too.
 Mirror the coercion rules already applied to the primitive numeric types.
+
+---
+
+## B-78 — Escaped closing brace `\}` leaks the backslash
+
+**Date:** 2026-06-19
+**Files:** `src/lexer.rs`
+**Severity:** 🟠 Medium
+**Status:** ✅ Fixed
+
+### Symptom
+
+String interpolation uses `{ }`, so `\{` escapes a literal opening brace. But the
+matching `\}` was never unescaped — the backslash leaked into the string, and the
+brace was effectively duplicated by later interpolation processing:
+
+```serez
+out "a\{b\}c";          // → a{b\}}c   (expected a{b}c)
+out "\{\}".length();    // → 4         (expected 2)
+out "\{\"k\": 1\}";     // → broken    (can't write a literal JSON object inline)
+```
+
+### Root cause
+
+`read_string` (lexer.rs) handled `\{` by emitting the `\x01` sentinel (so the
+parser would not treat it as an interpolation start), but had **no `\}` case**.
+`\}` fell through to the catch-all `c => { result.push('\\'); result.push(c); }`,
+which kept the backslash:
+
+```rust
+'{'  => { self.read_char(); result.push('\x01'); }
+c    => { result.push('\\'); result.push(c); }   // ← '\}' landed here
+```
+
+### Fix
+
+Added the symmetric `\}` case, emitting a literal `}`:
+
+```rust
+'{'  => { self.read_char(); result.push('\x01'); }
+'}'  => { self.read_char(); result.push('}'); }   // ← added
+c    => { result.push('\\'); result.push(c); }
+```
+
+### Lesson
+
+Paired delimiters need paired escapes. `\{` without `\}` is a half-finished
+escape; any literal that needs one brace usually needs the other (e.g. inline
+JSON), so add both at once.

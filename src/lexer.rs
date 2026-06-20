@@ -317,6 +317,9 @@ impl Lexer {
                         '"'  => { self.read_char(); result.push('"');  }
                         // \{ → sentinel \x01 so the parser won't treat it as interpolation
                         '{'  => { self.read_char(); result.push('\x01'); }
+                        // \} → literal '}' (symmetric with \{; otherwise the
+                        // backslash leaked through, e.g. "a\}b" → "a\}b")
+                        '}'  => { self.read_char(); result.push('}'); }
                         c    => { result.push('\\'); result.push(c);   }
                     }
                 }

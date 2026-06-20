@@ -119,4 +119,11 @@ test("binary literals parse correctly", () => {
     assert(0b100  == 4,    "0b100 = 4");
 });
 
+test("escaped braces \\{ and \\} are literal (B-78)", () => {
+    assert("a\{b\}c" == "a{b}c", "both braces literal");
+    assert("\{\}".length() == 2, "two chars, no leaked backslash");
+    let v = 7;
+    assert("val \{{v}\}" == "val {7}", "escaped braces around a real interpolation");
+});
+
 summary();
