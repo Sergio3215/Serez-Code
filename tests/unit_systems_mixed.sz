@@ -1,0 +1,89 @@
+// unit_systems_mixed.sz — cross-subsystem unit tests for the I/O / systems /
+// crypto / GPU / autodiff layers mixed with the core (dec, DateTime, JSON,
+// classes, Tensor). Behavioural asserts (robust to the host environment).
+
+use permissions { File, OS, Env, System, Time }
+
+test("Crypto over dec/datetime/JSON payloads", () => {
+    let rec <string, any> = ({"total", 199.99m}, {"when", DateTime.from(2026, 6, 20).toString()});
+    let payload = JSON.stringify(rec);
+    assert(Crypto.sha256(payload).length() == 64, "sha256 hex length");
+    assert(Crypto.sha256(payload) == Crypto.sha256(payload), "deterministic");
+    assert(Crypto.sha256("") != Crypto.sha256("x"), "different inputs differ");
+    let rb = Crypto.randomBytes(16);
+    assert(rb.length() == 16, "16 random bytes");
+    assert(Crypto.hexEncode(rb).length() == 32, "hex of 16 bytes = 32 chars");
+});
+
+test("ed25519 sign/verify round-trip", () => {
+    let kp = Crypto.ed25519Keypair();
+    let msg = "transfer 199.99";
+    let sig = Crypto.ed25519Sign(kp["private"], msg);
+    assert(Crypto.ed25519Verify(kp["public"], msg, sig), "valid signature verifies");
+    assert(!Crypto.ed25519Verify(kp["public"], "tampered", sig), "tampered message fails");
+});
+
+test("Binary round-trips inside a class", () => {
+    class Blob { hex: any = ""; public Blob(any h){ this.hex = h; } public any bytes(){ return Binary.fromHex(this.hex); } }
+    let b = new Blob("deadbeef");
+    assert(Binary.toHex(b.bytes()) == "deadbeef", "hex round-trip");
+    assert(Binary.toHex(Binary.concat(Binary.fromHex("00ff"), Binary.fromHex("10ab"))) == "00ff10ab", "concat");
+});
+
+test("Memory alloc/size/free in unsafe", () => {
+    assert(Memory.sizeof("int") == 8, "sizeof int");
+    let h = unsafe { Memory.alloc(32) };
+    assert(Memory.size(h) == 32, "size matches alloc");
+    unsafe { Memory.free(h) };
+});
+
+test("File round-trips a JSON record with dec + DateTime", () => {
+    let path = "tests/~tmp_unit_io.json";
+    let rec <string, any> = ({"total", 42.50m}, {"day", DateTime.from(2026, 6, 20).day});
+    File.write(path, JSON.stringify(rec));
+    assert(File.exists(path), "file created");
+    let back = JSON.parse(File.read(path));
+    assert(back["total"] == 42.5m, "dec value survives round-trip");
+    assert(back["day"] == 20, "datetime field survives");
+    unsafe { File.delete(path); }
+    assert(!File.exists(path), "file removed");
+});
+
+test("OS / Env / System structural checks", () => {
+    assert(OS.platform().length() > 0, "platform is a non-empty string");
+    assert(OS.pid() > 0, "pid is positive");
+    unsafe { Env.set("SZ_UNIT_VAR", "v42"); }
+    assert(Env.get("SZ_UNIT_VAR") == "v42", "env set/get round-trip");
+    assert(System.cpuCount() > 0, "at least one cpu");
+    assert(System.totalMemory() > 0, "total memory positive");
+});
+
+test("GPU buffer round-trip", () => {
+    let buf = GPU.createBuffer(8);
+    GPU.fill(buf, 2.5);
+    assert(GPU.size(buf) == 8, "buffer size");
+    assert(GPU.readBuffer(buf)[0] == 2.5, "filled value read back");
+    GPU.freeBuffer(buf);
+});
+
+test("Autodiff one gradient step lowers the loss", () => {
+    let x = Tensor.from([[1.0, 2.0]]);
+    let W = Tensor.from([[0.5], [0.5]]);
+    let t = Tensor.from([[3.0]]);
+    let l0 = x.matmul(W).sub(t).mul(x.matmul(W).sub(t)).get(0, 0);
+    Autodiff.tape();
+    let d = x.matmul(W).sub(t);
+    Autodiff.backward(d.mul(d));
+    let W2 = W.sub(Autodiff.gradient(W).scale(0.01));
+    let l1 = x.matmul(W2).sub(t).mul(x.matmul(W2).sub(t)).get(0, 0);
+    assert(l1 < l0, "loss decreased after a step");
+});
+
+test("cross: hash → dict → JSON, and Time→DateTime", () => {
+    let payload = "amount=199.99";
+    let audit <string, any> = ({"sig", Crypto.sha256(payload)}, {"amount", 199.99m});
+    assert(JSON.stringify(audit).includes("199.99"), "dec in audit json");
+    assert(DateTime.fromEpoch(Time.now()).year >= 2026, "clock decodes sanely");
+});
+
+summary();

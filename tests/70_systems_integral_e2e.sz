@@ -1,0 +1,80 @@
+// 70_systems_integral_e2e — integration of the I/O / systems / crypto / GPU /
+// autodiff subsystems mixed with the core (dec, DateTime, JSON, classes): Crypto
+// (sha256/randomBytes/hexEncode/ed25519), Binary, Memory+unsafe, File round-trip,
+// OS/Env/System, GPU buffers, and a one-step autodiff gradient descent. Output is
+// deterministic (lengths, booleans, fixed round-trips); the temp file is removed.
+use permissions { File, OS, Env, System, Time }
+
+// ── Crypto mixed with dec/datetime/json ──
+let rec <string, any> = ({"total", 199.99m}, {"when", DateTime.from(2026,6,20).toString()});
+let payload = JSON.stringify(rec);
+out "1 " + Crypto.sha256(payload).length();              // 64
+out "2 " + (Crypto.sha256("abc") == Crypto.sha256("abc"));   // true (deterministic)
+out "3 " + Crypto.sha256(199.99m.toString()).length();  // 64
+let rb = Crypto.randomBytes(16);
+out "4 " + rb.length() + "," + Crypto.hexEncode(rb).length();  // 16,32
+
+// ── Binary roundtrip in a class ──
+class Blob { hex: any = ""; public Blob(any h){ this.hex = h; } public any bytes(){ return Binary.fromHex(this.hex); } }
+let b = new Blob("deadbeef");
+out "5 " + Binary.toHex(b.bytes());                      // deadbeef
+out "6 " + Binary.toHex(Binary.concat(Binary.fromHex("00ff"), Binary.fromHex("10ab")));  // 00ff10ab
+
+// ── Memory / unsafe roundtrip ──
+out "7 " + Memory.sizeof("int");                         // 8
+let h = unsafe { Memory.alloc(16) };
+out "8 " + Memory.size(h);                               // 16
+unsafe { Memory.free(h) };
+
+// ── File I/O roundtrip with dec+datetime via JSON ──
+let path = "tests/~tmp_io.json";
+File.write(path, payload);
+out "9 " + File.exists(path);                            // true
+let back = JSON.parse(File.read(path));
+out "10 " + back["total"];                               // 199.99
+unsafe { File.delete(path) };
+out "11 " + File.exists(path);                           // false
+
+// ── OS / Env / System (structural) ──
+out "12 " + (OS.platform().length() > 0);               // true
+out "13 " + (OS.pid() > 0);                             // true
+unsafe { Env.set("SZ_TEST_VAR", "hello42") };
+out "14 " + Env.get("SZ_TEST_VAR");                     // hello42
+out "15 " + (System.cpuCount() > 0);                   // true
+out "16 " + (System.totalMemory() > 0);                // true
+
+// ── Time + DateTime + Crypto ──
+out "17 " + (DateTime.fromEpoch(Time.now()).year >= 2026);  // true
+
+// ── GPU buffer roundtrip ──
+let buf = GPU.createBuffer(8);
+GPU.fill(buf, 3.5);
+out "18 " + GPU.size(buf);                              // 8
+let rd = GPU.readBuffer(buf);
+out "19 " + rd[0];                                      // 3.5
+GPU.freeBuffer(buf);
+
+// ── Autodiff: one gradient-descent step lowers the loss ──
+let x = Tensor.from([[1.0, 2.0]]);
+let W = Tensor.from([[0.5], [0.5]]);
+let t = Tensor.from([[3.0]]);
+let p0 = x.matmul(W); let d0 = p0.sub(t); let l0 = d0.mul(d0).get(0, 0);
+Autodiff.tape();
+let p = x.matmul(W); let d = p.sub(t); let lT = d.mul(d);
+Autodiff.backward(lT);
+let dW = Autodiff.gradient(W);
+let W2 = W.sub(dW.scale(0.01));
+let p1 = x.matmul(W2); let d1 = p1.sub(t); let l1 = d1.mul(d1).get(0, 0);
+out "20 " + (l1 < l0);                                  // true
+
+// ── cross: hash a record, store result keyed in dict, JSON it ──
+let audit <string, any> = ({"sig", Crypto.sha256(payload)}, {"amount", 199.99m});
+out "21 " + (JSON.stringify(audit).includes("199.99"));  // true
+
+// ── ed25519 sign/verify ──
+let kp = Crypto.ed25519Keypair();
+let msg = "transfer 100.00";
+let sig = Crypto.ed25519Sign(kp["private"], msg);
+out "22 " + Crypto.ed25519Verify(kp["public"], msg, sig);  // true
+
+out "DONE";
