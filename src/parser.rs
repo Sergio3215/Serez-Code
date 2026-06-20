@@ -1759,8 +1759,18 @@ impl Parser {
 
                 self.next_token();
 
+                // `**` is right-associative (2 ** 3 ** 2 == 2 ** (3 ** 2)), matching
+                // math/Python. Parse its right operand one level below Power so a
+                // following `**` binds into the right side. All other operators stay
+                // left-associative.
+                let right_precedence = if current_precedence == Precedence::Power {
+                    Precedence::Product
+                } else {
+                    current_precedence
+                };
+
                 if let Some(left) = left_exp {
-                    if let Some(right) = self.parse_expression(current_precedence) {
+                    if let Some(right) = self.parse_expression(right_precedence) {
                         left_exp = Some(Expression::Infix(InfixExpression {
                             left: Box::new(left),
                             operator,

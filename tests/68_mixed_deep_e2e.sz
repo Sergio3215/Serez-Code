@@ -1,0 +1,92 @@
+// 68_mixed_deep_e2e — broad cross-subsystem integration: raw strings crossed
+// with match/JSON/dict/concat/for-in, crypto, binary, math+string chains, match
+// guards/OR/enum, triple currying with dec, generator HOF chains, dict-memoized
+// fib, sets, bitwise precedence, right-assoc **, compound assign, destructuring,
+// nested JSON, op_str+dec arrays, type_of, abstract polymorphism. Deterministic.
+enum Suit { Hearts, Spades }
+class Box { v: any = 0m; public Box(any x){ this.v = x; } public any op_str(){ return "Box(" + this.v + ")"; } }
+fn* nats(int n) { let i = 1; while (i <= n) { yield i; i = i + 1; } }
+
+// ── raw strings crossed with everything ──
+out "1 " + (r"{x}" == "\{x\}");                          // true
+out "2 " + r"a\tb".length();                             // 4
+out "3 " + r"PASS {literal}".toUpperCase();              // PASS {LITERAL}
+out "4 " + r"x,y,z".split(",").length();                 // 3
+out "5 " + ("v=" + r"{raw}");                            // v={raw}
+out "6 " + (match r"{k}" { r"{k}" => "matched", _ => "no" });  // matched
+let rd <string, any> = ({"tpl", r"{name}"});
+out "7 " + rd["tpl"];                                     // {name}
+let d8 <string, any> = ({"p", r"a\b"});
+out "8 " + JSON.stringify(d8);                            // {"p":"a\b"}  (raw backslash)
+out "9 " + (true ? r"{a}" : "x");                         // {a}
+out "10 " + r"".length();                                 // 0
+let chars = [];
+for (let c in r"a{b}") { chars.push(c); }
+out "11 " + chars.length();                               // 4
+
+// ── crypto / binary ──
+out "12 " + Crypto.sha256("abc").length();               // 64
+out "13 " + Binary.toHex(Binary.fromHex("deadbeef"));    // deadbeef
+
+// ── math / string chains ──
+out "14 " + "1,2,3,4".split(",").map((s) => parseInt(s)).reduce(0, (a, v) => a + v);  // 10
+out "15 " + Math.floor(Math.sqrt(50.0));                 // 7
+out "16 " + "  Hola Mundo  ".trim().toLowerCase().split(" ").length();  // 2
+
+// ── match deep ──
+fn classify(int n) { return match n { x if x < 0 => "neg", 0 => "zero", x if x > 100 => "big", _ => "pos" }; }
+out "17 " + classify(-3) + "," + classify(0) + "," + classify(500) + "," + classify(7);
+out "18 " + (match 5 { 1 | 2 | 3 => "low", 4 | 5 | 6 => "mid", _ => "hi" });   // mid
+out "19 " + (match Suit.Spades { Suit.Hearts => "H", Suit.Spades => "S" });    // S
+
+// ── closures / generators deep ──
+let curry = (a) => (b) => (c) => a + b + c;
+out "20 " + curry(1m)(2m)(3m);                           // 6
+out "21 " + nats(6).filter((n) => n % 2 == 0).map((n) => n * n).reduce(0, (a, v) => a + v);  // 4+16+36=56
+fn memoFib() { let cache <int,int> = ({0,0},{1,1}); return (n) => { let i = 2; while (i <= n) { cache[i] = cache[i-1] + cache[i-2]; i = i + 1; } return cache[n]; }; }
+let fib = memoFib();
+out "22 " + fib(10);                                     // 55
+
+// ── sets ──
+let sa = new Set(); sa.add(1); sa.add(2); sa.add(3);
+let sb = new Set(); sb.add(2); sb.add(3); sb.add(4);
+out "23 " + sa.union(sb).size() + "," + sa.intersection(sb).size();  // 4,2
+
+// ── bitwise / power / coalesce ──
+out "24 " + (5 | 2 & 3);                                 // 5 | (2&3=2) = 7
+out "25 " + (2 ** 3 ** 2);                               // 2**9 = 512 (right assoc)
+out "26 " + (null ?? null ?? 9);                         // 9
+
+// ── compound assign deep ──
+let dd <string, any> = ({"n", 10m});
+dd["n"] += 2.5m;
+out "27 " + dd["n"];                                     // 12.5
+let arr2 = [1, 2, 3];
+arr2[1] *= 10;
+out "28 " + arr2[1];                                    // 20
+
+// ── destructuring deep ──
+let [h, _, t] = [10, 20, 30];
+out "29 " + h + "," + t;                                // 10,30
+let dd2 <string, any> = ({"a", 1}, {"b", 2});
+let {a: x1, b: y1, c: z1} = dd2;
+out "30 " + x1 + "," + y1 + "," + (z1 ?? -1);           // 1,2,-1
+
+// ── JSON deep ──
+let parsed = JSON.parse("[\{\"id\":1\},\{\"id\":2\}]");
+out "31 " + parsed[1]["id"];                            // 2
+let d32 <string, any> = ({"box", 5m}, {"suit", Suit.Hearts});
+out "32 " + JSON.stringify(d32);                          // exact + enum
+
+// ── op_str + dec + array display ──
+out "33 {[new Box(1.5m), new Box(2m)]}";                 // [Box(1.5), Box(2)]
+
+// ── type_of coverage ──
+out "34 " + type_of(5m) + "," + type_of(DateTime.from(2026,1,1)) + "," + type_of(new Set()) + "," + type_of(Suit.Hearts);
+
+// ── abstract poly + getter chain ──
+abstract class Shp { public dec area() { return 0m; } }
+class Ci : Shp { public Ci(any r){ this.r = r; } public dec area() { return this.r * this.r * 3m; } }
+out "35 " + (new Ci(2m)).area();                        // 12
+
+out "DONE";

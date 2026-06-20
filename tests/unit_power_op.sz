@@ -60,11 +60,13 @@ test("** in recursive function (manual pow)", () => {
     assert(ipow(3, 4) == 3 ** 4, "recursive ipow matches ** for 3^4");
 });
 
-test("** chained (right-associative semantics via grouping)", () => {
-    // 2 ** 3 ** 2 = 2 ** (3 ** 2) = 2 ** 9 = 512 only if right-assoc.
-    // Serez parses ** left-to-right: (2 ** 3) ** 2 = 8 ** 2 = 64
-    let left = (2 ** 3) ** 2;
-    assert(left == 64, "(2**3)**2 = 64");
+test("** is right-associative (B-79)", () => {
+    // Math/Python convention: 2 ** 3 ** 2 = 2 ** (3 ** 2) = 2 ** 9 = 512
+    assert(2 ** 3 ** 2 == 512, "2**3**2 = 512 (right-assoc)");
+    assert(2 ** 2 ** 3 == 256, "2**2**3 = 2**8 = 256");
+    assert((2 ** 3) ** 2 == 64, "explicit grouping still forces left");
+    assert(2 ** 3 * 4 == 32, "** binds tighter than * → (2**3)*4");
+    assert(2 ** 3 + 1 == 9, "** binds tighter than +");
 });
 
 summary();

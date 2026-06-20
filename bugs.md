@@ -88,6 +88,7 @@
 | [B-76](#b-76--tensorsumon-empty-tensor-returns--00-instead-of-00) | `Tensor.sum()` on empty tensor returns `-0.0` instead of `0.0` | 🟢 Low | ✅ |
 | [B-77](#b-77--op_str-not-used-in-string-concatenation) | `op_str` not used in string `+` concatenation (only in interpolation/arrays) | 🟠 Medium | ✅ |
 | [B-78](#b-78--escaped-closing-brace--leaks-the-backslash) | Escaped closing brace `\}` in string literals leaks the backslash | 🟠 Medium | ✅ |
+| [B-79](#b-79--power-operator--is-left-associative) | Power operator `**` is left-associative instead of right | 🟠 Medium | ✅ |
 
 ---
 
@@ -3609,3 +3610,51 @@ c    => { result.push('\\'); result.push(c); }
 Paired delimiters need paired escapes. `\{` without `\}` is a half-finished
 escape; any literal that needs one brace usually needs the other (e.g. inline
 JSON), so add both at once.
+
+---
+
+## B-79 — Power operator `**` is left-associative
+
+**Date:** 2026-06-19
+**Files:** `src/parser.rs`
+**Severity:** 🟠 Medium
+**Status:** ✅ Fixed
+
+### Symptom
+
+`**` chained left-to-right, against the mathematical / Python / Ruby convention
+that exponentiation is right-associative:
+
+```serez
+out 2 ** 3 ** 2;   // → 64   (parsed as (2**3)**2 = 8**2)
+                   // expected 512 (2**(3**2) = 2**9)
+```
+
+### Root cause
+
+In `parse_infix_chain`, the right operand of every binary operator was parsed
+with `self.parse_expression(current_precedence)`. With equal precedences the
+loop condition `precedence < peek_precedence` is false, so a following operator
+of the same precedence is left for the *outer* call — i.e. left-associativity,
+which is correct for `+ - * /` but wrong for `**`.
+
+### Fix
+
+Parse the right operand of `**` one precedence level below `Power` (`Product`),
+so a following `**` (still `Power`) satisfies `Product < Power` and binds into
+the right side. All other operators keep `current_precedence` (left-assoc):
+
+```rust
+let right_precedence = if current_precedence == Precedence::Power {
+    Precedence::Product   // → right-associative
+} else {
+    current_precedence
+};
+let right = self.parse_expression(right_precedence)?;
+```
+
+### Lesson
+
+Pratt parsers get right-associativity by recursing the right operand at
+`precedence - 1` (or the same precedence) rather than the operator's own
+precedence. Only `**` needed it here.
