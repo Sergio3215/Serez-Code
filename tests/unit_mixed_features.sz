@@ -1,0 +1,108 @@
+// unit_mixed_features.sz — cross-feature integration at the unit level: each
+// test deliberately combines several language features that are usually tested
+// in isolation, to catch interaction regressions.
+
+enum Tier { Bronze, Silver, Gold }
+
+class Account {
+    owner: any = "";
+    balance: any = 0m;
+    public Account(any o, any b) { this.owner = o; this.balance = b; }
+    public any deposit(any amt) { this.balance = this.balance + amt; return this.balance; }
+    public any op_str() { return this.owner + ":" + this.balance.setScale(2); }
+}
+
+fn* upto(int n) { let i = 1; while (i <= n) { yield i; i = i + 1; } }
+
+test("generator + HOF + dec aggregation", () => {
+    let total = upto(5).map((i) => Dec.fromInt(i, 0) * 0.10m).reduce(0m, (a, v) => a + v);
+    assert(total == 1.5m, "0.1+0.2+0.3+0.4+0.5 = 1.5 exact");
+});
+
+test("class + dec field + op_str via interpolation", () => {
+    let acc = new Account("Ana", 100m);
+    acc.deposit(0.005m);
+    acc.deposit(0.005m);
+    assert(acc.balance == 100.01m, "two 0.005 deposits = 0.01 exact");
+    assert("{acc}" == "Ana:100.01", "op_str renders dec field");
+});
+
+test("match with guard over dec drives classification", () => {
+    let classify = (p) => match p {
+        x if x >= 1000m => Tier.Gold,
+        x if x >= 100m => Tier.Silver,
+        _ => Tier.Bronze,
+    };
+    assert(classify(1500m) == Tier.Gold, "gold");
+    assert(classify(250m) == Tier.Silver, "silver");
+    assert(classify(5m) == Tier.Bronze, "bronze");
+});
+
+test("dict<string, instance> + optional chaining + null coalescing", () => {
+    let bank <string, any> = ({"ana", new Account("Ana", 50m)});
+    assert(bank["ana"]?.deposit(25m) == 75m, "deposit via optional chain");
+    assert((bank["zzz"]?.deposit(1m) ?? -1m) == -1m, "missing key short-circuits");
+});
+
+test("DateTime + dec together in a record dict, serialized", () => {
+    let when = DateTime.from(2026, 1, 15, 9, 0, 0);
+    let rec <string, any> = ({"day", when.day}, {"price", 12.50m}, {"iso", when.toString()});
+    let s = JSON.stringify(rec);
+    assert(s.includes("\"day\":15"), "datetime field");
+    assert(s.includes("12.50"), "exact dec");
+    assert(s.includes("2026-01-15T09:00:00"), "iso string");
+});
+
+test("closures keep independent mutable dec state", () => {
+    let make = () => { let t = 0m; return (n) => { t = t + n; return t; }; };
+    let a = make();
+    let b = make();
+    assert(a(1.25m) == 1.25m, "a first");
+    assert(a(1.25m) == 2.50m, "a accumulates");
+    assert(b(10m) == 10m, "b independent");
+});
+
+test("recursion producing exact dec (factorial)", () => {
+    fn dec f(int n) { if (n <= 1) { return 1m; } return Dec.fromInt(n, 0) * f(n - 1); }
+    assert(f(10) == 3628800m, "10! exact");
+    assert(f(20).toString() == "2432902008176640000", "20! exact, no f64 loss");
+});
+
+test("spread + rest + dec reduce", () => {
+    let xs = [1.1m, 2.2m, 3.3m];
+    let more = [...xs, 4.4m];
+    assert(more.length() == 4, "spread grew array");
+    assert(more.reduce(0m, (a, v) => a + v) == 11m, "sum exact");
+});
+
+test("switch on enum selecting dec fees, accumulated in a loop", () => {
+    let tiers = [Tier.Gold, Tier.Bronze, Tier.Silver, Tier.Gold];
+    let total = 0m;
+    for (let t in tiers) {
+        switch (t) {
+            case Tier.Gold:   { total = total + 9.99m; }
+            case Tier.Silver: { total = total + 4.99m; }
+            case Tier.Bronze: { total = total + 0.99m; }
+        }
+    }
+    assert(total == 25.96m, "9.99*2 + 4.99 + 0.99 exact");
+});
+
+test("pipe chaining through typed dec functions", () => {
+    let f = (d) => d + 1m;
+    let g = (d) => d * 2m;
+    assert((10m |> f |> g) == 22m, "(10+1)*2 = 22");
+});
+
+test("try/catch around HOF throw, recovery returns dec", () => {
+    let safeDiv = (a, b) => {
+        let res = 0m;
+        try { if (b == 0m) { throw "divzero"; } res = (a / b).setScale(2, "half-up"); }
+        catch (e) { res = -1m; }
+        return res;
+    };
+    assert(safeDiv(10m, 4m) == 2.5m, "normal");
+    assert(safeDiv(10m, 0m) == -1m, "recovered");
+});
+
+summary();

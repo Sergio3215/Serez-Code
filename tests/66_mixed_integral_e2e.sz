@@ -1,0 +1,74 @@
+// 66_mixed_integral_e2e — integration across the whole language: enums,
+// inheritance, operator overloading, generators, pipe, match (guards), closures,
+// HOFs, dec, DateTime, dicts/arrays, optional chaining, destructuring, spread,
+// try/catch, switch, JSON and string interpolation — all woven together.
+// Deterministic (DateTime via from(), no clock) so the golden is stable.
+
+enum Status { Pending, Paid, Shipped }
+
+class Money {
+    cents: any = 0m;
+    public Money(any c) { this.cents = c; }
+    public any op_add(any o) { return new Money(this.cents + o.cents); }
+    public any op_str() { return "$" + this.cents.setScale(2, "half-up"); }
+}
+
+class Animal {
+    name: any = "";
+    weight: any = 0m;
+    public Animal(any n, any w) { this.name = n; this.weight = w; }
+    public any speak() { return this.name + " makes a sound"; }
+}
+class Dog : Animal {
+    public Dog(any n, any w) { super(n, w); }
+    public any speak() { return this.name + " barks (" + this.weight + "kg)"; }
+}
+
+fn* range(int n) { let i = 0; while (i < n) { yield i; i = i + 1; } }
+fn dec sumDec(any arr) { return arr.reduce(0m, (a, v) => a + v); }
+fn dec doubleDec(dec x) { return x * 2; }
+fn makeP() { let p <string, any> = ({"x", 3m}, {"y", 4m}); return p; }
+fn any acc() { let t = 0m; return (n) => { t = t + n; return t; }; }
+fn dec fact(int n) { if (n <= 1) { return 1m; } return Dec.fromInt(n, 0) * fact(n - 1); }
+fn sumAll(...nums) { return nums.reduce(0, (a, v) => a + v); }
+fn* prices(int n) { let i = 1; while (i <= n) { yield Dec.fromInt(i, 0) * 0.75m; i = i + 1; } }
+
+out "1 gen->map->reduce(dec): " + sumDec(range(5).map((i) => Dec.fromInt(i, 0) * 1.5m));
+out "2 pipe with dec: " + (3m |> doubleDec);
+out "3 op overload + dec: {new Money(10.005m) + new Money(2.50m)}";
+out "4 inheritance+dec field: " + (new Dog("Rex", 12.5m)).speak();
+out "5 match guard on dec: " + (match 150m { x if x > 100m => "big", x if x > 0m => "small", _ => "zero" });
+let order <string, any> = ({"status", Status.Paid}, {"total", 99.90m});
+out "6 enum in dict + json: " + JSON.stringify(order);
+out "7 match on enum: " + (match Status.Shipped { Status.Pending => "wait", Status.Shipped => "sent", _ => "?" });
+let zoo <string, any> = ({"rex", new Dog("Rex", 10m)});
+out "8 optional chain instance: " + zoo["rex"]?.speak();
+out "9 optional chain missing: " + (zoo["none"]?.speak() ?? "no animal");
+let {x, y} = makeP();
+out "10 destructure dict from fn: " + (x + y);
+let a = acc();
+out "11 closure dec accumulator: " + a(1.5m) + "," + a(2.5m) + "," + a(1m);
+let fns = [];
+for (let i = 1; i <= 3; i = i + 1) { fns.push((k) => k * i); }
+out "12 closures capture loop var: " + fns[0](10) + "," + fns[1](10) + "," + fns[2](10);
+let caught = "none";
+try { [1, 2, 3].map((v) => { if (v == 2) { throw "boom at " + v; } return v; }); }
+catch (e) { caught = e; }
+out "13 try/catch from HOF: " + caught;
+out "14 recursion dec factorial(20): " + fact(20);
+let when = DateTime.from(2026, 6, 19, 14, 30, 0);
+let amount = 1234.5m;
+let whenStr = when.format("YYYY-MM-DD HH:mm");
+let amtStr = amount.setScale(2);
+out "15 datetime + dec interp: Order @ {whenStr} for ${amtStr}";
+let inv <string, any> = ({"fruit", [1.5m, 2.5m, 0.99m]}, {"veg", [3m, 1.25m]});
+out "16 nested dict<str,array> query: " + sumDec(inv["fruit"]).setScale(2);
+let parts = [1, 2, 3, 4];
+out "17 spread into rest fn: " + sumAll(...parts);
+let st = Status.Paid;
+let fee = 0m;
+switch (st) { case Status.Paid: { fee = 2.50m; } case Status.Pending: { fee = 0m; } }
+out "18 switch on enum + dec: " + fee;
+out "19 ternary dec/datetime: " + (amount > 1000m ? "premium since " + when.year : "standard");
+let big = prices(10).filter((p) => p > 5m);
+out "20 generator+filter dec: count " + big.length() + " first " + big[0];

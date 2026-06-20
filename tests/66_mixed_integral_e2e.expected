@@ -1,0 +1,20 @@
+1 gen->map->reduce(dec): 15.0
+2 pipe with dec: 6
+3 op overload + dec: $12.51
+4 inheritance+dec field: Rex barks (12.5kg)
+5 match guard on dec: big
+6 enum in dict + json: {"status":"Status.Paid","total":99.90}
+7 match on enum: sent
+8 optional chain instance: Rex barks (10kg)
+9 optional chain missing: no animal
+10 destructure dict from fn: 7
+11 closure dec accumulator: 1.5,4.0,5.0
+12 closures capture loop var: 10,20,30
+13 try/catch from HOF: boom at 2
+14 recursion dec factorial(20): 2432902008176640000
+15 datetime + dec interp: Order @ 2026-06-19 14:30 for $1234.50
+16 nested dict<str,array> query: 4.99
+17 spread into rest fn: 10
+18 switch on enum + dec: 2.50
+19 ternary dec/datetime: premium since 2026
+20 generator+filter dec: count 4 first 5.25
