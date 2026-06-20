@@ -55,6 +55,7 @@ out fibonacci(10);   // → 55
    - [OS](#os)
    - [Env](#env)
    - [Time](#time)
+   - [DateTime](#datetime)
    - [System](#system)
    - [Permissions](#permissions)
    - [Package Manager](#package-manager)
@@ -228,8 +229,9 @@ Serez-Code has five primitive types and three compound types:
 |---|---|---|
 | `int` | `0`, `42`, `-7` | 64-bit signed integer (`i64`) |
 | `decimal` | `3.14`, `0.5`, `2.0` | 64-bit floating-point (`f64`) |
+| `dec` | `12.50m`, `5m`, `1e-7m` | **Exact** base-10 decimal (`rust_decimal`, 28–29 digits) |
 | `bool` | `true`, `false` | Boolean |
-| `string` | `"hello"`, `"foo bar"` | UTF-8 string |
+| `string` | `"hello"`, `r"raw {x}"` | UTF-8 string (interpolated, or raw with `r"…"`) |
 | `void` | — | Signals absence of a return value |
 | `any` | — | Wildcard: skips type validation |
 | `null` | `null` | Absence of a value; used with nullable types |
@@ -267,6 +269,54 @@ if (idx != null) {
 ```
 
 Nullable annotations work on parameters, return types, and array element types: `int?`, `string?`, `[int?]`. The `null` literal produces a null value that is compatible with any nullable type.
+
+#### Exact decimals (`dec`)
+
+`decimal` is `f64` — fast, but binary, so `0.1 + 0.2 != 0.3`. For money and any
+domain that cannot tolerate rounding drift, use **`dec`**: an exact base-10
+decimal written with the **`m` suffix** (`12.50m`, `5m`, `1e-7m`).
+
+```serez
+out 0.1 + 0.2 == 0.3        // false  (f64)
+out 0.1m + 0.2m == 0.3m     // true   (exact)
+
+let price = 12.50m          // type inferred as dec; scale is preserved → "12.50"
+let total = price * (1m + 0.21m)
+out total                    // 15.1250
+```
+
+- `int` mixes in exactly (`1 + 1m → 2m`); mixing `dec` with `decimal` (f64) is a
+  **type error** — convert explicitly with `d.toDecimal()` / `Dec.parse`.
+- Comparison is by value (`1.50m == 1.5m` → `true`); arithmetic is checked
+  (overflow → error), `/` rounds to 28 digits, `**` needs an integer exponent.
+- Rounding is explicit: `d.round(n[, mode])` / `d.setScale(n[, mode])` where mode
+  is `half-even` (default), `half-up`, `down`, `up`, `floor` or `ceil`.
+- Methods: `round setScale truncate scale abs floor ceil isZero sign min max
+  toInt toDecimal toString`. Namespace: `Dec.parse(s)`, `Dec.fromInt(v, scale)`,
+  `Dec.MAX`, `Dec.MIN`, `Dec.MAX_SCALE` (28).
+
+```serez
+let iva = (1000.00m * 0.21m).setScale(2, "half-up")   // 210.00 (COBOL ROUNDED)
+out Dec.fromInt(1250, 2)                               // 12.50
+```
+
+#### Raw strings (`r"…"`)
+
+By default a `"…"` string is **interpolated**: `{expr}` is evaluated and `\{`/`\}`
+escape literal braces. A **raw** string `r"…"` disables interpolation *and* escape
+processing — `{ }` and backslashes are literal — which is ideal for literal
+braces, Windows paths and regexes:
+
+```serez
+let x = 5
+out "value is {x}"     // value is 5     (interpolated)
+out r"value is {x}"    // value is {x}   (raw)
+out r"C:\temp\new"     // C:\temp\new    (no escapes)
+out r"\d+\.\d{2}"      // \d+\.\d{2}     (regex literal)
+```
+
+A raw string cannot contain a `"` (the first quote closes it) — use a normal
+string with `\"` for that.
 
 ---
 
@@ -2160,6 +2210,69 @@ out t2 - t1   // → ~100 (ms elapsed)
 
 ---
 
+### DateTime
+
+`DateTime` is a calendar date/time built on `chrono`. It is **immutable**: every
+operation returns a *new* `DateTime`. Reading the wall clock (`now`, `utcNow`)
+**requires `use permissions { Time }`**; pure construction (`from`, `fromEpoch`)
+and any operation on an existing value need **no permission**.
+
+**Construction**
+
+| Function | Description |
+|---|---|
+| `DateTime.now()` | Current **local** date/time. Requires `Time`. |
+| `DateTime.utcNow()` | Current **UTC** date/time. Requires `Time`. |
+| `DateTime.from(y, m, d, [h, mi, s, ms])` | Build from fields (3–7 ints). Rejects invalid dates (e.g. `Feb 30`). |
+| `DateTime.fromEpoch(ms)` | Build from a millisecond Unix timestamp. |
+
+**Fields** — each returns a `DateField` that behaves as an `int` under operators
+but carries `.add(n)` / `.reduce(n)` / `.remove(n)` returning a **new** `DateTime`:
+
+| Field | Meaning |
+|---|---|
+| `.year .month .day .hour .minute .second .ms` | Calendar components (month is 1-indexed). |
+| `.weekday` | 1 = Monday … 7 = Sunday (`int`). |
+| `.dayOfYear` | 1–366 (`int`). |
+| `.daysInMonth` | Days in the current month (`int`). |
+
+**Immutable arithmetic** — day/hour/minute/second/ms shift the instant; month/year
+adjust field-wise and **clamp the day** to the end of the resulting month:
+
+```serez
+let d = DateTime.from(2026, 1, 31, 9, 30, 0)
+out d.day.add(5)            // 2026-02-05T09:30:00
+out d.month.add(1)          // 2026-02-28T09:30:00  (31 clamped to 28)
+out d.month.reduce(1)       // 2025-12-31T09:30:00
+out d.day + 5               // 36   (DateField acts as int)
+```
+
+**Methods & formatting**
+
+| Member | Description |
+|---|---|
+| `.format(pattern)` | moment.js-style: `YYYY YY MM M DD D HH H hh h mm m ss s SSS A`; `[text]` is literal. |
+| `.toString()` / `.iso()` | ISO 8601 (`Z` suffix when UTC). |
+| `.timestamp()` / `.toEpoch()` / `.epochMillis()` | Millisecond epoch (`int`). |
+| `.isLeapYear()` / `.isUtc()` | `bool`. |
+| `.add/.reduce/.remove(n)` *(on a field)* | Immutable add/subtract; `remove` == `reduce`. |
+
+```serez
+let d = DateTime.from(2026, 6, 20, 14, 30, 0)
+out d.format("YYYY-MM-DD HH:mm")   // 2026-06-20 14:30
+out d.format("D/M/YYYY h:mm A")    // 20/6/2026 2:30 PM
+out d.weekday                       // 6  (Saturday)
+
+// Object-destructuring exposes the calendar fields as plain ints
+const {day, month, year} = DateTime.from(2026, 6, 20)
+out year + "-" + month + "-" + day  // 2026-6-20
+```
+
+Two `DateTime`s compare by instant (`<`, `>`, `==`, …); arithmetic between two
+dates is not allowed — operate through their fields.
+
+---
+
 ### System
 
 `System` provides read-only system information. **Requires `use permissions { System }`.**
@@ -2291,6 +2404,10 @@ Grants additional namespaces for the current file only. Additive — cannot revo
 ```serez
 use permissions { OS, File }
 ```
+
+> `DateTime.now()` / `DateTime.utcNow()` read the clock and so reuse the **`Time`**
+> permission. `DateTime.from()` / `.fromEpoch()` and all field/arithmetic/format
+> operations are pure and need no permission.
 
 #### Level 3 — Operation-level (`unsafe {}`)
 
@@ -3300,11 +3417,13 @@ Index-assign (`this.items[i] = value`) and direct method calls (`this.items.push
 
 ### `{` inside a string literal triggers interpolation
 
-Any `{` starts an interpolation expression. Use `\{` for a literal brace:
+Any `{` starts an interpolation expression. Use `\{`/`\}` for literal braces, or a
+**raw string** `r"…"` to disable interpolation entirely:
 
 ```serez
 out "Score: {score}";      // ✅ interpolation
 out "Empty dict: \{\}";    // ✅ literal braces → Empty dict: {}
+out r"Empty dict: {}";     // ✅ raw string → Empty dict: {}
 out "Block: {";            // ❌ parse error — unclosed interpolation
 ```
 

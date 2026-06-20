@@ -5,6 +5,59 @@ Order: most recent to oldest.
 
 ---
 
+## [6.3.0] — branch `improve` (2026-06-20)
+
+### New: `DateTime` namespace (calendar date/time)
+
+- Immutable date/time built on `chrono`. Construction: `DateTime.now()` /
+  `utcNow()` (require the `Time` permission), `DateTime.from(y,m,d[,h,mi,s,ms])`
+  and `DateTime.fromEpoch(ms)` (no permission — pure, and reject invalid dates).
+- Fields `.year/.month/.day/.hour/.minute/.second/.ms` return a **DateField**
+  that acts as an `int` under operators yet carries immutable
+  `.add(n)/.reduce(n)/.remove(n)` returning a new `DateTime`. Day/time units shift
+  the instant; month/year adjust field-wise and clamp the day to month end.
+  Read-only `.weekday/.dayOfYear/.daysInMonth`, plus `.isLeapYear()/.isUtc()`.
+- `.format(pattern)` (moment.js-style, `[literal]` escaping), `.toString()/.iso()`,
+  `.timestamp()/.toEpoch()/.epochMillis()`. Object-destructuring exposes the
+  calendar fields as ints: `const {day, month, year} = DateTime.now()`.
+
+### New: exact decimal type `dec`
+
+- Base-10 exact decimal (crate `rust_decimal`, 28–29 digits) alongside the
+  untouched `decimal` (f64). Literal suffix `m`: `12.50m`, `5m`, `1e-7m`.
+- `int` mixes in exactly; mixing `dec` with f64 `decimal` is a type error
+  (convert via `toDecimal()` / `Dec.parse`). Comparison by value; checked
+  arithmetic; `/` rounds to 28 digits half-even; `**` requires an int exponent.
+- Methods `round/setScale/truncate` (modes half-even default, half-up, down, up,
+  floor, ceil), `scale/abs/floor/ceil/isZero/sign/min/max/toInt/toDecimal/
+  toString`; namespace `Dec.parse/fromInt/MAX/MIN/MAX_SCALE`. JSON serializes a
+  `dec` as an exact number literal. Works in switch, sort, includes and dicts.
+
+### New: raw string literals `r"…"`
+
+- `r"…"` disables interpolation **and** escape processing — `{ }` and backslashes
+  are literal (great for literal braces, Windows paths, regexes). Cannot contain a
+  `"`. Default `"…"` interpolation is unchanged (zero impact on existing code).
+
+### Bug fixes
+
+- **B-77** — `op_str` is now honored in string `+` concatenation (both operand
+  orders), consistent with interpolation/array display.
+- **B-78** — escaped closing brace `\}` in a string literal no longer leaks the
+  backslash (symmetric with `\{`); inline literal JSON now works.
+- **B-79** — the power operator `**` is now **right-associative**
+  (`2 ** 3 ** 2 == 512`), matching math/Python.
+
+### Tests
+
+- New: `unit_datetime`, `unit_dec`, plus mixed/integration suites
+  `unit_mixed_features`, `unit_stdlib_mixed`, `unit_systems_mixed`,
+  `unit_net_gui_mixed` and e2e `63`–`71` (datetime, dec, raw/op_str, deep
+  cross-feature, stdlib, systems/crypto/GPU/autodiff, networking+GUI), plus
+  security tests for the new namespaces. Full suite: **369 passing, 0 failing.**
+
+---
+
 ## [Unreleased] — branch `improve` (2026-06-11)
 
 ### Memory — loop-body value retention fixed (leak #1 residual)
