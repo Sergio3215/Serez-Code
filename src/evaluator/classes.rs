@@ -119,7 +119,7 @@ impl super::Evaluator {
 
             for (i, param) in ctor.parameters.iter().enumerate() {
                 if param.is_rest {
-                    let rest_items: Vec<OwnedValue> = arg_vals[i..].iter()
+                    let rest_items: Vec<OwnedValue> = arg_vals[i.min(arg_vals.len())..].iter()
                         .cloned()
                         .collect();
                     let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_items });
@@ -223,7 +223,7 @@ impl super::Evaluator {
         self.scopes.push();
         for (i, param) in parent_ctor.parameters.iter().enumerate() {
             if param.is_rest {
-                let rest_owned: Vec<OwnedValue> = arg_vals[i..].iter()
+                let rest_owned: Vec<OwnedValue> = arg_vals[i.min(arg_vals.len())..].iter()
                     .cloned()
                     .collect();
                 let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_owned });
@@ -341,7 +341,7 @@ impl super::Evaluator {
 
         for (i, param) in method.parameters.iter().enumerate() {
             if param.is_rest {
-                let rest_owned: Vec<OwnedValue> = arg_vals[i..].iter()
+                let rest_owned: Vec<OwnedValue> = arg_vals[i.min(arg_vals.len())..].iter()
                     .cloned()
                     .collect();
                 let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_owned });
@@ -596,7 +596,7 @@ impl super::Evaluator {
 
         for (i, param) in m.parameters.iter().enumerate() {
             if param.is_rest {
-                let rest_owned: Vec<OwnedValue> = arg_vals[i..].iter()
+                let rest_owned: Vec<OwnedValue> = arg_vals[i.min(arg_vals.len())..].iter()
                     .cloned()
                     .collect();
                 let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_owned });

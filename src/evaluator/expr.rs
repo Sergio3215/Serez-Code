@@ -243,7 +243,7 @@ impl super::Evaluator {
                 for (i, param) in parameters.iter().enumerate() {
                     if param.is_rest {
                         // Collect remaining args into an array
-                        let rest_elems: Vec<OwnedValue> = arg_refs[i..].iter()
+                        let rest_elems: Vec<OwnedValue> = arg_refs[i.min(arg_refs.len())..].iter()
                             .map(|&r| self.extract(r))
                             .collect();
                         let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_elems });

@@ -1530,6 +1530,13 @@ impl super::Evaluator {
                     _ => { eprintln!("❌ ERROR: Tensor.layer_norm() eps must be a number"); return EvalResult::Error; }
                 };
                 let (rows, cols) = (shape[0], shape[1]);
+                if gamma_data.len() != cols || beta_data.len() != cols {
+                    let msg = self.alloc(ObjectData::Str(format!(
+                        "❌ Tensor.layer_norm(): gamma and beta must each have {} element(s) (one per column); got gamma={}, beta={}",
+                        cols, gamma_data.len(), beta_data.len()
+                    )));
+                    return EvalResult::Throw(msg);
+                }
                 let mut out_data = vec![0.0f64; rows * cols];
                 let mut x_norm = vec![0.0f64; rows * cols];
                 let mut stds   = vec![0.0f64; rows];

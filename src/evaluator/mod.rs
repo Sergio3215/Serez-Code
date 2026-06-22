@@ -939,7 +939,7 @@ impl Evaluator {
                 }
                 for (i, param) in parameters.iter().enumerate() {
                     if param.is_rest {
-                        let rest_items: Vec<OwnedValue> = arg_vals[i..].iter()
+                        let rest_items: Vec<OwnedValue> = arg_vals[i.min(arg_vals.len())..].iter()
                             .cloned()
                             .collect();
                         let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_items });
