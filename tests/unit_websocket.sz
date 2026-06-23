@@ -1,4 +1,5 @@
 // Unit tests: WebSocket support — Crypto.sha1 / sha1base64 / Socket WS frames
+use permissions { Socket }
 
 // ── SHA-1 correctness ─────────────────────────────────────────────────────────
 

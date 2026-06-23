@@ -26,7 +26,8 @@ test("interpolación de expresión aritmética", () => {
 test("interpolación de llamada a función", () => {
     fn int cuadrado(int x) { return x * x; }
     assert("4²={cuadrado(4)}" == "4²=16", "fn call");
-    assert("longitud={\"hola\".length()}" == "longitud=4", "method call");
+    let lh = "hola".length();
+    assert("longitud={lh}" == "longitud=4", "method call");
 });
 
 test("interpolación de acceso a campo de objeto", () => {
@@ -57,12 +58,14 @@ test("múltiples interpolaciones en un string", () => {
 
 test("interpolación de acceso a dict", () => {
     let d <string,int> = ({"a",100});
-    assert("val={d[\"a\"]}" == "val=100", "dict access interp");
+    let va = d["a"];
+    assert("val={va}" == "val=100", "dict access interp");
 });
 
 test("interpolación con ternario", () => {
     let n = 5;
-    assert("es {n > 0 ? \"positivo\" : \"negativo\"}" == "es positivo", "ternario en interp");
+    let pos = n > 0 ? "positivo" : "negativo";
+    assert("es {pos}" == "es positivo", "ternario en interp");
 });
 
 test("interpolación en concatenación", () => {

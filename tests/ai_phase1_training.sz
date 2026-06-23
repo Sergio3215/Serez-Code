@@ -6,16 +6,16 @@
 test("xavierUniform shape [4,3] is correct", () => {
     let w = Autodiff.xavierUniform([4, 3])
     let s = w.shape
-    assert(s[0] == 4 and s[1] == 3, "xavierUniform shape mismatch")
+    assert(s[0] == 4 && s[1] == 3, "xavierUniform shape mismatch")
 })
 
 test("xavierUniform values are bounded", () => {
     let w = Autodiff.xavierUniform([10, 10])
     let limit = Math.sqrt(6.0 / 20.0)
-    let all_data = w.toArray()
+    let all_data = w.flatten().toArray()
     let i = 0
-    while i < all_data.length() {
-        assert(all_data[i] >= -limit - 0.01 and all_data[i] <= limit + 0.01, "xavierUniform out of bounds at " + i)
+    while (i < all_data.length()) {
+        assert(all_data[i] >= -limit - 0.01 && all_data[i] <= limit + 0.01, "xavierUniform out of bounds at " + i)
         i++
     }
 })
@@ -23,7 +23,7 @@ test("xavierUniform values are bounded", () => {
 test("heNormal shape [8,4] is correct", () => {
     let w = Autodiff.heNormal([8, 4])
     let s = w.shape
-    assert(s[0] == 8 and s[1] == 4, "heNormal shape mismatch")
+    assert(s[0] == 8 && s[1] == 4, "heNormal shape mismatch")
 })
 
 test("xavierNormal produces non-zero values", () => {
@@ -31,8 +31,8 @@ test("xavierNormal produces non-zero values", () => {
     let arr = w.toArray()
     let nonzero = false
     let i = 0
-    while i < arr.length() {
-        if arr[i] != 0.0 { nonzero = true }
+    while (i < arr.length()) {
+        if (arr[i] != 0.0) { nonzero = true }
         i++
     }
     assert(nonzero, "xavierNormal all zeros")
@@ -41,7 +41,7 @@ test("xavierNormal produces non-zero values", () => {
 test("heUniform shape correct", () => {
     let w = Autodiff.heUniform([6, 2])
     let s = w.shape
-    assert(s[0] == 6 and s[1] == 2, "heUniform shape")
+    assert(s[0] == 6 && s[1] == 2, "heUniform shape")
 })
 
 // ── Loss functions ────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ test("mseLoss known value", () => {
     let tgt  = Tensor.from([1.0, 1.0])
     let loss = Autodiff.mseLoss(pred, tgt)
     let v = loss.toArray()[0]
-    assert(v > 0.99 and v < 1.01, "mseLoss expected ~1.0, got " + v)
+    assert(v > 0.99 && v < 1.01, "mseLoss expected ~1.0, got " + v)
 })
 
 test("maeLoss known value", () => {
@@ -69,7 +69,7 @@ test("maeLoss known value", () => {
     let tgt  = Tensor.from([1.0, 1.0])
     let loss = Autodiff.maeLoss(pred, tgt)
     let v = loss.toArray()[0]
-    assert(v > 0.99 and v < 1.01, "maeLoss expected ~1.0, got " + v)
+    assert(v > 0.99 && v < 1.01, "maeLoss expected ~1.0, got " + v)
 })
 
 test("bceLoss perfect sigmoid output near 0", () => {
@@ -117,7 +117,7 @@ test("clipGrad does not clip small gradient", () => {
     let grad = Tensor.from([0.1, 0.1])
     let clipped = Autodiff.clipGrad(grad, 10.0)
     let arr = clipped.toArray()
-    assert(arr[0] > 0.09 and arr[0] < 0.11, "clipGrad should not change small grad")
+    assert(arr[0] > 0.09 && arr[0] < 0.11, "clipGrad should not change small grad")
 })
 
 test("clipGradNorm clips array of gradients", () => {
@@ -194,7 +194,7 @@ test("mseLoss backward produces correct gradient", () => {
     let grad = Autodiff.gradient(param)
     let g = grad.toArray()[0]
     // d/dp MSE = 2*(p-target)/n = 2*(0-1)/1 = -2
-    assert(g < -1.9 and g > -2.1, "mseLoss gradient should be -2, got " + g)
+    assert(g < -1.9 && g > -2.1, "mseLoss gradient should be -2, got " + g)
 })
 
 test("crossEntropyLoss backward gradient flows", () => {
@@ -205,7 +205,7 @@ test("crossEntropyLoss backward gradient flows", () => {
     Autodiff.backward(loss)
     let grad = Autodiff.gradient(logits)
     let s = grad.shape
-    assert(s[0] == 1 and s[1] == 2, "crossEntropy gradient shape should be [1,2]")
+    assert(s[0] == 1 && s[1] == 2, "crossEntropy gradient shape should be [1,2]")
 })
 
 summary()

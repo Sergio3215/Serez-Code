@@ -103,9 +103,8 @@ test("closure in loop: each lambda captures its own copy of loop var", () => {
 
 test("class method scope: local variable shadows this.field name", () => {
     class Box {
-        public int value;
-        fn Box(int v) { this.value = v; }
-        fn int compute() {
+        public Box(int v) { this.value = v; }
+        public int compute() {
             let value = this.value * 2;
             return value;
         }

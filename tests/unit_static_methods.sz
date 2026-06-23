@@ -1,43 +1,42 @@
 // Static methods on classes
-// Tests the `static` keyword added in the improve branch
+// Tests the `static` keyword (public static MODIFIER on class members)
 
 class MathUtils {
-    static fn int abs(int n) {
+    public static int abs(int n) {
         if (n < 0) { return -n; }
         return n;
     }
-    static fn int max(int a, int b) {
+    public static int max(int a, int b) {
         if (a >= b) { return a; }
         return b;
     }
-    static fn int min(int a, int b) {
+    public static int min(int a, int b) {
         if (a <= b) { return a; }
         return b;
     }
-    static fn int clamp(int val, int lo, int hi) {
+    public static int clamp(int val, int lo, int hi) {
         return MathUtils.max(lo, MathUtils.min(val, hi));
     }
 }
 
 class Counter {
-    public int value;
-    fn Counter(int start) {
+    public Counter(int start) {
         this.value = start;
     }
-    static fn Counter zero() {
+    public static Counter zero() {
         return new Counter(0);
     }
-    static fn Counter from(int n) {
+    public static Counter from(int n) {
         return new Counter(n);
     }
-    fn void inc() { this.value = this.value + 1; }
+    public void inc() { this.value = this.value + 1; }
 }
 
 class StringUtils {
-    static fn bool isEmpty(string s) {
+    public static bool isEmpty(string s) {
         return s.length() == 0;
     }
-    static fn string repeat(string s, int n) {
+    public static string repeat(string s, int n) {
         let result = "";
         let i = 0;
         while (i < n) {
@@ -46,7 +45,7 @@ class StringUtils {
         }
         return result;
     }
-    static fn int countChar(string s, string ch) {
+    public static int countChar(string s, string ch) {
         let count = 0;
         for (let i = 0; i < s.length(); i++) {
             if (s.charAt(i) == ch) { count = count + 1; }

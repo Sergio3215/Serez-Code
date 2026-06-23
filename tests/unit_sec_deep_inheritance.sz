@@ -9,31 +9,31 @@ class A {
     public string tag() { return this.tag; }
 }
 
-class B extends A {
+class B :A {
     public B() { this.tag = "B"; }
     public string name() { return "B"; }
     public int depth() { return 1; }
 }
 
-class C extends B {
+class C :B {
     public C() { this.tag = "C"; }
     public string name() { return "C"; }
     public int depth() { return 2; }
 }
 
-class D extends C {
+class D :C {
     public D() { this.tag = "D"; }
     public string name() { return "D"; }
     public int depth() { return 3; }
 }
 
-class E extends D {
+class E :D {
     public E() { this.tag = "E"; }
     public string name() { return "E"; }
     public int depth() { return 4; }
 }
 
-class F extends E {
+class F :E {
     public F() { this.tag = "F"; }
     public string name() { return "F"; }
     public int depth() { return 5; }

@@ -169,7 +169,7 @@ test("campo de clase que almacena función (B-34)", () => {
 test("campo función asignado después del constructor (B-34)", () => {
     public class Handler {
         public Handler() { this.callback = null; }
-        public void set(any fn) { this.callback = fn; }
+        public void set(any f) { this.callback = f; }
         public any run(int x) { return this.callback(x); }
     }
     let h = new Handler();

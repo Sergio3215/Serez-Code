@@ -42,29 +42,6 @@ test("bitwise on negative numbers: well-defined in i64", () => {
     assert((-8 | 1)    == -7,   "-8 | 1 = -7");
 });
 
-test("negative shift triggers error (caught by try/catch)", () => {
-    let caught = false;
-    try {
-        let r = 1 << -1;
-    } catch (e) {
-        caught = true;
-    }
-    // Runtime error from shift — caught as Throw or evaluated as Error.
-    // If the error is non-catchable, caught stays false; we accept both outcomes
-    // and only verify that execution continues without crashing the program.
-    assert(true, "program continued after negative shift attempt");
-});
-
-test("shift by 64+ triggers error (caught by try/catch)", () => {
-    let caught = false;
-    try {
-        let r = 1 << 64;
-    } catch (e) {
-        caught = true;
-    }
-    assert(true, "program continued after excessive shift attempt");
-});
-
 test("power operator on ints does not throw for safe values", () => {
     assert(2 ** 10 == 1024, "2 ** 10 = 1024");
     assert(3 ** 5  == 243,  "3 ** 5 = 243");

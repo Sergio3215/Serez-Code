@@ -7,8 +7,8 @@ test("elu positive values unchanged", () => {
     let x = Tensor.from([1.0, 2.0, 3.0])
     let y = x.elu()
     let arr = y.toArray()
-    assert(arr[0] > 0.99 and arr[0] < 1.01, "elu(1) = 1")
-    assert(arr[1] > 1.99 and arr[1] < 2.01, "elu(2) = 2")
+    assert(arr[0] > 0.99 && arr[0] < 1.01, "elu(1) = 1")
+    assert(arr[1] > 1.99 && arr[1] < 2.01, "elu(2) = 2")
 })
 
 test("elu negative values become alpha*(exp(x)-1)", () => {
@@ -16,14 +16,14 @@ test("elu negative values become alpha*(exp(x)-1)", () => {
     let y = x.elu(1.0)
     let arr = y.toArray()
     let expected = Math.exp(-1.0) - 1.0   // ≈ -0.6321
-    assert(arr[0] > expected - 0.01 and arr[0] < expected + 0.01, "elu(-1) should be " + expected + ", got " + arr[0])
+    assert(arr[0] > expected - 0.01 && arr[0] < expected + 0.01, "elu(-1) should be " + expected + ", got " + arr[0])
 })
 
 test("swish x=0 gives 0", () => {
     let x = Tensor.from([0.0])
     let y = x.swish()
     let arr = y.toArray()
-    assert(arr[0] > -0.001 and arr[0] < 0.001, "swish(0) = 0")
+    assert(arr[0] > -0.001 && arr[0] < 0.001, "swish(0) = 0")
 })
 
 test("swish positive x gives positive output", () => {
@@ -48,7 +48,7 @@ test("mish x=0 gives 0", () => {
     let x = Tensor.from([0.0])
     let y = x.mish()
     let arr = y.toArray()
-    assert(arr[0] > -0.001 and arr[0] < 0.001, "mish(0) = 0")
+    assert(arr[0] > -0.001 && arr[0] < 0.001, "mish(0) = 0")
 })
 
 test("mish large positive ≈ x", () => {
@@ -64,7 +64,7 @@ test("softplus is smooth approximation of relu", () => {
     let x = Tensor.from([0.0, 5.0, -5.0])
     let y = x.softplus()
     let arr = y.toArray()
-    assert(arr[0] > 0.69 and arr[0] < 0.70, "softplus(0) = ln(2)")
+    assert(arr[0] > 0.69 && arr[0] < 0.70, "softplus(0) = ln(2)")
     assert(arr[1] > 4.99, "softplus(5) ≈ 5")
     assert(arr[2] < 0.01, "softplus(-5) ≈ 0")
 })
@@ -73,14 +73,14 @@ test("hardsigmoid x=0 gives 0.5", () => {
     let x = Tensor.from([0.0])
     let y = x.hardsigmoid()
     let arr = y.toArray()
-    assert(arr[0] > 0.49 and arr[0] < 0.51, "hardsigmoid(0) = 0.5")
+    assert(arr[0] > 0.49 && arr[0] < 0.51, "hardsigmoid(0) = 0.5")
 })
 
 test("hardswish x=0 gives 0", () => {
     let x = Tensor.from([0.0])
     let y = x.hardswish()
     let arr = y.toArray()
-    assert(arr[0] > -0.001 and arr[0] < 0.001, "hardswish(0) = 0")
+    assert(arr[0] > -0.001 && arr[0] < 0.001, "hardswish(0) = 0")
 })
 
 // ── BatchNorm ─────────────────────────────────────────────────────────────────
@@ -91,9 +91,9 @@ test("batchNorm output has mean ≈ 0 per feature", () => {
     x = x.reshape([4, 2])
     let gamma = Tensor.ones([2])
     let beta  = Tensor.zeros([2])
-    let out = Autodiff.batchNorm(x, gamma, beta, true)
+    let res = Autodiff.batchNorm(x, gamma, beta, true)
     // After batchnorm, mean of each column should be ~0
-    let arr = out.toArray()
+    let arr = res.flatten().toArray()
     let mean0 = (arr[0] + arr[2] + arr[4] + arr[6]) / 4.0
     let mean1 = (arr[1] + arr[3] + arr[5] + arr[7]) / 4.0
     assert(Math.abs(mean0) < 0.01, "batchNorm feature 0 mean ≈ 0, got " + mean0)
@@ -105,29 +105,29 @@ test("batchNorm output shape preserved", () => {
     x = x.reshape([3, 2])
     let g = Tensor.ones([2])
     let b = Tensor.zeros([2])
-    let out = Autodiff.batchNorm(x, g, b, true)
-    let s = out.shape
-    assert(s[0] == 3 and s[1] == 2, "batchNorm preserves shape")
+    let res = Autodiff.batchNorm(x, g, b, true)
+    let s = res.shape
+    assert(s[0] == 3 && s[1] == 2, "batchNorm preserves shape")
 })
 
 // ── Dropout ───────────────────────────────────────────────────────────────────
 
 test("dropout training=false returns unchanged", () => {
     let x = Tensor.ones([4])
-    let out = Autodiff.dropout(x, 0.5, false)
-    let arr = out.toArray()
+    let res = Autodiff.dropout(x, 0.5, false)
+    let arr = res.flatten().toArray()
     let total = 0.0
     let i = 0
-    while i < arr.length() { total += arr[i]; i++ }
+    while (i < arr.length()) { total += arr[i]; i++ }
     assert(Math.abs(total - 4.0) < 0.01, "dropout(training=false) should not change values")
 })
 
 test("dropout p=0 returns unchanged", () => {
     let x = Tensor.ones([4])
-    let out = Autodiff.dropout(x, 0.0)
-    let arr = out.toArray()
+    let res = Autodiff.dropout(x, 0.0)
+    let arr = res.flatten().toArray()
     let i = 0
-    while i < arr.length() {
+    while (i < arr.length()) {
         assert(Math.abs(arr[i] - 1.0) < 0.01, "dropout(p=0) element " + i + " should be 1.0")
         i++
     }
@@ -135,9 +135,9 @@ test("dropout p=0 returns unchanged", () => {
 
 test("dropout output shape preserved", () => {
     let x = Tensor.ones([3, 4])
-    let out = Autodiff.dropout(x, 0.3)
-    let s = out.shape
-    assert(s[0] == 3 and s[1] == 4, "dropout preserves shape")
+    let res = Autodiff.dropout(x, 0.3)
+    let s = res.shape
+    assert(s[0] == 3 && s[1] == 4, "dropout preserves shape")
 })
 
 // ── Embedding ─────────────────────────────────────────────────────────────────
@@ -148,8 +148,8 @@ test("embedding lookup correct row", () => {
     let w = Tensor.from([1.0, 0.0, 0.0, 1.0, 0.5, 0.5])
     w = w.reshape([3, 2])
     let indices = [1]
-    let out = Autodiff.embedding(indices, w)
-    let arr = out.toArray()
+    let res = Autodiff.embedding(indices, w)
+    let arr = res.flatten().toArray()
     assert(Math.abs(arr[0] - 0.0) < 0.001, "embedding[1][0] should be 0.0")
     assert(Math.abs(arr[1] - 1.0) < 0.001, "embedding[1][1] should be 1.0")
 })
@@ -158,9 +158,9 @@ test("embedding output shape", () => {
     let w = Tensor.from([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
     w = w.reshape([3, 2])
     let indices = [0, 2, 1]
-    let out = Autodiff.embedding(indices, w)
-    let s = out.shape
-    assert(s[0] == 3 and s[1] == 2, "embedding shape should be [seq_len, emb_dim]")
+    let res = Autodiff.embedding(indices, w)
+    let s = res.shape
+    assert(s[0] == 3 && s[1] == 2, "embedding shape should be [seq_len, emb_dim]")
 })
 
 // ── AvgPool2d ─────────────────────────────────────────────────────────────────
@@ -168,10 +168,10 @@ test("embedding output shape", () => {
 test("avg_pool2d 2x2 kernel on 4x4 input", () => {
     // Input: [1, 4, 4, 1] all ones — avg pool 2x2 stride 2 → [1, 2, 2, 1] all ones
     let data = Tensor.ones([1, 4, 4, 1])
-    let out  = data.avg_pool2d(2, 2)
-    let s = out.shape
-    assert(s[0] == 1 and s[1] == 2 and s[2] == 2 and s[3] == 1, "avg_pool2d output shape")
-    let arr = out.toArray()
+    let res = data.avg_pool2d(2, 2)
+    let s = res.shape
+    assert(s[0] == 1 && s[1] == 2 && s[2] == 2 && s[3] == 1, "avg_pool2d output shape")
+    let arr = res.flatten().toArray()
     assert(Math.abs(arr[0] - 1.0) < 0.001, "avg_pool2d of ones is ones")
 })
 

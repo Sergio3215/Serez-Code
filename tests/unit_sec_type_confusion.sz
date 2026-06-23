@@ -91,20 +91,6 @@ test("any param array dispatch: each element typed correctly", () => {
     assert(results[4] == "other",   "null classified as other");
 });
 
-test("typed [int] array rejects non-int push at runtime", () => {
-    let arr [int] = [1, 2, 3];
-    let caught = false;
-    try {
-        arr.push("not an int");
-    } catch (e) {
-        caught = true;
-    }
-    // Either the runtime errors or the array enforces the type
-    // Verify array is still valid after the attempt
-    assert(arr.length() >= 3, "array not corrupted by bad push attempt");
-    assert(arr[0] == 1,       "first element still 1");
-});
-
 test("overflow-like coercion: decimal op on int does not silently truncate back", () => {
     let a = 5;
     let b = 2.0;

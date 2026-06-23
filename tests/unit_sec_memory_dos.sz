@@ -80,7 +80,7 @@ test("creating many short-lived objects does not panic", () => {
 
 test("large dict filled in a loop stays manageable", () => {
     fn any buildDict(int limit) {
-        let d = {};
+        let d <string, int> = ();
         let i = 0;
         while (i < limit) {
             d["k" + i] = i * 2;

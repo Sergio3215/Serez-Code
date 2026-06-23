@@ -83,9 +83,9 @@ test("const used in switch case", () => {
     const CODE_ERROR = 500;
     fn string httpStatus(int code) {
         switch (code) {
-            case 200: return "ok";
-            case 500: return "error";
-            default:  return "other";
+            case 200: { return "ok"; }
+            case 500: { return "error"; }
+            default:  { return "other"; }
         }
     }
     assert(httpStatus(CODE_OK)    == "ok",    "200 -> ok");

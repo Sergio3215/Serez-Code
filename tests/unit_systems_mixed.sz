@@ -43,7 +43,7 @@ test("File round-trips a JSON record with dec + DateTime", () => {
     File.write(path, JSON.stringify(rec));
     assert(File.exists(path), "file created");
     let back = JSON.parse(File.read(path));
-    assert(back["total"] == 42.5m, "dec value survives round-trip");
+    assert(back["total"] == 42.5, "dec value survives round-trip as decimal (JSON has no dec type)");
     assert(back["day"] == 20, "datetime field survives");
     unsafe { File.delete(path); }
     assert(!File.exists(path), "file removed");

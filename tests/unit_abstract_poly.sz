@@ -2,43 +2,37 @@
 // Covers: method override, polymorphic dispatch, type_of, arrays of abstract type
 
 abstract class Shape {
-    fn string name() { return "Shape"; }
-    fn decimal area() { return 0.0; }
-    fn decimal perimeter() { return 0.0; }
-    fn string describe() {
+    public string name() { return "Shape"; }
+    public decimal area() { return 0.0; }
+    public decimal perimeter() { return 0.0; }
+    public string describe() {
         return this.name() + ": area=" + this.area() + " perim=" + this.perimeter();
     }
 }
 
-class Circle : Shape {
-    public decimal radius;
-    fn Circle(decimal r) { this.radius = r; }
-    fn string name() { return "Circle"; }
-    fn decimal area() { return 3.14159 * this.radius * this.radius; }
-    fn decimal perimeter() { return 2.0 * 3.14159 * this.radius; }
+public class Circle : Shape {
+    public Circle(decimal r) { this.radius = r; }
+    public string name() { return "Circle"; }
+    public decimal area() { return 3.14159 * this.radius * this.radius; }
+    public decimal perimeter() { return 2.0 * 3.14159 * this.radius; }
 }
 
-class Rectangle : Shape {
-    public decimal width;
-    public decimal height;
-    fn Rectangle(decimal w, decimal h) { this.width = w; this.height = h; }
-    fn string name() { return "Rectangle"; }
-    fn decimal area() { return this.width * this.height; }
-    fn decimal perimeter() { return 2.0 * (this.width + this.height); }
+public class Rectangle : Shape {
+    public Rectangle(decimal w, decimal h) { this.width = w; this.height = h; }
+    public string name() { return "Rectangle"; }
+    public decimal area() { return this.width * this.height; }
+    public decimal perimeter() { return 2.0 * (this.width + this.height); }
 }
 
-class Triangle : Shape {
-    public decimal base;
-    public decimal h;
-    public decimal side;
-    fn Triangle(decimal b, decimal h, decimal s) {
+public class Triangle : Shape {
+    public Triangle(decimal b, decimal h, decimal s) {
         this.base = b;
         this.h = h;
         this.side = s;
     }
-    fn string name() { return "Triangle"; }
-    fn decimal area() { return 0.5 * this.base * this.h; }
-    fn decimal perimeter() { return this.base + this.side * 2.0; }
+    public string name() { return "Triangle"; }
+    public decimal area() { return 0.5 * this.base * this.h; }
+    public decimal perimeter() { return this.base + this.side * 2.0; }
 }
 
 test("abstract subclass: name() returns correct type name", () => {

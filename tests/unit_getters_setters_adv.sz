@@ -2,52 +2,45 @@
 // Covers: computed properties, validation in setters, readonly, chaining
 
 class Temperature {
-    public decimal _celsius;
-    fn Temperature(decimal c) { this._celsius = c; }
-    fn get decimal celsius()    { return this._celsius; }
-    fn set celsius(decimal v)   { this._celsius = v; }
-    fn get decimal fahrenheit() { return this._celsius * 1.8 + 32.0; }
-    fn get decimal kelvin()     { return this._celsius + 273.15; }
+    public Temperature(decimal c) { this._celsius = c; }
+    public get decimal celsius()    { return this._celsius; }
+    public set celsius(decimal v)   { this._celsius = v; }
+    public get decimal fahrenheit() { return this._celsius * 9.0 / 5.0 + 32.0; }
+    public get decimal kelvin()     { return this._celsius + 273.15; }
 }
 
 class BoundedValue {
-    public int _value;
-    public int _min;
-    public int _max;
-    fn BoundedValue(int lo, int hi, int init) {
+    public BoundedValue(int lo, int hi, int init) {
         this._min = lo;
         this._max = hi;
         this._value = init;
     }
-    fn get int value() { return this._value; }
-    fn set value(int v) {
+    public get int value() { return this._value; }
+    public set value(int v) {
         if (v < this._min) { this._value = this._min; return; }
         if (v > this._max) { this._value = this._max; return; }
         this._value = v;
     }
-    fn get bool atMin() { return this._value == this._min; }
-    fn get bool atMax() { return this._value == this._max; }
+    public get bool atMin() { return this._value == this._min; }
+    public get bool atMax() { return this._value == this._max; }
 }
 
 class FullName {
-    public string _first;
-    public string _last;
-    fn FullName(string f, string l) { this._first = f; this._last = l; }
-    fn get string first() { return this._first; }
-    fn get string last()  { return this._last; }
-    fn set first(string v) { this._first = v; }
-    fn set last(string v)  { this._last = v; }
-    fn get string full()   { return this._first + " " + this._last; }
-    fn get int nameLength() { return this.full().length(); }
+    public FullName(string f, string l) { this._first = f; this._last = l; }
+    public get string first() { return this._first; }
+    public get string last()  { return this._last; }
+    public set first(string v) { this._first = v; }
+    public set last(string v)  { this._last = v; }
+    public get string full()   { return this._first + " " + this._last; }
+    public get int nameLength() { return this.full.length(); }
 }
 
 class Counter2 {
-    public int _count;
-    fn Counter2() { this._count = 0; }
-    fn get int count() { return this._count; }
-    fn void increment() { this._count = this._count + 1; }
-    fn void reset()     { this._count = 0; }
-    fn get bool isZero() { return this._count == 0; }
+    public Counter2() { this._count = 0; }
+    public get int count() { return this._count; }
+    public void increment() { this._count = this._count + 1; }
+    public void reset()     { this._count = 0; }
+    public get bool isZero() { return this._count == 0; }
 }
 
 test("getter: celsius returns stored value", () => {

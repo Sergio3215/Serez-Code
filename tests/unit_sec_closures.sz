@@ -19,7 +19,7 @@ test("named fn closure: own local does not bleed into outer", () => {
 
 test("two closures with same captured name are independent", () => {
     fn any makeAdder(int n) {
-        return (int x) => x + n;
+        return (x) => x + n;
     }
     let add3 = makeAdder(3);
     let add7 = makeAdder(7);
@@ -90,9 +90,8 @@ test("closure does not see variables declared in sibling blocks", () => {
 
 test("class method closure: this.field is not leaked via return value", () => {
     class Safe {
-        private int _secret;
-        fn Safe(int s) { this._secret = s; }
-        fn int exposedComputed() { return this._secret * 2; }
+        public Safe(int s) { this._secret = s; }
+        public int exposedComputed() { return this._secret * 2; }
     }
     let obj = new Safe(21);
     let doubled = obj.exposedComputed();

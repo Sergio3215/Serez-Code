@@ -69,7 +69,7 @@ test("bitwise flag manipulation pattern", () => {
 });
 
 test("bitwise ops in expressions with arithmetic", () => {
-    assert((2 + 3) & 7 == 5,    "(2+3) & 7 = 5");
+    assert(((2 + 3) & 7) == 5,    "(2+3) & 7 = 5");
     assert((8 | 4) + 1 == 13,   "(8|4)+1 = 13");
     assert((15 ^ 7) * 2 == 16,  "(15^7)*2 = 16");
 });

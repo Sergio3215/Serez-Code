@@ -1,4 +1,5 @@
 // Unit tests: Socket namespace
+use permissions { Socket }
 
 test("Socket.listen binds a port", () => {
     let srv = Socket.listen(19920);

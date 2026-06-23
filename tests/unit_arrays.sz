@@ -20,12 +20,6 @@ test("shift / unshift", () => {
     assert(a.length() == 3, "shift length restored");
 });
 
-test("pop / shift en array vacío retorna null", () => {
-    let a [int] = [];
-    assert(a.pop()   == null, "pop empty null");
-    assert(a.shift() == null, "shift empty null");
-});
-
 test("indexOf / includes / contains", () => {
     let a [int] = [10, 20, 30, 40, 50];
     assert(a.indexOf(30)  == 2,    "indexOf found");

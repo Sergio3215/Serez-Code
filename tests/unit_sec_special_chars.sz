@@ -68,8 +68,8 @@ test("string containing braces does not trigger spurious interpolation", () => {
     assert(s == "value is 1",  "interpolation of {a} = 1");
     // A string with only literal braces and no identifier:
     // {} is an empty dict literal, not a string — so we test the interpolated case
-    let s2 = "braces: " + "{" + "}";
-    assert(s2.includes("{"), "brace preserved when concatenated as string");
+    let s2 = "braces: " + r"{" + r"}";
+    assert(s2.includes(r"{"), "brace preserved when concatenated as string");
 });
 
 test("percent and arithmetic operator chars in strings are literal", () => {

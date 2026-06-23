@@ -16,7 +16,7 @@ test("TCP loopback carries a JSON record with dec + DateTime", () => {
     Socket.close(cli); Socket.close(conn); Socket.close(srv);
     assert(got == payload, "exact round-trip");
     let p = JSON.parse(got);
-    assert(p["total"] == 199.99m, "dec survives the wire");
+    assert(p["total"] == 199.99, "dec value survives the wire as decimal (JSON has no dec type)");
     assert(p["day"] == 20, "datetime field survives");
 });
 

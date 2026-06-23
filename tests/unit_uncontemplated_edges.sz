@@ -1,0 +1,125 @@
+// Unit tests — 10 previously-uncontemplated edge cases across the whole language.
+// Grounded in README.md, Serez-Code-Internals.md and serez_internal_architecture.docx
+// (Snapshot 2026-06-21). Each test was empirically probed against the current core
+// before being written, so the assertions reflect REAL behaviour. Two of them
+// surface doc-vs-implementation discrepancies, flagged inline with "HALLAZGO".
+
+// 1 ── dec: banker's rounding (half-even) genuinely diverges from half-up / down
+test("dec: half-even (banker's) rounding diverges from half-up and down", () => {
+    assert((2.5m).setScale(0, "half-even") == 2m, "2.5 half-even -> 2 (round to even)");
+    assert((3.5m).setScale(0, "half-even") == 4m, "3.5 half-even -> 4 (round to even)");
+    assert((2.5m).setScale(0, "half-up")   == 3m, "2.5 half-up -> 3");
+    assert((2.5m).setScale(0, "down")      == 2m, "2.5 down -> 2 (truncate)");
+    assert((0.125m).setScale(2, "half-even") == 0.12m, "0.125 half-even -> 0.12");
+});
+
+// 2 ── dec: scale preservation, Dec.fromInt, and value-equality across scales
+test("dec: scale preservation, Dec.fromInt, and cross-scale value equality", () => {
+    assert(("" + 12.50m) == "12.50", "display preserves scale: 12.50");
+    assert(1.50m == 1.5m, "value-equality ignores trailing zeros");
+    assert(Dec.fromInt(1250, 2) == 12.50m, "Dec.fromInt(1250, 2) == 12.50m");
+    assert(Dec.parse("3.14") == 3.14m, "Dec.parse builds an exact dec");
+});
+
+// 3 ── dec: exact int mixing, money pipeline, and the toDecimal bridge to f64
+test("dec: exact int mixing, money pipeline, and toDecimal bridge", () => {
+    assert((1 + 1m) == 2m, "int + dec -> exact dec");
+    assert((19.99m * 3).setScale(2, "half-up") == 59.97m, "money: 19.99 * 3 = 59.97");
+    assert((5m).toDecimal() == 5.0, "toDecimal bridges dec -> f64");
+});
+
+// 4 ── DateTime: fields, destructuring, and immutable add/reduce
+test("DateTime: fields, destructuring, and immutable add/reduce", () => {
+    let d = DateTime.from(2026, 6, 23);
+    assert(d.day == 23 && d.month == 6 && d.year == 2026, "fields read back");
+    const {day, month, year} = DateTime.from(2026, 6, 23);
+    assert(day == 23 && month == 6 && year == 2026, "destructuring binds fields");
+    let d2 = d.day.add(5);
+    assert(d2.day == 28, "add(5) returns a NEW date with day 28");
+    assert(d.day == 23, "the original date is unchanged (immutable)");
+});
+
+// 5 ── value semantics: mutating a container argument does not affect the caller
+test("value semantics: mutating a container argument leaves the caller untouched", () => {
+    fn void tryPush(any a) { a.push(99); }
+    let arr = [1, 2, 3];
+    tryPush(arr);
+    assert(arr.length() == 3, "caller's array is a copy, unchanged after callee push");
+});
+
+// 6 ── scope: upward-search reassignment reaches through deeply nested blocks
+test("scope: upward-search reassignment reaches through deeply nested blocks", () => {
+    let x = 1;
+    { let y = 2; { let z = 3; { x = 99; } } }
+    assert(x == 99, "depth-3 block reassigns the SAME outer x (no shadowing)");
+    let counter = 0;
+    let i = 0;
+    while (i < 3) { { counter = counter + 1; } i++; }
+    assert(counter == 3, "block-scoped writes accumulate on the outer variable");
+});
+
+// 7 ── flash-scope: return rescue preserves a locally-built nested structure
+test("flash-scope: return rescue preserves a locally-built nested structure", () => {
+    fn any build() {
+        let m <string, any> = ();
+        m["nums"] = [10, 20, 30];
+        return m;
+    }
+    let r = build();
+    assert(r["nums"][1] == 20, "nested array survives the scope's death");
+    assert(r["nums"].length() == 3, "the rescued array is intact");
+});
+
+// 8 ── closures: capture is a snapshot; a returned closure keeps its OWN state
+test("closures: snapshot capture vs a returned closure's own state", () => {
+    fn any makeCounter() { let n = 0; return () => { n = n + 1; return n; }; }
+    let c = makeCounter();
+    assert(c() == 1, "returned counter advances: 1");
+    assert(c() == 2, "returned counter advances: 2");
+    assert(c() == 3, "returned counter advances: 3");
+    // A closure captures a SNAPSHOT of an enclosing variable: later writes are
+    // unseen, and mutating it inside the closure does not escape to the original.
+    let v = 10;
+    let readV = () => v;
+    v = 20;
+    assert(readV() == 10, "closure sees the value captured at definition, not v=20");
+    let top = 0;
+    let bump = () => { top = top + 1; };
+    bump(); bump();
+    // HALLAZGO: README/Internals 1.3 says "closures only mutate top-level vars",
+    // but empirically a captured top-level var is NOT mutated (snapshot semantics).
+    assert(top == 0, "mutating a captured top-level var does not escape the closure");
+});
+
+// 9 ── crypto: Ed25519 sign/verify round-trip and tamper detection
+test("crypto: Ed25519 sign/verify round-trip and tamper detection", () => {
+    let kp = Crypto.ed25519Keypair();
+    assert(kp["public"].length()  == 64, "public key is 32-byte hex (64 chars)");
+    assert(kp["private"].length() == 64, "private key is 32-byte hex (64 chars)");
+    let msg = "transfer 100 to alice";
+    let sig = Crypto.ed25519Sign(kp["private"], msg);
+    assert(Crypto.ed25519Verify(kp["public"], msg, sig), "a valid signature verifies");
+    assert(!Crypto.ed25519Verify(kp["public"], "transfer 999 to mallory", sig), "a tampered message fails");
+    let kp2 = Crypto.ed25519Keypair();
+    assert(!Crypto.ed25519Verify(kp2["public"], msg, sig), "a wrong public key fails");
+});
+
+// 10 ── type introspection: is across primitives, dec vs decimal, and type_of on functions
+test("type introspection: is across primitives, dec vs decimal, type_of on functions", () => {
+    assert(5 is int,          "int");
+    assert(3.14 is decimal,   "f64 decimal");
+    assert(5m is dec,         "exact dec is dec");
+    assert(!(5m is decimal),  "exact dec is NOT f64 decimal (distinct types)");
+    assert(!(3.14 is dec),    "f64 decimal is NOT exact dec");
+    assert([1, 2] is array,   "array");
+    assert("hi" is string,    "string");
+    assert(true is bool,      "bool");
+    assert(null is null,      "null");
+    // Functions are introspected with type_of (there is no `function` type name
+    // for `is`; callables are passed as `any`).
+    let double = int (int n) => { return n * 2 };
+    assert(type_of(double) == "function", "type_of reports 'function'");
+    assert(double(5) == 10,               "the typed function is callable");
+});
+
+summary();

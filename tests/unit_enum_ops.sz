@@ -26,11 +26,11 @@ test("enum variants from different enums are not equal", () => {
 test("enum in switch: matches correct case", () => {
     fn string describeDir(any d) {
         switch (d) {
-            case Direction.North: return "going north";
-            case Direction.South: return "going south";
-            case Direction.East:  return "going east";
-            case Direction.West:  return "going west";
-            default: return "unknown";
+            case Direction.North: { return "going north"; }
+            case Direction.South: { return "going south"; }
+            case Direction.East:  { return "going east"; }
+            case Direction.West:  { return "going west"; }
+            default: { return "unknown"; }
         }
     }
     assert(describeDir(Direction.North) == "going north", "North -> going north");
@@ -41,8 +41,8 @@ test("enum in switch: matches correct case", () => {
 test("enum in switch: default branch", () => {
     fn string classify(any p) {
         switch (p) {
-            case Priority.Critical: return "urgent";
-            default: return "normal";
+            case Priority.Critical: { return "urgent"; }
+            default: { return "normal"; }
         }
     }
     assert(classify(Priority.Critical) == "urgent", "Critical -> urgent");
@@ -95,7 +95,7 @@ test("enum in if/else chain", () => {
 });
 
 test("enum used as dict value", () => {
-    let config = {};
+    let config <string, any> = ();
     config["status"]   = Status.Active;
     config["priority"] = Priority.High;
     assert(config["status"]   == Status.Active,   "dict stores Status.Active");

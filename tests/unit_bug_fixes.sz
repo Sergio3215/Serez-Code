@@ -112,7 +112,7 @@ test("power in expressions: (2**30) * 2 = 2**31", () => {
 
 test("typed dict: existing key returns correct value", () => {
     fn any makeDict() {
-        let d <string, int> = {};
+        let d <string, int> = ();
         d["alpha"] = 1;
         d["beta"]  = 2;
         d["gamma"] = 3;
@@ -126,7 +126,7 @@ test("typed dict: existing key returns correct value", () => {
 
 test("untyped dict: missing key still returns null (no regression)", () => {
     fn any makeUntyped() {
-        let d = {};
+        let d <string, any> = ();
         d["x"] = 10;
         return d;
     }
@@ -137,7 +137,7 @@ test("untyped dict: missing key still returns null (no regression)", () => {
 
 test("typed dict after update: updated key accessible", () => {
     fn any makeDict() {
-        let d <string, int> = {};
+        let d <string, int> = ();
         d["n"] = 5;
         d["n"] = 99;
         return d;
@@ -148,7 +148,7 @@ test("typed dict after update: updated key accessible", () => {
 
 test("typed dict keys() and values() work correctly", () => {
     fn any makeDict() {
-        let d <string, int> = {};
+        let d <string, int> = ();
         d["a"] = 1;
         d["b"] = 2;
         return d;

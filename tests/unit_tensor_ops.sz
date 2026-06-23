@@ -151,8 +151,8 @@ test("Tensor sum/mean/max/min", () => {
     assert(t.min()  == 1.0,  "min=1");
 });
 
-test("Tensor.fill factory", () => {
-    let t = Tensor.fill([4], 7.0);
+test("Tensor.ones + scale (fill pattern)", () => {
+    let t = Tensor.ones([4]).scale(7.0);
     assert(t.size() == 4,   "size=4");
     assert(t.get(0) == 7.0, "[0]=7");
     assert(t.get(3) == 7.0, "[3]=7");

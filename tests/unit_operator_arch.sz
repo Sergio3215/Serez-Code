@@ -90,9 +90,9 @@ test("bitwise & tighter than logical &&", () => {
 // ── Compound expressions ──────────────────────────────────────────────────────
 
 test("mixed arithmetic and bitwise", () => {
-    assert((3 + 4) & 7 == 7,    "(3+4) & 7 = 7 & 7 = 7, but with parens");
+    assert(((3 + 4) & 7) == 7,    "(3+4) & 7 = 7 & 7 = 7, but with parens");
     assert((1 << 3) + (1 << 2) == 12, "(8) + (4) = 12");
-    assert((255 >> 4) & 15 == 15, "(255>>4)&15 = 15&15 = 15");
+    assert(((255 >> 4) & 15) == 15, "(255>>4)&15 = 15&15 = 15");
 });
 
 test("power with unary not: ~(2**4) = ~16 = -17", () => {

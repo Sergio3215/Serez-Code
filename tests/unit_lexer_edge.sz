@@ -9,14 +9,18 @@ test("compound operators: ++ and -- as standalone statements", () => {
     assert(n == 5, "n-- decrements n");
 });
 
-test("compound operators: ++ -- in expressions", () => {
+test("compound operators: ++ -- modify in place (pure statements)", () => {
+    // Per the language reference, ++ and -- are pure statements: they do not
+    // return a value, so `let b = a++` is not valid. They mutate in place.
     let a = 10;
-    let b = a++;
+    a++;
     assert(a == 11, "a++ leaves a=11");
-    assert(b == 10, "b captures pre-increment value 10");
-    let c = ++a;
+    ++a;
     assert(a == 12, "++a leaves a=12");
-    assert(c == 12, "c captures post-increment value 12");
+    a--;
+    assert(a == 11, "a-- leaves a=11");
+    --a;
+    assert(a == 10, "--a leaves a=10");
 });
 
 test("null coalescing operator ?? parses correctly", () => {
@@ -28,7 +32,7 @@ test("null coalescing operator ?? parses correctly", () => {
 });
 
 test("arrow => parses in lambda", () => {
-    let double = (int x) => x * 2;
+    let double = (x) => x * 2;
     assert(double(5) == 10, "arrow lambda works");
 });
 
@@ -94,10 +98,9 @@ test("multi-line string expression", () => {
 
 test("keyword used as method name (get/set)", () => {
     class Prop {
-        public int _val;
-        fn Prop(int v) { this._val = v; }
-        fn int get() { return this._val; }
-        fn void set(int v) { this._val = v; }
+        public Prop(int v) { this._val = v; }
+        public int get() { return this._val; }
+        public void set(int v) { this._val = v; }
     }
     let p = new Prop(7);
     assert(p.get() == 7,  "get() method returns 7");
@@ -132,11 +135,11 @@ test("raw strings r\"...\" — no interpolation, no escapes", () => {
     assert(identNotRaw == 7, "'r' identifiers unaffected");
 });
 
-test("escaped braces \\{ and \\} are literal (B-78)", () => {
-    assert("a\{b\}c" == "a{b}c", "both braces literal");
+test("escaped braces \{ and \} are literal (B-78)", () => {
+    assert("a\{b\}c" == r"a{b}c", "both braces literal");
     assert("\{\}".length() == 2, "two chars, no leaked backslash");
     let v = 7;
-    assert("val \{{v}\}" == "val {7}", "escaped braces around a real interpolation");
+    assert("val \{{v}\}" == r"val {7}", "escaped braces around a real interpolation");
 });
 
 summary();

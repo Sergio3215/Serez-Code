@@ -2,20 +2,17 @@
 // Tests the ?. operator added in the improve branch
 
 class Node {
-    public int value;
-    public Node? next;
-    fn Node(int v) {
+    public Node(int v) {
         this.value = v;
         this.next = null;
     }
-    fn int getValue() { return this.value; }
-    fn string describe() { return "Node(" + this.value + ")"; }
+    public int getValue() { return this.value; }
+    public string describe() { return "Node(" + this.value + ")"; }
 }
 
 class Container {
-    public Node? inner;
-    fn Container() { this.inner = null; }
-    fn void setInner(Node n) { this.inner = n; }
+    public Container() { this.inner = null; }
+    public void setInner(Node n) { this.inner = n; }
 }
 
 test("?. on null returns null without error", () => {
