@@ -31,13 +31,13 @@ use std::time::Duration;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::EventLoopExtPumpEvents;
 use winit::window::{CursorIcon, Window, WindowId};
 
 use softbuffer::{Context, Surface};
-use cosmic_text::{Attrs, Buffer as TextBuffer, Color as TextColor, Family, FontSystem, Metrics, Shaping, SwashCache};
+use cosmic_text::{Attrs, Buffer as TextBuffer, Color as TextColor, Family, FontSystem, Metrics, Shaping, Style as FontStyle, SwashCache, Weight};
 
 use crate::ast::{self};
 use crate::region::{ObjectData, OwnedValue};
@@ -74,6 +74,16 @@ enum GuiCmd {
     SetTitle(String),
     SetCursor(String),
     SetImePosition(i32, i32),
+    // Control de ventana (winit) — aditivo, ruteado por el hilo main en service().
+    SetMinSize(u32, u32),
+    SetResizable(bool),
+    SetFullscreen(bool),
+    SetMaximized(bool),
+    SetPosition(i32, i32),
+    SetDecorations(bool),
+    // Diálogo de archivo nativo (rfd) — ejecutado por el hilo main; el resultado
+    // vuelve por SharedInner.dialog_result / dialog_seq (handshake como present).
+    FileDialog { save: bool, filter_name: String, filter_exts: Vec<String>, default_name: String },
 }
 
 struct SharedInner {
@@ -93,6 +103,11 @@ struct SharedInner {
     open_failed: bool,
     win_w: usize,
     win_h: usize,
+    scale_factor: f64,        // HiDPI: factor de escala del monitor (winit)
+    input_epoch: u64,         // sube en cada evento de input (para idleWait)
+    dialog_seq: u64,          // handshake de FileDialog (main → interp)
+    dialog_done: u64,
+    dialog_result: Option<String>,
     input: InputSnapshot,
 }
 
@@ -113,6 +128,11 @@ impl SharedInner {
             open_failed: false,
             win_w: 0,
             win_h: 0,
+            scale_factor: 1.0,
+            input_epoch: 0,
+            dialog_seq: 0,
+            dialog_done: 0,
+            dialog_result: None,
             input: InputSnapshot::default(),
         }
     }
@@ -122,11 +142,20 @@ impl SharedInner {
 pub struct GuiHost {
     inner: Mutex<SharedInner>,
     cv: Condvar,
+    // Despierta el pump del hilo main desde el intérprete (al presentar). Permite que
+    // el pump duerma con timeout largo en reposo (CPU ~0) y reaccione al instante.
+    proxy: Mutex<Option<EventLoopProxy<()>>>,
 }
 
 impl GuiHost {
     pub fn new() -> Self {
-        GuiHost { inner: Mutex::new(SharedInner::new()), cv: Condvar::new() }
+        GuiHost { inner: Mutex::new(SharedInner::new()), cv: Condvar::new(), proxy: Mutex::new(None) }
+    }
+    /// Despierta el bucle de eventos del hilo main (si hay proxy instalado).
+    fn wake_main(&self) {
+        if let Some(px) = self.proxy.lock().unwrap().as_ref() {
+            let _ = px.send_event(());
+        }
     }
     /// Llamado por el hilo intérprete al terminar, para que el hilo main salga.
     pub fn signal_interp_done(&self, code: i32) {
@@ -167,7 +196,8 @@ struct Glyph {
 pub struct GuiFonts {
     font_system: FontSystem,
     swash_cache: SwashCache,
-    glyphs: HashMap<(u32, char, i32), Glyph>,
+    // Clave: (familia, char, escala, estilo). estilo: bit0=bold, bit1=italic.
+    glyphs: HashMap<(u32, char, i32, u8), Glyph>,
     families: Vec<String>, // [0] = "" (default monospace)
     current: u32,
 }
@@ -223,8 +253,8 @@ impl GuiFonts {
             .and_then(|f| f.families.first().map(|(n, _)| n.clone()))
     }
 
-    fn ensure_glyph(&mut self, ch: char, scale: i32) {
-        let key = (self.current, ch, scale);
+    fn ensure_glyph(&mut self, ch: char, scale: i32, style: u8) {
+        let key = (self.current, ch, scale, style);
         if self.glyphs.contains_key(&key) {
             return;
         }
@@ -233,12 +263,14 @@ impl GuiFonts {
         let mut buf = TextBuffer::new(&mut self.font_system, metrics);
         buf.set_size(&mut self.font_system, Some(size * 4.0), Some(size * 2.0));
         let family_name;
-        let attrs = if self.current == 0 {
+        let mut attrs = if self.current == 0 {
             Attrs::new().family(Family::Monospace)
         } else {
             family_name = self.families[self.current as usize].clone();
             Attrs::new().family(Family::Name(&family_name))
         };
+        if style & 1 != 0 { attrs = attrs.weight(Weight::BOLD); }
+        if style & 2 != 0 { attrs = attrs.style(FontStyle::Italic); }
         buf.set_text(&mut self.font_system, &ch.to_string(), &attrs, Shaping::Advanced, None);
         buf.shape_until_scroll(&mut self.font_system, false);
         // Advance real (suma de anchos de layout); la familia default fija la rejilla.
@@ -290,12 +322,38 @@ impl GuiFonts {
             if ch.is_control() {
                 continue;
             }
-            self.ensure_glyph(ch, scale);
-            if let Some(gl) = self.glyphs.get(&(self.current, ch, scale)) {
+            self.ensure_glyph(ch, scale, 0);
+            if let Some(gl) = self.glyphs.get(&(self.current, ch, scale, 0)) {
                 w += gl.advance as i64;
             }
         }
         w
+    }
+
+    /// Posiciones x acumuladas en los límites de carácter (long = nº de chars + 1;
+    /// [0] = 0, [i] = x tras i chars). Para situar caret/selección con fuente
+    /// proporcional. Coincide con el avance de draw_text/measure.
+    fn advances(&mut self, text: &str, scale: i32) -> Vec<i64> {
+        let scale = scale.max(1);
+        let mut out = vec![0i64];
+        let mut x = 0i64;
+        if self.current == 0 {
+            for _ in text.chars() {
+                x += 8 * scale as i64;
+                out.push(x);
+            }
+            return out;
+        }
+        for ch in text.chars() {
+            if !ch.is_control() {
+                self.ensure_glyph(ch, scale, 0);
+                if let Some(gl) = self.glyphs.get(&(self.current, ch, scale, 0)) {
+                    x += gl.advance as i64;
+                }
+            }
+            out.push(x);
+        }
+        out
     }
 }
 
@@ -315,6 +373,7 @@ pub struct GuiState {
     clipboard: Option<arboard::Clipboard>,
     input: InputSnapshot,
     open_time: std::time::Instant,   // para Gui.time()
+    scale_factor: f64,               // HiDPI (refrescado en present desde el main)
 }
 
 impl GuiState {
@@ -334,6 +393,7 @@ impl GuiState {
             clipboard: None,
             input: InputSnapshot::default(),
             open_time: std::time::Instant::now(),
+            scale_factor: 1.0,
         }
     }
 
@@ -348,12 +408,16 @@ impl GuiState {
         g.present_seq += 1;
         let want = g.present_seq;
         host.cv.notify_all();
+        drop(g);
+        host.wake_main();   // saca al pump de su espera larga → sirve el frame ya
+        let mut g = host.inner.lock().unwrap();
         while g.done_seq < want && g.window_open && !g.should_close {
             g = host.cv.wait(g).unwrap();
         }
         self.input = g.input.clone();
         self.win_w = g.win_w.max(1);
         self.win_h = g.win_h.max(1);
+        self.scale_factor = g.scale_factor;
         self.open = g.window_open && !g.should_close;
     }
 
@@ -451,7 +515,7 @@ impl GuiState {
         }
     }
 
-    fn draw_text(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, scale: i32, rgb: u32) {
+    fn draw_text(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, scale: i32, rgb: u32, style: u8) {
         let scale = scale.max(1);
         let r = ((rgb >> 16) & 0xff) as u8;
         let g = ((rgb >> 8) & 0xff) as u8;
@@ -469,8 +533,8 @@ impl GuiState {
                 pen += 8 * scale;
                 continue;
             }
-            fonts.ensure_glyph(ch, scale);
-            if let Some(gl) = fonts.glyphs.get(&(fam, ch, scale)) {
+            fonts.ensure_glyph(ch, scale, style);
+            if let Some(gl) = fonts.glyphs.get(&(fam, ch, scale, style)) {
                 let advance = gl.advance;
                 if ch != ' ' {
                     let cells = gl.cells.clone();
@@ -570,6 +634,119 @@ impl GuiState {
             yy += 1;
         }
     }
+
+    /// Imagen escalada a (dw, dh) por muestreo de vecino más cercano, con alpha global
+    /// extra (0–255) multiplicada sobre el alpha del pixel. dw/dh <= 0 → no dibuja.
+    fn draw_image_scaled(&mut self, x: i32, y: i32, handle: i64, dw: i32, dh: i32, galpha: u32) {
+        let img = match self.images.get(&handle) {
+            Some(im) => (im.w, im.h, im.px.clone()),
+            None => return,
+        };
+        let (iw, ih, px) = img;
+        if dw <= 0 || dh <= 0 || iw == 0 || ih == 0 { return; }
+        let ga = galpha.min(255);
+        let mut dy = 0;
+        while dy < dh {
+            let sy = (dy as usize * ih) / dh as usize;
+            let mut dx = 0;
+            while dx < dw {
+                let sx = (dx as usize * iw) / dw as usize;
+                let p = px[sy.min(ih - 1) * iw + sx.min(iw - 1)];
+                let a = (((p >> 24) & 0xff) * ga) / 255;
+                let r = ((p >> 16) & 0xff) as u8;
+                let g = ((p >> 8) & 0xff) as u8;
+                let b = (p & 0xff) as u8;
+                self.blend(x + dx, y + dy, r, g, b, a);
+                dx += 1;
+            }
+            dy += 1;
+        }
+    }
+
+    /// Relleno con gradiente lineal entre dos colores 0xRRGGBB. vertical=true interpola
+    /// de arriba (c1) a abajo (c2); false de izquierda a derecha. Respeta el clip.
+    fn fill_gradient(&mut self, x: i32, y: i32, w: i32, h: i32, c1: u32, c2: u32, vertical: bool) {
+        if w <= 0 || h <= 0 { return; }
+        let r1 = ((c1 >> 16) & 0xff) as i32; let g1 = ((c1 >> 8) & 0xff) as i32; let b1 = (c1 & 0xff) as i32;
+        let r2 = ((c2 >> 16) & 0xff) as i32; let g2 = ((c2 >> 8) & 0xff) as i32; let b2 = (c2 & 0xff) as i32;
+        let span = if vertical { h } else { w };
+        let denom = (span - 1).max(1);
+        let mut yy = 0;
+        while yy < h {
+            let mut xx = 0;
+            while xx < w {
+                let t = if vertical { yy } else { xx };
+                let r = (r1 + (r2 - r1) * t / denom) as u32;
+                let g = (g1 + (g2 - g1) * t / denom) as u32;
+                let b = (b1 + (b2 - b1) * t / denom) as u32;
+                self.put(x + xx, y + yy, (r << 16) | (g << 8) | b);
+                xx += 1;
+            }
+            yy += 1;
+        }
+    }
+
+    /// Box-blur in-place de una región del canvas (radio en px, 2 pasadas). Para
+    /// paneles esmerilados / sombras suaves. Coste O(w*h*radio); radio acotado.
+    fn blur_region(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
+        let (cx0, cy0, cx1, cy1) = self.clip;
+        let x0 = x.max(0).max(cx0); let y0 = y.max(0).max(cy0);
+        let x1 = (x + w).min(self.width as i32).min(cx1);
+        let y1 = (y + h).min(self.height as i32).min(cy1);
+        if x1 <= x0 || y1 <= y0 { return; }
+        let rad = radius.clamp(1, 32);
+        let rw = (x1 - x0) as usize; let rh = (y1 - y0) as usize;
+        // Extrae la región a buffers RGB.
+        let mut rr = vec![0i32; rw * rh];
+        let mut gg = vec![0i32; rw * rh];
+        let mut bb = vec![0i32; rw * rh];
+        for j in 0..rh {
+            let row = (y0 as usize + j) * self.width + x0 as usize;
+            for i in 0..rw {
+                let p = self.canvas[row + i];
+                rr[j * rw + i] = ((p >> 16) & 0xff) as i32;
+                gg[j * rw + i] = ((p >> 8) & 0xff) as i32;
+                bb[j * rw + i] = (p & 0xff) as i32;
+            }
+        }
+        // Pasada horizontal y vertical (separable).
+        let blur_pass = |src: &Vec<i32>, w: usize, h: usize, horiz: bool| -> Vec<i32> {
+            let mut out = vec![0i32; w * h];
+            let r = rad as usize;
+            if horiz {
+                for j in 0..h {
+                    for i in 0..w {
+                        let lo = i.saturating_sub(r);
+                        let hi = (i + r).min(w - 1);
+                        let mut sum = 0i32;
+                        for k in lo..=hi { sum += src[j * w + k]; }
+                        out[j * w + i] = sum / (hi - lo + 1) as i32;
+                    }
+                }
+            } else {
+                for i in 0..w {
+                    for j in 0..h {
+                        let lo = j.saturating_sub(r);
+                        let hi = (j + r).min(h - 1);
+                        let mut sum = 0i32;
+                        for k in lo..=hi { sum += src[k * w + i]; }
+                        out[j * w + i] = sum / (hi - lo + 1) as i32;
+                    }
+                }
+            }
+            out
+        };
+        let rr = blur_pass(&blur_pass(&rr, rw, rh, true), rw, rh, false);
+        let gg = blur_pass(&blur_pass(&gg, rw, rh, true), rw, rh, false);
+        let bb = blur_pass(&blur_pass(&bb, rw, rh, true), rw, rh, false);
+        for j in 0..rh {
+            let row = (y0 as usize + j) * self.width + x0 as usize;
+            for i in 0..rw {
+                let p = ((rr[j * rw + i] as u32) << 16) | ((gg[j * rw + i] as u32) << 8) | bb[j * rw + i] as u32;
+                self.canvas[row + i] = p;
+            }
+        }
+    }
 }
 
 // ── Lado del hilo MAIN: ventana + EventLoop ───────────────────────────────────────
@@ -598,6 +775,7 @@ struct GuiMain {
     scroll_x: f32,
     scroll_y: f32,
     last_present: u64,
+    pending_input: bool,   // hubo input desde el último service → despertar idleWait
 }
 
 impl GuiMain {
@@ -624,6 +802,7 @@ impl GuiMain {
             scroll_x: 0.0,
             scroll_y: 0.0,
             last_present: 0,
+            pending_input: false,
         }
     }
 
@@ -695,6 +874,9 @@ impl GuiMain {
     fn service(&mut self) {
         let host = self.host.clone();
         let mut canvas_to_blit: Option<(Vec<u32>, usize, usize)> = None;
+        // El diálogo de archivo se ejecuta FUERA del lock (bloquea hasta que el usuario
+        // elige) para no congelar al intérprete que espera el handshake.
+        let mut pending_dialog: Option<(u64, bool, String, Vec<String>, String)> = None;
         {
             let mut g = host.inner.lock().unwrap();
             // Comandos (Open lo maneja ensure_window).
@@ -718,9 +900,42 @@ impl GuiMain {
                             );
                         }
                     }
+                    GuiCmd::SetMinSize(w, h) => {
+                        if let Some(win) = &self.window {
+                            let s = if w == 0 || h == 0 { None } else { Some(LogicalSize::new(w as f64, h as f64)) };
+                            win.set_min_inner_size(s);
+                        }
+                    }
+                    GuiCmd::SetResizable(b) => {
+                        if let Some(win) = &self.window { win.set_resizable(b); }
+                    }
+                    GuiCmd::SetFullscreen(b) => {
+                        if let Some(win) = &self.window {
+                            win.set_fullscreen(if b { Some(winit::window::Fullscreen::Borderless(None)) } else { None });
+                        }
+                    }
+                    GuiCmd::SetMaximized(b) => {
+                        if let Some(win) = &self.window { win.set_maximized(b); }
+                    }
+                    GuiCmd::SetPosition(x, y) => {
+                        if let Some(win) = &self.window {
+                            win.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+                        }
+                    }
+                    GuiCmd::SetDecorations(b) => {
+                        if let Some(win) = &self.window { win.set_decorations(b); }
+                    }
+                    GuiCmd::FileDialog { save, filter_name, filter_exts, default_name } => {
+                        pending_dialog = Some((g.dialog_seq, save, filter_name, filter_exts, default_name));
+                    }
                 }
             }
             g.cmds = keep;
+            // Hubo input → subir epoch para despertar a Gui.idleWait().
+            if self.pending_input {
+                g.input_epoch = g.input_epoch.wrapping_add(1);
+                self.pending_input = false;
+            }
             // Present pendiente → blit.
             if g.present_seq > self.last_present {
                 canvas_to_blit = Some((g.canvas.clone(), g.canvas_w, g.canvas_h));
@@ -728,11 +943,12 @@ impl GuiMain {
                 g.done_seq = g.present_seq;
                 g.input = self.take_input();
             }
-            // Tamaño de ventana → compartido.
+            // Tamaño de ventana + factor de escala (HiDPI) → compartido.
             if let Some(win) = &self.window {
                 let s = win.inner_size();
                 g.win_w = s.width.max(1) as usize;
                 g.win_h = s.height.max(1) as usize;
+                g.scale_factor = win.scale_factor();
             }
             // Cierre.
             if self.close_requested || g.interp_done {
@@ -740,6 +956,14 @@ impl GuiMain {
                 g.window_open = false;
                 self.session_active = false;
             }
+            host.cv.notify_all();
+        }
+        // Diálogo nativo (fuera del lock): bloquea hasta elegir, luego publica el resultado.
+        if let Some((want, save, fname, fexts, defname)) = pending_dialog {
+            let result = run_file_dialog(save, &fname, &fexts, &defname);
+            let mut g = host.inner.lock().unwrap();
+            g.dialog_result = result;
+            g.dialog_done = want;
             host.cv.notify_all();
         }
         if let Some((canvas, cw, ch)) = canvas_to_blit {
@@ -750,6 +974,19 @@ impl GuiMain {
             self.surface = None;
             self.context = None;
             self.close_requested = false;
+        }
+    }
+
+    /// Sirve el frame pendiente + re-blit del último canvas. Para `Resized`/
+    /// `RedrawRequested` durante el modal loop de resize (mantiene la ventana viva).
+    fn service_and_repaint(&mut self) {
+        self.service();
+        let snap = {
+            let g = self.host.inner.lock().unwrap();
+            (g.canvas.clone(), g.canvas_w, g.canvas_h)
+        };
+        if snap.1 > 0 && snap.2 > 0 {
+            self.blit(&snap.0, snap.1, snap.2);
         }
     }
 
@@ -829,15 +1066,42 @@ impl ApplicationHandler for GuiMain {
         self.ensure_window(event_loop);
     }
 
+    // Despertador del intérprete (proxy.send_event en present()): solo necesita sacar al
+    // pump de su espera larga; service() — llamado tras el pump — sirve el frame.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {}
+
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // Solo el INPUT REAL (teclado/mouse/IME/modificadores) y el resize del usuario
+        // marcan input pendiente → el próximo service() sube input_epoch y despierta a
+        // Gui.idleWait(). RedrawRequested NO: lo dispara nuestro propio blit, y marcarlo
+        // haría que idleWait se despierte solo cada frame (CPU alta en reposo).
         match event {
             WindowEvent::CloseRequested => {
                 self.close_requested = true;
             }
+            // Repintar/reflowar DURANTE el arrastre de redimensión. En Windows, el modal
+            // move/size loop de Win32 hace que `pump_app_events` no retorne, así que
+            // `service()` no se llama desde el bucle principal y el intérprete queda
+            // bloqueado en `present()` → la ventana no reflowaba hasta soltar (regresión
+            // vs minifb, de un solo hilo). winit SÍ despacha estos eventos durante el modal
+            // loop: servirlos blitea el frame pendiente y libera el `present()`, que
+            // re-renderiza al tamaño vivo. Re-blit del último canvas para no mostrar basura.
+            WindowEvent::Resized(_) => {
+                self.pending_input = true;   // resize del usuario → despierta idleWait
+                self.service_and_repaint();  // re-blit: muestra contenido al nuevo tamaño ya
+            }
+            WindowEvent::RedrawRequested => {
+                // Lo dispara nuestro propio blit (surface.present postea WM_PAINT). Solo
+                // service(): bliteamos SÓLO si hay un frame nuevo pendiente. Un re-blit
+                // incondicional aquí re-postearía WM_PAINT → tormenta de repintado (CPU alta).
+                self.service();
+            }
             WindowEvent::ModifiersChanged(m) => {
+                self.pending_input = true;
                 self.mods = m.state();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                self.pending_input = true;
                 let name = key_name(&event.logical_key);
                 match event.state {
                     ElementState::Pressed => {
@@ -865,6 +1129,7 @@ impl ApplicationHandler for GuiMain {
                 }
             }
             WindowEvent::Ime(Ime::Commit(s)) => {
+                self.pending_input = true;
                 for c in s.chars() {
                     if !c.is_control() {
                         self.chars_typed.push(c);
@@ -872,10 +1137,12 @@ impl ApplicationHandler for GuiMain {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                self.pending_input = true;
                 self.mouse_x = position.x as i32;
                 self.mouse_y = position.y as i32;
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                self.pending_input = true;
                 let down = state == ElementState::Pressed;
                 match button {
                     MouseButton::Left => self.mouse_l = down,
@@ -884,16 +1151,19 @@ impl ApplicationHandler for GuiMain {
                     _ => {}
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => match delta {
-                MouseScrollDelta::LineDelta(dx, dy) => {
-                    self.scroll_x += dx;
-                    self.scroll_y += dy;
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.pending_input = true;
+                match delta {
+                    MouseScrollDelta::LineDelta(dx, dy) => {
+                        self.scroll_x += dx;
+                        self.scroll_y += dy;
+                    }
+                    MouseScrollDelta::PixelDelta(p) => {
+                        self.scroll_x += (p.x as f32) / 12.0;
+                        self.scroll_y += (p.y as f32) / 12.0;
+                    }
                 }
-                MouseScrollDelta::PixelDelta(p) => {
-                    self.scroll_x += (p.x as f32) / 12.0;
-                    self.scroll_y += (p.y as f32) / 12.0;
-                }
-            },
+            }
             _ => {}
         }
     }
@@ -926,7 +1196,11 @@ pub fn gui_host_main_loop(host: Arc<GuiHost>) {
         // ── Crear el EventLoop una sola vez (en el hilo principal) ─────────────
         if event_loop.is_none() {
             match EventLoop::new() {
-                Ok(el) => event_loop = Some(el),
+                Ok(el) => {
+                    // Proxy para que el intérprete despierte el pump al presentar.
+                    *host.proxy.lock().unwrap() = Some(el.create_proxy());
+                    event_loop = Some(el);
+                }
                 Err(_) => {
                     let mut g = host.inner.lock().unwrap();
                     g.open_failed = true;
@@ -950,7 +1224,15 @@ pub fn gui_host_main_loop(host: Arc<GuiHost>) {
         let el = event_loop.as_mut().unwrap();
         let mut guard = 0u32;
         while app.session_active {
-            let _ = el.pump_app_events(Some(Duration::from_millis(4)), &mut app);
+            // En reposo el pump duerme hasta 200ms (CPU ~0); el intérprete lo despierta
+            // al instante vía proxy en cada present(), y los eventos del SO también. Hasta
+            // que exista la ventana se bombea rápido (el guard de 250 = ~1s de presupuesto).
+            let timeout = if app.window.is_some() {
+                Duration::from_millis(200)
+            } else {
+                Duration::from_millis(4)
+            };
+            let _ = el.pump_app_events(Some(timeout), &mut app);
             app.service();
             // Salvaguarda: si la ventana no se creó (open_failed), no girar para siempre.
             if app.window.is_none() {
@@ -1001,6 +1283,23 @@ fn key_name(key: &Key) -> Option<String> {
         _ => return None,
     };
     Some(s)
+}
+
+/// Muestra un diálogo nativo de abrir/guardar archivo (rfd, bloqueante en el hilo
+/// main). Devuelve la ruta elegida o None si se canceló.
+fn run_file_dialog(save: bool, filter_name: &str, filter_exts: &[String], default_name: &str) -> Option<String> {
+    let mut dlg = rfd::FileDialog::new();
+    if !filter_exts.is_empty() {
+        let exts: Vec<&str> = filter_exts.iter().map(|s| s.as_str()).collect();
+        let name = if filter_name.is_empty() { "Archivos" } else { filter_name };
+        dlg = dlg.add_filter(name, &exts);
+    }
+    if save {
+        if !default_name.is_empty() { dlg = dlg.set_file_name(default_name); }
+        dlg.save_file().map(|p| p.to_string_lossy().to_string())
+    } else {
+        dlg.pick_file().map(|p| p.to_string_lossy().to_string())
+    }
 }
 
 fn cursor_icon(name: &str) -> CursorIcon {
@@ -1202,8 +1501,11 @@ impl super::Evaluator {
             }
 
             "drawText" => {
-                if dot_call.arguments.len() != 5 {
-                    eprintln!("❌ ERROR: Gui.drawText(x, y, text, scale, color) requires 5 arguments");
+                // Aditivo: 5 args = (x,y,text,scale,color) estilo normal (como antes);
+                //          6 args = + style (0=normal, 1=bold, 2=italic, 3=bold+italic).
+                let n = dot_call.arguments.len();
+                if n != 5 && n != 6 {
+                    eprintln!("❌ ERROR: Gui.drawText(x, y, text, scale, color [, style]) requires 5 or 6 arguments");
                     return EvalResult::Error;
                 }
                 let x     = self.gui_int_arg(&dot_call.arguments[0]);
@@ -1211,10 +1513,11 @@ impl super::Evaluator {
                 let text  = self.gui_str_arg(&dot_call.arguments[2]);
                 let scale = self.gui_int_arg(&dot_call.arguments[3]);
                 let c     = self.gui_int_arg(&dot_call.arguments[4]);
+                let style = if n == 6 { self.gui_int_arg(&dot_call.arguments[5]).unwrap_or(0) } else { 0 };
                 let (x, y, text, scale, color) = match (x, y, text, scale, c) {
                     (Some(x), Some(y), Some(t), Some(s), Some(c)) =>
                         (x as i32, y as i32, t, s.max(1) as i32, (c as u32) & 0x00FF_FFFF),
-                    _ => { eprintln!("❌ ERROR: Gui.drawText requires (int, int, string, int, int)"); return EvalResult::Error; }
+                    _ => { eprintln!("❌ ERROR: Gui.drawText requires (int, int, string, int, int [, int])"); return EvalResult::Error; }
                 };
                 if self.gui_state.is_none() {
                     eprintln!("❌ ERROR: Gui.drawText: no window open");
@@ -1223,7 +1526,7 @@ impl super::Evaluator {
                 if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
                 let fonts = self.gui_fonts.as_mut().unwrap();
                 let st = self.gui_state.as_mut().unwrap();
-                st.draw_text(fonts, x, y, &text, scale, color);
+                st.draw_text(fonts, x, y, &text, scale, color, (style.clamp(0, 3)) as u8);
                 EvalResult::Value(self.null_ref)
             }
 
@@ -1503,21 +1806,135 @@ impl super::Evaluator {
             }
 
             "drawImage" => {
-                if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Gui.drawImage(x, y, handle) requires 3 arguments");
+                // Aditivo: 3 args = (x,y,handle) tamaño nativo (como antes);
+                //          5 args = (x,y,handle,w,h) escalado;
+                //          6 args = (x,y,handle,w,h,alpha) escalado + alpha global 0–255.
+                let n = dot_call.arguments.len();
+                if n != 3 && n != 5 && n != 6 {
+                    eprintln!("❌ ERROR: Gui.drawImage requires (x,y,handle) | (x,y,handle,w,h) | (x,y,handle,w,h,alpha)");
                     return EvalResult::Error;
                 }
-                let x = self.gui_int_arg(&dot_call.arguments[0]);
-                let y = self.gui_int_arg(&dot_call.arguments[1]);
-                let hnd = self.gui_int_arg(&dot_call.arguments[2]);
-                let (x, y, hnd) = match (x, y, hnd) {
-                    (Some(x), Some(y), Some(h)) => (x as i32, y as i32, h),
-                    _ => { eprintln!("❌ ERROR: Gui.drawImage requires 3 integers"); return EvalResult::Error; }
-                };
+                let mut vals = [0i64; 6];
+                vals[5] = 255; // alpha por defecto
+                for i in 0..n {
+                    match self.gui_int_arg(&dot_call.arguments[i]) {
+                        Some(v) => vals[i] = v,
+                        None => { eprintln!("❌ ERROR: Gui.drawImage requires integers"); return EvalResult::Error; }
+                    }
+                }
+                let (x, y, hnd) = (vals[0] as i32, vals[1] as i32, vals[2]);
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.draw_image(x, y, hnd); EvalResult::Value(self.null_ref) }
+                    Some(st) => {
+                        if n == 3 {
+                            st.draw_image(x, y, hnd);
+                        } else {
+                            st.draw_image_scaled(x, y, hnd, vals[3] as i32, vals[4] as i32, (vals[5].clamp(0, 255)) as u32);
+                        }
+                        EvalResult::Value(self.null_ref)
+                    }
                     None => { eprintln!("❌ ERROR: Gui.drawImage: no window open"); EvalResult::Error }
                 }
+            }
+
+            "fillGradient" => {
+                if dot_call.arguments.len() != 7 {
+                    eprintln!("❌ ERROR: Gui.fillGradient(x, y, w, h, color1, color2, vertical) requires 7 arguments");
+                    return EvalResult::Error;
+                }
+                let mut vals = [0i64; 6];
+                for (i, slot) in vals.iter_mut().enumerate() {
+                    match self.gui_int_arg(&dot_call.arguments[i]) {
+                        Some(v) => *slot = v,
+                        None => { eprintln!("❌ ERROR: Gui.fillGradient requires 6 integers (x,y,w,h,color1,color2) + vertical(bool)"); return EvalResult::Error; }
+                    }
+                }
+                // `vertical` acepta bool (true=vertical) o int (≠0).
+                let vertical = match self.gui_bool_arg(&dot_call.arguments[6]) {
+                    Some(b) => b,
+                    None => self.gui_int_arg(&dot_call.arguments[6]).map(|v| v != 0).unwrap_or(true),
+                };
+                let c1 = (vals[4] as u32) & 0x00FF_FFFF;
+                let c2 = (vals[5] as u32) & 0x00FF_FFFF;
+                match self.gui_state.as_mut() {
+                    Some(st) => { st.fill_gradient(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, c1, c2, vertical); EvalResult::Value(self.null_ref) }
+                    None => { eprintln!("❌ ERROR: Gui.fillGradient: no window open"); EvalResult::Error }
+                }
+            }
+
+            "blur" => {
+                if dot_call.arguments.len() != 5 {
+                    eprintln!("❌ ERROR: Gui.blur(x, y, w, h, radius) requires 5 arguments");
+                    return EvalResult::Error;
+                }
+                let mut vals = [0i64; 5];
+                for (i, slot) in vals.iter_mut().enumerate() {
+                    match self.gui_int_arg(&dot_call.arguments[i]) {
+                        Some(v) => *slot = v,
+                        None => { eprintln!("❌ ERROR: Gui.blur requires 5 integers"); return EvalResult::Error; }
+                    }
+                }
+                match self.gui_state.as_mut() {
+                    Some(st) => { st.blur_region(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, vals[4] as i32); EvalResult::Value(self.null_ref) }
+                    None => { eprintln!("❌ ERROR: Gui.blur: no window open"); EvalResult::Error }
+                }
+            }
+
+            "scaleFactor" => {
+                let sf = self.gui_state.as_ref().map(|s| s.scale_factor).unwrap_or(1.0);
+                EvalResult::Value(self.alloc(ObjectData::Decimal(sf)))
+            }
+
+            "textAdvances" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Gui.textAdvances(text, scale) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let text  = self.gui_str_arg(&dot_call.arguments[0]);
+                let scale = self.gui_int_arg(&dot_call.arguments[1]);
+                let (text, scale) = match (text, scale) {
+                    (Some(t), Some(s)) => (t, s.max(1) as i32),
+                    _ => { eprintln!("❌ ERROR: Gui.textAdvances requires (string, int)"); return EvalResult::Error; }
+                };
+                let xs = match self.gui_fonts.as_mut() {
+                    Some(f) => f.advances(&text, scale),
+                    None => {
+                        let mut v = vec![0i64];
+                        let mut x = 0i64;
+                        for _ in text.chars() { x += 8 * scale as i64; v.push(x); }
+                        v
+                    }
+                };
+                let elements: Vec<OwnedValue> = xs.into_iter().map(OwnedValue::Integer).collect();
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements }))
+            }
+
+            "setMinSize" | "setResizable" | "setFullscreen" | "maximize" | "setPosition" | "setDecorations" => {
+                let m = dot_call.method.clone();
+                return self.gui_window_control(&m, dot_call);
+            }
+
+            "openFileDialog" | "saveFileDialog" => {
+                return self.gui_file_dialog(dot_call.method == "saveFileDialog", dot_call);
+            }
+
+            "idleWait" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.idleWait(maxMs) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let ms = match self.gui_int_arg(&dot_call.arguments[0]) {
+                    Some(v) => v.max(0) as u64,
+                    None => { eprintln!("❌ ERROR: Gui.idleWait maxMs must be an integer"); return EvalResult::Error; }
+                };
+                if let Some(host) = host() {
+                    let g = host.inner.lock().unwrap();
+                    let base = g.input_epoch;
+                    let deadline = std::time::Duration::from_millis(ms);
+                    let _ = host.cv.wait_timeout_while(g, deadline, |s| {
+                        s.input_epoch == base && s.window_open && !s.should_close
+                    });
+                }
+                EvalResult::Value(self.null_ref)
             }
 
             "imageSize" => {
@@ -1662,5 +2079,91 @@ impl super::Evaluator {
             (Some(x), Some(y), Some(w), Some(h), Some(c)) => Some((x, y, w, h, (c as u32) & 0x00FF_FFFF)),
             _ => { eprintln!("❌ ERROR: Gui.fillRect requires 5 integers"); None }
         }
+    }
+
+    fn gui_bool_arg(&mut self, expr: &ast::Expression) -> Option<bool> {
+        match self.eval_expression(expr) {
+            EvalResult::Value(v) => match self.resolve(v).cloned() {
+                Some(ObjectData::Boolean(b)) => Some(b),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Control de ventana (setMinSize/setResizable/setFullscreen/maximize/setPosition/
+    /// setDecorations): valida args y encola el GuiCmd para el hilo main.
+    fn gui_window_control(&mut self, method: &str, dot_call: &ast::DotCallExpression) -> EvalResult {
+        let cmd = match method {
+            "setMinSize" => {
+                if dot_call.arguments.len() != 2 { eprintln!("❌ ERROR: Gui.setMinSize(w, h) requires 2 arguments"); return EvalResult::Error; }
+                let w = self.gui_int_arg(&dot_call.arguments[0]);
+                let h = self.gui_int_arg(&dot_call.arguments[1]);
+                match (w, h) {
+                    (Some(w), Some(h)) => GuiCmd::SetMinSize(w.max(0) as u32, h.max(0) as u32),
+                    _ => { eprintln!("❌ ERROR: Gui.setMinSize requires 2 integers"); return EvalResult::Error; }
+                }
+            }
+            "setPosition" => {
+                if dot_call.arguments.len() != 2 { eprintln!("❌ ERROR: Gui.setPosition(x, y) requires 2 arguments"); return EvalResult::Error; }
+                let x = self.gui_int_arg(&dot_call.arguments[0]);
+                let y = self.gui_int_arg(&dot_call.arguments[1]);
+                match (x, y) {
+                    (Some(x), Some(y)) => GuiCmd::SetPosition(x as i32, y as i32),
+                    _ => { eprintln!("❌ ERROR: Gui.setPosition requires 2 integers"); return EvalResult::Error; }
+                }
+            }
+            _ => {
+                if dot_call.arguments.len() != 1 { eprintln!("❌ ERROR: Gui.{}(bool) requires 1 argument", method); return EvalResult::Error; }
+                let b = match self.gui_bool_arg(&dot_call.arguments[0]) {
+                    Some(b) => b,
+                    None => { eprintln!("❌ ERROR: Gui.{} requires a boolean", method); return EvalResult::Error; }
+                };
+                match method {
+                    "setResizable"   => GuiCmd::SetResizable(b),
+                    "setFullscreen"  => GuiCmd::SetFullscreen(b),
+                    "maximize"       => GuiCmd::SetMaximized(b),
+                    "setDecorations" => GuiCmd::SetDecorations(b),
+                    _ => return EvalResult::Error,
+                }
+            }
+        };
+        if let Some(host) = host() {
+            host.inner.lock().unwrap().cmds.push_back(cmd);
+            host.cv.notify_all();
+        }
+        EvalResult::Value(self.null_ref)
+    }
+
+    /// Diálogo de archivo nativo. open: (filterName, extsCsv) ; save: (filterName,
+    /// extsCsv, defaultName). Devuelve la ruta elegida o "" si se canceló. Bloquea
+    /// (el hilo main muestra el diálogo modal) vía handshake dialog_seq/dialog_done.
+    fn gui_file_dialog(&mut self, save: bool, dot_call: &ast::DotCallExpression) -> EvalResult {
+        if self.gui_state.is_none() {
+            eprintln!("❌ ERROR: Gui file dialog: no window open");
+            return EvalResult::Error;
+        }
+        let n = dot_call.arguments.len();
+        let filter_name  = if n >= 1 { self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default() } else { String::new() };
+        let exts_csv     = if n >= 2 { self.gui_str_arg(&dot_call.arguments[1]).unwrap_or_default() } else { String::new() };
+        let default_name = if save && n >= 3 { self.gui_str_arg(&dot_call.arguments[2]).unwrap_or_default() } else { String::new() };
+        let filter_exts: Vec<String> = exts_csv.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let host = match host() { Some(h) => h.clone(), None => { eprintln!("❌ ERROR: Gui file dialog: no GUI host"); return EvalResult::Error; } };
+        let want = {
+            let mut g = host.inner.lock().unwrap();
+            g.dialog_seq += 1;
+            g.dialog_result = None;
+            g.cmds.push_back(GuiCmd::FileDialog { save, filter_name, filter_exts, default_name });
+            g.dialog_seq
+        };
+        host.cv.notify_all();
+        let result = {
+            let mut g = host.inner.lock().unwrap();
+            while g.dialog_done < want && g.window_open && !g.should_close {
+                g = host.cv.wait(g).unwrap();
+            }
+            g.dialog_result.take()
+        };
+        EvalResult::Value(self.alloc(ObjectData::Str(result.unwrap_or_default())))
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "serez-code"
-version = "6.3.2"
+version = "6.4.0"
 edition = "2024"
 description = "Serez Code - The programming language for AI, UI, systems, and GPU in a single runtime"
 license = "MIT"
@@ -28,6 +28,7 @@ softbuffer = "0.4.8"
 cosmic-text = "0.17.0"
 image = "0.25.9"
 arboard = "3.6.1"
+rfd = "0.15"
 ed25519-dalek = "2"
 getrandom = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
