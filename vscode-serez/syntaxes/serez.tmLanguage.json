@@ -6,6 +6,7 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#numbers" },
+    { "include": "#declarations" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#namespaces" },
@@ -32,6 +33,13 @@
     },
     "strings": {
       "patterns": [
+        {
+          "name": "string.quoted.double.raw.serez",
+          "begin": "(?<![A-Za-z0-9_])r\"",
+          "end": "\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.serez" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.serez" } }
+        },
         {
           "name": "string.quoted.double.serez",
           "begin": "\"",
@@ -68,11 +76,11 @@
         },
         {
           "name": "constant.numeric.decimal.serez",
-          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9]+)?m?\\b"
         },
         {
           "name": "constant.numeric.integer.serez",
-          "match": "\\b[0-9][0-9_]*\\b"
+          "match": "\\b[0-9][0-9_]*([eE][+-]?[0-9]+)?m?\\b"
         }
       ]
     },
@@ -80,7 +88,7 @@
       "patterns": [
         {
           "name": "keyword.control.serez",
-          "match": "\\b(if|else|while|do|for|in|switch|case|default|break|continue|return|try|catch|finally|throw)\\b"
+          "match": "\\b(if|else|while|do|for|in|switch|case|default|break|continue|return|try|catch|finally|throw|match|yield)\\b"
         },
         {
           "name": "keyword.declaration.serez",
@@ -88,11 +96,11 @@
         },
         {
           "name": "keyword.modifier.serez",
-          "match": "\\b(public|private|static|abstract|sealed|get|set)\\b"
+          "match": "\\b(public|private|static|abstract|sealed|get|set|unsafe)\\b"
         },
         {
           "name": "keyword.control.import.serez",
-          "match": "\\b(import|export)\\b"
+          "match": "\\b(import|export|use|permissions)\\b"
         },
         {
           "name": "keyword.other.serez",
@@ -102,11 +110,22 @@
     },
     "types": {
       "name": "support.type.serez",
-      "match": "\\b(int|decimal|string|bool|any|void|null)\\b"
+      "match": "\\b(int|decimal|dec|string|bool|any|void|null)\\b"
     },
     "namespaces": {
       "name": "support.class.builtin.serez",
-      "match": "\\b(Math|JSON|File|Terminal|OS|Env|Time|System|Random|Tensor|Autodiff|Gui|Crypto|Socket|Set)\\b"
+      "match": "\\b(Math|JSON|File|Terminal|OS|Env|Time|DateTime|System|Random|Tensor|Autodiff|Gui|Crypto|Socket|Set|Binary|GPU|Memory)\\b"
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(class|interface|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.serez" },
+            "2": { "name": "entity.name.type.class.serez" }
+          }
+        }
+      ]
     },
     "constants": {
       "patterns": [

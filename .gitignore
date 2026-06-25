@@ -17,6 +17,7 @@ ANALISIS_MEMORIA_RENDIMIENTO.md
 !tests/registry/**
 !apps/*.sz
 !benchmarks/*.sz
+!vscode-serez/themes/*.json
 tests/_*.sz
 merge.ps1
 mergeFromMain.ps1

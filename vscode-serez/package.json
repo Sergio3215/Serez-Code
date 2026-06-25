@@ -1,8 +1,8 @@
 {
   "name": "serez-code-formatter",
   "displayName": "Serez-Code Formatter",
-  "description": "Syntax highlighting and formatter for Serez-Code — .sz, .szx (JSX) and .szs (styles)",
-  "version": "1.5.0",
+  "description": "Syntax highlighting, formatter and color theme for Serez-Code — .sz, .szx (JSX) and .szs (styles)",
+  "version": "1.6.0",
   "icon": "icon.png",
   "license": "MIT",
   "publisher": "sd-tools",
@@ -15,7 +15,8 @@
   },
   "categories": [
     "Programming Languages",
-    "Formatters"
+    "Formatters",
+    "Themes"
   ],
   "main": "./extension.js",
   "activationEvents": [
@@ -76,6 +77,13 @@
         "language": "serez-style",
         "scopeName": "source.serez.style",
         "path": "./syntaxes/serez-style.tmLanguage.json"
+      }
+    ],
+    "themes": [
+      {
+        "label": "Serez Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/serez-dark-color-theme.json"
       }
     ],
     "configurationDefaults": {
