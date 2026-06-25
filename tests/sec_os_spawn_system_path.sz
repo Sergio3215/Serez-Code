@@ -1,0 +1,5 @@
+// Security: OS.spawn targeting system paths must be blocked
+use permissions { OS }
+unsafe {
+    OS.spawn("C:\\Windows\\System32\\cmd.exe");
+}

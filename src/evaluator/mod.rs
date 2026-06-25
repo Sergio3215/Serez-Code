@@ -134,6 +134,9 @@ pub struct Evaluator {
     // Tipografía GUI (loadFont/setFont + cache de glifos). Vive fuera de gui_state
     // para sobrevivir abrir/cerrar ventana y servir measureText sin ventana.
     gui_fonts: Option<namespaces_gui::GuiFonts>,
+    // Procesos lanzados con OS.spawn (no bloqueante). OS.tick() los cosecha y dispara
+    // sus callbacks onOk/onErr en este hilo (cooperativo, sin background thread).
+    spawned: Vec<namespaces_os::SpawnedJob>,
 }
 
 // ── Free-identifier collection (for consistent lambda capture, B-83) ──────────
@@ -277,6 +280,7 @@ impl Evaluator {
             tensor_id_counter: 1,
             gui_state: None,
             gui_fonts: None,
+            spawned: Vec::new(),
         }
     }
 

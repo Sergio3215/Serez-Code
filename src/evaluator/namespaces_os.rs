@@ -31,6 +31,14 @@ macro_rules! require_unsafe {
     };
 }
 
+/// Proceso lanzado con OS.spawn (no bloqueante). OS.tick() lo cosecha (try_wait) y
+/// devuelve [pid, code, errMsg] como DATO (no callbacks: guardar refs de closures .sz
+/// es use-after-free en el modelo de valor/regiones). stderr queda piped para el msg.
+pub(super) struct SpawnedJob {
+    pub child: std::process::Child,
+    pub pid: i64,
+}
+
 // ── Platform helpers (no external deps) ──────────────────────────────────────
 
 #[cfg(windows)]
@@ -410,6 +418,104 @@ impl super::Evaluator {
                     }
                     Err(e) => { eprintln!("❌ ERROR: OS.exec '{}' failed: {}", cmd, e); EvalResult::Error }
                 }
+            }
+
+            "spawn" => {
+                // No bloqueante: lanza el proceso y vuelve enseguida (a diferencia de
+                // OS.exec que espera con .output()). Devuelve el PID (o -1 si no arrancó).
+                //   OS.spawn(cmd, [args])
+                // La notificación de fin/error se cosecha por OS.tick() (poll-based).
+                require_unsafe!(self, "OS.spawn");
+                if dot_call.arguments.is_empty() {
+                    eprintln!("❌ ERROR: OS.spawn(cmd, [args]) requires at least 1 argument");
+                    return EvalResult::Error;
+                }
+                let cr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
+                let cmd = match self.resolve(cr).cloned() {
+                    Some(ObjectData::Str(s)) => s,
+                    _ => { eprintln!("❌ ERROR: OS.spawn: first argument must be a string command"); return EvalResult::Error; }
+                };
+                let blocked = ["C:\\Windows\\System32", "/etc/", "/bin/", "/sbin/", "/usr/bin/"];
+                if blocked.iter().any(|b| cmd.contains(b)) {
+                    eprintln!("❌ SECURITY ERROR: OS.spawn blocked — targets a protected system path");
+                    return EvalResult::Error;
+                }
+                let mut args_vec: Vec<String> = Vec::new();
+                if dot_call.arguments.len() >= 2 {
+                    let ar = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
+                    if let Some(ObjectData::Array { elements, .. }) = self.resolve(ar).cloned() {
+                        for elem in elements {
+                            if let OwnedValue::Str(s) = elem { args_vec.push(s); }
+                        }
+                    }
+                }
+                // stderr piped (para el mensaje de error); sin ventana de consola en Windows.
+                let mut command = std::process::Command::new(&cmd);
+                command.args(&args_vec)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped());
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                    command.creation_flags(CREATE_NO_WINDOW);
+                }
+                match command.spawn() {
+                    Ok(child) => {
+                        let pid = child.id() as i64;
+                        self.spawned.push(SpawnedJob { child, pid });
+                        EvalResult::Value(self.int_ref(pid))
+                    }
+                    Err(e) => {
+                        eprintln!("❌ ERROR: OS.spawn '{}' failed: {}", cmd, e);
+                        EvalResult::Value(self.int_ref(-1))
+                    }
+                }
+            }
+
+            "tick" => {
+                // Cosecha (no bloqueante) los procesos de OS.spawn ya terminados y los
+                // DEVUELVE como datos: array de [pid, code, errMsg]. La app reacciona
+                // (p.ej. en onFrame). No requiere `unsafe` (no lanza nada nuevo).
+                let mut finished: Vec<OwnedValue> = Vec::new();
+                let mut i = 0;
+                while i < self.spawned.len() {
+                    let status = match self.spawned[i].child.try_wait() {
+                        Ok(Some(st)) => Some(st.code().unwrap_or(-1)),
+                        Ok(None)     => None,        // sigue corriendo
+                        Err(_)       => Some(-1),    // error al consultar → fallo
+                    };
+                    match status {
+                        None => { i += 1; }
+                        Some(code) => {
+                            let mut job = self.spawned.remove(i);
+                            let pid = job.pid;
+                            let mut errbuf = String::new();
+                            if let Some(mut se) = job.child.stderr.take() {
+                                let _ = se.read_to_string(&mut errbuf);
+                            }
+                            let msg = if code == 0 || errbuf.trim().is_empty() {
+                                String::new()
+                            } else {
+                                errbuf.trim().to_string()
+                            };
+                            // [pid, code, errMsg] como array de valor anidado
+                            finished.push(OwnedValue::Array {
+                                element_type: Some("any".to_string()),
+                                elements: vec![
+                                    OwnedValue::Integer(pid),
+                                    OwnedValue::Integer(code as i64),
+                                    OwnedValue::Str(msg),
+                                ],
+                            });
+                            // no incrementar i: remove() desplazó el resto
+                        }
+                    }
+                }
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: Some("any".to_string()),
+                    elements: finished,
+                }))
             }
 
             "kill" => {

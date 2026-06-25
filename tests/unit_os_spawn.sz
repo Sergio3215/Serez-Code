@@ -1,0 +1,106 @@
+// unit_os_spawn.sz — OS.spawn (no bloqueante) + OS.tick (cosecha por polling)
+// Regresión del feature nuevo del core: lanzar procesos reales sin bloquear el
+// hilo del intérprete y cosechar [pid, code, errMsg] por sondeo (poll-based, NO
+// callbacks). La cola de procesos vive en el Evaluator (self.spawned); este test
+// corre en su propio proceso sz, así que arranca vacía.
+
+use permissions { OS, Time }
+
+// Comando real (ejecutable de verdad, no builtin del shell) con código de salida
+// controlable según el SO: cmd en Windows, sh en POSIX.
+let PLAT  = OS.platform();
+let SHCMD = "sh";
+if (PLAT == "windows") { SHCMD = "cmd"; }
+
+let OK_ARGS     [string] = [];
+let FAIL_ARGS   [string] = [];
+let FAILMSG_ARGS[string] = [];
+if (PLAT == "windows") {
+    OK_ARGS.push("/c");      OK_ARGS.push("exit 0");
+    FAIL_ARGS.push("/c");    FAIL_ARGS.push("exit 7");
+    FAILMSG_ARGS.push("/c"); FAILMSG_ARGS.push("echo BOOM 1>&2 & exit 7");
+} else {
+    OK_ARGS.push("-c");      OK_ARGS.push("exit 0");
+    FAIL_ARGS.push("-c");    FAIL_ARGS.push("exit 7");
+    FAILMSG_ARGS.push("-c"); FAILMSG_ARGS.push("echo BOOM 1>&2; exit 7");
+}
+
+// Sondea OS.tick() hasta cosechar `want` procesos terminados (o agotar intentos).
+// Devuelve el array de jobs [pid, code, errMsg] cosechados.
+fn [any] collectN(int want, int maxTries) {
+    let acc [any] = [];
+    let tries = 0;
+    while (acc.length() < want && tries < maxTries) {
+        let batch = OS.tick();
+        for (let job in batch) { acc.push(job); }
+        if (acc.length() < want) { Time.sleep(10); }
+        tries = tries + 1;
+    }
+    return acc;
+}
+
+test("OS.tick returns an empty array when nothing was spawned", () => {
+    let batch = OS.tick();
+    assert(batch.length() == 0, "tick should be empty with no spawned procs");
+});
+
+test("OS.spawn returns a positive pid (non-blocking)", () => {
+    let pid = -999;
+    unsafe { pid = OS.spawn(SHCMD, OK_ARGS); }
+    assert(pid is int, "spawn should return an int pid");
+    assert(pid > 0, "pid should be positive");
+    // cosecha para no dejar el proceso pendiente para el siguiente test
+    let jobs = collectN(1, 300);
+    assert(jobs.length() == 1, "the spawned proc should be harvested");
+});
+
+test("OS.tick harvests a process that exits 0", () => {
+    unsafe { OS.spawn(SHCMD, OK_ARGS); }
+    let jobs = collectN(1, 300);
+    assert(jobs.length() == 1, "one finished job");
+    let job = jobs[0];
+    assert(job[0] is int, "job[0] is the pid");
+    assert(job[0] > 0, "pid positive");
+    assert(job[1] == 0, "exit code should be 0");
+    assert(job[2] == "", "errMsg empty on success");
+});
+
+test("OS.tick reports a non-zero exit code", () => {
+    unsafe { OS.spawn(SHCMD, FAIL_ARGS); }
+    let jobs = collectN(1, 300);
+    assert(jobs.length() == 1, "the failed job is harvested");
+    assert(jobs[0][1] == 7, "exit code should be 7");
+});
+
+test("OS.tick captures stderr text in errMsg on failure", () => {
+    unsafe { OS.spawn(SHCMD, FAILMSG_ARGS); }
+    let jobs = collectN(1, 300);
+    assert(jobs.length() == 1, "failed job harvested");
+    assert(jobs[0][1] == 7, "exit code 7");
+    assert(jobs[0][2].includes("BOOM"), "errMsg should contain captured stderr");
+});
+
+test("OS.spawn launches several concurrent processes", () => {
+    unsafe {
+        OS.spawn(SHCMD, OK_ARGS);
+        OS.spawn(SHCMD, OK_ARGS);
+        OS.spawn(SHCMD, OK_ARGS);
+    }
+    let jobs = collectN(3, 400);
+    assert(jobs.length() == 3, "all three harvested");
+    let allOk = true;
+    for (let j in jobs) {
+        if (j[1] != 0) { allOk = false; }
+    }
+    assert(allOk, "all three exited 0");
+});
+
+test("OS.spawn of a missing binary returns -1 and enqueues nothing", () => {
+    let pid = 0;
+    unsafe { pid = OS.spawn("serez_no_such_binary_xyz_123"); }
+    assert(pid == -1, "missing binary should return -1");
+    let batch = OS.tick();
+    assert(batch.length() == 0, "a failed spawn must not enqueue a job");
+});
+
+summary();
