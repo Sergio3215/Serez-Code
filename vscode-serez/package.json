@@ -2,7 +2,7 @@
   "name": "serez-code-formatter",
   "displayName": "Serez-Code Formatter",
   "description": "Syntax highlighting, formatter and color theme for Serez-Code — .sz, .szx (JSX) and .szs (styles)",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "icon": "icon.png",
   "license": "MIT",
   "publisher": "sd-tools",

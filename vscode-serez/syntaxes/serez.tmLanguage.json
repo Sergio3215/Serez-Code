@@ -52,11 +52,11 @@
               "match": "\\\\[ntr\\\\\"{}]"
             },
             {
-              "name": "meta.interpolation.serez",
+              "name": "meta.template.expression.serez meta.interpolation.serez",
               "begin": "\\{",
               "end": "\\}",
-              "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.serez" } },
-              "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.serez" } },
+              "beginCaptures": { "0": { "name": "punctuation.definition.template-expression.begin.serez punctuation.section.interpolation.begin.serez" } },
+              "endCaptures": { "0": { "name": "punctuation.definition.template-expression.end.serez punctuation.section.interpolation.end.serez" } },
               "contentName": "source.serez.embedded",
               "patterns": [{ "include": "$self" }]
             }
