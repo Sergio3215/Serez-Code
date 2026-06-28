@@ -1,0 +1,9 @@
+// BENCH 15: High-Precision Decimals
+// Executes 50 000 financial-like iterations using the native exact base-10 'dec' type.
+// Exercises: rust_decimal type resolution overhead, literal suffix 'm' parsing.
+let balance = 1000.00m;
+let rate = 1.00005m;
+for (let i = 0; i < 50000; i = i + 1) {
+    balance = (balance * rate).setScale(4, "half-up");
+}
+out balance;

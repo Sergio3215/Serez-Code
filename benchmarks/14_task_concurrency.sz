@@ -1,0 +1,31 @@
+// BENCH 14: Task Concurrency
+// Launches 5 concurrent native threads executing CPU-heavy arithmetic in parallel.
+// Exercises: multithread scheduling, thread creation overhead, and message polling.
+use permissions { Task, Time }
+
+let tasks = [];
+let i = 0;
+while (i < 5) {
+    let id = Task.run("benchmarks/task_worker_bench.worker", "" + i);
+    tasks.push(id);
+    i = i + 1;
+}
+
+let allDone = false;
+while (!allDone) {
+    let doneCount = 0;
+    let j = 0;
+    while (j < tasks.length()) {
+        if (Task.isDone(tasks[j])) {
+            doneCount = doneCount + 1;
+        }
+        j = j + 1;
+    }
+    if (doneCount == tasks.length()) {
+        allDone = true;
+    } else {
+        Time.sleep(1);
+    }
+}
+
+out "Concurrency bench finished successfully";

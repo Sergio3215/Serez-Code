@@ -1,0 +1,7 @@
+use permissions { Task }
+let input = Task.message()
+let sum = 0;
+for (let i = 0; i < 20000; i = i + 1) {
+    sum = (sum + i) % 1000003;
+}
+Task.reply("Result: " + sum)
