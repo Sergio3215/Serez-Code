@@ -2446,9 +2446,9 @@ Without a declared permission, every namespace call fails immediately with a cle
 
 ### Tasks (Multithreading)
 
-By default, Serez-Code runs on a single thread. To execute heavy or blocking operations (like HTTP requests, file I/O, or heavy calculations) without freezing the main application (highly critical in GUI apps), you can spawn **Background Workers** using the native `Task` namespace.
+By default, Serez-Code programs run sequentially. If you need to perform a slow or blocking operation—such as sending HTTP requests, reading large files, or running heavy calculations—without freezing your main application (which is critical to keep GUI apps running smoothly at 500 FPS), you can use the `Task` namespace to run scripts in the background.
 
-Each task runs in an **isolated native thread** with its own memory evaluator and arenas. Communication between the main thread and the worker is done through serialized messages (e.g., JSON strings).
+A background task runs independently and communicates with your main script using text messages (typically formatted in JSON).
 
 #### Required Permissions
 You must declare `Task` permissions in `serez.json` or in your script using:
