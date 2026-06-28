@@ -58,6 +58,7 @@ out fibonacci(10);   // → 55
    - [DateTime](#datetime)
    - [System](#system)
    - [Permissions](#permissions)
+   - [Tasks (Multithreading)](#tasks-multithreading)
    - [Package Manager](#package-manager)
    - [Classes & Interfaces](#classes--interfaces)
    - [Type Conversions](#type-conversions)
@@ -2440,6 +2441,69 @@ unsafe {
 ```
 
 Without a declared permission, every namespace call fails immediately with a clear error pointing to how to grant it.
+
+---
+
+### Tasks (Multithreading)
+
+By default, Serez-Code runs on a single thread. To execute heavy or blocking operations (like HTTP requests, file I/O, or heavy calculations) without freezing the main application (highly critical in GUI apps), you can spawn **Background Workers** using the native `Task` namespace.
+
+Each task runs in an **isolated native thread** with its own memory evaluator and arenas. Communication between the main thread and the worker is done through serialized messages (e.g., JSON strings).
+
+#### Required Permissions
+You must declare `Task` permissions in `serez.json` or in your script using:
+```serez
+use permissions { Task, Time }
+```
+
+#### Step 1: Write the Worker Script
+Create a separate script that will execute in the background (e.g., `worker.sz`). Use `Task.message()` to get the input argument, and `Task.reply()` to return the result:
+
+```serez
+// worker.sz
+use permissions { Task }
+
+// Retrieve the argument passed from the main thread
+let input = Task.message()
+
+// Do some calculations or IO...
+let result = "Hello, " + input + "! This runs in parallel."
+
+// Send the response back and exit the worker
+Task.reply(result)
+```
+
+#### Step 2: Run and Poll from the Main Thread
+In your main script, start the task with `Task.run()`. It will immediately return a task ID. You can check its status using `Task.isDone(id)` and retrieve the result with `Task.poll(id)`:
+
+```serez
+// main.sz
+use permissions { Task, Time }
+
+// 1. Spawns the worker in background
+let taskId = Task.run("worker.sz", "Serez Developer")
+out "Worker started with ID: {taskId}"
+
+// 2. Do non-blocking polling
+while (!Task.isDone(taskId)) {
+    out "Waiting for worker..."
+    Time.sleep(10) // Sleep 10ms to release CPU
+}
+
+// 3. Retrieve the result
+let response = Task.poll(taskId)
+out "Result: " + response
+```
+
+#### API Reference
+
+| Method | Description |
+|---|---|
+| `Task.run(scriptPath: string, arg: string) -> int` | Spawns a background thread running the specified script. Returns the `taskId`. |
+| `Task.message() -> string` | (Worker only) Retrieves the argument passed to the worker. |
+| `Task.reply(result: string) -> void` | (Worker only) Sends the result back to the main thread and terminates the task. |
+| `Task.isDone(taskId: int) -> bool` | Returns `true` if the task completed successfully or failed with an error. |
+| `Task.poll(taskId: int) -> string` | Retrieves the result of the task. If the task failed or panicked, it returns a string starting with `"ERROR: "`. |
 
 ---
 
