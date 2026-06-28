@@ -76,22 +76,22 @@ out bal;
 section("PROGRAM 2: Task Manager");
 
 enum Priority { Low, Medium, High }
-enum TaskStatus { Todo, InProgress, Done }
+enum TodoStatus { Todo, InProgress, Done }
 
-class Task {
-    public Task(string title, Priority prio) {
+class TodoItem {
+    public TodoItem(string title, Priority prio) {
         this.title = title;
         this.priority = prio;
-        this.status = TaskStatus.Todo;
+        this.status = TodoStatus.Todo;
     }
 
-    public static Task create(string title) {
-        return new Task(title, Priority.Medium);
+    public static TodoItem create(string title) {
+        return new TodoItem(title, Priority.Medium);
     }
 
-    public void start()    { this.status = TaskStatus.InProgress; }
-    public void complete() { this.status = TaskStatus.Done; }
-    public bool isDone()   { return this.status == TaskStatus.Done; }
+    public void start()    { this.status = TodoStatus.InProgress; }
+    public void complete() { this.status = TodoStatus.Done; }
+    public bool isDone()   { return this.status == TodoStatus.Done; }
 
     public string display() {
         let p = "?";
@@ -99,15 +99,15 @@ class Task {
         if (this.priority == Priority.Medium) { p = "MED"; }
         if (this.priority == Priority.Low)    { p = "LOW"; }
         let s = "TODO";
-        if (this.status == TaskStatus.InProgress) { s = "WIP"; }
-        if (this.status == TaskStatus.Done)       { s = "DONE"; }
+        if (this.status == TodoStatus.InProgress) { s = "WIP"; }
+        if (this.status == TodoStatus.Done)       { s = "DONE"; }
         return "[" + s + "] " + this.title + " (" + p + ")";
     }
 }
 
-let t1 = new Task("Write tests", Priority.High);
-let t2 = Task.create("Deploy app");
-let t3 = new Task("Fix typo", Priority.Low);
+let t1 = new TodoItem("Write tests", Priority.High);
+let t2 = TodoItem.create("Deploy app");
+let t3 = new TodoItem("Fix typo", Priority.Low);
 
 t1.start();
 t2.complete();

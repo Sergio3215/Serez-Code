@@ -71,6 +71,10 @@ impl Parser {
         }
     }
 
+    fn is_reserved_name(&self, name: &str) -> bool {
+        matches!(name, "Task" | "Time" | "DateTime" | "System" | "Gui" | "Dec")
+    }
+
     /// Whether any parse error was reported while building the program.
     pub fn has_errors(&self) -> bool {
         self.had_error.get()
@@ -2310,6 +2314,10 @@ impl Parser {
         }
         self.next_token();
         let name = self.current_token.literal.clone();
+        if self.is_reserved_name(&name) {
+            self.parser_error(&format!("'{}' is a reserved system namespace and cannot be used as an interface name", name));
+            return None;
+        }
 
         if self.peek_token.token_type != TokenType::LBrace {
             self.parser_error("Expected '{{' after interface name");
@@ -2390,6 +2398,10 @@ impl Parser {
         }
         self.next_token();
         let name = self.current_token.literal.clone();
+        if self.is_reserved_name(&name) {
+            self.parser_error(&format!("'{}' is a reserved system namespace and cannot be used as a class name", name));
+            return None;
+        }
 
         // Optional inheritance: class Child : Parent
         let parent = if self.peek_token.token_type == TokenType::Colon {
@@ -3014,6 +3026,10 @@ impl Parser {
         }
         self.next_token();
         let name = self.current_token.literal.clone();
+        if self.is_reserved_name(&name) {
+            self.parser_error(&format!("'{}' is a reserved system namespace and cannot be used as an enum name", name));
+            return None;
+        }
 
         if self.peek_token.token_type != TokenType::LBrace {
             self.parser_error("Expected '{{' after enum name");

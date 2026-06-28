@@ -1,0 +1,3 @@
+// Error: Cannot declare a class with a reserved system namespace name
+class Task {
+}
