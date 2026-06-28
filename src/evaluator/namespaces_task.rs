@@ -79,52 +79,59 @@ impl super::Evaluator {
                     .stack_size(16 * 1024 * 1024); // 16 MB para sub-tareas
                 
                 let handle_res = builder.spawn(move || {
-                    // Cargar y evaluar el script
-                    let input = match std::fs::read_to_string(&script_path_clone) {
-                        Ok(content) => content,
-                        Err(e) => {
-                            let mut reg = registry().lock().unwrap();
-                            reg.insert(task_id, TaskState::Failed { error: format!("Error reading file '{}': {}", script_path_clone, e) });
-                            return;
+                    let run_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // Cargar y evaluar el script
+                        let input = match std::fs::read_to_string(&script_path_clone) {
+                            Ok(content) => content,
+                            Err(e) => return Err(format!("Error reading file '{}': {}", script_path_clone, e)),
+                        };
+
+                        let source_lines: Vec<String> = input.lines().map(|l| l.to_string()).collect();
+                        let lexer = crate::lexer::Lexer::new(input);
+                        let mut parser = crate::parser::Parser::new(lexer);
+                        parser.set_source(source_lines.clone());
+                        let program = parser.parse_program();
+
+                        if parser.has_errors() {
+                            return Err("Syntax/Parsing error in worker script".to_string());
                         }
-                    };
 
-                    let source_lines: Vec<String> = input.lines().map(|l| l.to_string()).collect();
-                    let lexer = crate::lexer::Lexer::new(input);
-                    let mut parser = crate::parser::Parser::new(lexer);
-                    parser.set_source(source_lines.clone());
-                    let program = parser.parse_program();
+                        let mut checker = crate::type_checker::TypeChecker::new(&program);
+                        checker.check();
 
-                    let mut checker = crate::type_checker::TypeChecker::new(&program);
-                    checker.check();
+                        let mut evaluator = crate::evaluator::Evaluator::new();
+                        evaluator.set_source(source_lines);
+                        evaluator.set_task_context(task_id, arg_string_clone);
+                        
+                        // Heredar el archivo actual
+                        let file_path_obj = std::path::Path::new(&script_path_clone);
+                        evaluator.set_current_file(file_path_obj);
 
-                    let mut evaluator = crate::evaluator::Evaluator::new();
-                    evaluator.set_source(source_lines);
-                    evaluator.set_task_context(task_id, arg_string_clone);
-                    
-                    // Heredar el archivo actual
-                    let file_path_obj = std::path::Path::new(&script_path_clone);
-                    evaluator.set_current_file(file_path_obj);
-
-                    // Cargar permisos locales si existen (de serez.json)
-                    if let Some(dir) = file_path_obj.parent() {
-                        let dir = if dir == std::path::Path::new("") { std::path::Path::new(".") } else { dir };
-                        if let Ok(manifest) = crate::package_manager::SerezManifest::load(dir) {
-                            evaluator.set_permissions(manifest.permissions);
+                        // Cargar permisos locales si existen (de serez.json)
+                        if let Some(dir) = file_path_obj.parent() {
+                            let dir = if dir == std::path::Path::new("") { std::path::Path::new(".") } else { dir };
+                            if let Ok(manifest) = crate::package_manager::SerezManifest::load(dir) {
+                                evaluator.set_permissions(manifest.permissions);
+                            }
                         }
-                    }
-                    
-                    let run_res = evaluator.eval_program(&program);
+                        
+                        match evaluator.eval_program(&program) {
+                            Some(_) => Ok(()),
+                            None => Err("Runtime execution failed".to_string()),
+                        }
+                    }));
 
-                    // Si al terminar no se llamó a Task.reply, completamos
                     let mut reg = registry().lock().unwrap();
                     if let Some(TaskState::Running) = reg.get(&task_id) {
                         match run_res {
-                            Some(_) => {
+                            Ok(Ok(())) => {
                                 reg.insert(task_id, TaskState::Finished { result: "".to_string() });
                             }
-                            None => {
-                                reg.insert(task_id, TaskState::Failed { error: "Runtime execution failed".to_string() });
+                            Ok(Err(err_msg)) => {
+                                reg.insert(task_id, TaskState::Failed { error: err_msg });
+                            }
+                            Err(_) => {
+                                reg.insert(task_id, TaskState::Failed { error: "Worker thread panicked".to_string() });
                             }
                         }
                     }

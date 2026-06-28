@@ -1,0 +1,8 @@
+use permissions { Task, Time }
+let msg = Task.message()
+let childId = Task.run("tests/task_child_worker.sz", msg + " -> parent")
+while (!Task.isDone(childId)) {
+    Time.sleep(2)
+}
+let childRes = Task.poll(childId)
+Task.reply("Parent processed child: [" + childRes + "]")

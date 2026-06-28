@@ -1,0 +1,7 @@
+Parent processed child: [Child received: Hello -> parent]
+Hello from worker: Worker#0
+Hello from worker: Worker#1
+Hello from worker: Worker#2
+Hello from worker: Worker#3
+Hello from worker: Worker#4
+ERROR

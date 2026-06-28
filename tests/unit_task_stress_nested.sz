@@ -1,0 +1,55 @@
+use permissions { Task, Time }
+
+// 1. Probar Workers Anidados
+let parentId = Task.run("tests/task_parent_worker.sz", "Hello")
+while (!Task.isDone(parentId)) {
+    Time.sleep(5)
+}
+let parentRes = Task.poll(parentId)
+out parentRes
+
+// 2. Probar Concurrencia (múltiples workers en paralelo)
+let tasks = []
+let i = 0
+while (i < 5) {
+    let id = Task.run("tests/task_worker_simple.sz", "Worker#" + i)
+    tasks.push(id)
+    i = i + 1
+}
+
+let allDone = false
+while (!allDone) {
+    let doneCount = 0
+    let j = 0
+    while (j < tasks.length()) {
+        if (Task.isDone(tasks[j])) {
+            doneCount = doneCount + 1
+        }
+        j = j + 1
+    }
+    if (doneCount == tasks.length()) {
+        allDone = true
+    } else {
+        Time.sleep(5)
+    }
+}
+
+let results = []
+let k = 0
+while (k < tasks.length()) {
+    results.push(Task.poll(tasks[k]))
+    k = k + 1
+}
+results.sort()
+
+for (let res in results) {
+    out res
+}
+
+// 3. Probar Worker con error de parsing
+let badTaskId = Task.run("tests/task_worker_syntax_error.sz", "")
+while (!Task.isDone(badTaskId)) {
+    Time.sleep(5)
+}
+let badResult = Task.poll(badTaskId)
+out badResult.substring(0, 5)
