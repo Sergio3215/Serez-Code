@@ -1,0 +1,14 @@
+use permissions { Task, Time }
+
+// 1. Task.reply fuera de un worker
+Task.reply("respuesta huerfana")
+out "reply_huerfana_ok"
+
+// 2. Tarea con error de ejecución
+let taskId = Task.run("tests/task_worker_error.sz", "")
+while (!Task.isDone(taskId)) {
+    Time.sleep(5)
+}
+
+let result = Task.poll(taskId)
+out result.substring(0, 5)

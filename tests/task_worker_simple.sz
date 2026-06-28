@@ -1,0 +1,4 @@
+use permissions { Task }
+
+let msg = Task.message()
+Task.reply("Hello from worker: " + msg)

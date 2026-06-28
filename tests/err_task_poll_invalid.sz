@@ -1,0 +1,4 @@
+use permissions { Task }
+
+// Task.poll con ID inexistente
+Task.poll(99999)

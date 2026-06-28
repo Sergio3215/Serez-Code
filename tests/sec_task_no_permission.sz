@@ -1,0 +1,2 @@
+// Security: Task namespace without permission must fail
+Task.run("tests/task_worker_simple.sz", "Sergio");

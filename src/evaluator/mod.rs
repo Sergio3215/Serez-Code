@@ -21,6 +21,8 @@ mod methods_dec;
 pub(crate) mod namespaces_datetime;
 mod namespaces_os;
 pub(crate) mod namespaces_gui;
+mod namespaces_task;
+
 
 use crate::ast::{self, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
@@ -137,6 +139,9 @@ pub struct Evaluator {
     // Procesos lanzados con OS.spawn (no bloqueante). OS.tick() los cosecha y dispara
     // sus callbacks onOk/onErr en este hilo (cooperativo, sin background thread).
     spawned: Vec<namespaces_os::SpawnedJob>,
+    // ── Task context ──────────────────────────────────────────────────────────
+    task_id: Option<i64>,
+    task_arg: Option<String>,
 }
 
 // ── Free-identifier collection (for consistent lambda capture, B-83) ──────────
@@ -281,6 +286,8 @@ impl Evaluator {
             gui_state: None,
             gui_fonts: None,
             spawned: Vec::new(),
+            task_id: None,
+            task_arg: None,
         }
     }
 
@@ -295,6 +302,13 @@ impl Evaluator {
         for p in perms {
             self.permissions.insert(p);
         }
+    }
+
+    pub fn set_task_context(&mut self, id: i64, arg: String) {
+        self.task_id = Some(id);
+        self.task_arg = Some(arg);
+        // Por defecto, dale permiso de "Task" a sí mismo para que los workers puedan usar Task.reply / Task.message
+        self.permissions.insert("Task".to_string());
     }
 
     pub fn set_source(&mut self, lines: Vec<String>) {

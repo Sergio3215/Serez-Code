@@ -1,0 +1,11 @@
+use permissions { Task, Time }
+
+let taskId = Task.run("tests/task_worker_simple.sz", "Sergio")
+out taskId > 0
+
+while (!Task.isDone(taskId)) {
+    Time.sleep(5)
+}
+
+let result = Task.poll(taskId)
+out result
