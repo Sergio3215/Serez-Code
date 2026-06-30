@@ -76,6 +76,36 @@ struct InputSnapshot {
     pinch_delta: f64,                  // gesto de pinch/zoom acumulado este frame
 }
 
+/// Datos de un monitor conectado (lado main → interp). Se cachean: solo se
+/// recolectan al abrir la ventana y cuando cambia el factor de escala.
+#[derive(Clone, Default)]
+struct MonitorInfo {
+    x: i32,      // posición física de la esquina sup-izquierda
+    y: i32,
+    w: u32,      // resolución física
+    h: u32,
+    scale: f64,  // factor de escala (HiDPI)
+    name: String, // nombre del monitor ("" si no disponible)
+}
+
+/// Recolecta los monitores disponibles desde la ventana (hilo main).
+fn collect_monitors(win: &Window) -> Vec<MonitorInfo> {
+    win.available_monitors()
+        .map(|m| {
+            let pos = m.position();
+            let size = m.size();
+            MonitorInfo {
+                x: pos.x,
+                y: pos.y,
+                w: size.width,
+                h: size.height,
+                scale: m.scale_factor(),
+                name: m.name().unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
 /// Comandos del intérprete → hilo main.
 enum GuiCmd {
     Open { title: String, w: u32, h: u32 },
@@ -119,6 +149,9 @@ struct SharedInner {
     open_failed: bool,
     win_w: usize,
     win_h: usize,
+    win_x: i32,               // posición outer de la ventana (refrescada cada present)
+    win_y: i32,
+    monitors: Vec<MonitorInfo>, // monitores conectados (cacheado, refrescado por el main)
     scale_factor: f64,        // HiDPI: factor de escala del monitor (winit)
     input_epoch: u64,         // sube en cada evento de input (para idleWait)
     dialog_seq: u64,          // handshake de FileDialog (main → interp)
@@ -150,6 +183,9 @@ impl SharedInner {
             open_failed: false,
             win_w: 0,
             win_h: 0,
+            win_x: 0,
+            win_y: 0,
+            monitors: Vec::new(),
             scale_factor: 1.0,
             input_epoch: 0,
             dialog_seq: 0,
@@ -401,6 +437,9 @@ pub struct GuiState {
     input: InputSnapshot,
     open_time: std::time::Instant,   // para Gui.time()
     scale_factor: f64,               // HiDPI (refrescado en present desde el main)
+    win_x: i32,                      // posición outer de la ventana (refrescada en present)
+    win_y: i32,
+    monitors: Vec<MonitorInfo>,      // monitores conectados (refrescados en present)
 }
 
 impl GuiState {
@@ -421,6 +460,9 @@ impl GuiState {
             input: InputSnapshot::default(),
             open_time: std::time::Instant::now(),
             scale_factor: 1.0,
+            win_x: 0,
+            win_y: 0,
+            monitors: Vec::new(),
         }
     }
 
@@ -445,6 +487,9 @@ impl GuiState {
         self.input = g.input.clone();
         self.win_w = g.win_w.max(1);
         self.win_h = g.win_h.max(1);
+        self.win_x = g.win_x;
+        self.win_y = g.win_y;
+        self.monitors = g.monitors.clone();
         self.scale_factor = g.scale_factor;
         self.open = g.window_open && !g.should_close;
     }
@@ -813,6 +858,7 @@ struct GuiMain {
     pinch_delta: f64,           // acumulador por frame: pinch/zoom
     last_present: u64,
     pending_input: bool,   // hubo input desde el último service → despertar idleWait
+    monitors_dirty: bool,  // pedir recolección de monitores (al abrir + ScaleFactorChanged)
 }
 
 impl GuiMain {
@@ -849,6 +895,7 @@ impl GuiMain {
             pinch_delta: 0.0,
             last_present: 0,
             pending_input: false,
+            monitors_dirty: true,
         }
     }
 
@@ -907,12 +954,22 @@ impl GuiMain {
         self.context = Some(context);
         self.surface = Some(surface);
         self.window = Some(window);
+        // Posición outer + monitores iniciales (recolectados antes de tomar el lock).
+        let (wx, wy) = self.window.as_ref()
+            .and_then(|w| w.outer_position().ok())
+            .map(|p| (p.x, p.y))
+            .unwrap_or((0, 0));
+        let mons = self.window.as_ref().map(|w| collect_monitors(w)).unwrap_or_default();
+        self.monitors_dirty = false;
         let mut g = self.host.inner.lock().unwrap();
         g.window_ready = true;
         g.window_open = true;
         g.should_close = false;
         g.win_w = size.width.max(1) as usize;
         g.win_h = size.height.max(1) as usize;
+        g.win_x = wx;
+        g.win_y = wy;
+        g.monitors = mons;
         self.host.cv.notify_all();
     }
 
@@ -1026,12 +1083,25 @@ impl GuiMain {
                 g.last_presented_h = g.canvas_h;
                 g.virtual_scroll_y = 0;
             }
-            // Tamaño de ventana + factor de escala (HiDPI) → compartido.
+            // Tamaño de ventana + posición outer + factor de escala (HiDPI) → compartido.
+            // Los monitores SOLO se recolectan cuando están marcados sucios (al abrir o
+            // al cambiar la escala), no cada frame: available_monitors() enumera el SO.
+            let want_monitors = self.monitors_dirty;
             if let Some(win) = &self.window {
                 let s = win.inner_size();
                 g.win_w = s.width.max(1) as usize;
                 g.win_h = s.height.max(1) as usize;
                 g.scale_factor = win.scale_factor();
+                if let Ok(pos) = win.outer_position() {
+                    g.win_x = pos.x;
+                    g.win_y = pos.y;
+                }
+                if want_monitors {
+                    g.monitors = collect_monitors(win);
+                }
+            }
+            if want_monitors {
+                self.monitors_dirty = false;
             }
             // Cierre.
             if self.close_requested || g.interp_done {
@@ -1320,6 +1390,7 @@ impl ApplicationHandler for GuiMain {
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 self.pending_input = true;   // service() relee win.scale_factor() y Resized ajusta el tamaño
+                self.monitors_dirty = true;  // pudo cambiar la config de pantallas → recolectar de nuevo
             }
             WindowEvent::Touch(t) => {
                 self.pending_input = true;
@@ -1964,6 +2035,34 @@ impl super::Evaluator {
                 let d = self.gui_state.as_ref().map(|s| s.input.pinch_delta).unwrap_or(0.0);
                 EvalResult::Value(self.alloc(ObjectData::Decimal(d)))
             }
+            // Posición outer de la ventana en píxeles físicos: [x, y]. Para centrar /
+            // recordar dónde estaba la ventana, o posicionar relativo a un monitor.
+            "windowPosition" => {
+                let (x, y) = self.gui_state.as_ref().map(|s| (s.win_x, s.win_y)).unwrap_or((0, 0));
+                let elems = vec![OwnedValue::Integer(x as i64), OwnedValue::Integer(y as i64)];
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements: elems }))
+            }
+            // Monitores conectados: array de dicts {x, y, width, height, scale, name}
+            // (posición + resolución en píxeles físicos). Para multi-monitor y centrado.
+            "monitors" => {
+                let mons = self.gui_state.as_ref().map(|s| s.monitors.clone()).unwrap_or_default();
+                let mut elems: Vec<OwnedValue> = Vec::with_capacity(mons.len());
+                for m in mons {
+                    elems.push(OwnedValue::Dict {
+                        key_type: "string".to_string(),
+                        value_type: "any".to_string(),
+                        entries: vec![
+                            (OwnedValue::Str("x".to_string()), OwnedValue::Integer(m.x as i64)),
+                            (OwnedValue::Str("y".to_string()), OwnedValue::Integer(m.y as i64)),
+                            (OwnedValue::Str("width".to_string()), OwnedValue::Integer(m.w as i64)),
+                            (OwnedValue::Str("height".to_string()), OwnedValue::Integer(m.h as i64)),
+                            (OwnedValue::Str("scale".to_string()), OwnedValue::Decimal(m.scale)),
+                            (OwnedValue::Str("name".to_string()), OwnedValue::Str(m.name)),
+                        ],
+                    });
+                }
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("dict".to_string()), elements: elems }))
+            }
 
             "clipboardGet" => {
                 let text = match self.gui_state.as_mut() {
@@ -2016,6 +2115,51 @@ impl super::Evaluator {
                         EvalResult::Value(self.int_ref(id))
                     }
                     None => { eprintln!("❌ ERROR: Gui.loadImage: no window open"); EvalResult::Error }
+                }
+            }
+
+            "loadImageBytes" => {
+                // Igual que loadImage pero decodifica desde un arreglo de bytes en memoria
+                // (0–255, como devuelve File binario / fetch / Binary.*), no desde una ruta.
+                // Sirve para imágenes fetcheadas o generadas sin tocar el disco.
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.loadImageBytes(bytes) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let r = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    other => return other,
+                };
+                let elems = match self.resolve(r) {
+                    Some(ObjectData::Array { elements, .. }) => elements.clone(),
+                    _ => { eprintln!("❌ ERROR: Gui.loadImageBytes: argument must be a byte array"); return EvalResult::Error; }
+                };
+                let mut bytes = Vec::with_capacity(elems.len());
+                for elem in elems {
+                    match elem {
+                        OwnedValue::Integer(b) => bytes.push(b as u8),
+                        _ => { eprintln!("❌ ERROR: Gui.loadImageBytes: all elements must be integers (0–255)"); return EvalResult::Error; }
+                    }
+                }
+                let decoded = match image::load_from_memory(&bytes) {
+                    Ok(img) => img.to_rgba8(),
+                    Err(e) => { eprintln!("❌ ERROR: Gui.loadImageBytes: {}", e); return EvalResult::Error; }
+                };
+                let (w, h) = (decoded.width() as usize, decoded.height() as usize);
+                let mut px = Vec::with_capacity(w * h);
+                for pixel in decoded.pixels() {
+                    let [r, g, b, a] = pixel.0;
+                    px.push(((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
+                }
+                match self.gui_state.as_mut() {
+                    Some(st) => {
+                        let id = st.next_image;
+                        st.next_image += 1;
+                        st.images.insert(id, ImageData { w, h, px });
+                        EvalResult::Value(self.int_ref(id))
+                    }
+                    None => { eprintln!("❌ ERROR: Gui.loadImageBytes: no window open"); EvalResult::Error }
                 }
             }
 
