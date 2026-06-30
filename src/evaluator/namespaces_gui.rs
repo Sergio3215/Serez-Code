@@ -34,7 +34,7 @@ use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, W
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::EventLoopExtPumpEvents;
-use winit::window::{CursorIcon, Window, WindowId};
+use winit::window::{CursorIcon, Icon, UserAttentionType, Window, WindowId, WindowLevel};
 
 use softbuffer::{Context, Surface};
 use cosmic_text::{Attrs, Buffer as TextBuffer, Color as TextColor, Family, FontSystem, Metrics, Shaping, Style as FontStyle, SwashCache, Weight};
@@ -71,6 +71,9 @@ struct InputSnapshot {
     mouse_fwd: bool,        // botón "adelante" del mouse (MouseButton::Forward)
     dropped_files: Vec<String>, // archivos soltados este frame (DroppedFile) — consumido por frame
     ime_preedit: String,    // composición IME en curso (Ime::Preedit), "" si no hay
+    hovered_files: Vec<String>,        // archivos arrastrados SOBRE la ventana (antes de soltar) — nivel
+    touches: Vec<(u64, u8, i32, i32)>, // toques este frame: (id, fase 0=start/1=move/2=end/3=cancel, x, y)
+    pinch_delta: f64,                  // gesto de pinch/zoom acumulado este frame
 }
 
 /// Comandos del intérprete → hilo main.
@@ -87,6 +90,13 @@ enum GuiCmd {
     SetMaximized(bool),
     SetPosition(i32, i32),
     SetDecorations(bool),
+    SetMaxSize(u32, u32),
+    DragWindow,                       // mover ventana borderless (winit::drag_window)
+    SetAlwaysOnTop(bool),
+    SetMinimized(bool),
+    RequestAttention(bool),           // flash de taskbar
+    SetCursorVisible(bool),
+    SetWindowIcon(Vec<u8>, u32, u32), // rgba, w, h (vacío = quitar ícono)
     // Diálogo de archivo nativo (rfd) — ejecutado por el hilo main; el resultado
     // vuelve por SharedInner.dialog_result / dialog_seq (handshake como present).
     FileDialog { save: bool, filter_name: String, filter_exts: Vec<String>, default_name: String },
@@ -798,6 +808,9 @@ struct GuiMain {
     mouse_fwd: bool,            // nivel: botón forward
     dropped_files: Vec<String>, // acumulador por frame: archivos soltados
     ime_preedit: String,        // nivel: composición IME en curso
+    hovered_files: Vec<String>, // nivel: archivos arrastrados sobre la ventana
+    touches: Vec<(u64, u8, i32, i32)>, // acumulador por frame: toques
+    pinch_delta: f64,           // acumulador por frame: pinch/zoom
     last_present: u64,
     pending_input: bool,   // hubo input desde el último service → despertar idleWait
 }
@@ -831,6 +844,9 @@ impl GuiMain {
             mouse_fwd: false,
             dropped_files: Vec::new(),
             ime_preedit: String::new(),
+            hovered_files: Vec::new(),
+            touches: Vec::new(),
+            pinch_delta: 0.0,
             last_present: 0,
             pending_input: false,
         }
@@ -955,6 +971,37 @@ impl GuiMain {
                     GuiCmd::SetDecorations(b) => {
                         if let Some(win) = &self.window { win.set_decorations(b); }
                     }
+                    GuiCmd::SetMaxSize(w, h) => {
+                        if let Some(win) = &self.window {
+                            let s = if w == 0 || h == 0 { None } else { Some(LogicalSize::new(w as f64, h as f64)) };
+                            win.set_max_inner_size(s);
+                        }
+                    }
+                    GuiCmd::DragWindow => {
+                        if let Some(win) = &self.window { let _ = win.drag_window(); }
+                    }
+                    GuiCmd::SetAlwaysOnTop(b) => {
+                        if let Some(win) = &self.window {
+                            win.set_window_level(if b { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal });
+                        }
+                    }
+                    GuiCmd::SetMinimized(b) => {
+                        if let Some(win) = &self.window { win.set_minimized(b); }
+                    }
+                    GuiCmd::RequestAttention(b) => {
+                        if let Some(win) = &self.window {
+                            win.request_user_attention(if b { Some(UserAttentionType::Informational) } else { None });
+                        }
+                    }
+                    GuiCmd::SetCursorVisible(b) => {
+                        if let Some(win) = &self.window { win.set_cursor_visible(b); }
+                    }
+                    GuiCmd::SetWindowIcon(rgba, w, h) => {
+                        if let Some(win) = &self.window {
+                            let icon = if rgba.is_empty() { None } else { Icon::from_rgba(rgba, w, h).ok() };
+                            win.set_window_icon(icon);
+                        }
+                    }
                     GuiCmd::FileDialog { save, filter_name, filter_exts, default_name } => {
                         pending_dialog = Some((g.dialog_seq, save, filter_name, filter_exts, default_name));
                     }
@@ -1057,9 +1104,13 @@ impl GuiMain {
             mouse_fwd: self.mouse_fwd,
             dropped_files: std::mem::take(&mut self.dropped_files),
             ime_preedit: self.ime_preedit.clone(),
+            hovered_files: self.hovered_files.clone(),   // nivel: persiste mientras hay hover
+            touches: std::mem::take(&mut self.touches),  // per-frame
+            pinch_delta: self.pinch_delta,               // per-frame
         };
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
+        self.pinch_delta = 0.0;
         snap
     }
 
@@ -1256,10 +1307,33 @@ impl ApplicationHandler for GuiMain {
             }
             WindowEvent::DroppedFile(path) => {
                 self.pending_input = true;
+                self.hovered_files.clear();   // el drop termina el hover
                 self.dropped_files.push(path.to_string_lossy().into_owned());
+            }
+            WindowEvent::HoveredFile(path) => {
+                self.pending_input = true;
+                self.hovered_files.push(path.to_string_lossy().into_owned());
+            }
+            WindowEvent::HoveredFileCancelled => {
+                self.pending_input = true;
+                self.hovered_files.clear();
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 self.pending_input = true;   // service() relee win.scale_factor() y Resized ajusta el tamaño
+            }
+            WindowEvent::Touch(t) => {
+                self.pending_input = true;
+                let code: u8 = match t.phase {
+                    winit::event::TouchPhase::Started => 0,
+                    winit::event::TouchPhase::Moved => 1,
+                    winit::event::TouchPhase::Ended => 2,
+                    winit::event::TouchPhase::Cancelled => 3,
+                };
+                self.touches.push((t.id, code, t.location.x as i32, t.location.y as i32));
+            }
+            WindowEvent::PinchGesture { delta, .. } => {
+                self.pending_input = true;
+                self.pinch_delta += delta;
             }
             _ => {}
         }
@@ -1871,6 +1945,25 @@ impl super::Evaluator {
                 let s = self.gui_state.as_ref().map(|s| s.input.ime_preedit.clone()).unwrap_or_default();
                 EvalResult::Value(self.alloc(ObjectData::Str(s)))
             }
+            // Archivos arrastrados SOBRE la ventana (antes de soltar) — para resaltar zonas de drop.
+            "hoveredFiles" => { let v = self.gui_state.as_ref().map(|s| s.input.hovered_files.clone()).unwrap_or_default(); self.gui_str_array(v) }
+            // Toques activos este frame, aplanado: [id, fase, x, y, ...] (fase: 0=start 1=move 2=end 3=cancel).
+            "touches" => {
+                let ts = self.gui_state.as_ref().map(|s| s.input.touches.clone()).unwrap_or_default();
+                let mut elems: Vec<OwnedValue> = Vec::new();
+                for (id, code, x, y) in ts {
+                    elems.push(OwnedValue::Integer(id as i64));
+                    elems.push(OwnedValue::Integer(code as i64));
+                    elems.push(OwnedValue::Integer(x as i64));
+                    elems.push(OwnedValue::Integer(y as i64));
+                }
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements: elems }))
+            }
+            // Delta de pinch/zoom acumulado este frame (decimal; 0 si no hubo gesto).
+            "pinchDelta" => {
+                let d = self.gui_state.as_ref().map(|s| s.input.pinch_delta).unwrap_or(0.0);
+                EvalResult::Value(self.alloc(ObjectData::Decimal(d)))
+            }
 
             "clipboardGet" => {
                 let text = match self.gui_state.as_mut() {
@@ -2029,9 +2122,46 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements }))
             }
 
-            "setMinSize" | "setResizable" | "setFullscreen" | "maximize" | "setPosition" | "setDecorations" => {
+            "setMinSize" | "setResizable" | "setFullscreen" | "maximize" | "setPosition" | "setDecorations"
+            | "setMaxSize" | "setAlwaysOnTop" | "minimize" | "requestAttention" | "setCursorVisible" => {
                 let m = dot_call.method.clone();
                 return self.gui_window_control(&m, dot_call);
+            }
+            // Mover una ventana borderless (llamar en mousedown sobre la barra custom).
+            "dragWindow" => {
+                if let Some(host) = host() {
+                    host.inner.lock().unwrap().cmds.push_back(GuiCmd::DragWindow);
+                    host.cv.notify_all();
+                }
+                EvalResult::Value(self.null_ref)
+            }
+            // Ícono de la ventana desde un archivo de imagen ("" = quitar).
+            "setWindowIcon" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.setWindowIcon(path) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let path = match self.gui_str_arg(&dot_call.arguments[0]) {
+                    Some(s) => s,
+                    None => { eprintln!("❌ ERROR: Gui.setWindowIcon path must be a string"); return EvalResult::Error; }
+                };
+                let cmd = if path.is_empty() {
+                    GuiCmd::SetWindowIcon(Vec::new(), 0, 0)
+                } else {
+                    match image::open(&path) {
+                        Ok(img) => {
+                            let rgba = img.to_rgba8();
+                            let (w, h) = (rgba.width(), rgba.height());
+                            GuiCmd::SetWindowIcon(rgba.into_raw(), w, h)
+                        }
+                        Err(e) => { eprintln!("❌ ERROR: Gui.setWindowIcon: {}", e); return EvalResult::Error; }
+                    }
+                };
+                if let Some(host) = host() {
+                    host.inner.lock().unwrap().cmds.push_back(cmd);
+                    host.cv.notify_all();
+                }
+                EvalResult::Value(self.null_ref)
             }
 
             "openFileDialog" | "saveFileDialog" => {
@@ -2216,13 +2346,16 @@ impl super::Evaluator {
     /// setDecorations): valida args y encola el GuiCmd para el hilo main.
     fn gui_window_control(&mut self, method: &str, dot_call: &ast::DotCallExpression) -> EvalResult {
         let cmd = match method {
-            "setMinSize" => {
-                if dot_call.arguments.len() != 2 { eprintln!("❌ ERROR: Gui.setMinSize(w, h) requires 2 arguments"); return EvalResult::Error; }
+            "setMinSize" | "setMaxSize" => {
+                if dot_call.arguments.len() != 2 { eprintln!("❌ ERROR: Gui.{}(w, h) requires 2 arguments", method); return EvalResult::Error; }
                 let w = self.gui_int_arg(&dot_call.arguments[0]);
                 let h = self.gui_int_arg(&dot_call.arguments[1]);
                 match (w, h) {
-                    (Some(w), Some(h)) => GuiCmd::SetMinSize(w.max(0) as u32, h.max(0) as u32),
-                    _ => { eprintln!("❌ ERROR: Gui.setMinSize requires 2 integers"); return EvalResult::Error; }
+                    (Some(w), Some(h)) => {
+                        let (w, h) = (w.max(0) as u32, h.max(0) as u32);
+                        if method == "setMinSize" { GuiCmd::SetMinSize(w, h) } else { GuiCmd::SetMaxSize(w, h) }
+                    }
+                    _ => { eprintln!("❌ ERROR: Gui.{} requires 2 integers", method); return EvalResult::Error; }
                 }
             }
             "setPosition" => {
@@ -2241,10 +2374,14 @@ impl super::Evaluator {
                     None => { eprintln!("❌ ERROR: Gui.{} requires a boolean", method); return EvalResult::Error; }
                 };
                 match method {
-                    "setResizable"   => GuiCmd::SetResizable(b),
-                    "setFullscreen"  => GuiCmd::SetFullscreen(b),
-                    "maximize"       => GuiCmd::SetMaximized(b),
-                    "setDecorations" => GuiCmd::SetDecorations(b),
+                    "setResizable"     => GuiCmd::SetResizable(b),
+                    "setFullscreen"    => GuiCmd::SetFullscreen(b),
+                    "maximize"         => GuiCmd::SetMaximized(b),
+                    "setDecorations"   => GuiCmd::SetDecorations(b),
+                    "setAlwaysOnTop"   => GuiCmd::SetAlwaysOnTop(b),
+                    "minimize"         => GuiCmd::SetMinimized(b),
+                    "requestAttention" => GuiCmd::RequestAttention(b),
+                    "setCursorVisible" => GuiCmd::SetCursorVisible(b),
                     _ => return EvalResult::Error,
                 }
             }
