@@ -164,6 +164,7 @@ struct SharedInner {
     last_presented_w: usize,
     last_presented_h: usize,
     virtual_scroll_y: i32,
+    virtual_scroll_x: i32,
     bg_color: u32,
 }
 
@@ -197,6 +198,7 @@ impl SharedInner {
             last_presented_w: 0,
             last_presented_h: 0,
             virtual_scroll_y: 0,
+            virtual_scroll_x: 0,
             bg_color: 0xFFFFFFFF,
         }
     }
@@ -1114,6 +1116,7 @@ impl GuiMain {
                 g.last_presented_w = g.canvas_w;
                 g.last_presented_h = g.canvas_h;
                 g.virtual_scroll_y = 0;
+                g.virtual_scroll_x = 0;
             }
             // Tamaño de ventana + posición outer + factor de escala (HiDPI) → compartido.
             // Los monitores SOLO se recolectan cuando están marcados sucios (al abrir o
@@ -1152,11 +1155,11 @@ impl GuiMain {
             host.cv.notify_all();
         }
         if let Some((canvas, cw, ch)) = canvas_to_blit {
-            let (vy, bg) = {
+            let (vx, vy, bg) = {
                 let g = self.host.inner.lock().unwrap();
-                (g.virtual_scroll_y, g.bg_color)
+                (g.virtual_scroll_x, g.virtual_scroll_y, g.bg_color)
             };
-            self.blit(&canvas, cw, ch, vy, bg);
+            self.blit(&canvas, cw, ch, vx, vy, bg);
         }
         if !self.session_active {
             self.window = None;
@@ -1172,10 +1175,10 @@ impl GuiMain {
         self.service();
         let snap = {
             let g = self.host.inner.lock().unwrap();
-            (g.canvas.clone(), g.canvas_w, g.canvas_h, g.virtual_scroll_y, g.bg_color)
+            (g.canvas.clone(), g.canvas_w, g.canvas_h, g.virtual_scroll_x, g.virtual_scroll_y, g.bg_color)
         };
         if snap.1 > 0 && snap.2 > 0 {
-            self.blit(&snap.0, snap.1, snap.2, snap.3, snap.4);
+            self.blit(&snap.0, snap.1, snap.2, snap.3, snap.4, snap.5);
         }
     }
 
@@ -1216,7 +1219,7 @@ impl GuiMain {
         snap
     }
 
-    fn blit(&mut self, canvas: &[u32], cw: usize, ch: usize, offset_y: i32, bg: u32) {
+    fn blit(&mut self, canvas: &[u32], cw: usize, ch: usize, offset_x: i32, offset_y: i32, bg: u32) {
         let window = match self.window.as_ref() {
             Some(w) => w,
             None => return,
@@ -1243,9 +1246,22 @@ impl GuiMain {
             let virtual_y = y as i32 + offset_y;
             if virtual_y >= 0 && (virtual_y as usize) < ch {
                 let crow = (virtual_y as usize) * cw;
-                buffer[brow..brow + n].copy_from_slice(&canvas[crow..crow + n]);
-                for x in n..bw {
-                    buffer[brow + x] = bg;
+                if offset_x == 0 {
+                    // Fast-path sin scroll horizontal: copia de fila en bloque (como antes).
+                    buffer[brow..brow + n].copy_from_slice(&canvas[crow..crow + n]);
+                    for x in n..bw {
+                        buffer[brow + x] = bg;
+                    }
+                } else {
+                    // Con scroll horizontal: desplazar columnas (bg fuera del canvas).
+                    for x in 0..bw {
+                        let virtual_x = x as i32 + offset_x;
+                        buffer[brow + x] = if virtual_x >= 0 && (virtual_x as usize) < cw {
+                            canvas[crow + virtual_x as usize]
+                        } else {
+                            bg
+                        };
+                    }
                 }
             } else {
                 for x in 0..bw {
@@ -1374,37 +1390,42 @@ impl ApplicationHandler for GuiMain {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 self.pending_input = true;
-                let dy = match delta {
-                    MouseScrollDelta::LineDelta(_, dy) => dy,
-                    MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 12.0,
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
+                    MouseScrollDelta::PixelDelta(p) => ((p.x as f32) / 12.0, (p.y as f32) / 12.0),
                 };
-                if dy != 0.0 {
+                // Compositing predictivo: desplaza el canvas cacheado (vertical Y horizontal)
+                // sin esperar al intérprete (CPU 0). El próximo present() lo resetea y redibuja.
+                if dx != 0.0 || dy != 0.0 {
                     let mut g = self.host.inner.lock().unwrap();
                     if !g.last_presented_canvas.is_empty() {
-                        let delta_pixels = (-dy * 40.0) as i32;
-                        g.virtual_scroll_y = (g.virtual_scroll_y + delta_pixels).clamp(
-                            0,
-                            (g.last_presented_h as i32 - g.win_h as i32).max(0),
-                        );
+                        if dy != 0.0 {
+                            let dpy = (-dy * 40.0) as i32;
+                            g.virtual_scroll_y = (g.virtual_scroll_y + dpy).clamp(
+                                0,
+                                (g.last_presented_h as i32 - g.win_h as i32).max(0),
+                            );
+                        }
+                        if dx != 0.0 {
+                            let dpx = (-dx * 40.0) as i32;
+                            g.virtual_scroll_x = (g.virtual_scroll_x + dpx).clamp(
+                                0,
+                                (g.last_presented_w as i32 - g.win_w as i32).max(0),
+                            );
+                        }
                         let canvas = g.last_presented_canvas.clone();
                         let cw = g.last_presented_w;
                         let ch = g.last_presented_h;
+                        let vx = g.virtual_scroll_x;
                         let vy = g.virtual_scroll_y;
                         let bg = g.bg_color;
                         drop(g);
-                        self.blit(&canvas, cw, ch, vy, bg);
+                        self.blit(&canvas, cw, ch, vx, vy, bg);
                     }
                 }
-                match delta {
-                    MouseScrollDelta::LineDelta(dx, dy) => {
-                        self.scroll_x += dx;
-                        self.scroll_y += dy;
-                    }
-                    MouseScrollDelta::PixelDelta(p) => {
-                        self.scroll_x += (p.x as f32) / 12.0;
-                        self.scroll_y += (p.y as f32) / 12.0;
-                    }
-                }
+                // Acumular para el intérprete (Gui.scrollX/scrollY).
+                self.scroll_x += dx;
+                self.scroll_y += dy;
             }
             WindowEvent::Focused(b) => {
                 self.pending_input = true;
