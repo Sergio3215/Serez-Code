@@ -589,14 +589,25 @@ impl GuiState {
         }
     }
 
-    fn draw_text(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, scale: i32, rgb: u32, style: u8) {
+    /// `style` es bitfield: bit0=bold, bit1=italic (afectan al glifo), bit2=subrayado,
+    /// bit3=tachado (decoraciones: líneas dibujadas sobre el ancho del texto, NO afectan
+    /// la forma del glifo ni la caché). `letter_spacing` = px extra entre caracteres.
+    fn draw_text(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, scale: i32, rgb: u32, style: u8, letter_spacing: i32) {
         let scale = scale.max(1);
         let r = ((rgb >> 16) & 0xff) as u8;
         let g = ((rgb >> 8) & 0xff) as u8;
         let b = (rgb & 0xff) as u8;
+        let glyph_style = style & 0b11;          // solo bold/italic cambian el glifo
+        let underline = style & 0b100 != 0;
+        let strike    = style & 0b1000 != 0;
         let fam = fonts.current;
         let mut pen = x;
+        let mut first = true;
         for ch in text.chars() {
+            if !first {
+                pen += letter_spacing;           // espaciado entre caracteres (no antes del 1º)
+            }
+            first = false;
             if ch.is_control() {
                 if fam == 0 {
                     pen += 8 * scale; // compat: la rejilla siempre avanza una celda
@@ -607,8 +618,8 @@ impl GuiState {
                 pen += 8 * scale;
                 continue;
             }
-            fonts.ensure_glyph(ch, scale, style);
-            if let Some(gl) = fonts.glyphs.get(&(fam, ch, scale, style)) {
+            fonts.ensure_glyph(ch, scale, glyph_style);
+            if let Some(gl) = fonts.glyphs.get(&(fam, ch, scale, glyph_style)) {
                 let advance = gl.advance;
                 if ch != ' ' {
                     let cells = gl.cells.clone();
@@ -619,6 +630,17 @@ impl GuiState {
                 pen += advance;
             } else if fam == 0 {
                 pen += 8 * scale;
+            }
+        }
+        // Decoraciones: líneas horizontales a lo ancho del texto ([x, pen)).
+        if (underline || strike) && pen > x {
+            let size = 8 * scale;
+            let thick = scale.max(1);
+            if underline {
+                self.fill_rect(x, y + size - thick, pen - x, thick, rgb); // bajo la línea base
+            }
+            if strike {
+                self.fill_rect(x, y + size / 2 - thick / 2, pen - x, thick, rgb); // a media altura
             }
         }
     }
@@ -1765,10 +1787,13 @@ impl super::Evaluator {
 
             "drawText" => {
                 // Aditivo: 5 args = (x,y,text,scale,color) estilo normal (como antes);
-                //          6 args = + style (0=normal, 1=bold, 2=italic, 3=bold+italic).
+                //          6 args = + style (bitfield: 1=bold, 2=italic, 4=subrayado, 8=tachado);
+                //          7 args = + letterSpacing (px extra entre caracteres).
+                // Nota: measureText/textAdvances NO incluyen letterSpacing; si se usa, sumar
+                // (nChars-1)*spacing aparte para situar el caret.
                 let n = dot_call.arguments.len();
-                if n != 5 && n != 6 {
-                    eprintln!("❌ ERROR: Gui.drawText(x, y, text, scale, color [, style]) requires 5 or 6 arguments");
+                if n < 5 || n > 7 {
+                    eprintln!("❌ ERROR: Gui.drawText(x, y, text, scale, color [, style [, letterSpacing]]) requires 5 to 7 arguments");
                     return EvalResult::Error;
                 }
                 let x     = self.gui_int_arg(&dot_call.arguments[0]);
@@ -1776,11 +1801,12 @@ impl super::Evaluator {
                 let text  = self.gui_str_arg(&dot_call.arguments[2]);
                 let scale = self.gui_int_arg(&dot_call.arguments[3]);
                 let c     = self.gui_int_arg(&dot_call.arguments[4]);
-                let style = if n == 6 { self.gui_int_arg(&dot_call.arguments[5]).unwrap_or(0) } else { 0 };
+                let style = if n >= 6 { self.gui_int_arg(&dot_call.arguments[5]).unwrap_or(0) } else { 0 };
+                let spacing = if n == 7 { self.gui_int_arg(&dot_call.arguments[6]).unwrap_or(0) } else { 0 };
                 let (x, y, text, scale, color) = match (x, y, text, scale, c) {
                     (Some(x), Some(y), Some(t), Some(s), Some(c)) =>
                         (x as i32, y as i32, t, s.max(1) as i32, (c as u32) & 0x00FF_FFFF),
-                    _ => { eprintln!("❌ ERROR: Gui.drawText requires (int, int, string, int, int [, int])"); return EvalResult::Error; }
+                    _ => { eprintln!("❌ ERROR: Gui.drawText requires (int, int, string, int, int [, int [, int]])"); return EvalResult::Error; }
                 };
                 if self.gui_state.is_none() {
                     eprintln!("❌ ERROR: Gui.drawText: no window open");
@@ -1789,7 +1815,7 @@ impl super::Evaluator {
                 if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
                 let fonts = self.gui_fonts.as_mut().unwrap();
                 let st = self.gui_state.as_mut().unwrap();
-                st.draw_text(fonts, x, y, &text, scale, color, (style.clamp(0, 3)) as u8);
+                st.draw_text(fonts, x, y, &text, scale, color, (style.clamp(0, 15)) as u8, spacing as i32);
                 EvalResult::Value(self.null_ref)
             }
 
