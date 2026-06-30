@@ -2155,6 +2155,80 @@ impl super::Evaluator {
                 }
                 EvalResult::Value(self.null_ref)
             }
+            // Lee una imagen del portapapeles (RGBA) y la registra como handle (como loadImage).
+            // Devuelve 0 si el portapapeles no contiene una imagen.
+            "clipboardGetImage" => {
+                let img = match self.gui_state.as_mut() {
+                    Some(st) => {
+                        if st.clipboard.is_none() { st.clipboard = arboard::Clipboard::new().ok(); }
+                        st.clipboard.as_mut().and_then(|c| c.get_image().ok())
+                    }
+                    None => None,
+                };
+                match img {
+                    Some(im) => {
+                        let (w, h) = (im.width, im.height);
+                        let bytes = im.bytes; // Cow<[u8]> en RGBA
+                        let mut px = Vec::with_capacity(w * h);
+                        let mut i = 0;
+                        while i + 3 < bytes.len() {
+                            let r = bytes[i] as u32;
+                            let g = bytes[i + 1] as u32;
+                            let b = bytes[i + 2] as u32;
+                            let a = bytes[i + 3] as u32;
+                            px.push((a << 24) | (r << 16) | (g << 8) | b);
+                            i += 4;
+                        }
+                        match self.gui_state.as_mut() {
+                            Some(st) => {
+                                let id = st.next_image;
+                                st.next_image += 1;
+                                st.images.insert(id, ImageData { w, h, px });
+                                EvalResult::Value(self.int_ref(id))
+                            }
+                            None => EvalResult::Value(self.int_ref(0)),
+                        }
+                    }
+                    None => EvalResult::Value(self.int_ref(0)),
+                }
+            }
+            // Copia una imagen (por handle, como devuelve loadImage/loadImageBytes) al portapapeles.
+            "clipboardSetImage" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: Gui.clipboardSetImage(handle) requires 1 argument");
+                    return EvalResult::Error;
+                }
+                let hnd = match self.gui_int_arg(&dot_call.arguments[0]) {
+                    Some(h) => h,
+                    None => { eprintln!("❌ ERROR: Gui.clipboardSetImage handle must be an integer"); return EvalResult::Error; }
+                };
+                // ARGB u32 (interno) → RGBA bytes (lo que espera arboard).
+                let rgba = self.gui_state.as_ref().and_then(|s| s.images.get(&hnd)).map(|im| {
+                    let mut bytes = Vec::with_capacity(im.px.len() * 4);
+                    for &p in &im.px {
+                        bytes.push(((p >> 16) & 0xff) as u8); // r
+                        bytes.push(((p >> 8) & 0xff) as u8);  // g
+                        bytes.push((p & 0xff) as u8);         // b
+                        bytes.push(((p >> 24) & 0xff) as u8); // a
+                    }
+                    (im.w, im.h, bytes)
+                });
+                match rgba {
+                    Some((w, h, bytes)) => {
+                        if let Some(st) = self.gui_state.as_mut() {
+                            if st.clipboard.is_none() { st.clipboard = arboard::Clipboard::new().ok(); }
+                            if let Some(c) = st.clipboard.as_mut() {
+                                let _ = c.set_image(arboard::ImageData { width: w, height: h, bytes: std::borrow::Cow::Owned(bytes) });
+                            }
+                        }
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => {
+                        eprintln!("❌ ERROR: Gui.clipboardSetImage: invalid image handle");
+                        EvalResult::Error
+                    }
+                }
+            }
 
             "loadImage" => {
                 if dot_call.arguments.len() != 1 {
