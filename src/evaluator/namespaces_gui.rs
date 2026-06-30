@@ -65,6 +65,12 @@ struct InputSnapshot {
     chars_typed: String,
     scroll_x: i64,
     scroll_y: i64,
+    focused: bool,          // ¿la ventana tiene foco? (WindowEvent::Focused)
+    mouse_in: bool,         // ¿el cursor está sobre la ventana? (CursorEntered/Left)
+    mouse_back: bool,       // botón "atrás" del mouse (MouseButton::Back)
+    mouse_fwd: bool,        // botón "adelante" del mouse (MouseButton::Forward)
+    dropped_files: Vec<String>, // archivos soltados este frame (DroppedFile) — consumido por frame
+    ime_preedit: String,    // composición IME en curso (Ime::Preedit), "" si no hay
 }
 
 /// Comandos del intérprete → hilo main.
@@ -786,6 +792,12 @@ struct GuiMain {
     chars_typed: String,
     scroll_x: f32,
     scroll_y: f32,
+    focused: bool,              // nivel: ¿ventana enfocada?
+    cursor_in: bool,            // nivel: ¿cursor sobre la ventana?
+    mouse_back: bool,           // nivel: botón back
+    mouse_fwd: bool,            // nivel: botón forward
+    dropped_files: Vec<String>, // acumulador por frame: archivos soltados
+    ime_preedit: String,        // nivel: composición IME en curso
     last_present: u64,
     pending_input: bool,   // hubo input desde el último service → despertar idleWait
 }
@@ -813,6 +825,12 @@ impl GuiMain {
             chars_typed: String::new(),
             scroll_x: 0.0,
             scroll_y: 0.0,
+            focused: true,
+            cursor_in: false,
+            mouse_back: false,
+            mouse_fwd: false,
+            dropped_files: Vec::new(),
+            ime_preedit: String::new(),
             last_present: 0,
             pending_input: false,
         }
@@ -1033,6 +1051,12 @@ impl GuiMain {
             chars_typed: std::mem::take(&mut self.chars_typed),
             scroll_x: self.scroll_x as i64,
             scroll_y: self.scroll_y as i64,
+            focused: self.focused,
+            mouse_in: self.cursor_in,
+            mouse_back: self.mouse_back,
+            mouse_fwd: self.mouse_fwd,
+            dropped_files: std::mem::take(&mut self.dropped_files),
+            ime_preedit: self.ime_preedit.clone(),
         };
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
@@ -1151,12 +1175,20 @@ impl ApplicationHandler for GuiMain {
                     }
                 }
             }
-            WindowEvent::Ime(Ime::Commit(s)) => {
+            WindowEvent::Ime(ime) => {
                 self.pending_input = true;
-                for c in s.chars() {
-                    if !c.is_control() {
-                        self.chars_typed.push(c);
+                match ime {
+                    // Composición en curso (CJK): la guardamos para que serez-ui la pinte.
+                    Ime::Preedit(text, _) => { self.ime_preedit = text; }
+                    Ime::Commit(s) => {
+                        self.ime_preedit.clear();
+                        for c in s.chars() {
+                            if !c.is_control() {
+                                self.chars_typed.push(c);
+                            }
+                        }
                     }
+                    _ => {}
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -1171,6 +1203,8 @@ impl ApplicationHandler for GuiMain {
                     MouseButton::Left => self.mouse_l = down,
                     MouseButton::Right => self.mouse_r = down,
                     MouseButton::Middle => self.mouse_m = down,
+                    MouseButton::Back => self.mouse_back = down,
+                    MouseButton::Forward => self.mouse_fwd = down,
                     _ => {}
                 }
             }
@@ -1207,6 +1241,25 @@ impl ApplicationHandler for GuiMain {
                         self.scroll_y += (p.y as f32) / 12.0;
                     }
                 }
+            }
+            WindowEvent::Focused(b) => {
+                self.pending_input = true;
+                self.focused = b;
+            }
+            WindowEvent::CursorEntered { .. } => {
+                self.pending_input = true;
+                self.cursor_in = true;
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.pending_input = true;
+                self.cursor_in = false;
+            }
+            WindowEvent::DroppedFile(path) => {
+                self.pending_input = true;
+                self.dropped_files.push(path.to_string_lossy().into_owned());
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                self.pending_input = true;   // service() relee win.scale_factor() y Resized ajusta el tamaño
             }
             _ => {}
         }
@@ -1792,6 +1845,30 @@ impl super::Evaluator {
 
             "charsTyped" => {
                 let s = self.gui_state.as_ref().map(|s| s.input.chars_typed.clone()).unwrap_or_default();
+                EvalResult::Value(self.alloc(ObjectData::Str(s)))
+            }
+
+            "focused" => {
+                let v = self.gui_state.as_ref().map(|s| s.input.focused).unwrap_or(true);
+                EvalResult::Value(if v { self.true_ref } else { self.false_ref })
+            }
+            "mouseInWindow" => {
+                let v = self.gui_state.as_ref().map(|s| s.input.mouse_in).unwrap_or(false);
+                EvalResult::Value(if v { self.true_ref } else { self.false_ref })
+            }
+            "mouseBackDown" => {
+                let v = self.gui_state.as_ref().map(|s| s.input.mouse_back).unwrap_or(false);
+                EvalResult::Value(if v { self.true_ref } else { self.false_ref })
+            }
+            "mouseForwardDown" => {
+                let v = self.gui_state.as_ref().map(|s| s.input.mouse_fwd).unwrap_or(false);
+                EvalResult::Value(if v { self.true_ref } else { self.false_ref })
+            }
+            // Archivos soltados sobre la ventana este frame (rutas). Requiere permiso File para leerlos.
+            "droppedFiles" => { let v = self.gui_state.as_ref().map(|s| s.input.dropped_files.clone()).unwrap_or_default(); self.gui_str_array(v) }
+            // Composición IME en curso (CJK), "" si no hay. serez-ui la dibuja en el caret.
+            "imePreedit" => {
+                let s = self.gui_state.as_ref().map(|s| s.input.ime_preedit.clone()).unwrap_or_default();
                 EvalResult::Value(self.alloc(ObjectData::Str(s)))
             }
 
