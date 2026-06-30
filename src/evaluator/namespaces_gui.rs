@@ -34,7 +34,7 @@ use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, W
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::EventLoopExtPumpEvents;
-use winit::window::{CursorIcon, Icon, UserAttentionType, Window, WindowId, WindowLevel};
+use winit::window::{CursorIcon, CustomCursor, Icon, UserAttentionType, Window, WindowId, WindowLevel};
 
 use softbuffer::{Context, Surface};
 use cosmic_text::{Attrs, Buffer as TextBuffer, Color as TextColor, Family, FontSystem, Metrics, Shaping, Style as FontStyle, SwashCache, Weight};
@@ -127,6 +127,7 @@ enum GuiCmd {
     RequestAttention(bool),           // flash de taskbar
     SetCursorVisible(bool),
     SetWindowIcon(Vec<u8>, u32, u32), // rgba, w, h (vacío = quitar ícono)
+    SetCustomCursor(Vec<u8>, u32, u32, u32, u32), // rgba, w, h, hotspot_x, hotspot_y (rgba vacío = cursor por defecto)
     // Diálogo de archivo nativo (rfd) — ejecutado por el hilo main; el resultado
     // vuelve por SharedInner.dialog_result / dialog_seq (handshake como present).
     FileDialog { save: bool, filter_name: String, filter_exts: Vec<String>, default_name: String },
@@ -859,6 +860,9 @@ struct GuiMain {
     last_present: u64,
     pending_input: bool,   // hubo input desde el último service → despertar idleWait
     monitors_dirty: bool,  // pedir recolección de monitores (al abrir + ScaleFactorChanged)
+    // Cursor custom pendiente de aplicar: se crea en about_to_wait (necesita el
+    // ActiveEventLoop). rgba vacío = restaurar cursor por defecto. None = nada pendiente.
+    pending_cursor: Option<(Vec<u8>, u32, u32, u32, u32)>,
 }
 
 impl GuiMain {
@@ -896,6 +900,7 @@ impl GuiMain {
             last_present: 0,
             pending_input: false,
             monitors_dirty: true,
+            pending_cursor: None,
         }
     }
 
@@ -1058,6 +1063,11 @@ impl GuiMain {
                             let icon = if rgba.is_empty() { None } else { Icon::from_rgba(rgba, w, h).ok() };
                             win.set_window_icon(icon);
                         }
+                    }
+                    // El cursor custom necesita el ActiveEventLoop (create_custom_cursor),
+                    // que no está aquí: lo dejamos pendiente y se aplica en about_to_wait.
+                    GuiCmd::SetCustomCursor(rgba, w, h, hx, hy) => {
+                        self.pending_cursor = Some((rgba, w, h, hx, hy));
                     }
                     GuiCmd::FileDialog { save, filter_name, filter_exts, default_name } => {
                         pending_dialog = Some((g.dialog_seq, save, filter_name, filter_exts, default_name));
@@ -1232,6 +1242,17 @@ impl ApplicationHandler for GuiMain {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.ensure_window(event_loop);
+        // Aplicar un cursor custom pendiente: requiere el ActiveEventLoop para crearlo.
+        if let Some((rgba, w, h, hx, hy)) = self.pending_cursor.take() {
+            if let Some(win) = &self.window {
+                if rgba.is_empty() {
+                    win.set_cursor(CursorIcon::Default);
+                } else if let Ok(src) = CustomCursor::from_rgba(rgba, w as u16, h as u16, hx as u16, hy as u16) {
+                    let cursor = event_loop.create_custom_cursor(src);
+                    win.set_cursor(cursor);
+                }
+            }
+        }
     }
 
     // Despertador del intérprete (proxy.send_event en present()): solo necesita sacar al
@@ -2299,6 +2320,41 @@ impl super::Evaluator {
                             GuiCmd::SetWindowIcon(rgba.into_raw(), w, h)
                         }
                         Err(e) => { eprintln!("❌ ERROR: Gui.setWindowIcon: {}", e); return EvalResult::Error; }
+                    }
+                };
+                if let Some(host) = host() {
+                    host.inner.lock().unwrap().cmds.push_back(cmd);
+                    host.cv.notify_all();
+                }
+                EvalResult::Value(self.null_ref)
+            }
+            // Cursor del mouse desde un archivo de imagen, con punto caliente (hotspot).
+            // Gui.setCursorImage(path, hotspotX, hotspotY); "" = restaurar el cursor por defecto.
+            "setCursorImage" => {
+                if dot_call.arguments.len() != 3 {
+                    eprintln!("❌ ERROR: Gui.setCursorImage(path, hotspotX, hotspotY) requires 3 arguments");
+                    return EvalResult::Error;
+                }
+                let path = match self.gui_str_arg(&dot_call.arguments[0]) {
+                    Some(s) => s,
+                    None => { eprintln!("❌ ERROR: Gui.setCursorImage path must be a string"); return EvalResult::Error; }
+                };
+                let hx = self.gui_int_arg(&dot_call.arguments[1]);
+                let hy = self.gui_int_arg(&dot_call.arguments[2]);
+                let (hx, hy) = match (hx, hy) {
+                    (Some(a), Some(b)) => (a.max(0) as u32, b.max(0) as u32),
+                    _ => { eprintln!("❌ ERROR: Gui.setCursorImage hotspotX/hotspotY must be integers"); return EvalResult::Error; }
+                };
+                let cmd = if path.is_empty() {
+                    GuiCmd::SetCustomCursor(Vec::new(), 0, 0, 0, 0)
+                } else {
+                    match image::open(&path) {
+                        Ok(img) => {
+                            let rgba = img.to_rgba8();
+                            let (w, h) = (rgba.width(), rgba.height());
+                            GuiCmd::SetCustomCursor(rgba.into_raw(), w, h, hx.min(w.saturating_sub(1)), hy.min(h.saturating_sub(1)))
+                        }
+                        Err(e) => { eprintln!("❌ ERROR: Gui.setCursorImage: {}", e); return EvalResult::Error; }
                     }
                 };
                 if let Some(host) = host() {
