@@ -711,6 +711,99 @@ impl GuiState {
         }
     }
 
+    /// Línea de grosor `width` px: estampa discos antialiased a lo largo del trazo
+    /// (extremos y juntas redondeados). width<=1 cae a draw_line (1px exacto).
+    fn draw_thick_line(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, width: i32, color: u32) {
+        if width <= 1 {
+            self.draw_line(x0, y0, x1, y1, color);
+            return;
+        }
+        let r = width / 2;
+        let dx = (x1 - x0).abs();
+        let dy = -(y1 - y0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+        let (mut x, mut y) = (x0, y0);
+        loop {
+            self.fill_circle(x, y, r, color);
+            if x == x1 && y == y1 { break; }
+            let e2 = 2 * err;
+            if e2 >= dy { err += dy; x += sx; }
+            if e2 <= dx { err += dx; y += sy; }
+        }
+    }
+
+    /// Contorno de círculo de 1px (midpoint), respetando el clip.
+    fn draw_circle(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
+        if r <= 0 { return; }
+        let mut x = r;
+        let mut y = 0;
+        let mut err = 1 - r;
+        while x >= y {
+            self.put(cx + x, cy + y, color);
+            self.put(cx + y, cy + x, color);
+            self.put(cx - y, cy + x, color);
+            self.put(cx - x, cy + y, color);
+            self.put(cx - x, cy - y, color);
+            self.put(cx - y, cy - x, color);
+            self.put(cx + y, cy - x, color);
+            self.put(cx + x, cy - y, color);
+            y += 1;
+            if err < 0 {
+                err += 2 * y + 1;
+            } else {
+                x -= 1;
+                err += 2 * (y - x) + 1;
+            }
+        }
+    }
+
+    /// Relleno sólido de un polígono arbitrario (regla par-impar, scanline).
+    /// `pts` = vértices en orden; el último se cierra con el primero.
+    fn fill_polygon(&mut self, pts: &[(i32, i32)], color: u32) {
+        if pts.len() < 3 { return; }
+        let (cx0, cy0, cx1, cy1) = self.clip;
+        let mut ymin = i32::MAX;
+        let mut ymax = i32::MIN;
+        for &(_, y) in pts {
+            ymin = ymin.min(y);
+            ymax = ymax.max(y);
+        }
+        ymin = ymin.max(0).max(cy0);
+        ymax = ymax.min(self.height as i32 - 1).min(cy1 - 1);
+        let n = pts.len();
+        let mut xs: Vec<i32> = Vec::new();
+        let mut y = ymin;
+        while y <= ymax {
+            xs.clear();
+            let yf = y as f32 + 0.5;
+            for i in 0..n {
+                let (ax, ay) = pts[i];
+                let (bx, by) = pts[(i + 1) % n];
+                let (ayf, byf) = (ay as f32, by as f32);
+                if (ayf <= yf && byf > yf) || (byf <= yf && ayf > yf) {
+                    let t = (yf - ayf) / (byf - ayf);
+                    xs.push((ax as f32 + t * (bx - ax) as f32).round() as i32);
+                }
+            }
+            xs.sort_unstable();
+            let row = (y as usize) * self.width;
+            let mut k = 0;
+            while k + 1 < xs.len() {
+                let xa = xs[k].max(0).max(cx0);
+                let xb = (xs[k + 1] - 1).min(self.width as i32 - 1).min(cx1 - 1);
+                let mut x = xa;
+                while x <= xb {
+                    self.canvas[row + x as usize] = color;
+                    x += 1;
+                }
+                k += 2;
+            }
+            y += 1;
+        }
+    }
+
     fn draw_image(&mut self, x: i32, y: i32, handle: i64) {
         let img = match self.images.get(&handle) {
             Some(im) => (im.w, im.h, im.px.clone()),
@@ -1976,6 +2069,98 @@ impl super::Evaluator {
                 }
             }
 
+            // Contorno de círculo (1px).
+            "drawCircle" => {
+                if dot_call.arguments.len() != 4 {
+                    eprintln!("❌ ERROR: Gui.drawCircle(cx, cy, radius, color) requires 4 arguments");
+                    return EvalResult::Error;
+                }
+                let mut vals = [0i64; 4];
+                for (i, slot) in vals.iter_mut().enumerate() {
+                    match self.gui_int_arg(&dot_call.arguments[i]) {
+                        Some(v) => *slot = v,
+                        None => { eprintln!("❌ ERROR: Gui.drawCircle requires 4 integers"); return EvalResult::Error; }
+                    }
+                }
+                let color = (vals[3] as u32) & 0x00FF_FFFF;
+                match self.gui_state.as_mut() {
+                    Some(st) => { st.draw_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color); EvalResult::Value(self.null_ref) }
+                    None => { eprintln!("❌ ERROR: Gui.drawCircle: no window open"); EvalResult::Error }
+                }
+            }
+
+            // Línea de grosor configurable (extremos/juntas redondeados, antialiased).
+            "drawLineThick" => {
+                if dot_call.arguments.len() != 6 {
+                    eprintln!("❌ ERROR: Gui.drawLineThick(x0, y0, x1, y1, width, color) requires 6 arguments");
+                    return EvalResult::Error;
+                }
+                let mut vals = [0i64; 6];
+                for (i, slot) in vals.iter_mut().enumerate() {
+                    match self.gui_int_arg(&dot_call.arguments[i]) {
+                        Some(v) => *slot = v,
+                        None => { eprintln!("❌ ERROR: Gui.drawLineThick requires 6 integers"); return EvalResult::Error; }
+                    }
+                }
+                let color = (vals[5] as u32) & 0x00FF_FFFF;
+                match self.gui_state.as_mut() {
+                    Some(st) => { st.draw_thick_line(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, vals[4] as i32, color); EvalResult::Value(self.null_ref) }
+                    None => { eprintln!("❌ ERROR: Gui.drawLineThick: no window open"); EvalResult::Error }
+                }
+            }
+
+            // Polilínea: segmentos conectados a partir de un arreglo plano [x0,y0,x1,y1,…].
+            // Gui.drawPolyline(points, width, color).
+            "drawPolyline" => {
+                if dot_call.arguments.len() != 3 {
+                    eprintln!("❌ ERROR: Gui.drawPolyline(points, width, color) requires 3 arguments");
+                    return EvalResult::Error;
+                }
+                let pts = match self.gui_int_vec_arg(&dot_call.arguments[0]) {
+                    Some(p) => p,
+                    None => { eprintln!("❌ ERROR: Gui.drawPolyline points must be a flat int array [x0,y0,x1,y1,…]"); return EvalResult::Error; }
+                };
+                let width = self.gui_int_arg(&dot_call.arguments[1]);
+                let color = self.gui_int_arg(&dot_call.arguments[2]);
+                let (width, color) = match (width, color) {
+                    (Some(w), Some(c)) => (w.max(1) as i32, (c as u32) & 0x00FF_FFFF),
+                    _ => { eprintln!("❌ ERROR: Gui.drawPolyline requires (int[], int, int)"); return EvalResult::Error; }
+                };
+                match self.gui_state.as_mut() {
+                    Some(st) => {
+                        let mut i = 0;
+                        while i + 3 < pts.len() {
+                            st.draw_thick_line(pts[i] as i32, pts[i + 1] as i32, pts[i + 2] as i32, pts[i + 3] as i32, width, color);
+                            i += 2;
+                        }
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => { eprintln!("❌ ERROR: Gui.drawPolyline: no window open"); EvalResult::Error }
+                }
+            }
+
+            // Polígono relleno (regla par-impar) a partir de un arreglo plano [x0,y0,x1,y1,…].
+            // Gui.fillPolygon(points, color).
+            "fillPolygon" => {
+                if dot_call.arguments.len() != 2 {
+                    eprintln!("❌ ERROR: Gui.fillPolygon(points, color) requires 2 arguments");
+                    return EvalResult::Error;
+                }
+                let pts = match self.gui_int_vec_arg(&dot_call.arguments[0]) {
+                    Some(p) => p,
+                    None => { eprintln!("❌ ERROR: Gui.fillPolygon points must be a flat int array [x0,y0,x1,y1,…]"); return EvalResult::Error; }
+                };
+                let color = match self.gui_int_arg(&dot_call.arguments[1]) {
+                    Some(c) => (c as u32) & 0x00FF_FFFF,
+                    None => { eprintln!("❌ ERROR: Gui.fillPolygon color must be an integer"); return EvalResult::Error; }
+                };
+                let verts: Vec<(i32, i32)> = pts.chunks_exact(2).map(|c| (c[0] as i32, c[1] as i32)).collect();
+                match self.gui_state.as_mut() {
+                    Some(st) => { st.fill_polygon(&verts, color); EvalResult::Value(self.null_ref) }
+                    None => { eprintln!("❌ ERROR: Gui.fillPolygon: no window open"); EvalResult::Error }
+                }
+            }
+
             "setImePosition" => {
                 if dot_call.arguments.len() != 2 {
                     eprintln!("❌ ERROR: Gui.setImePosition(x, y) requires 2 arguments");
@@ -2622,6 +2807,27 @@ impl super::Evaluator {
         match self.eval_expression(expr) {
             EvalResult::Value(v) => match self.resolve(v).cloned() {
                 Some(ObjectData::Str(s)) => Some(s),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Lee un argumento que es un arreglo plano de enteros → Vec<i64> (p.ej. puntos
+    /// [x0,y0,x1,y1,…] para polilíneas/polígonos).
+    fn gui_int_vec_arg(&mut self, expr: &ast::Expression) -> Option<Vec<i64>> {
+        match self.eval_expression(expr) {
+            EvalResult::Value(v) => match self.resolve(v) {
+                Some(ObjectData::Array { elements, .. }) => {
+                    let mut out = Vec::with_capacity(elements.len());
+                    for e in elements {
+                        match e {
+                            OwnedValue::Integer(n) => out.push(*n),
+                            _ => return None,
+                        }
+                    }
+                    Some(out)
+                }
                 _ => None,
             },
             _ => None,
