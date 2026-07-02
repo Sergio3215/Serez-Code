@@ -16,8 +16,12 @@ test("OS.pid returns a positive integer", () => {
 
 test("OS.exec returns ExecResult with stdout stderr code", () => {
     let result = null;
+    // `echo` is a shell builtin on Windows (not an executable); route through cmd.
+    let cmd = "echo";
+    let args = ["hello"];
+    if (OS.platform() == "windows") { cmd = "cmd"; args = ["/c", "echo", "hello"]; }
     unsafe {
-        result = OS.exec("echo", ["hello"]);
+        result = OS.exec(cmd, args);
     }
     assert(result != null, "exec result should not be null");
     assert(result.code is int, "code should be an integer");
@@ -28,8 +32,11 @@ test("OS.exec returns ExecResult with stdout stderr code", () => {
 
 test("OS.exec stdout contains expected output", () => {
     let result = null;
+    let cmd = "echo";
+    let args = ["serez-test"];
+    if (OS.platform() == "windows") { cmd = "cmd"; args = ["/c", "echo", "serez-test"]; }
     unsafe {
-        result = OS.exec("echo", ["serez-test"]);
+        result = OS.exec(cmd, args);
     }
     assert(result.stdout.includes("serez-test"), "stdout should contain echoed text");
 });

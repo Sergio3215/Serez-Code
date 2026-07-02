@@ -419,7 +419,6 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
 
-                let arr_data = self.resolve(arr_ref).unwrap().clone();
                 let idx_data = self.resolve(idx_ref).unwrap().clone();
                 // A DateField indexes as its integer value (e.g. arr[date.month] = x).
                 let idx_data = match idx_data {
@@ -427,83 +426,87 @@ impl super::Evaluator {
                     other => other,
                 };
 
-                match arr_data {
-                    ObjectData::Array { element_type, mut elements } => {
+                // Peek the container kind + cheap metadata WITHOUT cloning its contents,
+                // so we can mutate the target slot in place (O(1) for arrays; no extra
+                // full-container copy for dicts).
+                enum Container { Array(Option<String>, usize), Dict(String, String), Other }
+                let container = match self.resolve(arr_ref) {
+                    Some(ObjectData::Array { element_type, elements }) =>
+                        Container::Array(element_type.clone(), elements.len()),
+                    Some(ObjectData::Dict { key_type, value_type, .. }) =>
+                        Container::Dict(key_type.clone(), value_type.clone()),
+                    _ => Container::Other,
+                };
+
+                match container {
+                    Container::Array(element_type, len) => {
                         let i = match idx_data {
                             ObjectData::Integer(i) => i,
-                            _ => {
-                                eprintln!("❌ ERROR: Array index must be an integer");
-                                return EvalResult::Error;
-                            }
+                            _ => return self.rt_err_kind("TypeError", "Array index must be an integer"),
                         };
 
-                        if i < 0 || i as usize >= elements.len() {
-                            eprintln!("❌ ERROR: Index out of bounds");
-                            return EvalResult::Error;
+                        if i < 0 || i as usize >= len {
+                            return self.rt_err_kind("IndexOutOfBounds", "Index out of bounds");
                         }
 
                         if let Some(ref et) = element_type {
                             let val_data = self.resolve(val_ref).unwrap();
                             if !type_matches(et, val_data) {
-                                eprintln!(
-                                    "❌ TYPE ERROR: Cannot assign '{}' to [{}] array element",
-                                    val_data.type_name(), et
-                                );
-                                return EvalResult::Error;
+                                let (tn, et) = (val_data.type_name().to_string(), et.clone());
+                                return self.rt_err_kind("TypeError", format!(
+                                    "Cannot assign '{}' to [{}] array element", tn, et));
                             }
                         }
 
                         let owned = self.extract(val_ref);
-                        elements[i as usize] = owned;
-
-                        match arr_ref.region {
-                            RegionId::Global => {
-                                self.global_arena.update(arr_ref.index, ObjectData::Array { element_type, elements });
-                            }
-                            RegionId::Scoped => {
-                                self.scopes.arena.update(arr_ref.index, ObjectData::Array { element_type, elements });
-                            }
+                        let arena = match arr_ref.region {
+                            RegionId::Global => &mut self.global_arena,
+                            RegionId::Scoped => &mut self.scopes.arena,
+                        };
+                        if let Some(ObjectData::Array { elements, .. }) = arena.get_mut(arr_ref.index) {
+                            elements[i as usize] = owned;   // in place: no full-array copy
                         }
                     }
 
-                    ObjectData::Dict { key_type, value_type, mut entries } => {
+                    Container::Dict(key_type, value_type) => {
                         {
                             let val_data = self.resolve(val_ref).unwrap();
                             if !type_matches(&value_type, val_data) {
-                                eprintln!(
-                                    "❌ TYPE ERROR: Cannot assign '{}' to <{},{}> dict value",
-                                    val_data.type_name(), key_type, value_type
-                                );
-                                return EvalResult::Error;
+                                let tn = val_data.type_name().to_string();
+                                return self.rt_err_kind("TypeError", format!(
+                                    "Cannot assign '{}' to <{},{}> dict value", tn, key_type, value_type));
                             }
                         }
                         let search_key = obj_data_to_key_str(&idx_data);
                         let owned_val = self.extract(val_ref);
-
-                        let mut replaced = false;
-                        for entry in entries.iter_mut() {
-                            let key_str = match &entry.0 {
-                                OwnedValue::Str(s) => s.clone(),
-                                OwnedValue::Integer(i) => i.to_string(),
-                                OwnedValue::Decimal(d) => d.to_string(),
-                                OwnedValue::Boolean(b) => b.to_string(),
-                                _ => format!("{:?}", entry.0),
-                            };
-                            if key_str == search_key {
-                                entry.1 = owned_val.clone();
-                                replaced = true;
-                                break;
+                        let arena = match arr_ref.region {
+                            RegionId::Global => &mut self.global_arena,
+                            RegionId::Scoped => &mut self.scopes.arena,
+                        };
+                        if let Some(ObjectData::Dict { entries, .. }) = arena.get_mut(arr_ref.index) {
+                            let mut replaced = false;
+                            for entry in entries.iter_mut() {
+                                let key_str = match &entry.0 {
+                                    OwnedValue::Str(s) => s.clone(),
+                                    OwnedValue::Integer(i) => i.to_string(),
+                                    OwnedValue::Decimal(d) => d.to_string(),
+                                    OwnedValue::Boolean(b) => b.to_string(),
+                                    _ => format!("{:?}", entry.0),
+                                };
+                                if key_str == search_key {
+                                    entry.1 = owned_val.clone();
+                                    replaced = true;
+                                    break;
+                                }
+                            }
+                            if !replaced {
+                                entries.push((OwnedValue::Str(search_key), owned_val));
                             }
                         }
-                        if !replaced {
-                            entries.push((OwnedValue::Str(search_key), owned_val));
-                        }
-                        self.update_dict(arr_ref, key_type, value_type, entries);
                     }
 
-                    _ => {
-                        eprintln!("❌ ERROR: Target is not an array or dict");
-                        return EvalResult::Error;
+                    Container::Other => {
+                        return self.rt_err_kind("TypeError", "Target is not an array or dict");
                     }
                 }
 

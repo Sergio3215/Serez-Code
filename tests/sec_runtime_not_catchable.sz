@@ -1,6 +1,20 @@
-// sec_runtime_not_catchable.sz — runtime errors must NOT be suppressible via try/catch
-// Division by zero, OOB access, and null method calls are EvalResult::Error (not Throw),
-// so they terminate execution even inside try/catch blocks.
+// sec_runtime_not_catchable.sz — SECURITY errors must NOT be suppressible via try/catch.
+//
+// Permission denials, `unsafe`-required gates and resource limits are fatal
+// (they do not mark the error as recoverable), so a try/catch cannot trap them
+// and keep running — this preserves the sandbox invariant.
+//
+// NOTE: ordinary *programming* errors (index out of range, division by zero,
+// type mismatch) ARE catchable on purpose — see unit_exceptions_advanced.sz.
+// This test only pins down the security-relevant, non-catchable kind.
 
-let arr = [1, 2, 3];
-let x = arr[99];  // OOB: should produce ❌ even inside try/catch context
+// Memory.alloc requires an unsafe { } block. Calling it OUTSIDE unsafe is a
+// security gate: it must abort with ❌ even though it sits inside try/catch,
+// and the catch must NOT swallow it.
+try {
+    let p = Memory.alloc(16);
+    out "unreachable: security gate was bypassed";
+} catch (e) {
+    out "unreachable: security error must not be catchable";
+}
+out "unreachable: execution must have aborted before here";

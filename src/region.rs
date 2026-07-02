@@ -207,6 +207,12 @@ impl Arena {
         self.storage.get(index)
     }
 
+    /// Mutable access to a slot. Lets callers mutate a container in place
+    /// (e.g. one array element) instead of cloning + `update`ing the whole value.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut ObjectData> {
+        self.storage.get_mut(index)
+    }
+
     pub fn update(&mut self, index: usize, data: ObjectData) {
         if let Some(slot) = self.storage.get_mut(index) {
             *slot = data;

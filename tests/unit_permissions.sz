@@ -18,8 +18,12 @@ test("permissions accumulate across multiple use permissions blocks", () => {
 test("unsafe block gates dangerous operations within permitted namespace", () => {
     use permissions { OS }
     let result = null;
+    // `echo` is a shell builtin on Windows (not an executable); route through cmd.
+    let cmd = "echo";
+    let args = ["unsafe-test"];
+    if (OS.platform() == "windows") { cmd = "cmd"; args = ["/c", "echo", "unsafe-test"]; }
     unsafe {
-        result = OS.exec("echo", ["unsafe-test"]);
+        result = OS.exec(cmd, args);
     }
     assert(result != null, "exec should work inside unsafe with OS permission");
     assert(result.code == 0, "echo should succeed");

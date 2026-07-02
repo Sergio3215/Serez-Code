@@ -94,7 +94,39 @@ impl super::Evaluator {
     // ── try / catch / finally ─────────────────────────────────────────────────
 
     pub(super) fn eval_try(&mut self, try_stmt: &ast::TryStatement) -> EvalResult {
+        let has_catch = try_stmt.catch_body.is_some();
+        // While a catch handler is in scope, recoverable runtime errors are
+        // suppressed on stderr (they will be handled, not aborted).
+        if has_catch {
+            self.try_depth += 1;
+            self.last_error = None;
+        }
         let body_result = self.eval_block(&try_stmt.body);
+        if has_catch {
+            self.try_depth -= 1;
+        }
+
+        // A *recoverable* runtime Error inside a try-with-catch becomes a catchable
+        // value (its message as a string), so user code can handle ordinary
+        // programming faults (index out of range, type mismatch, division by zero)
+        // exactly like an explicit `throw`. Errors that DON'T set `last_error`
+        // (permission denials, `unsafe`-required gates, resource limits) are NOT
+        // recoverable: they stay fatal and abort, preserving the sandbox invariant.
+        let body_result = match body_result {
+            EvalResult::Error if has_catch && self.last_error.is_some() => {
+                let (kind, msg) = self.last_error.take().unwrap();
+                // Bind a structured Error object: e.message, e.kind (dot-readable).
+                let err_ref = self.alloc(ObjectData::Instance {
+                    class_name: "Error".to_string(),
+                    fields: vec![
+                        ("message".to_string(), OwnedValue::Str(msg)),
+                        ("kind".to_string(),    OwnedValue::Str(kind)),
+                    ],
+                });
+                EvalResult::Throw(err_ref)
+            }
+            other => other,
+        };
 
         let result_after_catch = match body_result {
             EvalResult::Throw(thrown_ref) => {

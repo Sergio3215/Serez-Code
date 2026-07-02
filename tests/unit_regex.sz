@@ -1,0 +1,105 @@
+// unit_regex.sz — tests for the Regex namespace (dependency-free engine).
+// Patterns use raw strings r"..." so backslashes reach the engine verbatim.
+
+// ── test / anchors ────────────────────────────────────────────────────────────
+test("test matches anywhere", () => {
+    assert(Regex.test(r"\d+", "abc123") == true, "digits present");
+    assert(Regex.test(r"\d+", "abcdef") == false, "no digits");
+});
+
+test("anchors ^ and $", () => {
+    assert(Regex.test(r"^\d+$", "12345") == true, "fully numeric");
+    assert(Regex.test(r"^\d+$", "12a45") == false, "not fully numeric");
+    assert(Regex.test(r"^abc", "abcdef") == true, "starts with abc");
+    assert(Regex.test(r"def$", "abcdef") == true, "ends with def");
+});
+
+// ── character classes ─────────────────────────────────────────────────────────
+test("character classes and ranges", () => {
+    assert(Regex.test(r"[a-c]+", "cab") == true, "range a-c");
+    assert(Regex.test(r"[^0-9]", "123") == false, "negated class no letters");
+    assert(Regex.test(r"[0-9]", "a1") == true, "class finds a digit");
+});
+
+test("shorthand classes \\d \\w \\s", () => {
+    assert(Regex.test(r"\w+", "hello_1") == true, "word chars");
+    assert(Regex.test(r"\s", "a b") == true, "has whitespace");
+    assert(Regex.test(r"\s", "ab") == false, "no whitespace");
+});
+
+// ── quantifiers ───────────────────────────────────────────────────────────────
+test("quantifiers and bounded repetition", () => {
+    let m = Regex.match(r"a{2,3}", "aaaa");
+    assert(m[0] == "aaa", "bounded greedy takes 3");
+    let m2 = Regex.match(r"a{2}", "aaaa");
+    assert(m2[0] == "aa", "exact count");
+    assert(Regex.test(r"ab?c", "ac") == true, "optional b");
+    assert(Regex.test(r"ab?c", "abc") == true, "present b");
+});
+
+test("greedy vs lazy", () => {
+    let g = Regex.match(r"a.*b", "axbxb");
+    assert(g[0] == "axbxb", "greedy to last b");
+    let l = Regex.match(r"a.*?b", "axbxb");
+    assert(l[0] == "axb", "lazy to first b");
+});
+
+// ── groups + alternation ──────────────────────────────────────────────────────
+test("capturing groups", () => {
+    let m = Regex.match(r"(\w+)@(\w+)\.(\w+)", "joe@example.com");
+    assert(m[0] == "joe@example.com", "whole match");
+    assert(m[1] == "joe", "group 1");
+    assert(m[2] == "example", "group 2");
+    assert(m[3] == "com", "group 3");
+});
+
+test("non-capturing group and alternation", () => {
+    let m = Regex.match(r"(?:ab)+(c)", "ababc");
+    assert(m[0] == "ababc", "repeated non-capturing group");
+    assert(m[1] == "c", "only real group captured");
+    assert(Regex.test(r"cat|dog|bird", "I like dogs") == true, "alternation");
+});
+
+test("match returns null when no match", () => {
+    assert(Regex.match(r"xyz", "abc") == null, "no match is null");
+});
+
+// ── findAll / split / replace ──────────────────────────────────────────────────
+test("findAll returns all matches", () => {
+    let all = Regex.findAll(r"\d+", "a1b22c333");
+    assert(all.length() == 3, "three number runs");
+    assert(all[0] == "1", "first");
+    assert(all[1] == "22", "second");
+    assert(all[2] == "333", "third");
+});
+
+test("split on a pattern", () => {
+    let parts = Regex.split(r",\s*", "a, b,c ,  d");
+    assert(parts.length() == 4, "four parts");
+    assert(parts[0] == "a", "part 0");
+    assert(parts[3] == "d", "part 3");
+});
+
+test("replace all with literal", () => {
+    assert(Regex.replace(r"\d+", "a1b22c333", "#") == "a#b#c#", "replace runs with #");
+    assert(Regex.replace(r"[^0-9]", "a1b2c3", "") == "123", "strip non-digits");
+});
+
+test("replace with group backreferences", () => {
+    assert(Regex.replace(r"(\w+)@(\w+)", "joe@corp", "$2.$1") == "corp.joe", "swap groups");
+    assert(Regex.replace(r"\d", "x1y", "[$&]") == "x[1]y", "$& is whole match");
+    assert(Regex.replace(r"a", "a", "$$") == "$", "$$ is literal dollar");
+});
+
+// ── invalid pattern is a catchable programming error ────────────────────────────
+test("invalid pattern is catchable", () => {
+    let caught = false;
+    try {
+        let x = Regex.test(r"(unbalanced", "abc");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "unbalanced group throws a catchable error");
+});
+
+summary();

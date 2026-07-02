@@ -200,28 +200,28 @@ impl super::Evaluator {
                 let result = match op {
                     "+" => match l.checked_add(r) {
                         Some(v) => v,
-                        None => { eprintln!("❌ ERROR: Integer overflow"); return EvalResult::Error; }
+                        None => return self.rt_err_kind("Overflow", "Integer overflow"),
                     },
                     "-" => match l.checked_sub(r) {
                         Some(v) => v,
-                        None => { eprintln!("❌ ERROR: Integer overflow"); return EvalResult::Error; }
+                        None => return self.rt_err_kind("Overflow", "Integer overflow"),
                     },
                     "*" => match l.checked_mul(r) {
                         Some(v) => v,
-                        None => { eprintln!("❌ ERROR: Integer overflow"); return EvalResult::Error; }
+                        None => return self.rt_err_kind("Overflow", "Integer overflow"),
                     },
                     "/" => {
-                        if r == 0 { eprintln!("❌ ERROR: Division by zero"); return EvalResult::Error; }
+                        if r == 0 { return self.rt_err_kind("DivisionByZero", "Division by zero"); }
                         match l.checked_div(r) {
                             Some(v) => v,
-                            None => { eprintln!("❌ ERROR: Integer overflow"); return EvalResult::Error; }
+                            None => return self.rt_err_kind("Overflow", "Integer overflow"),
                         }
                     }
                     "%" => {
-                        if r == 0 { eprintln!("❌ ERROR: Modulus operator by zero"); return EvalResult::Error; }
+                        if r == 0 { return self.rt_err_kind("DivisionByZero", "Modulus by zero"); }
                         match l.checked_rem(r) {
                             Some(v) => v,
-                            None => { eprintln!("❌ ERROR: Modulo overflow (i64::MIN % -1 is undefined)"); return EvalResult::Error; }
+                            None => return self.rt_err_kind("Overflow", "Modulo overflow (i64::MIN % -1 is undefined)"),
                         }
                     }
                     "**" => {
@@ -299,11 +299,11 @@ impl super::Evaluator {
                     "-" => ObjectData::Decimal(l - r),
                     "*" => ObjectData::Decimal(l * r),
                     "/" => {
-                        if r == 0.0 { eprintln!("❌ ERROR: Division by zero"); return EvalResult::Error; }
+                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Division by zero"); }
                         ObjectData::Decimal(l / r)
                     }
                     "%" => {
-                        if r == 0.0 { eprintln!("❌ ERROR: Modulus by zero"); return EvalResult::Error; }
+                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Modulus by zero"); }
                         ObjectData::Decimal(l % r)
                     }
                     "**" => ObjectData::Decimal(l.powf(r)),
@@ -327,11 +327,11 @@ impl super::Evaluator {
                     "-" => ObjectData::Decimal(l - r),
                     "*" => ObjectData::Decimal(l * r),
                     "/" => {
-                        if r == 0.0 { eprintln!("❌ ERROR: Division by zero"); return EvalResult::Error; }
+                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Division by zero"); }
                         ObjectData::Decimal(l / r)
                     }
                     "%" => {
-                        if r == 0.0 { eprintln!("❌ ERROR: Modulus by zero"); return EvalResult::Error; }
+                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Modulus by zero"); }
                         ObjectData::Decimal(l % r)
                     }
                     "**" => ObjectData::Decimal(l.powf(r)),
@@ -355,11 +355,11 @@ impl super::Evaluator {
                     "-" => ObjectData::Decimal(l - r),
                     "*" => ObjectData::Decimal(l * r),
                     "/" => {
-                        if r == 0.0 { eprintln!("❌ ERROR: Division by zero"); return EvalResult::Error; }
+                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Division by zero"); }
                         ObjectData::Decimal(l / r)
                     }
                     "%" => {
-                        if r == 0.0 { eprintln!("❌ ERROR: Modulus by zero"); return EvalResult::Error; }
+                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Modulus by zero"); }
                         ObjectData::Decimal(l % r)
                     }
                     "**" => ObjectData::Decimal(l.powf(r)),

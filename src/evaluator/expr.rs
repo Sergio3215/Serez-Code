@@ -441,9 +441,8 @@ impl super::Evaluator {
                     }
                     (ObjectData::Array { elements, .. }, ObjectData::Integer(i)) => {
                         if *i < 0 || *i as usize >= elements.len() {
-                            eprintln!("❌ ERROR: Index out of bounds");
-                            self.print_call_stack();
-                            EvalResult::Error
+                            let (i, len) = (*i, elements.len());
+                            self.rt_err_kind("IndexOutOfBounds", format!("Index out of bounds: {} (length {})", i, len))
                         } else {
                             EvalResult::Value(self.plant(elements[*i as usize].clone()))
                         }
@@ -466,9 +465,8 @@ impl super::Evaluator {
                         }
                     }
                     _ => {
-                        eprintln!("❌ ERROR: Index operator not supported for these types");
-                        self.print_call_stack();
-                        EvalResult::Error
+                        let tn = left_data.type_name().to_string();
+                        self.rt_err_kind("TypeError", format!("Index operator not supported for type '{}'", tn))
                     }
                 }
             }
@@ -527,6 +525,9 @@ impl super::Evaluator {
                     // ── Namespace dispatch (Math / File / JSON) ───────────────
                     if name == "Math" {
                         return self.eval_math_namespace(dot_call);
+                    }
+                    if name == "Regex" {
+                        return self.eval_regex_namespace(dot_call);
                     }
                     if name == "File" {
                         return self.eval_file_namespace(dot_call);

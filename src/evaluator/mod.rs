@@ -22,6 +22,7 @@ pub(crate) mod namespaces_datetime;
 mod namespaces_os;
 pub(crate) mod namespaces_gui;
 mod namespaces_task;
+mod namespaces_regex;
 
 
 use crate::ast::{self, Program, Statement};
@@ -142,6 +143,14 @@ pub struct Evaluator {
     // ── Task context ──────────────────────────────────────────────────────────
     task_id: Option<i64>,
     task_arg: Option<String>,
+    // ── Recoverable runtime errors (catchable by try/catch) ────────────────────
+    // (kind, message) of the most recent recoverable runtime error, recorded by
+    // `rt_err`/`rt_err_kind`. `eval_try` reads it to build the structured Error
+    // object bound in `catch (e)`. `try_depth` > 0 means we are inside a try body
+    // that has a catch handler, so `rt_err` suppresses the stderr noise (the error
+    // is handled, not aborted).
+    last_error: Option<(String, String)>,
+    try_depth: usize,
 }
 
 // ── Free-identifier collection (for consistent lambda capture, B-83) ──────────
@@ -288,7 +297,31 @@ impl Evaluator {
             spawned: Vec::new(),
             task_id: None,
             task_arg: None,
+            last_error: None,
+            try_depth: 0,
         }
+    }
+
+    /// Raise a recoverable runtime error with the default kind ("RuntimeError").
+    pub(crate) fn rt_err(&mut self, msg: impl Into<String>) -> EvalResult {
+        self.rt_err_kind("RuntimeError", msg)
+    }
+
+    /// Raise a recoverable runtime error tagged with a `kind` (e.g.
+    /// "IndexOutOfBounds", "DivisionByZero", "TypeError"). Records the (kind,
+    /// message) pair so an enclosing `try/catch` can bind a structured Error
+    /// object (`e.message`, `e.kind`). Prints to stderr only when NOT inside a
+    /// try-with-catch, so caught errors don't spam the console. Always returns
+    /// `EvalResult::Error`, which `eval_try` intercepts for recoverable errors.
+    pub(crate) fn rt_err_kind(&mut self, kind: impl Into<String>, msg: impl Into<String>) -> EvalResult {
+        let m = msg.into();
+        let k = kind.into();
+        if self.try_depth == 0 {
+            eprintln!("❌ ERROR: {}", m);
+            self.print_call_stack();
+        }
+        self.last_error = Some((k, m));
+        EvalResult::Error
     }
 
     /// Read-only diagnostic: current sizes of the two arenas (object slots).
@@ -1136,6 +1169,9 @@ fn type_matches(expected: &str, data: &ObjectData) -> bool {
             type_matches(base, d)
         }
         (t, ObjectData::Instance { class_name, .. }) => t == class_name.as_str(),
+        // `x is function` — closures and named functions both report as "function"
+        // (matches type_of), so the introspection is symmetric.
+        ("function", ObjectData::Function { .. }) => true,
         ("DateTime", ObjectData::DateTime { .. }) => true,
         // A DateField behaves as an int, so it satisfies an `int` parameter.
         ("int", ObjectData::DateField { .. }) => true,

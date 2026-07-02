@@ -209,4 +209,70 @@ test("inner catch handles its own, outer handles remaining", () => {
     assert(outer_caught == "outer-error", "outer caught different throw");
 });
 
+// ── Recoverable runtime errors are catchable (programming faults) ──────────────
+// Ordinary programming errors surface as catchable values, like an explicit throw.
+// (Security gates — permission/unsafe/resource — stay fatal: see sec_runtime_not_catchable.)
+
+test("index out of bounds is catchable", () => {
+    let caught = "none";
+    let arr = [1, 2, 3];
+    try {
+        let x = arr[99];
+        caught = "not-thrown";
+    } catch (e) {
+        caught = "caught";
+    }
+    assert(caught == "caught", "OOB read should be catchable");
+});
+
+test("division by zero is catchable", () => {
+    let caught = false;
+    try {
+        let z = 10 / 0;
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "division by zero should be catchable");
+});
+
+test("caught runtime error is a structured object (message + kind)", () => {
+    let msg = "";
+    let kind = "";
+    let arr = [1, 2, 3];
+    try {
+        let x = arr[50];
+    } catch (e) {
+        msg = e.message;
+        kind = e.kind;
+    }
+    assert(msg.length() > 0, "runtime error message is non-empty");
+    assert(msg.includes("bounds"), "message describes the fault");
+    assert(kind == "IndexOutOfBounds", "kind classifies the fault");
+    // Control returns to normal flow after a caught runtime error.
+    let after = 7;
+    assert(after == 7, "execution continues after catch");
+});
+
+test("division by zero error has DivisionByZero kind", () => {
+    let kind = "";
+    try {
+        let z = 1 / 0;
+    } catch (e) {
+        kind = e.kind;
+    }
+    assert(kind == "DivisionByZero", "division reports its kind");
+});
+
+test("runtime error deep in a call chain is catchable", () => {
+    fn int firstOf(any a) { return a[0]; }
+    let caught = false;
+    try {
+        let empty = [];
+        let v = firstOf(empty);
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "error thrown across a function call is catchable");
+});
+
 summary();
