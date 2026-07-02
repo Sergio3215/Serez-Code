@@ -5,6 +5,54 @@ Order: most recent to oldest.
 
 ---
 
+## [Unreleased] — branch `improve` (2026-07-01)
+
+### New: catchable runtime errors + structured `Error` object
+
+- `try/catch` now catches ordinary **programming** errors (index out of range,
+  division/modulo by zero, type mismatches, invalid assignment targets), not just
+  values raised with `throw`. Inside `catch` they bind an **`Error`** object with
+  `.message` and `.kind` (`IndexOutOfBounds`, `DivisionByZero`, `TypeError`,
+  `InvalidAssignTarget`, `Overflow`, `RuntimeError`). `throw "x"` still binds the
+  raw value.
+- **Security and resource-limit errors stay fatal and non-catchable** (permission
+  denials, `unsafe`-required gates, stack overflow / resource guards) — a
+  `try/catch` cannot silently swallow them, preserving the sandbox and DoS
+  protections.
+- String concatenation with an instance (`"x" + e`) now renders it (the `Error`
+  object → its `.message`), while still honouring a user-defined `op_str`/`op_add`.
+
+### New: `Regex` namespace (dependency-free engine)
+
+- `Regex.test / match / findAll / split / replace`. Backtracking engine compiled
+  to bytecode, bounded step budget (no hangs). Supports `. \d \w \s`, classes
+  `[a-z]` `[^…]`, anchors `^ $`, groups `( )` / `(?: )`, alternation `|`, and
+  quantifiers `* + ? {n,m}` (greedy or lazy). Patterns use raw strings `r"…"`.
+  No permission required. Invalid patterns raise a catchable error.
+
+### Changed: `arr[i] = x` is now O(1); nested index-assign is loud
+
+- Array index assignment mutates the element in place (`Arena::get_mut`) instead of
+  copying the whole array — a fill loop goes from O(N²) to O(N). Value semantics
+  are unchanged (verified: `let b = a; a[0]=x` does not affect `b`).
+- Assigning into a **temporary** target (`m[i][j] = x` where `m[i]` is a copy,
+  `getArr()[i] = x`, …) previously did nothing silently; it now raises a catchable
+  `InvalidAssignTarget` error. Reassign the whole element instead (`m[i] = inner`).
+
+### Fixed: `x is function`
+
+- `is function` now returns `true` for named functions and lambdas (previously
+  always `false`, though `type_of` already reported `"function"`).
+
+### Perf: parallel, cache-friendly matmul
+
+- `Tensor.matmul` rewritten from a naive `ijk` triple loop to a cache-friendly
+  `ikj` order and parallelized across output rows with `std` scoped threads (no
+  external dependency; small matrices stay single-threaded). The autodiff backward
+  pass reuses the same kernel, so training also benefits. Results are bit-identical.
+
+---
+
 ## [6.3.0] — branch `improve` (2026-06-20)
 
 ### New: `DateTime` namespace (calendar date/time)

@@ -450,6 +450,9 @@ out 3.14 is decimal;  // → true
 out null is null;     // → true
 out [1,2] is array;   // → true
 
+let f = (x) => x + 1;
+out f is function;    // → true (named functions and lambdas both match)
+
 fn string dispatch(any v) {
     if (v is int)     { return "int:" + v; }
     if (v is string)  { return "str:" + v; }
@@ -1047,6 +1050,27 @@ throw 42;
 throw { code: 404, msg: "Not found" };
 ```
 
+**Catchable runtime errors.** Ordinary programming errors — index out of range,
+division by zero, type mismatches, invalid assignment targets — are catchable
+too. Inside `catch` they bind a structured **`Error`** object with `.message`
+(human-readable) and `.kind` (a category such as `IndexOutOfBounds`,
+`DivisionByZero`, `TypeError`, `InvalidAssignTarget`, `Overflow`, `RuntimeError`).
+Concatenating the error with a string uses its message:
+
+```serez
+let a = [1, 2, 3];
+try {
+    let x = a[99];
+} catch (e) {
+    out e.kind;         // → IndexOutOfBounds
+    out e.message;      // → Index out of bounds: 99 (length 3)
+    out "boom: " + e;   // → boom: Index out of bounds: 99 (length 3)
+}
+```
+
+A thrown value keeps its original type (`throw "x"` binds the string `"x"`); only
+errors raised by the runtime bind an `Error` object.
+
 `catch` is optional. `finally` is optional. Both together are also valid:
 
 ```serez
@@ -1057,7 +1081,14 @@ try {
 }
 ```
 
-Unhandled exceptions (no enclosing `try`) terminate the program with a runtime error message. Runtime errors (stack overflow, out-of-bounds, etc.) are **not** catchable via `try/catch`.
+Unhandled exceptions (no enclosing `try`) terminate the program with a runtime
+error message.
+
+**Not catchable — fatal by design.** Security and resource-limit violations stay
+fatal and bypass `try/catch`: permission denials, operations that require an
+`unsafe {}` block, stack overflow and other resource guards always abort. This
+guarantees a script can never silently swallow a security or denial-of-service
+condition.
 
 ---
 
@@ -1209,6 +1240,21 @@ Index must be a non-negative integer within bounds — out-of-range mutations ar
 ```serez
 let a = [1, 2, 3];
 a[5] = 0;   // ❌ ERROR: Index out of bounds
+```
+
+Only assignments to a **variable** (`a[i] = x`) or an **object field**
+(`obj.field[i] = x`) persist, because reading anything else yields a copy
+(value semantics). A **nested** target like `m[i][j] = x` — where `m[i]` is a
+copy — is rejected loudly with an `InvalidAssignTarget` error (never a silent
+no-op). To update a nested element, rebuild and reassign the whole inner value:
+
+```serez
+let m = [[1, 2], [3, 4]];
+// m[0][1] = 99;              // ❌ ERROR: InvalidAssignTarget (m[0] is a copy)
+let row = m[0];
+row[1] = 99;
+m[0] = row;                   // ✅ reassign the whole element
+out m[0][1];                  // → 99
 ```
 
 #### Arrays from functions
@@ -2271,6 +2317,39 @@ out year + "-" + month + "-" + day  // 2026-6-20
 
 Two `DateTime`s compare by instant (`<`, `>`, `==`, …); arithmetic between two
 dates is not allowed — operate through their fields.
+
+---
+
+### Regex
+
+`Regex` is a dependency-free regular-expression engine. Write patterns as **raw
+strings** (`r"…"`) so backslashes reach the engine verbatim. No permission is
+required (it is pure computation).
+
+```serez
+Regex.test(r"\d+", "abc123");                 // → true   (matches anywhere)
+Regex.test(r"^\d+$", "12345");                // → true   (anchored)
+Regex.match(r"(\w+)@(\w+)\.(\w+)", "joe@x.com"); // → [joe@x.com, joe, x, com]  (or null)
+Regex.findAll(r"\d+", "a1b22c333");           // → [1, 22, 333]
+Regex.split(r",\s*", "a, b,c");               // → [a, b, c]
+Regex.replace(r"\d+", "a1b22", "#");          // → a#b#
+Regex.replace(r"(\w+)@(\w+)", "joe@corp", "$2.$1"); // → corp.joe
+```
+
+| Method | Returns |
+|--------|---------|
+| `Regex.test(pattern, text)` | `bool` — does it match anywhere |
+| `Regex.match(pattern, text)` | `[whole, group1, …]` of the first match, or `null` (absent optional groups are `null`) |
+| `Regex.findAll(pattern, text)` | array of all non-overlapping matches |
+| `Regex.split(pattern, text)` | array split on matches |
+| `Regex.replace(pattern, text, repl)` | string, replacing all matches (`$0`/`$&` = whole match, `$1`…`$9` = groups, `$$` = literal `$`) |
+
+**Supported syntax:** literals, `.` (any char except newline), `\d \D \w \W \s \S`
+and escapes (`\. \\ \n \t \r`), character classes `[abc]` `[a-z]` `[^…]`, anchors
+`^` `$`, groups `( … )` and non-capturing `(?: … )`, alternation `|`, and
+quantifiers `* + ?` and `{n}` `{n,}` `{n,m}` — each optionally lazy (`*?`, `+?`).
+The engine is bounded (step budget) so a pathological pattern returns "no match"
+instead of hanging. An invalid pattern raises a catchable error.
 
 ---
 
