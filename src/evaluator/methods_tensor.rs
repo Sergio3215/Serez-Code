@@ -2,6 +2,53 @@ use crate::ast;
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use super::EvalResult;
 
+// ── Matrix multiply kernel (dependency-free) ──────────────────────────────────
+// Cache-friendly `ikj` loop order (the inner loop walks `b` and `out` contiguously)
+// and, for large products, parallelized across output rows with std scoped threads.
+// The per-output accumulation order is unchanged (l ascending), so results are
+// bit-identical to the previous naive `ijk` loop. Small matrices (serez-ai's
+// typical case) stay single-threaded to avoid thread-spawn overhead.
+const MATMUL_PARALLEL_FLOPS: usize = 262_144; // ~64x64x64 before threading kicks in
+
+pub(crate) fn matmul_kernel(a: &[f64], b: &[f64], m: usize, k: usize, n: usize, out: &mut [f64]) {
+    let flops = m.saturating_mul(n).saturating_mul(k);
+    let threads = if flops >= MATMUL_PARALLEL_FLOPS {
+        std::thread::available_parallelism().map(|p| p.get()).unwrap_or(1).min(m).max(1)
+    } else {
+        1
+    };
+    if threads <= 1 {
+        matmul_rows(a, b, k, n, 0, out);
+        return;
+    }
+    let rows_per = m.div_ceil(threads);
+    std::thread::scope(|s| {
+        let mut start_row = 0usize;
+        for chunk in out.chunks_mut(rows_per * n) {
+            let sr = start_row;
+            s.spawn(move || matmul_rows(a, b, k, n, sr, chunk));
+            start_row += rows_per;
+        }
+    });
+}
+
+// Fill `out` (a contiguous block of output rows starting at global row `start_row`)
+// with A·B for those rows. `out` must be zeroed on entry.
+fn matmul_rows(a: &[f64], b: &[f64], k: usize, n: usize, start_row: usize, out: &mut [f64]) {
+    let rows = out.len() / n;
+    for li in 0..rows {
+        let a_row = (start_row + li) * k;
+        let o = &mut out[li * n..li * n + n];
+        for l in 0..k {
+            let av = a[a_row + l];
+            let bb = &b[l * n..l * n + n];
+            for j in 0..n {
+                o[j] += av * bb[j];
+            }
+        }
+    }
+}
+
 impl super::Evaluator {
     // ── Constructor: new Tensor([rows, cols], fill) ───────────────────────────
     pub(super) fn eval_new_tensor(&mut self, new_expr: &ast::NewExpression) -> EvalResult {
@@ -250,13 +297,7 @@ impl super::Evaluator {
                             return EvalResult::Error;
                         }
                         let mut result = vec![0.0f64; m * n];
-                        for i in 0..m {
-                            for j in 0..n {
-                                let mut acc = 0.0f64;
-                                for l in 0..k { acc += data[i * k + l] * d2[l * n + j]; }
-                                result[i * n + j] = acc;
-                            }
-                        }
+                        matmul_kernel(&data, &d2, m, k, n, &mut result);
                         let out_ref = self.alloc(ObjectData::Tensor { shape: vec![m, n], data: result, tid: 0 });
                         if self.ad_recording {
                             let a_id = self.ad_tensor_id(tensor_ref);

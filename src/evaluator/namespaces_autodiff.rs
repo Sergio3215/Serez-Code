@@ -237,24 +237,17 @@ impl super::Evaluator {
                         }
                         TapeOp::MatMul { a_id, b_id, a_rows, a_cols, b_cols, a_data, b_data } => {
                             let (m, k, n) = (*a_rows, *a_cols, *b_cols);
-                            // dL/dA[i,j] = sum_l out_grad[i,l] * B[j,l]
+                            // dL/dA = out_grad (m×n) · Bᵀ (n×k). Transpose B (k×n) → Bᵀ (n×k),
+                            // then reuse the shared matmul kernel (same accumulation order → identical result).
+                            let mut bt = vec![0.0f64; n * k];
+                            for j in 0..k { for l in 0..n { bt[l * k + j] = b_data[j * n + l]; } }
                             let mut da = vec![0.0f64; m * k];
-                            for i in 0..m {
-                                for j in 0..k {
-                                    for l in 0..n {
-                                        da[i * k + j] += out_grad[i * n + l] * b_data[j * n + l];
-                                    }
-                                }
-                            }
-                            // dL/dB[j,l] = sum_i A[i,j] * out_grad[i,l]
+                            super::methods_tensor::matmul_kernel(&out_grad, &bt, m, n, k, &mut da);
+                            // dL/dB = Aᵀ (k×m) · out_grad (m×n). Transpose A (m×k) → Aᵀ (k×m).
+                            let mut at = vec![0.0f64; k * m];
+                            for i in 0..m { for j in 0..k { at[j * m + i] = a_data[i * k + j]; } }
                             let mut db = vec![0.0f64; k * n];
-                            for j in 0..k {
-                                for l in 0..n {
-                                    for i in 0..m {
-                                        db[j * n + l] += a_data[i * k + j] * out_grad[i * n + l];
-                                    }
-                                }
-                            }
+                            super::methods_tensor::matmul_kernel(&at, &out_grad, k, m, n, &mut db);
                             Self::accum_grad(&mut self.ad_grads, *a_id, da);
                             Self::accum_grad(&mut self.ad_grads, *b_id, db);
                         }
