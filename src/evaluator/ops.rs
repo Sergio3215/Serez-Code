@@ -9,6 +9,20 @@ use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_st
             obj_data_eq, format_decimal, json_stringify_owned, json_parse,
             operator_to_method_name};
 
+// How an instance renders when concatenated with a string (`"x" + obj`). The
+// built-in Error object (bound in `catch (e)`) renders as its `message`, so the
+// common `"error: " + e` pattern keeps working; any other instance renders as
+// `ClassName{ field: value, ... }`.
+fn instance_concat_str(class_name: &str, fields: &[(String, OwnedValue)]) -> String {
+    if class_name == "Error" {
+        if let Some((_, v)) = fields.iter().find(|(k, _)| k == "message") {
+            return v.display_str();
+        }
+    }
+    let parts: Vec<String> = fields.iter().map(|(k, v)| format!("{}: {}", k, v.display_str())).collect();
+    format!("{}{{ {} }}", class_name, parts.join(", "))
+}
+
 impl super::Evaluator {
     pub(super) fn eval_prefix(&mut self, op: &str, right_ref: ObjectRef, right: ObjectData) -> EvalResult {
         match op {
@@ -544,6 +558,18 @@ impl super::Evaluator {
                     let arg_ref   = self.alloc(right);
                     let arg_owned = self.extract(arg_ref);
                     return self.call_op_method(inst_ref, &class_name, method_name, vec![arg_owned], line, column);
+                }
+
+                // String + instance with NO op_str/op_add overload: render the
+                // instance (built-in Error → its message), so `catch (e) { "x" + e }`
+                // works now that runtime errors bind a structured Error object.
+                if op == "+" {
+                    if let (ObjectData::Str(s), ObjectData::Instance { class_name, fields }) = (&left, &right) {
+                        return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, instance_concat_str(class_name, fields)))));
+                    }
+                    if let (ObjectData::Instance { class_name, fields }, ObjectData::Str(s)) = (&left, &right) {
+                        return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", instance_concat_str(class_name, fields), s))));
+                    }
                 }
 
                 // Cross-type equality: different types are never equal

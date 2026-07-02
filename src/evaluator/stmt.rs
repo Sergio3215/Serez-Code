@@ -376,9 +376,10 @@ impl super::Evaluator {
                 let value = stmt.value.clone();
 
                 // For DotCall targets (this.field[i] = val) we need to writeback after mutation.
-                // A zero-arg DotCall with an Identifier object is a field access, not a method call.
+                // Only a *field access* (no parens) on an Identifier object persists — a
+                // method call like obj.get()[i] returns a temporary and cannot be assigned into.
                 let writeback: Option<(String, String)> = match &target {
-                    Expression::DotCall(dc) if dc.arguments.is_empty() => {
+                    Expression::DotCall(dc) if dc.arguments.is_empty() && !dc.has_parens => {
                         if let Expression::Identifier(obj_name) = dc.object.as_ref() {
                             Some((obj_name.clone(), dc.method.clone()))
                         } else {
@@ -387,6 +388,20 @@ impl super::Evaluator {
                     }
                     _ => None,
                 };
+
+                // Only assignments to a variable (`a[i] = x`) or an object field
+                // (`obj.field[i] = x`) persist, because reading anything else yields a
+                // COPY (value semantics). A nested/temporary target such as `m[i][j] = x`
+                // (where `m[i]` is a copy) or `getArr()[i] = x` would silently do nothing,
+                // so we reject it loudly instead of losing the write. To mutate a nested
+                // element, rebuild and reassign the whole element: `m[i] = updatedInner`.
+                let is_persistable = matches!(&target, Expression::Identifier(_)) || writeback.is_some();
+                if !is_persistable {
+                    return self.rt_err_kind(
+                        "InvalidAssignTarget",
+                        "Cannot assign to an index of a temporary value (e.g. `m[i][j] = x`, where `m[i]` is a copy): only variables and object fields are writable. Rebuild and reassign the whole element instead, e.g. `m[i] = updatedInner`.",
+                    );
+                }
 
                 // Resolve the target array
                 let arr_ref = match &target {

@@ -263,6 +263,21 @@ test("division by zero error has DivisionByZero kind", () => {
     assert(kind == "DivisionByZero", "division reports its kind");
 });
 
+test("nested index assign is a loud catchable error (not a silent no-op)", () => {
+    let m = [[1, 2], [3, 4]];
+    let kind = "";
+    try { m[0][1] = 99; } catch (e) { kind = e.kind; }
+    assert(kind == "InvalidAssignTarget", "m[i][j]=x throws InvalidAssignTarget");
+    assert(m[0][1] == 2, "original value not corrupted");
+});
+
+test("string concatenation with a caught Error uses its message", () => {
+    let s = "";
+    let a = [1];
+    try { let x = a[9]; } catch (e) { s = "boom: " + e; }
+    assert(s.includes("bounds"), "\"...\" + e renders the Error message");
+});
+
 test("runtime error deep in a call chain is catchable", () => {
     fn int firstOf(any a) { return a[0]; }
     let caught = false;
