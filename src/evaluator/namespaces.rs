@@ -20,8 +20,7 @@ impl super::Evaluator {
             }
             "clamp" => {
                 if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Math.clamp(x, min, max) requires 3 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Math.clamp(x, min, max) requires 3 arguments");
                 }
                 let x   = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let mn  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
@@ -33,13 +32,12 @@ impl super::Evaluator {
                         EvalResult::Value(self.alloc(ObjectData::Decimal(xv.max(mnv).min(mxv)))),
                     (Some(ObjectData::Integer(xv)), Some(ObjectData::Integer(mnv)), Some(ObjectData::Decimal(mxv))) =>
                         EvalResult::Value(self.alloc(ObjectData::Decimal((xv as f64).max(mnv as f64).min(mxv)))),
-                    _ => { eprintln!("❌ ERROR: Math.clamp requires numeric arguments"); EvalResult::Error }
+                    _ => self.rt_err_kind("TypeError", "Math.clamp requires numeric arguments"),
                 }
             }
             "sign" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Math.sign(x) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Math.sign(x) requires 1 argument");
                 }
                 let xr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 match self.resolve(xr).cloned() {
@@ -51,7 +49,7 @@ impl super::Evaluator {
                         let s = if v > 0.0 { 1i64 } else if v < 0.0 { -1 } else { 0 };
                         EvalResult::Value(self.alloc(ObjectData::Integer(s)))
                     }
-                    _ => { eprintln!("❌ ERROR: Math.sign requires a numeric argument"); EvalResult::Error }
+                    _ => self.rt_err_kind("TypeError", "Math.sign requires a numeric argument"),
                 }
             }
             // Delegate single-arg math functions to eval_math_builtin
@@ -64,8 +62,8 @@ impl super::Evaluator {
                 self.eval_math_builtin(dot_call.method.as_str(), &dot_call.arguments)
             }
             _ => {
-                eprintln!("❌ ERROR: Unknown Math method '{}'", dot_call.method);
-                EvalResult::Error
+                let m = dot_call.method.clone();
+                self.rt_err_kind("TypeError", format!("Unknown Math method '{}'", m))
             }
         }
     }
@@ -76,94 +74,90 @@ impl super::Evaluator {
         match dot_call.method.as_str() {
             "exists" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: File.exists(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.exists(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.exists requires a string path"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.exists requires a string path"),
                 };
                 let exists = std::path::Path::new(&path).exists();
                 EvalResult::Value(self.alloc(ObjectData::Boolean(exists)))
             }
             "read" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: File.read(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.read(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.read requires a string path"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.read requires a string path"),
                 };
                 const MAX_FILE_READ: u64 = 256 * 1024 * 1024; // 256 MB
                 match std::fs::metadata(&path) {
+                    // Resource limit: stays fatal and non-catchable (DoS protection).
                     Ok(meta) if meta.len() > MAX_FILE_READ => {
                         eprintln!("❌ ERROR: File '{}' exceeds maximum read size of 256 MB", path);
                         return EvalResult::Error;
                     }
-                    Err(e) => { eprintln!("❌ ERROR: File error reading '{}': {}", path, e); return EvalResult::Error; }
+                    Err(e) => return self.rt_err_kind("IOError", format!("File error reading '{}': {}", path, e)),
                     _ => {}
                 }
                 match std::fs::read_to_string(&path) {
                     Ok(content) => EvalResult::Value(self.alloc(ObjectData::Str(content))),
-                    Err(e) => { eprintln!("❌ ERROR: File error reading '{}': {}", path, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("File error reading '{}': {}", path, e)),
                 }
             }
             "write" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: File.write(path, content) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.write(path, content) requires 2 arguments");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let cr = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.write path must be a string"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.write path must be a string"),
                 };
                 let content = self.display(cr);
                 match std::fs::write(&path, &content) {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: File error writing '{}': {}", path, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("File error writing '{}': {}", path, e)),
                 }
             }
             "create" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: File.create(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.create(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.create requires a string path"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.create requires a string path"),
                 };
                 // touch: create if not exists, leave untouched if exists
                 if !std::path::Path::new(&path).exists() {
                     if let Err(e) = std::fs::File::create(&path) {
-                        eprintln!("❌ ERROR: File error creating '{}': {}", path, e);
-                        return EvalResult::Error;
+                        return self.rt_err_kind("IOError", format!("File error creating '{}': {}", path, e));
                     }
                 }
                 EvalResult::Value(self.null_ref)
             }
             "read_asBinary" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: File.read_asBinary(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.read_asBinary(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.read_asBinary requires a string path"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.read_asBinary requires a string path"),
                 };
                 const MAX_BINARY_READ: u64 = 256 * 1024 * 1024; // 256 MB
                 match std::fs::metadata(&path) {
+                    // Resource limit: stays fatal and non-catchable (DoS protection).
                     Ok(meta) if meta.len() > MAX_BINARY_READ => {
                         eprintln!("❌ ERROR: File '{}' exceeds maximum read size of 256 MB", path);
                         return EvalResult::Error;
                     }
-                    Err(e) => { eprintln!("❌ ERROR: File error reading binary '{}': {}", path, e); return EvalResult::Error; }
+                    Err(e) => return self.rt_err_kind("IOError", format!("File error reading binary '{}': {}", path, e)),
                     _ => {}
                 }
                 match std::fs::read(&path) {
@@ -173,45 +167,43 @@ impl super::Evaluator {
                             .collect();
                         EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements: owned }))
                     }
-                    Err(e) => { eprintln!("❌ ERROR: File error reading binary '{}': {}", path, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("File error reading binary '{}': {}", path, e)),
                 }
             }
             "write_asBinary" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: File.write_asBinary(path, bytes) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.write_asBinary(path, bytes) requires 2 arguments");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let br = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.write_asBinary path must be a string"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.write_asBinary path must be a string"),
                 };
                 let bytes_data = match self.resolve(br).cloned() {
                     Some(ObjectData::Array { elements, .. }) => elements,
-                    _ => { eprintln!("❌ ERROR: File.write_asBinary bytes must be an array"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.write_asBinary bytes must be an array"),
                 };
                 let mut buf: Vec<u8> = Vec::with_capacity(bytes_data.len());
                 for owned in bytes_data {
                     match owned {
                         OwnedValue::Integer(b) if b >= 0 && b <= 255 => buf.push(b as u8),
-                        _ => { eprintln!("❌ ERROR: File.write_asBinary: each byte must be int 0-255"); return EvalResult::Error; }
+                        _ => return self.rt_err_kind("TypeError", "File.write_asBinary: each byte must be int 0-255"),
                     }
                 }
                 match std::fs::write(&path, &buf) {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: File error writing binary '{}': {}", path, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("File error writing binary '{}': {}", path, e)),
                 }
             }
             "listDir" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: File.listDir(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.listDir(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.listDir requires a string path"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.listDir requires a string path"),
                 };
                 match std::fs::read_dir(&path) {
                     Ok(entries) => {
@@ -224,33 +216,31 @@ impl super::Evaluator {
                             .collect();
                         EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("string".to_string()), elements: owned }))
                     }
-                    Err(e) => { eprintln!("❌ ERROR: File.listDir '{}' failed: {}", path, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("File.listDir '{}' failed: {}", path, e)),
                 }
             }
             "mkdir" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: File.mkdir(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.mkdir(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.mkdir requires a string path"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.mkdir requires a string path"),
                 };
                 match std::fs::create_dir_all(&path) {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: File.mkdir '{}' failed: {}", path, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("File.mkdir '{}' failed: {}", path, e)),
                 }
             }
             "stat" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: File.stat(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.stat(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.stat requires a string path"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.stat requires a string path"),
                 };
                 match std::fs::metadata(&path) {
                     Ok(meta) => {
@@ -271,7 +261,7 @@ impl super::Evaluator {
                             ],
                         }))
                     }
-                    Err(e) => { eprintln!("❌ ERROR: File.stat '{}' failed: {}", path, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("File.stat '{}' failed: {}", path, e)),
                 }
             }
             "delete" => {
@@ -280,19 +270,18 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: File.delete(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.delete(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.delete requires a string path"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.delete requires a string path"),
                 };
                 let p = std::path::Path::new(&path);
                 let result = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
                 match result {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: File.delete '{}' failed: {}", path, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("File.delete '{}' failed: {}", path, e)),
                 }
             }
             "rename" => {
@@ -301,27 +290,26 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: File.rename(from, to) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "File.rename(from, to) requires 2 arguments");
                 }
                 let fr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let tr = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let from = match self.resolve(fr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.rename: 'from' must be a string"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.rename: 'from' must be a string"),
                 };
                 let to = match self.resolve(tr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: File.rename: 'to' must be a string"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "File.rename: 'to' must be a string"),
                 };
                 match std::fs::rename(&from, &to) {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: File.rename '{}' → '{}' failed: {}", from, to, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("File.rename '{}' → '{}' failed: {}", from, to, e)),
                 }
             }
             _ => {
-                eprintln!("❌ ERROR: Unknown File method '{}'", dot_call.method);
-                EvalResult::Error
+                let m = dot_call.method.clone();
+                self.rt_err_kind("TypeError", format!("Unknown File method '{}'", m))
             }
         }
     }
@@ -332,8 +320,7 @@ impl super::Evaluator {
         match dot_call.method.as_str() {
             "stringify" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: JSON.stringify(value) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "JSON.stringify(value) requires 1 argument");
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let owned = self.extract(vr);
@@ -342,23 +329,21 @@ impl super::Evaluator {
             }
             "parse" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: JSON.parse(string) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "JSON.parse(string) requires 1 argument");
                 }
                 let sr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let s = match self.resolve(sr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: JSON.parse requires a string"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "JSON.parse requires a string"),
                 };
                 match json_parse(&s) {
                     Ok(owned) => EvalResult::Value(self.plant_global(owned)),
-                    Err(e) => { eprintln!("❌ ERROR: JSON.parse error: {}", e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("JsonError", format!("JSON.parse error: {}", e)),
                 }
             }
             "pretty" => {
                 if dot_call.arguments.is_empty() || dot_call.arguments.len() > 2 {
-                    eprintln!("❌ ERROR: JSON.pretty(value, [indent]) requires 1 or 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "JSON.pretty(value, [indent]) requires 1 or 2 arguments");
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                 let owned = self.extract(vr);
@@ -367,7 +352,7 @@ impl super::Evaluator {
                     let ir = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, _ => return EvalResult::Error };
                     match self.resolve(ir) {
                         Some(ObjectData::Integer(n)) if *n >= 0 => *n as usize,
-                        _ => { eprintln!("❌ ERROR: JSON.pretty indent must be a non-negative integer"); return EvalResult::Error; }
+                        _ => return self.rt_err_kind("TypeError", "JSON.pretty indent must be a non-negative integer"),
                     }
                 } else { 2 };
                 // A raw string (e.g. a fetch body) is parsed as JSON first so its
@@ -381,8 +366,8 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Str(json)))
             }
             _ => {
-                eprintln!("❌ ERROR: Unknown JSON method '{}'", dot_call.method);
-                EvalResult::Error
+                let m = dot_call.method.clone();
+                self.rt_err_kind("TypeError", format!("Unknown JSON method '{}'", m))
             }
         }
     }

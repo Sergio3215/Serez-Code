@@ -27,8 +27,7 @@ impl super::Evaluator {
             }
             "hmacSha256" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Crypto.hmacSha256(key, data) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Crypto.hmacSha256(key, data) requires 2 arguments");
                 }
                 let key = match self.eval_to_string(&dot_call.arguments[0], "Crypto.hmacSha256 key") {
                     Ok(v) => v, Err(e) => return e,
@@ -65,8 +64,7 @@ impl super::Evaluator {
             }
             "hexEncode" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Crypto.hexEncode(bytes) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Crypto.hexEncode(bytes) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -92,8 +90,7 @@ impl super::Evaluator {
                         EvalResult::Value(self.alloc(ObjectData::Str(to_hex(&bytes))))
                     }
                     _ => {
-                        eprintln!("❌ ERROR: Crypto.hexEncode() requires an array of bytes");
-                        EvalResult::Error
+                        self.rt_err_kind("TypeError", "Crypto.hexEncode() requires an array of bytes")
                     }
                 }
             }
@@ -137,8 +134,7 @@ impl super::Evaluator {
                 // CSPRNG real (entropía del OS vía getrandom). NO usar Random.* para
                 // tokens/claves: Random es un LCG predecible.
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Crypto.randomBytes(n) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Crypto.randomBytes(n) requires 1 argument");
                 }
                 let n = match self.eval_int_arg(&dot_call.arguments[0]) {
                     Some(v) => v,
@@ -164,8 +160,7 @@ impl super::Evaluator {
             }
             "ed25519Keypair" => {
                 if !dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Crypto.ed25519Keypair() takes no arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Crypto.ed25519Keypair() takes no arguments");
                 }
                 let mut seed = [0u8; 32];
                 if getrandom::getrandom(&mut seed).is_err() {
@@ -183,12 +178,12 @@ impl super::Evaluator {
                     key_type: "string".to_string(),
                     value_type: "string".to_string(),
                     entries,
+                    index: Default::default(),
                 }))
             }
             "ed25519Sign" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Crypto.ed25519Sign(privateHex, message) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Crypto.ed25519Sign(privateHex, message) requires 2 arguments");
                 }
                 let priv_hex = match self.eval_to_string(&dot_call.arguments[0], "Crypto.ed25519Sign privateHex") {
                     Ok(v) => v, Err(e) => return e,
@@ -215,8 +210,7 @@ impl super::Evaluator {
             }
             "ed25519Verify" => {
                 if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Crypto.ed25519Verify(publicHex, message, signatureHex) requires 3 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Crypto.ed25519Verify(publicHex, message, signatureHex) requires 3 arguments");
                 }
                 let pub_hex = match self.eval_to_string(&dot_call.arguments[0], "Crypto.ed25519Verify publicHex") {
                     Ok(v) => v, Err(e) => return e,
@@ -263,8 +257,7 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Boolean(ok)))
             }
             _ => {
-                eprintln!("❌ ERROR: Unknown Crypto method '{}'", dot_call.method);
-                EvalResult::Error
+                self.rt_err_kind("TypeError", format!("Unknown Crypto method '{}'", dot_call.method))
             }
         }
     }

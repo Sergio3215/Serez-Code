@@ -33,8 +33,7 @@ impl super::Evaluator {
         match dot_call.method.as_str() {
             "connect" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Socket.connect(host, port) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Socket.connect(host, port) requires 2 arguments");
                 }
                 let host = match self.eval_to_string(&dot_call.arguments[0], "Socket.connect") {
                     Ok(v) => v,
@@ -46,10 +45,7 @@ impl super::Evaluator {
                 };
                 let port: u16 = match self.resolve(port_ref) {
                     Some(ObjectData::Integer(n)) => *n as u16,
-                    _ => {
-                        eprintln!("❌ ERROR: Socket.connect: port must be an integer");
-                        return EvalResult::Error;
-                    }
+                    _ => return self.rt_err_kind("TypeError", "Socket.connect: port must be an integer"),
                 };
                 let addr = format!("{}:{}", host, port);
                 match std::net::TcpStream::connect(&addr) {
@@ -59,17 +55,13 @@ impl super::Evaluator {
                         self.socket_registry.insert(id, stream);
                         EvalResult::Value(self.alloc(ObjectData::Integer(id)))
                     }
-                    Err(e) => {
-                        eprintln!("❌ ERROR: Socket.connect: {}", e);
-                        EvalResult::Error
-                    }
+                    Err(e) => self.rt_err_kind("SocketError", format!("Socket.connect: {}", e)),
                 }
             }
 
             "send" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Socket.send(id, data) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Socket.send(id, data) requires 2 arguments");
                 }
                 let id = match self.eval_socket_id(&dot_call.arguments[0], "Socket.send") {
                     Ok(v) => v,
@@ -83,24 +75,17 @@ impl super::Evaluator {
                 let result: Result<usize, std::io::Error> =
                     match self.socket_registry.get_mut(&id) {
                         Some(stream) => stream.write_all(&bytes).map(|_| bytes.len()),
-                        None => {
-                            eprintln!("❌ ERROR: Socket.send: no socket with id {}", id);
-                            return EvalResult::Error;
-                        }
+                        None => return self.rt_err_kind("SocketError", format!("Socket.send: no socket with id {}", id)),
                     };
                 match result {
                     Ok(n) => EvalResult::Value(self.alloc(ObjectData::Integer(n as i64))),
-                    Err(e) => {
-                        eprintln!("❌ ERROR: Socket.send: {}", e);
-                        EvalResult::Error
-                    }
+                    Err(e) => self.rt_err_kind("SocketError", format!("Socket.send: {}", e)),
                 }
             }
 
             "recv" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Socket.recv(id, max_bytes) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Socket.recv(id, max_bytes) requires 2 arguments");
                 }
                 let id = match self.eval_socket_id(&dot_call.arguments[0], "Socket.recv") {
                     Ok(v) => v,
@@ -112,10 +97,7 @@ impl super::Evaluator {
                 };
                 let max_bytes: usize = match self.resolve(max_ref) {
                     Some(ObjectData::Integer(n)) => (*n).max(0) as usize,
-                    _ => {
-                        eprintln!("❌ ERROR: Socket.recv: max_bytes must be an integer");
-                        return EvalResult::Error;
-                    }
+                    _ => return self.rt_err_kind("TypeError", "Socket.recv: max_bytes must be an integer"),
                 };
                 let result: Result<String, std::io::Error> =
                     match self.socket_registry.get_mut(&id) {
@@ -125,24 +107,17 @@ impl super::Evaluator {
                                 String::from_utf8_lossy(&buf[..n]).into_owned()
                             })
                         }
-                        None => {
-                            eprintln!("❌ ERROR: Socket.recv: no socket with id {}", id);
-                            return EvalResult::Error;
-                        }
+                        None => return self.rt_err_kind("SocketError", format!("Socket.recv: no socket with id {}", id)),
                     };
                 match result {
                     Ok(s) => EvalResult::Value(self.alloc(ObjectData::Str(s))),
-                    Err(e) => {
-                        eprintln!("❌ ERROR: Socket.recv: {}", e);
-                        EvalResult::Error
-                    }
+                    Err(e) => self.rt_err_kind("SocketError", format!("Socket.recv: {}", e)),
                 }
             }
 
             "close" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Socket.close(id) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Socket.close(id) requires 1 argument");
                 }
                 let id = match self.eval_socket_id(&dot_call.arguments[0], "Socket.close") {
                     Ok(v) => v,
@@ -156,8 +131,7 @@ impl super::Evaluator {
 
             "listen" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Socket.listen(port) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Socket.listen(port) requires 1 argument");
                 }
                 let port_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -165,10 +139,7 @@ impl super::Evaluator {
                 };
                 let port: u16 = match self.resolve(port_ref) {
                     Some(ObjectData::Integer(n)) => *n as u16,
-                    _ => {
-                        eprintln!("❌ ERROR: Socket.listen: port must be an integer");
-                        return EvalResult::Error;
-                    }
+                    _ => return self.rt_err_kind("TypeError", "Socket.listen: port must be an integer"),
                 };
                 let addr = format!("0.0.0.0:{}", port);
                 match std::net::TcpListener::bind(&addr) {
@@ -178,17 +149,13 @@ impl super::Evaluator {
                         self.listener_registry.insert(id, listener);
                         EvalResult::Value(self.alloc(ObjectData::Integer(id)))
                     }
-                    Err(e) => {
-                        eprintln!("❌ ERROR: Socket.listen: {}", e);
-                        EvalResult::Error
-                    }
+                    Err(e) => self.rt_err_kind("SocketError", format!("Socket.listen: {}", e)),
                 }
             }
 
             "accept" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Socket.accept(listener_id) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Socket.accept(listener_id) requires 1 argument");
                 }
                 let id = match self.eval_socket_id(&dot_call.arguments[0], "Socket.accept") {
                     Ok(v) => v,
@@ -199,13 +166,7 @@ impl super::Evaluator {
                 let accept_result: Result<(std::net::TcpStream, _), _> =
                     match self.listener_registry.get(&id) {
                         Some(listener) => listener.accept(),
-                        None => {
-                            eprintln!(
-                                "❌ ERROR: Socket.accept: no listener with id {}",
-                                id
-                            );
-                            return EvalResult::Error;
-                        }
+                        None => return self.rt_err_kind("SocketError", format!("Socket.accept: no listener with id {}", id)),
                     };
                 match accept_result {
                     Ok((stream, _addr)) => {
@@ -214,10 +175,7 @@ impl super::Evaluator {
                         self.socket_registry.insert(new_id, stream);
                         EvalResult::Value(self.alloc(ObjectData::Integer(new_id)))
                     }
-                    Err(e) => {
-                        eprintln!("❌ ERROR: Socket.accept: {}", e);
-                        EvalResult::Error
-                    }
+                    Err(e) => self.rt_err_kind("SocketError", format!("Socket.accept: {}", e)),
                 }
             }
 
@@ -226,8 +184,7 @@ impl super::Evaluator {
                 // Reads one WebSocket frame from an established connection.
                 // Returns the decoded text payload, or null on close frame / connection end.
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Socket.recvWsFrame(conn_id) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Socket.recvWsFrame(conn_id) requires 1 argument");
                 }
                 let id = match self.eval_socket_id(&dot_call.arguments[0], "Socket.recvWsFrame") {
                     Ok(v) => v, Err(e) => return e,
@@ -241,10 +198,7 @@ impl super::Evaluator {
                             EvalResult::Value(self.null_ref)
                         }
                     },
-                    None => {
-                        eprintln!("❌ ERROR: Socket.recvWsFrame: no socket with id {}", id);
-                        EvalResult::Error
-                    }
+                    None => self.rt_err_kind("SocketError", format!("Socket.recvWsFrame: no socket with id {}", id)),
                 }
             }
 
@@ -252,8 +206,7 @@ impl super::Evaluator {
                 // Socket.sendWsFrame(conn_id, data) → null
                 // Encodes data as a WebSocket text frame and sends it.
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Socket.sendWsFrame(conn_id, data) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Socket.sendWsFrame(conn_id, data) requires 2 arguments");
                 }
                 let id = match self.eval_socket_id(&dot_call.arguments[0], "Socket.sendWsFrame") {
                     Ok(v) => v, Err(e) => return e,
@@ -264,21 +217,15 @@ impl super::Evaluator {
                 match self.socket_registry.get_mut(&id) {
                     Some(stream) => match ws_send_frame(stream, &data) {
                         Ok(()) => EvalResult::Value(self.null_ref),
-                        Err(e) => {
-                            eprintln!("❌ ERROR: Socket.sendWsFrame: {}", e);
-                            EvalResult::Error
-                        }
+                        Err(e) => self.rt_err_kind("SocketError", format!("Socket.sendWsFrame: {}", e)),
                     },
-                    None => {
-                        eprintln!("❌ ERROR: Socket.sendWsFrame: no socket with id {}", id);
-                        EvalResult::Error
-                    }
+                    None => self.rt_err_kind("SocketError", format!("Socket.sendWsFrame: no socket with id {}", id)),
                 }
             }
 
             _ => {
-                eprintln!("❌ ERROR: Unknown Socket method '{}'", dot_call.method);
-                EvalResult::Error
+                let m = dot_call.method.clone();
+                self.rt_err_kind("TypeError", format!("Unknown Socket method '{}'", m))
             }
         }
     }
@@ -295,10 +242,7 @@ impl super::Evaluator {
         };
         match self.resolve(r) {
             Some(ObjectData::Integer(n)) => Ok(*n),
-            _ => {
-                eprintln!("❌ ERROR: {}: socket id must be an integer", ctx);
-                Err(EvalResult::Error)
-            }
+            _ => Err(self.rt_err_kind("TypeError", format!("{}: socket id must be an integer", ctx))),
         }
     }
 }

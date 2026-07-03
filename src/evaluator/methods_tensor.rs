@@ -55,13 +55,11 @@ impl super::Evaluator {
         let args = match &new_expr.args {
             ast::NewArgs::Positional(a) => a.clone(),
             ast::NewArgs::Fields(_) => {
-                eprintln!("❌ ERROR: Tensor constructor requires positional arguments: new Tensor([shape], fill)");
-                return EvalResult::Error;
+                return self.rt_err_kind("TypeError", "Tensor constructor requires positional arguments: new Tensor([shape], fill)");
             }
         };
         if args.is_empty() {
-            eprintln!("❌ ERROR: Tensor() requires at least a shape argument like [2, 3]");
-            return EvalResult::Error;
+            return self.rt_err_kind("TypeError", "Tensor() requires at least a shape argument like [2, 3]");
         }
         let shape = match self.eval_shape_expr(&args[0]) {
             Ok(s) => s,
@@ -77,7 +75,7 @@ impl super::Evaluator {
                 EvalResult::Value(r) => match self.resolve(r) {
                     Some(ObjectData::Integer(n)) => *n as f64,
                     Some(ObjectData::Decimal(d)) => *d,
-                    _ => { eprintln!("❌ ERROR: Tensor fill value must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor fill value must be a number"); }
                 },
                 EvalResult::Throw(v) => return EvalResult::Throw(v),
                 _ => return EvalResult::Error,
@@ -93,8 +91,7 @@ impl super::Evaluator {
         match dot_call.method.as_str() {
             "zeros" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.zeros([shape]) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.zeros([shape]) requires 1 argument");
                 }
                 let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
                     Ok(s) => s, Err(e) => return e,
@@ -104,8 +101,7 @@ impl super::Evaluator {
             }
             "ones" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.ones([shape]) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.ones([shape]) requires 1 argument");
                 }
                 let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
                     Ok(s) => s, Err(e) => return e,
@@ -115,13 +111,12 @@ impl super::Evaluator {
             }
             "eye" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.eye(n) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.eye(n) requires 1 argument");
                 }
                 let n = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) if *n > 0 => *n as usize,
-                        _ => { eprintln!("❌ ERROR: Tensor.eye(n) requires a positive integer"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Tensor.eye(n) requires a positive integer"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
@@ -132,8 +127,7 @@ impl super::Evaluator {
             }
             "from" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.from(array) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.from(array) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -143,8 +137,7 @@ impl super::Evaluator {
                 self.tensor_from_array(arr_ref)
             }
             _ => {
-                eprintln!("❌ ERROR: Unknown Tensor static method '{}'", dot_call.method);
-                EvalResult::Error
+                self.rt_err_kind("TypeError", format!("Unknown Tensor static method '{}'", dot_call.method))
             }
         }
     }
@@ -181,8 +174,7 @@ impl super::Evaluator {
             }
             "set" => {
                 if dot_call.arguments.len() < 2 {
-                    eprintln!("❌ ERROR: Tensor.set() requires index arg(s) + value, e.g. set(0, 1, val)");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.set() requires index arg(s) + value, e.g. set(0, 1, val)");
                 }
                 let n_args = dot_call.arguments.len();
                 let index_args = dot_call.arguments[..n_args - 1].to_vec();
@@ -194,7 +186,7 @@ impl super::Evaluator {
                     EvalResult::Value(r) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
-                        _ => { eprintln!("❌ ERROR: Tensor.set() value must be a number"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Tensor.set() value must be a number"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
@@ -210,23 +202,20 @@ impl super::Evaluator {
             }
             "reshape" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.reshape([shape]) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.reshape([shape]) requires 1 argument");
                 }
                 let new_shape = match self.eval_shape_expr(&dot_call.arguments[0].clone()) {
                     Ok(s) => s, Err(e) => return e,
                 };
                 let new_total: usize = new_shape.iter().product();
                 if new_total != data.len() {
-                    eprintln!("❌ ERROR: Tensor.reshape() — shape has {} elements but tensor has {}", new_total, data.len());
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", format!("Tensor.reshape() — shape has {} elements but tensor has {}", new_total, data.len()));
                 }
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape: new_shape, data , tid: 0}))
             }
             "transpose" => {
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.transpose() only supported for 2D tensors");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.transpose() only supported for 2D tensors");
                 }
                 let (rows, cols) = (shape[0], shape[1]);
                 let mut new_data = vec![0.0f64; data.len()];
@@ -248,8 +237,7 @@ impl super::Evaluator {
             "div" => self.tensor_elementwise(tensor_ref, shape, data, dot_call, "div"),
             "dot" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.dot() requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.dot() requires 1 argument");
                 }
                 let arg_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -259,26 +247,22 @@ impl super::Evaluator {
                 match self.resolve(arg_ref).cloned() {
                     Some(ObjectData::Tensor { shape: s2, data: d2 , ..}) => {
                         if shape.len() != 1 || s2.len() != 1 {
-                            eprintln!("❌ ERROR: Tensor.dot() only works on 1D tensors (use matmul for 2D)");
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TensorError", "Tensor.dot() only works on 1D tensors (use matmul for 2D)");
                         }
                         if shape[0] != s2[0] {
-                            eprintln!("❌ ERROR: Tensor.dot() length mismatch: {} vs {}", shape[0], s2[0]);
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TensorError", format!("Tensor.dot() length mismatch: {} vs {}", shape[0], s2[0]));
                         }
                         let result: f64 = data.iter().zip(d2.iter()).map(|(a, b)| a * b).sum();
                         EvalResult::Value(self.alloc(ObjectData::Decimal(result)))
                     }
                     _ => {
-                        eprintln!("❌ ERROR: Tensor.dot() requires a 1D Tensor argument");
-                        EvalResult::Error
+                        self.rt_err_kind("TypeError", "Tensor.dot() requires a 1D Tensor argument")
                     }
                 }
             }
             "matmul" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.matmul() requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.matmul() requires 1 argument");
                 }
                 let arg_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -288,13 +272,11 @@ impl super::Evaluator {
                 match self.resolve(arg_ref).cloned() {
                     Some(ObjectData::Tensor { shape: s2, data: d2 , ..}) => {
                         if shape.len() != 2 || s2.len() != 2 {
-                            eprintln!("❌ ERROR: Tensor.matmul() requires 2D tensors");
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TypeError", "Tensor.matmul() requires 2D tensors");
                         }
                         let (m, k, k2, n) = (shape[0], shape[1], s2[0], s2[1]);
                         if k != k2 {
-                            eprintln!("❌ ERROR: Tensor.matmul() inner dimensions must match: {} != {}", k, k2);
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TensorError", format!("Tensor.matmul() inner dimensions must match: {} != {}", k, k2));
                         }
                         let mut result = vec![0.0f64; m * n];
                         matmul_kernel(&data, &d2, m, k, n, &mut result);
@@ -310,8 +292,7 @@ impl super::Evaluator {
                         EvalResult::Value(out_ref)
                     }
                     _ => {
-                        eprintln!("❌ ERROR: Tensor.matmul() requires a 2D Tensor argument");
-                        EvalResult::Error
+                        self.rt_err_kind("TypeError", "Tensor.matmul() requires a 2D Tensor argument")
                     }
                 }
             }
@@ -348,16 +329,14 @@ impl super::Evaluator {
             }
             "max" => {
                 if data.is_empty() {
-                    eprintln!("❌ ERROR: Tensor.max() on empty tensor");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.max() on empty tensor");
                 }
                 let v = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v)))
             }
             "min" => {
                 if data.is_empty() {
-                    eprintln!("❌ ERROR: Tensor.min() on empty tensor");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.min() on empty tensor");
                 }
                 let v = data.iter().cloned().fold(f64::INFINITY, f64::min);
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v)))
@@ -368,14 +347,13 @@ impl super::Evaluator {
             }
             "fill" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.fill(val) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.fill(val) requires 1 argument");
                 }
                 let val = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
-                        _ => { eprintln!("❌ ERROR: Tensor.fill() value must be a number"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Tensor.fill() value must be a number"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
@@ -479,7 +457,7 @@ impl super::Evaluator {
             }
             "sqrt" => {
                 for &x in &data {
-                    if x < 0.0 { eprintln!("❌ ERROR: Tensor.sqrt() — negative value {}", x); return EvalResult::Error; }
+                    if x < 0.0 { return self.rt_err_kind("TensorError", format!("Tensor.sqrt() — negative value {}", x)); }
                 }
                 let new_data: Vec<f64> = data.iter().map(|&x| x.sqrt()).collect();
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
@@ -490,21 +468,20 @@ impl super::Evaluator {
             }
             "log" => {
                 for &x in &data {
-                    if x <= 0.0 { eprintln!("❌ ERROR: Tensor.log() — non-positive value {}", x); return EvalResult::Error; }
+                    if x <= 0.0 { return self.rt_err_kind("TensorError", format!("Tensor.log() — non-positive value {}", x)); }
                 }
                 let new_data: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
             "pow" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.pow(exponent) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.pow(exponent) requires 1 argument");
                 }
                 let exp = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
-                        _ => { eprintln!("❌ ERROR: Tensor.pow() exponent must be a number"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Tensor.pow() exponent must be a number"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
@@ -522,7 +499,7 @@ impl super::Evaluator {
                     match self.eval_expression(&dot_call.arguments[0]) {
                         EvalResult::Value(r) => match self.resolve(r) {
                             Some(ObjectData::Integer(n)) => *n,
-                            _ => { eprintln!("❌ ERROR: Tensor.norm() order must be an integer"); return EvalResult::Error; }
+                            _ => { return self.rt_err_kind("TypeError", "Tensor.norm() order must be an integer"); }
                         },
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
@@ -531,7 +508,7 @@ impl super::Evaluator {
                 let result = match order {
                     1 => data.iter().map(|&x| x.abs()).sum::<f64>(),
                     2 => data.iter().map(|&x| x * x).sum::<f64>().sqrt(),
-                    _ => { eprintln!("❌ ERROR: Tensor.norm() supports order 1 or 2, got {}", order); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TensorError", format!("Tensor.norm() supports order 1 or 2, got {}", order)); }
                 };
                 EvalResult::Value(self.alloc(ObjectData::Decimal(result)))
             }
@@ -539,14 +516,13 @@ impl super::Evaluator {
             // ── Clamp ────────────────────────────────────────────────────────
             "clamp" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.clamp(min, max) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.clamp(min, max) requires 2 arguments");
                 }
                 let lo = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
-                        _ => { eprintln!("❌ ERROR: Tensor.clamp() min must be a number"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Tensor.clamp() min must be a number"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
@@ -555,12 +531,12 @@ impl super::Evaluator {
                     EvalResult::Value(r) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
-                        _ => { eprintln!("❌ ERROR: Tensor.clamp() max must be a number"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Tensor.clamp() max must be a number"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                if lo > hi { eprintln!("❌ ERROR: Tensor.clamp() min > max"); return EvalResult::Error; }
+                if lo > hi { return self.rt_err_kind("TensorError", "Tensor.clamp() min > max"); }
                 let new_data: Vec<f64> = data.iter().map(|&x| x.clamp(lo, hi)).collect();
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0}))
             }
@@ -568,12 +544,10 @@ impl super::Evaluator {
             // ── Broadcast add: (m,n) + (n,) ─────────────────────────────────
             "broadcastAdd" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.broadcastAdd(bias) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.broadcastAdd(bias) requires 1 argument");
                 }
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.broadcastAdd() only supported for 2D tensors");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.broadcastAdd() only supported for 2D tensors");
                 }
                 let (rows, cols) = (shape[0], shape[1]);
                 let bias_ref = match self.eval_expression(&dot_call.arguments[0]) {
@@ -584,12 +558,11 @@ impl super::Evaluator {
                 let bias_data = match self.resolve(bias_ref).cloned() {
                     Some(ObjectData::Tensor { shape: bs, data: bd , ..}) => {
                         if bs != vec![cols] {
-                            eprintln!("❌ ERROR: Tensor.broadcastAdd() bias shape {:?} must match last dim {}", bs, cols);
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TensorError", format!("Tensor.broadcastAdd() bias shape {:?} must match last dim {}", bs, cols));
                         }
                         bd
                     }
-                    _ => { eprintln!("❌ ERROR: Tensor.broadcastAdd() argument must be a 1D Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.broadcastAdd() argument must be a 1D Tensor"); }
                 };
                 let mut new_data = data.clone();
                 for r in 0..rows {
@@ -609,12 +582,10 @@ impl super::Evaluator {
             // ── Broadcast mul/sub/div: (m,n) op (n,) ────────────────────────
             "broadcastMul" | "broadcastSub" | "broadcastDiv" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.{}() requires 1 argument", dot_call.method);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", format!("Tensor.{}() requires 1 argument", dot_call.method));
                 }
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.{}() only supported for 2D tensors", dot_call.method);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", format!("Tensor.{}() only supported for 2D tensors", dot_call.method));
                 }
                 let (rows, cols) = (shape[0], shape[1]);
                 let rhs_ref = match self.eval_expression(&dot_call.arguments[0]) {
@@ -625,18 +596,16 @@ impl super::Evaluator {
                 let rhs_data = match self.resolve(rhs_ref).cloned() {
                     Some(ObjectData::Tensor { shape: rs, data: rd , ..}) => {
                         if rs != vec![cols] {
-                            eprintln!("❌ ERROR: Tensor.{}() rhs shape {:?} must match last dim {}", dot_call.method, rs, cols);
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TensorError", format!("Tensor.{}() rhs shape {:?} must match last dim {}", dot_call.method, rs, cols));
                         }
                         rd
                     }
-                    _ => { eprintln!("❌ ERROR: Tensor.{}() argument must be a 1D Tensor", dot_call.method); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", format!("Tensor.{}() argument must be a 1D Tensor", dot_call.method)); }
                 };
                 if dot_call.method == "broadcastDiv" {
                     for v in &rhs_data {
                         if *v == 0.0 {
-                            eprintln!("❌ ERROR: Tensor.broadcastDiv() division by zero in rhs");
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TensorError", "Tensor.broadcastDiv() division by zero in rhs");
                         }
                     }
                 }
@@ -668,18 +637,16 @@ impl super::Evaluator {
             // ── sum(axis) / mean(axis) ────────────────────────────────────────
             "sumAxis" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.sumAxis(axis) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.sumAxis(axis) requires 1 argument");
                 }
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.sumAxis() only supported for 2D tensors");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.sumAxis() only supported for 2D tensors");
                 }
                 let (rows, cols) = (shape[0], shape[1]);
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let axis = match self.resolve(ax_ref).cloned() {
                     Some(ObjectData::Integer(n)) if n == 0 || n == 1 => n as usize,
-                    _ => { eprintln!("❌ ERROR: Tensor.sumAxis() axis must be 0 or 1"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.sumAxis() axis must be 0 or 1"); }
                 };
                 if axis == 0 {
                     let mut out = vec![0.0f64; cols];
@@ -694,18 +661,16 @@ impl super::Evaluator {
 
             "meanAxis" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.meanAxis(axis) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.meanAxis(axis) requires 1 argument");
                 }
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.meanAxis() only supported for 2D tensors");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.meanAxis() only supported for 2D tensors");
                 }
                 let (rows, cols) = (shape[0], shape[1]);
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let axis = match self.resolve(ax_ref).cloned() {
                     Some(ObjectData::Integer(n)) if n == 0 || n == 1 => n as usize,
-                    _ => { eprintln!("❌ ERROR: Tensor.meanAxis() axis must be 0 or 1"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.meanAxis() axis must be 0 or 1"); }
                 };
                 if axis == 0 {
                     let mut out = vec![0.0f64; cols];
@@ -723,8 +688,7 @@ impl super::Evaluator {
             // ── argmax / argmin ───────────────────────────────────────────────
             "argmax" => {
                 if data.is_empty() {
-                    eprintln!("❌ ERROR: Tensor.argmax() on empty tensor");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.argmax() on empty tensor");
                 }
                 let idx = data.iter().enumerate()
                     .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
@@ -734,8 +698,7 @@ impl super::Evaluator {
 
             "argmin" => {
                 if data.is_empty() {
-                    eprintln!("❌ ERROR: Tensor.argmin() on empty tensor");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.argmin() on empty tensor");
                 }
                 let idx = data.iter().enumerate()
                     .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
@@ -746,18 +709,16 @@ impl super::Evaluator {
             // ── slice(start, end) — flat index range ──────────────────────────
             "slice" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.slice(start, end) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.slice(start, end) requires 2 arguments");
                 }
                 let r0 = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let r1 = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let (start, end) = match (self.resolve(r0).cloned(), self.resolve(r1).cloned()) {
                     (Some(ObjectData::Integer(a)), Some(ObjectData::Integer(b))) => (a as usize, b as usize),
-                    _ => { eprintln!("❌ ERROR: Tensor.slice() arguments must be integers"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.slice() arguments must be integers"); }
                 };
                 if start > end || end > data.len() {
-                    eprintln!("❌ ERROR: Tensor.slice() invalid range {}..{} for tensor of length {}", start, end, data.len());
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", format!("Tensor.slice() invalid range {}..{} for tensor of length {}", start, end, data.len()));
                 }
                 let sliced = data[start..end].to_vec();
                 let len = end - start;
@@ -767,34 +728,30 @@ impl super::Evaluator {
             // ── concat(other, axis) — 2D row/col concatenation ────────────────
             "concat" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.concat(other, axis) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.concat(other, axis) requires 2 arguments");
                 }
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.concat() only supported for 2D tensors");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.concat() only supported for 2D tensors");
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let ax_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let axis = match self.resolve(ax_ref).cloned() {
                     Some(ObjectData::Integer(n)) if n == 0 || n == 1 => n as usize,
-                    _ => { eprintln!("❌ ERROR: Tensor.concat() axis must be 0 or 1"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.concat() axis must be 0 or 1"); }
                 };
                 let (rows, cols) = (shape[0], shape[1]);
                 match self.resolve(other_ref).cloned() {
                     Some(ObjectData::Tensor { shape: os, data: od , ..}) => {
                         if axis == 0 {
                             if os.len() != 2 || os[1] != cols {
-                                eprintln!("❌ ERROR: Tensor.concat(axis=0) column mismatch: {} vs {}", os.get(1).copied().unwrap_or(0), cols);
-                                return EvalResult::Error;
+                                return self.rt_err_kind("TensorError", format!("Tensor.concat(axis=0) column mismatch: {} vs {}", os.get(1).copied().unwrap_or(0), cols));
                             }
                             let mut out = data.clone();
                             out.extend_from_slice(&od);
                             EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![rows + os[0], cols], data: out , tid: 0}))
                         } else {
                             if os.len() != 2 || os[0] != rows {
-                                eprintln!("❌ ERROR: Tensor.concat(axis=1) row mismatch: {} vs {}", os.get(0).copied().unwrap_or(0), rows);
-                                return EvalResult::Error;
+                                return self.rt_err_kind("TensorError", format!("Tensor.concat(axis=1) row mismatch: {} vs {}", os.get(0).copied().unwrap_or(0), rows));
                             }
                             let other_cols = os[1];
                             let new_cols = cols + other_cols;
@@ -806,7 +763,7 @@ impl super::Evaluator {
                             EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![rows, new_cols], data: out, tid: 0 }))
                         }
                     }
-                    _ => { eprintln!("❌ ERROR: Tensor.concat() argument must be a Tensor"); EvalResult::Error }
+                    _ => { self.rt_err_kind("TypeError", "Tensor.concat() argument must be a Tensor") }
                 }
             }
 
@@ -823,14 +780,13 @@ impl super::Evaluator {
 
             "scale" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.scale(s) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.scale(s) requires 1 argument");
                 }
                 let s_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let s = match self.resolve(s_ref).cloned() {
                     Some(ObjectData::Integer(n)) => n as f64,
                     Some(ObjectData::Decimal(d)) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.scale() argument must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.scale() argument must be a number"); }
                 };
                 let new_data: Vec<f64> = data.iter().map(|x| x * s).collect();
                 let out_ref = self.alloc(ObjectData::Tensor { shape, data: new_data , tid: 0});
@@ -844,14 +800,13 @@ impl super::Evaluator {
             // ── leaky_relu / gelu ─────────────────────────────────────────────
             "leaky_relu" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.leaky_relu(alpha) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.leaky_relu(alpha) requires 1 argument");
                 }
                 let a_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let alpha = match self.resolve(a_ref).cloned() {
                     Some(ObjectData::Integer(n)) => n as f64,
                     Some(ObjectData::Decimal(d)) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.leaky_relu() alpha must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.leaky_relu() alpha must be a number"); }
                 };
                 let cached_input = data.clone();
                 let new_data: Vec<f64> = data.iter().map(|&x| if x >= 0.0 { x } else { alpha * x }).collect();
@@ -937,14 +892,13 @@ impl super::Evaluator {
             // leaky_relu with autodiff tracking
             "leaky_relu_tracked" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.leaky_relu_tracked(alpha) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.leaky_relu_tracked(alpha) requires 1 argument");
                 }
                 let a_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let alpha = match self.resolve(a_ref).cloned() {
                     Some(ObjectData::Integer(n)) => n as f64,
                     Some(ObjectData::Decimal(d)) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.leaky_relu_tracked() alpha must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.leaky_relu_tracked() alpha must be a number"); }
                 };
                 let cached_input = data.clone();
                 let new_data: Vec<f64> = data.iter().map(|&x| if x >= 0.0 { x } else { alpha * x }).collect();
@@ -959,22 +913,20 @@ impl super::Evaluator {
             // ── Phase 2: avg_pool2d ───────────────────────────────────────────
             "avg_pool2d" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.avg_pool2d(kernel, stride) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.avg_pool2d(kernel, stride) requires 2 arguments");
                 }
                 if shape.len() != 4 {
-                    eprintln!("❌ ERROR: Tensor.avg_pool2d() input must be 4D [N, H, W, C]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.avg_pool2d() input must be 4D [N, H, W, C]");
                 }
                 let k_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let s_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let kernel = match self.resolve(k_ref) {
                     Some(ObjectData::Integer(n)) if *n > 0 => *n as usize,
-                    _ => { eprintln!("❌ ERROR: avg_pool2d kernel must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "avg_pool2d kernel must be a positive integer"); }
                 };
                 let stride = match self.resolve(s_ref) {
                     Some(ObjectData::Integer(n)) if *n > 0 => *n as usize,
-                    _ => { eprintln!("❌ ERROR: avg_pool2d stride must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "avg_pool2d stride must be a positive integer"); }
                 };
                 let (n_batch, in_h, in_w, ch) = (shape[0], shape[1], shape[2], shape[3]);
                 let out_h = (in_h - kernel) / stride + 1;
@@ -1061,18 +1013,17 @@ impl super::Evaluator {
             "unsqueeze" => {
                 // .unsqueeze(dim) — insert dim of size 1 at position dim
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.unsqueeze(dim) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.unsqueeze(dim) requires 1 argument");
                 }
                 let d_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let dim = match self.resolve(d_ref) {
                     Some(ObjectData::Integer(n)) => {
                         let ndim = shape.len() as i64 + 1;
                         let d = if *n < 0 { ndim + n } else { *n };
-                        if d < 0 || d > ndim { eprintln!("❌ ERROR: unsqueeze dim {} out of range for {}D tensor", n, shape.len()); return EvalResult::Error; }
+                        if d < 0 || d > ndim { return self.rt_err_kind("TensorError", format!("unsqueeze dim {} out of range for {}D tensor", n, shape.len())); }
                         d as usize
                     }
-                    _ => { eprintln!("❌ ERROR: unsqueeze dim must be an integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "unsqueeze dim must be an integer"); }
                 };
                 let mut new_shape = shape.clone();
                 new_shape.insert(dim, 1);
@@ -1092,7 +1043,7 @@ impl super::Evaluator {
                             let d = if *n < 0 { nd + n } else { *n };
                             d as usize
                         }
-                        _ => { eprintln!("❌ ERROR: squeeze dim must be an integer"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "squeeze dim must be an integer"); }
                     };
                     if dim < shape.len() && shape[dim] == 1 {
                         let mut s = shape.clone(); s.remove(dim); s
@@ -1105,8 +1056,7 @@ impl super::Evaluator {
             "permute" => {
                 // .permute([ax0, ax1, ...]) — N-D generalized transpose
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.permute([axes]) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.permute([axes]) requires 1 argument");
                 }
                 let axes_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let axes: Vec<usize> = match self.eval_shape_expr(&dot_call.arguments[0]) {
@@ -1115,12 +1065,11 @@ impl super::Evaluator {
                         Some(ObjectData::Array { elements, .. }) => elements.iter().filter_map(|e| {
                             match e { OwnedValue::Integer(n) => Some(*n as usize), _ => None }
                         }).collect(),
-                        _ => { eprintln!("❌ ERROR: Tensor.permute() axes must be an array"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Tensor.permute() axes must be an array"); }
                     }
                 };
                 if axes.len() != shape.len() {
-                    eprintln!("❌ ERROR: Tensor.permute() axes length {} must match tensor ndim {}", axes.len(), shape.len());
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", format!("Tensor.permute() axes length {} must match tensor ndim {}", axes.len(), shape.len()));
                 }
                 let new_shape: Vec<usize> = axes.iter().map(|&a| shape[a]).collect();
                 let total: usize = new_shape.iter().product();
@@ -1149,32 +1098,30 @@ impl super::Evaluator {
             "broadcastTo" => {
                 // .broadcastTo([shape]) — expand to target shape (numpy semantics)
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.broadcastTo([shape]) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.broadcastTo([shape]) requires 1 argument");
                 }
                 let target_shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
                     Ok(s) => s, Err(e) => return e,
                 };
                 match Self::broadcast_data(&data, &shape, &target_shape) {
                     Some(new_data) => EvalResult::Value(self.alloc(ObjectData::Tensor { shape: target_shape, data: new_data, tid: 0 })),
-                    None => { eprintln!("❌ ERROR: Tensor.broadcastTo() incompatible shapes {:?} → {:?}", shape, target_shape); EvalResult::Error }
+                    None => { self.rt_err_kind("TensorError", format!("Tensor.broadcastTo() incompatible shapes {:?} → {:?}", shape, target_shape)) }
                 }
             }
 
             "broadcastAddNd" => {
                 // N-D broadcast add (full numpy semantics)
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.broadcastAddNd(other) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.broadcastAddNd(other) requires 1 argument");
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let (other_data, other_shape) = match self.resolve(other_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, shape: s, .. }) => (d, s),
-                    _ => { eprintln!("❌ ERROR: Tensor.broadcastAddNd() argument must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.broadcastAddNd() argument must be a Tensor"); }
                 };
                 let out_shape = match Self::broadcast_shape(&shape, &other_shape) {
                     Some(s) => s,
-                    None => { eprintln!("❌ ERROR: Tensor.broadcastAddNd() shapes {:?} and {:?} are not broadcastable", shape, other_shape); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TensorError", format!("Tensor.broadcastAddNd() shapes {:?} and {:?} are not broadcastable", shape, other_shape)); }
                 };
                 let a_data = Self::broadcast_data(&data,       &shape,       &out_shape).unwrap();
                 let b_data = Self::broadcast_data(&other_data, &other_shape, &out_shape).unwrap();
@@ -1184,17 +1131,16 @@ impl super::Evaluator {
 
             "broadcastMulNd" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.broadcastMulNd(other) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.broadcastMulNd(other) requires 1 argument");
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let (other_data, other_shape) = match self.resolve(other_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, shape: s, .. }) => (d, s),
-                    _ => { eprintln!("❌ ERROR: Tensor.broadcastMulNd() argument must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.broadcastMulNd() argument must be a Tensor"); }
                 };
                 let out_shape = match Self::broadcast_shape(&shape, &other_shape) {
                     Some(s) => s,
-                    None => { eprintln!("❌ ERROR: Tensor.broadcastMulNd() shapes not broadcastable"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TensorError", "Tensor.broadcastMulNd() shapes not broadcastable"); }
                 };
                 let a_data = Self::broadcast_data(&data,       &shape,       &out_shape).unwrap();
                 let b_data = Self::broadcast_data(&other_data, &other_shape, &out_shape).unwrap();
@@ -1206,21 +1152,18 @@ impl super::Evaluator {
             "bmm" => {
                 // .bmm(other) — batch matmul: [B,N,M] @ [B,M,K] → [B,N,K]
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.bmm(other) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.bmm(other) requires 1 argument");
                 }
                 if shape.len() != 3 {
-                    eprintln!("❌ ERROR: Tensor.bmm() requires 3D tensors [B,N,M], got {}D", shape.len());
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", format!("Tensor.bmm() requires 3D tensors [B,N,M], got {}D", shape.len()));
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let (other_data, other_shape) = match self.resolve(other_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, shape: s, .. }) => (d, s),
-                    _ => { eprintln!("❌ ERROR: Tensor.bmm() argument must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.bmm() argument must be a Tensor"); }
                 };
                 if other_shape.len() != 3 || other_shape[0] != shape[0] || other_shape[1] != shape[2] {
-                    eprintln!("❌ ERROR: Tensor.bmm() shape mismatch: {:?} @ {:?}", shape, other_shape);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", format!("Tensor.bmm() shape mismatch: {:?} @ {:?}", shape, other_shape));
                 }
                 let (b, n, m, k) = (shape[0], shape[1], shape[2], other_shape[2]);
                 let mut out_data = vec![0.0_f64; b * n * k];
@@ -1240,18 +1183,17 @@ impl super::Evaluator {
             "reduceSum" => {
                 // .reduceSum(axis, keepdim=false) — sum along axis for any N-D tensor
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Tensor.reduceSum(axis) requires at least 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.reduceSum(axis) requires at least 1 argument");
                 }
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let axis = match self.resolve(ax_ref) {
                     Some(ObjectData::Integer(n)) => {
                         let nd = shape.len() as i64;
                         let a = if *n < 0 { nd + n } else { *n };
-                        if a < 0 || a >= nd { eprintln!("❌ ERROR: reduceSum axis {} out of range", n); return EvalResult::Error; }
+                        if a < 0 || a >= nd { return self.rt_err_kind("TensorError", format!("reduceSum axis {} out of range", n)); }
                         a as usize
                     }
-                    _ => { eprintln!("❌ ERROR: reduceSum axis must be integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "reduceSum axis must be integer"); }
                 };
                 let keepdim = dot_call.arguments.len() > 1 && matches!(
                     self.eval_expression(&dot_call.arguments[1]),
@@ -1263,18 +1205,17 @@ impl super::Evaluator {
 
             "reduceMean" => {
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Tensor.reduceMean(axis) requires at least 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.reduceMean(axis) requires at least 1 argument");
                 }
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let axis = match self.resolve(ax_ref) {
                     Some(ObjectData::Integer(n)) => {
                         let nd = shape.len() as i64;
                         let a = if *n < 0 { nd + n } else { *n };
-                        if a < 0 || a >= nd { eprintln!("❌ ERROR: reduceMean axis {} out of range", n); return EvalResult::Error; }
+                        if a < 0 || a >= nd { return self.rt_err_kind("TensorError", format!("reduceMean axis {} out of range", n)); }
                         a as usize
                     }
-                    _ => { eprintln!("❌ ERROR: reduceMean axis must be integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "reduceMean axis must be integer"); }
                 };
                 let keepdim = dot_call.arguments.len() > 1 && matches!(
                     self.eval_expression(&dot_call.arguments[1]),
@@ -1288,8 +1229,7 @@ impl super::Evaluator {
 
             "reduceMax" => {
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Tensor.reduceMax(axis) requires at least 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.reduceMax(axis) requires at least 1 argument");
                 }
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let axis = match self.resolve(ax_ref) {
@@ -1298,7 +1238,7 @@ impl super::Evaluator {
                         let a = if *n < 0 { nd + n } else { *n };
                         a as usize
                     }
-                    _ => { eprintln!("❌ ERROR: reduceMax axis must be integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "reduceMax axis must be integer"); }
                 };
                 let keepdim = dot_call.arguments.len() > 1 && matches!(
                     self.eval_expression(&dot_call.arguments[1]),
@@ -1354,15 +1294,14 @@ impl super::Evaluator {
             "maximum" => {
                 // .maximum(other) — element-wise max with another tensor
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.maximum(other) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.maximum(other) requires 1 argument");
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let other_data = match self.resolve(other_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
                     Some(ObjectData::Decimal(v)) => vec![v; data.len()],
                     Some(ObjectData::Integer(v)) => vec![v as f64; data.len()],
-                    _ => { eprintln!("❌ ERROR: maximum requires Tensor or scalar"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "maximum requires Tensor or scalar"); }
                 };
                 let new_data: Vec<f64> = data.iter().zip(other_data.iter()).map(|(&a,&b)| a.max(b)).collect();
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
@@ -1370,15 +1309,14 @@ impl super::Evaluator {
 
             "minimum" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.minimum(other) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.minimum(other) requires 1 argument");
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let other_data = match self.resolve(other_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
                     Some(ObjectData::Decimal(v)) => vec![v; data.len()],
                     Some(ObjectData::Integer(v)) => vec![v as f64; data.len()],
-                    _ => { eprintln!("❌ ERROR: minimum requires Tensor or scalar"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "minimum requires Tensor or scalar"); }
                 };
                 let new_data: Vec<f64> = data.iter().zip(other_data.iter()).map(|(&a,&b)| a.min(b)).collect();
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data: new_data, tid: 0 }))
@@ -1387,12 +1325,10 @@ impl super::Evaluator {
             // ── conv2d(weights, bias, kernel, stride) ─────────────────────────
             "conv2d" => {
                 if dot_call.arguments.len() != 4 {
-                    eprintln!("❌ ERROR: Tensor.conv2d(weights, bias, kernel, stride) requires 4 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.conv2d(weights, bias, kernel, stride) requires 4 arguments");
                 }
                 if shape.len() != 4 {
-                    eprintln!("❌ ERROR: Tensor.conv2d() input must be 4D [N, H, W, C_in], got {}D", shape.len());
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", format!("Tensor.conv2d() input must be 4D [N, H, W, C_in], got {}D", shape.len()));
                 }
                 let w_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let b_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
@@ -1400,34 +1336,31 @@ impl super::Evaluator {
                 let s_ref = match self.eval_expression(&dot_call.arguments[3]) { EvalResult::Value(r) => r, other => return other };
                 let kernel = match self.resolve(k_ref).cloned() {
                     Some(ObjectData::Integer(n)) if n > 0 => n as usize,
-                    _ => { eprintln!("❌ ERROR: Tensor.conv2d() kernel must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.conv2d() kernel must be a positive integer"); }
                 };
                 let stride = match self.resolve(s_ref).cloned() {
                     Some(ObjectData::Integer(n)) if n > 0 => n as usize,
-                    _ => { eprintln!("❌ ERROR: Tensor.conv2d() stride must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.conv2d() stride must be a positive integer"); }
                 };
                 let (w_shape, w_data) = match self.resolve(w_ref).cloned() {
                     Some(ObjectData::Tensor { shape: ws, data: wd, .. }) => (ws, wd),
-                    _ => { eprintln!("❌ ERROR: Tensor.conv2d() weights must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.conv2d() weights must be a Tensor"); }
                 };
                 let b_data = match self.resolve(b_ref).cloned() {
                     Some(ObjectData::Tensor { data: bd, .. }) => bd,
-                    _ => { eprintln!("❌ ERROR: Tensor.conv2d() bias must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.conv2d() bias must be a Tensor"); }
                 };
                 if w_shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.conv2d() weights must be 2D [kH*kW*C_in, C_out]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.conv2d() weights must be 2D [kH*kW*C_in, C_out]");
                 }
                 let (n, h, w_in, c_in) = (shape[0], shape[1], shape[2], shape[3]);
                 let col_cols = w_shape[0];
                 let c_out = w_shape[1];
                 if col_cols != kernel * kernel * c_in {
-                    eprintln!("❌ ERROR: Tensor.conv2d() weights dim0={} != kernel*kernel*C_in={}", col_cols, kernel*kernel*c_in);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", format!("Tensor.conv2d() weights dim0={} != kernel*kernel*C_in={}", col_cols, kernel*kernel*c_in));
                 }
                 if h < kernel || w_in < kernel {
-                    eprintln!("❌ ERROR: Tensor.conv2d() spatial {}x{} < kernel {}", h, w_in, kernel);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", format!("Tensor.conv2d() spatial {}x{} < kernel {}", h, w_in, kernel));
                 }
                 let out_h = (h - kernel) / stride + 1;
                 let out_w = (w_in - kernel) / stride + 1;
@@ -1482,27 +1415,24 @@ impl super::Evaluator {
             // ── max_pool2d(kernel, stride) ────────────────────────────────────
             "max_pool2d" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.max_pool2d(kernel, stride) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.max_pool2d(kernel, stride) requires 2 arguments");
                 }
                 if shape.len() != 4 {
-                    eprintln!("❌ ERROR: Tensor.max_pool2d() input must be 4D [N, H, W, C]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.max_pool2d() input must be 4D [N, H, W, C]");
                 }
                 let k_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let s_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let kernel = match self.resolve(k_ref).cloned() {
                     Some(ObjectData::Integer(n)) if n > 0 => n as usize,
-                    _ => { eprintln!("❌ ERROR: Tensor.max_pool2d() kernel must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.max_pool2d() kernel must be a positive integer"); }
                 };
                 let stride = match self.resolve(s_ref).cloned() {
                     Some(ObjectData::Integer(n)) if n > 0 => n as usize,
-                    _ => { eprintln!("❌ ERROR: Tensor.max_pool2d() stride must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.max_pool2d() stride must be a positive integer"); }
                 };
                 let (n, h, w_in, c) = (shape[0], shape[1], shape[2], shape[3]);
                 if h < kernel || w_in < kernel {
-                    eprintln!("❌ ERROR: Tensor.max_pool2d() spatial {}x{} < kernel {}", h, w_in, kernel);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", format!("Tensor.max_pool2d() spatial {}x{} < kernel {}", h, w_in, kernel));
                 }
                 let out_h = (h - kernel) / stride + 1;
                 let out_w = (w_in - kernel) / stride + 1;
@@ -1547,28 +1477,26 @@ impl super::Evaluator {
             // ── layer_norm(gamma, beta, eps) ─────────────────────────────────
             "layer_norm" => {
                 if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Tensor.layer_norm(gamma, beta, eps) requires 3 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.layer_norm(gamma, beta, eps) requires 3 arguments");
                 }
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.layer_norm() input must be 2D [rows, cols]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.layer_norm() input must be 2D [rows, cols]");
                 }
                 let g_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let b_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let e_ref = match self.eval_expression(&dot_call.arguments[2]) { EvalResult::Value(r) => r, other => return other };
                 let gamma_data = match self.resolve(g_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.layer_norm() gamma must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.layer_norm() gamma must be a Tensor"); }
                 };
                 let beta_data = match self.resolve(b_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.layer_norm() beta must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.layer_norm() beta must be a Tensor"); }
                 };
                 let eps = match self.resolve(e_ref).cloned() {
                     Some(ObjectData::Decimal(d)) => d,
                     Some(ObjectData::Integer(n)) => n as f64,
-                    _ => { eprintln!("❌ ERROR: Tensor.layer_norm() eps must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.layer_norm() eps must be a number"); }
                 };
                 let (rows, cols) = (shape[0], shape[1]);
                 if gamma_data.len() != cols || beta_data.len() != cols {
@@ -1611,12 +1539,10 @@ impl super::Evaluator {
             // ── mha(Wq, Wk, Wv, Wo, n_heads) — multi-head self-attention ─────
             "mha" => {
                 if dot_call.arguments.len() != 5 {
-                    eprintln!("❌ ERROR: Tensor.mha(Wq, Wk, Wv, Wo, n_heads) requires 5 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.mha(Wq, Wk, Wv, Wo, n_heads) requires 5 arguments");
                 }
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.mha() input must be 2D [seq_len, d_model]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.mha() input must be 2D [seq_len, d_model]");
                 }
                 let (seq_len, d_model) = (shape[0], shape[1]);
                 let wq_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
@@ -1626,18 +1552,17 @@ impl super::Evaluator {
                 let nh_ref = match self.eval_expression(&dot_call.arguments[4]) { EvalResult::Value(r) => r, other => return other };
                 let n_heads = match self.resolve(nh_ref).cloned() {
                     Some(ObjectData::Integer(n)) if n > 0 => n as usize,
-                    _ => { eprintln!("❌ ERROR: Tensor.mha() n_heads must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.mha() n_heads must be a positive integer"); }
                 };
                 let (wq_shape, wq_data) = match self.resolve(wq_ref).cloned() {
                     Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
-                    _ => { eprintln!("❌ ERROR: Tensor.mha() Wq must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.mha() Wq must be a Tensor"); }
                 };
                 let wk_data = match self.resolve(wk_ref).cloned() { Some(ObjectData::Tensor { data: d, .. }) => d, _ => return EvalResult::Error };
                 let wv_data = match self.resolve(wv_ref).cloned() { Some(ObjectData::Tensor { data: d, .. }) => d, _ => return EvalResult::Error };
                 let wo_data = match self.resolve(wo_ref).cloned() { Some(ObjectData::Tensor { data: d, .. }) => d, _ => return EvalResult::Error };
                 if wq_shape.len() != 2 || wq_shape[0] != d_model || wq_shape[1] != d_model || d_model % n_heads != 0 {
-                    eprintln!("❌ ERROR: Tensor.mha() Wq/Wk/Wv/Wo must be [d_model, d_model], d_model divisible by n_heads");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.mha() Wq/Wk/Wv/Wo must be [d_model, d_model], d_model divisible by n_heads");
                 }
                 let dh = d_model / n_heads;
                 let sl = seq_len;
@@ -1703,17 +1628,15 @@ impl super::Evaluator {
             // ── one_hot(vocab_size) ───────────────────────────────────────────
             "one_hot" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.one_hot(vocab_size) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.one_hot(vocab_size) requires 1 argument");
                 }
                 if shape.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.one_hot() input must be 1D [seq_len] of indices");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.one_hot() input must be 1D [seq_len] of indices");
                 }
                 let v_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let vocab = match self.resolve(v_ref).cloned() {
                     Some(ObjectData::Integer(n)) if n > 0 => n as usize,
-                    _ => { eprintln!("❌ ERROR: Tensor.one_hot() vocab_size must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.one_hot() vocab_size must be a positive integer"); }
                 };
                 let seq_len = shape[0];
                 let mut out = vec![0.0f64; seq_len * vocab];
@@ -1727,12 +1650,10 @@ impl super::Evaluator {
             // ── lstm(Wx, Wh, b, h0, c0) → [1, hidden_size] last hidden state ─
             "lstm" => {
                 if dot_call.arguments.len() != 5 {
-                    eprintln!("❌ ERROR: Tensor.lstm(Wx, Wh, b, h0, c0) requires 5 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.lstm(Wx, Wh, b, h0, c0) requires 5 arguments");
                 }
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.lstm() input must be 2D [seq_len, input_size]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.lstm() input must be 2D [seq_len, input_size]");
                 }
                 let (seq_len, input_size) = (shape[0], shape[1]);
                 let wx_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
@@ -1742,34 +1663,34 @@ impl super::Evaluator {
                 let c0_ref = match self.eval_expression(&dot_call.arguments[4]) { EvalResult::Value(r) => r, other => return other };
                 let (wx_shape, wx_data) = match self.resolve(wx_ref).cloned() {
                     Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
-                    _ => { eprintln!("❌ ERROR: Tensor.lstm() Wx must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.lstm() Wx must be a Tensor"); }
                 };
                 let (wh_shape, wh_data) = match self.resolve(wh_ref).cloned() {
                     Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
-                    _ => { eprintln!("❌ ERROR: Tensor.lstm() Wh must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.lstm() Wh must be a Tensor"); }
                 };
                 let b_data = match self.resolve(b_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.lstm() b must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.lstm() b must be a Tensor"); }
                 };
                 let h0_data = match self.resolve(h0_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.lstm() h0 must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.lstm() h0 must be a Tensor"); }
                 };
                 let c0_data = match self.resolve(c0_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.lstm() c0 must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.lstm() c0 must be a Tensor"); }
                 };
                 if wx_shape.len() != 2 || wx_shape[0] != input_size || wx_shape[1] % 4 != 0 {
-                    eprintln!("❌ ERROR: Tensor.lstm() Wx must be [input_size, 4*hidden_size]"); return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.lstm() Wx must be [input_size, 4*hidden_size]");
                 }
                 let four_h = wx_shape[1];
                 let hidden_size = four_h / 4;
                 if wh_shape.len() != 2 || wh_shape[0] != hidden_size || wh_shape[1] != four_h {
-                    eprintln!("❌ ERROR: Tensor.lstm() Wh must be [hidden_size, 4*hidden_size]"); return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.lstm() Wh must be [hidden_size, 4*hidden_size]");
                 }
                 if b_data.len() != four_h {
-                    eprintln!("❌ ERROR: Tensor.lstm() b must have length 4*hidden_size"); return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.lstm() b must have length 4*hidden_size");
                 }
                 // Forward pass
                 let mut h_all = vec![0.0f64; (seq_len + 1) * hidden_size];
@@ -1825,12 +1746,10 @@ impl super::Evaluator {
             // ── gru(Wx, Wh, b, h0) → [1, hidden_size] last hidden state ──────
             "gru" => {
                 if dot_call.arguments.len() != 4 {
-                    eprintln!("❌ ERROR: Tensor.gru(Wx, Wh, b, h0) requires 4 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.gru(Wx, Wh, b, h0) requires 4 arguments");
                 }
                 if shape.len() != 2 {
-                    eprintln!("❌ ERROR: Tensor.gru() input must be 2D [seq_len, input_size]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.gru() input must be 2D [seq_len, input_size]");
                 }
                 let (seq_len, input_size) = (shape[0], shape[1]);
                 let wx_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
@@ -1839,30 +1758,30 @@ impl super::Evaluator {
                 let h0_ref = match self.eval_expression(&dot_call.arguments[3]) { EvalResult::Value(r) => r, other => return other };
                 let (wx_shape, wx_data) = match self.resolve(wx_ref).cloned() {
                     Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
-                    _ => { eprintln!("❌ ERROR: Tensor.gru() Wx must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.gru() Wx must be a Tensor"); }
                 };
                 let (wh_shape, wh_data) = match self.resolve(wh_ref).cloned() {
                     Some(ObjectData::Tensor { shape: s, data: d, .. }) => (s, d),
-                    _ => { eprintln!("❌ ERROR: Tensor.gru() Wh must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.gru() Wh must be a Tensor"); }
                 };
                 let b_data = match self.resolve(b_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.gru() b must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.gru() b must be a Tensor"); }
                 };
                 let h0_data = match self.resolve(h0_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => { eprintln!("❌ ERROR: Tensor.gru() h0 must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Tensor.gru() h0 must be a Tensor"); }
                 };
                 if wx_shape.len() != 2 || wx_shape[0] != input_size || wx_shape[1] % 3 != 0 {
-                    eprintln!("❌ ERROR: Tensor.gru() Wx must be [input_size, 3*hidden_size]"); return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.gru() Wx must be [input_size, 3*hidden_size]");
                 }
                 let three_h = wx_shape[1];
                 let hidden_size = three_h / 3;
                 if wh_shape.len() != 2 || wh_shape[0] != hidden_size || wh_shape[1] != three_h {
-                    eprintln!("❌ ERROR: Tensor.gru() Wh must be [hidden_size, 3*hidden_size]"); return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.gru() Wh must be [hidden_size, 3*hidden_size]");
                 }
                 if b_data.len() != three_h {
-                    eprintln!("❌ ERROR: Tensor.gru() b must have length 3*hidden_size"); return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", "Tensor.gru() b must have length 3*hidden_size");
                 }
                 let mut h_all = vec![0.0f64; (seq_len + 1) * hidden_size];
                 let mut gates_r = vec![0.0f64; seq_len * hidden_size];
@@ -1915,19 +1834,16 @@ impl super::Evaluator {
             // ── outer product ─────────────────────────────────────────────────
             "outer" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.outer(other) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.outer(other) requires 1 argument");
                 }
                 if shape.len() != 1 {
-                    eprintln!("❌ ERROR: Tensor.outer() requires 1D tensors");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Tensor.outer() requires 1D tensors");
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 match self.resolve(other_ref).cloned() {
                     Some(ObjectData::Tensor { shape: os, data: od , ..}) => {
                         if os.len() != 1 {
-                            eprintln!("❌ ERROR: Tensor.outer() argument must be a 1D Tensor");
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TypeError", "Tensor.outer() argument must be a 1D Tensor");
                         }
                         let m = shape[0];
                         let n = os[0];
@@ -1935,13 +1851,12 @@ impl super::Evaluator {
                         for i in 0..m { for j in 0..n { out.push(data[i] * od[j]); } }
                         EvalResult::Value(self.alloc(ObjectData::Tensor { shape: vec![m, n], data: out, tid: 0 }))
                     }
-                    _ => { eprintln!("❌ ERROR: Tensor.outer() argument must be a Tensor"); EvalResult::Error }
+                    _ => { self.rt_err_kind("TypeError", "Tensor.outer() argument must be a Tensor") }
                 }
             }
 
             _ => {
-                eprintln!("❌ ERROR: Unknown Tensor method '{}'", dot_call.method);
-                EvalResult::Error
+                self.rt_err_kind("TypeError", format!("Unknown Tensor method '{}'", dot_call.method))
             }
         }
     }
@@ -2052,23 +1967,20 @@ impl super::Evaluator {
                                 if row_i == 0 {
                                     ncols = cols.len();
                                 } else if cols.len() != ncols {
-                                    eprintln!("❌ ERROR: Tensor.from() — all rows must have the same length");
-                                    return EvalResult::Error;
+                                    return self.rt_err_kind("TensorError", "Tensor.from() — all rows must have the same length");
                                 }
                                 for c in cols {
                                     match c {
                                         OwnedValue::Integer(n) => data.push(*n as f64),
                                         OwnedValue::Decimal(d) => data.push(*d),
                                         _ => {
-                                            eprintln!("❌ ERROR: Tensor.from() — elements must be numbers");
-                                            return EvalResult::Error;
+                                            return self.rt_err_kind("TypeError", "Tensor.from() — elements must be numbers");
                                         }
                                     }
                                 }
                             }
                             _ => {
-                                eprintln!("❌ ERROR: Tensor.from() — mixed nesting not allowed");
-                                return EvalResult::Error;
+                                return self.rt_err_kind("TensorError", "Tensor.from() — mixed nesting not allowed");
                             }
                         }
                     }
@@ -2085,8 +1997,7 @@ impl super::Evaluator {
                             OwnedValue::Integer(n) => data.push(*n as f64),
                             OwnedValue::Decimal(d) => data.push(*d),
                             _ => {
-                                eprintln!("❌ ERROR: Tensor.from() — elements must be numbers");
-                                return EvalResult::Error;
+                                return self.rt_err_kind("TypeError", "Tensor.from() — elements must be numbers");
                             }
                         }
                     }
@@ -2095,8 +2006,7 @@ impl super::Evaluator {
                 }
             }
             _ => {
-                eprintln!("❌ ERROR: Tensor.from() requires an array argument");
-                EvalResult::Error
+                self.rt_err_kind("TypeError", "Tensor.from() requires an array argument")
             }
         }
     }
@@ -2110,8 +2020,7 @@ impl super::Evaluator {
         op: &str,
     ) -> EvalResult {
         if dot_call.arguments.len() != 1 {
-            eprintln!("❌ ERROR: Tensor.{}() requires 1 argument", op);
-            return EvalResult::Error;
+            return self.rt_err_kind("TypeError", format!("Tensor.{}() requires 1 argument", op));
         }
         let arg_ref = match self.eval_expression(&dot_call.arguments[0]) {
             EvalResult::Value(r) => r,
@@ -2131,8 +2040,7 @@ impl super::Evaluator {
         let result_data = match self.resolve(arg_ref).cloned() {
             Some(ObjectData::Tensor { shape: s2, data: d2 , ..}) => {
                 if s2 != shape {
-                    eprintln!("❌ ERROR: Tensor.{}() shape mismatch: {:?} vs {:?}", op, shape, s2);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TensorError", format!("Tensor.{}() shape mismatch: {:?} vs {:?}", op, shape, s2));
                 }
                 data.iter().zip(d2.iter()).map(|(a, b)| match op {
                     "add" => a + b,
@@ -2162,8 +2070,7 @@ impl super::Evaluator {
                 }).collect()
             }
             _ => {
-                eprintln!("❌ ERROR: Tensor.{}() requires a Tensor or numeric argument", op);
-                return EvalResult::Error;
+                return self.rt_err_kind("TypeError", format!("Tensor.{}() requires a Tensor or numeric argument", op));
             }
         };
         let out_ref = self.alloc(ObjectData::Tensor { shape, data: result_data , tid: 0});

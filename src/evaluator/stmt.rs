@@ -177,78 +177,22 @@ impl super::Evaluator {
             }
 
             Statement::While(while_stmt) => {
-                loop {
-                    // Guardar watermark antes de evaluar la condición para liberar el temporal
-                    // inmediatamente después — evita que se acumule una allocación por iteración.
-                    let cond_mark = if !self.scopes.is_empty() {
-                        Some(self.scopes.arena.watermark())
-                    } else {
-                        None
-                    };
-
-                    // 1. Evaluate condition
-                    let condition_ref = match self.eval_expression(&while_stmt.condition) {
-                        EvalResult::Value(v) => v,
-                        EvalResult::Error => return EvalResult::Error,
-                        EvalResult::Return(v) => return EvalResult::Return(v),
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
-                    };
-
-                    let condition_data = self.resolve(condition_ref).unwrap().clone();
-
-                    // Liberar el temporal de la condición antes de decidir si continuar
-                    if let Some(mark) = cond_mark {
-                        self.scopes.arena.reset_to(mark);
-                    }
-
-                    if !self.is_truthy(&condition_data) {
-                        break;
-                    }
-
-                    // 2. Evaluate body — body value is discarded (while is a statement, not expression)
-                    match self.eval_block_discard(&while_stmt.body) {
-                        EvalResult::Value(_) => {}
-                        EvalResult::Break    => break,
-                        EvalResult::Continue => continue,
-                        EvalResult::Return(v) => return EvalResult::Return(v),
-                        EvalResult::Error => return EvalResult::Error,
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        EvalResult::BreakLabel(ref l) if while_stmt.label.as_deref() == Some(l.as_str()) => break,
-                        EvalResult::ContinueLabel(ref l) if while_stmt.label.as_deref() == Some(l.as_str()) => continue,
-                        other => return other,
-                    }
-                }
-                EvalResult::Value(self.null_ref)
+                // At top level (scopes empty) the condition temporaries would land in
+                // the global arena, which never shrinks — one orphan slot per iteration
+                // for the whole program lifetime. An ephemeral frame routes them to the
+                // scoped arena, where the per-iteration watermark reset reclaims them.
+                let wrapped = self.scopes.is_empty();
+                if wrapped { self.scopes.push(); }
+                let res = self.eval_while_loop(while_stmt);
+                if wrapped { self.pop_loop_frame(res) } else { res }
             }
 
             Statement::DoWhile(do_stmt) => {
-                loop {
-                    // Execute body first
-                    match self.eval_block_discard(&do_stmt.body) {
-                        EvalResult::Value(_) => {}
-                        EvalResult::Break    => break,
-                        EvalResult::Continue => {}
-                        EvalResult::Return(v) => return EvalResult::Return(v),
-                        EvalResult::Error => return EvalResult::Error,
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        EvalResult::BreakLabel(ref l) if do_stmt.label.as_deref() == Some(l.as_str()) => break,
-                        EvalResult::ContinueLabel(ref l) if do_stmt.label.as_deref() == Some(l.as_str()) => {}
-                        other => return other,
-                    }
-                    // Then check condition
-                    let cond_ref = match self.eval_expression(&do_stmt.condition) {
-                        EvalResult::Value(v) => v,
-                        EvalResult::Error => return EvalResult::Error,
-                        EvalResult::Return(v) => return EvalResult::Return(v),
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
-                    };
-                    if !self.is_truthy(self.resolve(cond_ref).unwrap()) {
-                        break;
-                    }
-                }
-                EvalResult::Value(self.null_ref)
+                // Same ephemeral top-level frame as While (see comment there).
+                let wrapped = self.scopes.is_empty();
+                if wrapped { self.scopes.push(); }
+                let res = self.eval_do_while_loop(do_stmt);
+                if wrapped { self.pop_loop_frame(res) } else { res }
             }
 
             Statement::For(for_stmt) => {
@@ -498,24 +442,16 @@ impl super::Evaluator {
                             RegionId::Global => &mut self.global_arena,
                             RegionId::Scoped => &mut self.scopes.arena,
                         };
-                        if let Some(ObjectData::Dict { entries, .. }) = arena.get_mut(arr_ref.index) {
-                            let mut replaced = false;
-                            for entry in entries.iter_mut() {
-                                let key_str = match &entry.0 {
-                                    OwnedValue::Str(s) => s.clone(),
-                                    OwnedValue::Integer(i) => i.to_string(),
-                                    OwnedValue::Decimal(d) => d.to_string(),
-                                    OwnedValue::Boolean(b) => b.to_string(),
-                                    _ => format!("{:?}", entry.0),
-                                };
-                                if key_str == search_key {
-                                    entry.1 = owned_val.clone();
-                                    replaced = true;
-                                    break;
+                        if let Some(ObjectData::Dict { entries, index, .. }) = arena.get_mut(arr_ref.index) {
+                            // O(1) via the slot-resident hash index; replacing a value
+                            // in place keeps the index valid, a push invalidates it by
+                            // length and it rebuilds on the next lookup.
+                            match index.lookup(entries, &search_key) {
+                                Some(i) => entries[i].1 = owned_val,
+                                None => {
+                                    entries.push((OwnedValue::Str(search_key.clone()), owned_val));
+                                    index.record_append(&search_key, entries.len() - 1);
                                 }
-                            }
-                            if !replaced {
-                                entries.push((OwnedValue::Str(search_key), owned_val));
                             }
                         }
                     }
@@ -684,6 +620,111 @@ impl super::Evaluator {
                 }
             }
         }
+    }
+
+    // Pops the ephemeral frame that wraps a top-level While/DoWhile, re-planting
+    // Throw/Return payloads first so their refs survive the frame's truncation.
+    fn pop_loop_frame(&mut self, res: EvalResult) -> EvalResult {
+        match res {
+            EvalResult::Throw(v) => {
+                let owned = self.extract(v);
+                self.scopes.pop();
+                EvalResult::Throw(self.plant(owned))
+            }
+            EvalResult::Return(v) => {
+                let owned = self.extract(v);
+                self.scopes.pop();
+                EvalResult::Return(self.plant(owned))
+            }
+            other => {
+                self.scopes.pop();
+                other
+            }
+        }
+    }
+
+    fn eval_while_loop(&mut self, while_stmt: &ast::WhileStatement) -> EvalResult {
+        loop {
+            // Guardar watermark antes de evaluar la condición para liberar el temporal
+            // inmediatamente después — evita que se acumule una allocación por iteración.
+            let cond_mark = if !self.scopes.is_empty() {
+                Some(self.scopes.arena.watermark())
+            } else {
+                None
+            };
+
+            // 1. Evaluate condition
+            let condition_ref = match self.eval_expression(&while_stmt.condition) {
+                EvalResult::Value(v) => v,
+                EvalResult::Error => return EvalResult::Error,
+                EvalResult::Return(v) => return EvalResult::Return(v),
+                EvalResult::Throw(v) => return EvalResult::Throw(v),
+                _ => return EvalResult::Error,
+            };
+
+            let condition_data = self.resolve(condition_ref).unwrap().clone();
+
+            // Liberar el temporal de la condición antes de decidir si continuar
+            if let Some(mark) = cond_mark {
+                self.scopes.arena.reset_to(mark);
+            }
+
+            if !self.is_truthy(&condition_data) {
+                break;
+            }
+
+            // 2. Evaluate body — body value is discarded (while is a statement, not expression)
+            match self.eval_block_discard(&while_stmt.body) {
+                EvalResult::Value(_) => {}
+                EvalResult::Break    => break,
+                EvalResult::Continue => continue,
+                EvalResult::Return(v) => return EvalResult::Return(v),
+                EvalResult::Error => return EvalResult::Error,
+                EvalResult::Throw(v) => return EvalResult::Throw(v),
+                EvalResult::BreakLabel(ref l) if while_stmt.label.as_deref() == Some(l.as_str()) => break,
+                EvalResult::ContinueLabel(ref l) if while_stmt.label.as_deref() == Some(l.as_str()) => continue,
+                other => return other,
+            }
+        }
+        EvalResult::Value(self.null_ref)
+    }
+
+    fn eval_do_while_loop(&mut self, do_stmt: &ast::WhileStatement) -> EvalResult {
+        loop {
+            // Execute body first
+            match self.eval_block_discard(&do_stmt.body) {
+                EvalResult::Value(_) => {}
+                EvalResult::Break    => break,
+                EvalResult::Continue => {}
+                EvalResult::Return(v) => return EvalResult::Return(v),
+                EvalResult::Error => return EvalResult::Error,
+                EvalResult::Throw(v) => return EvalResult::Throw(v),
+                EvalResult::BreakLabel(ref l) if do_stmt.label.as_deref() == Some(l.as_str()) => break,
+                EvalResult::ContinueLabel(ref l) if do_stmt.label.as_deref() == Some(l.as_str()) => {}
+                other => return other,
+            }
+            // Then check condition — free its temporary immediately (same as While)
+            let cond_mark = if !self.scopes.is_empty() {
+                Some(self.scopes.arena.watermark())
+            } else {
+                None
+            };
+            let cond_ref = match self.eval_expression(&do_stmt.condition) {
+                EvalResult::Value(v) => v,
+                EvalResult::Error => return EvalResult::Error,
+                EvalResult::Return(v) => return EvalResult::Return(v),
+                EvalResult::Throw(v) => return EvalResult::Throw(v),
+                _ => return EvalResult::Error,
+            };
+            let truthy = self.is_truthy(self.resolve(cond_ref).unwrap());
+            if let Some(mark) = cond_mark {
+                self.scopes.arena.reset_to(mark);
+            }
+            if !truthy {
+                break;
+            }
+        }
+        EvalResult::Value(self.null_ref)
     }
 
     pub(super) fn eval_foreach(&mut self, stmt: &ast::ForEachStatement) -> EvalResult {

@@ -1732,24 +1732,23 @@ impl super::Evaluator {
 
             "open" => {
                 if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Gui.open(title, width, height) requires 3 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.open(title, width, height) requires 3 arguments");
                 }
                 let title = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { eprintln!("❌ ERROR: Gui.open title must be a string"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.open title must be a string"); }
                 };
                 let w = match self.gui_int_arg(&dot_call.arguments[1]) {
                     Some(v) if v > 0 => v as u32,
-                    _ => { eprintln!("❌ ERROR: Gui.open width must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.open width must be a positive integer"); }
                 };
                 let h = match self.gui_int_arg(&dot_call.arguments[2]) {
                     Some(v) if v > 0 => v as u32,
-                    _ => { eprintln!("❌ ERROR: Gui.open height must be a positive integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.open height must be a positive integer"); }
                 };
                 let host = match host() {
                     Some(h) => h.clone(),
-                    None => { eprintln!("❌ ERROR: Gui.open: GUI host not initialized"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("GuiError", "Gui.open: GUI host not initialized"); }
                 };
                 let (ww, wh) = {
                     let mut g = host.inner.lock().unwrap();
@@ -1763,8 +1762,7 @@ impl super::Evaluator {
                     }
                     if g.open_failed {
                         drop(g);
-                        eprintln!("❌ ERROR: Gui.open: failed to create window");
-                        return EvalResult::Error;
+                        return self.rt_err_kind("GuiError", "Gui.open: failed to create window");
                     }
                     (g.win_w.max(1), g.win_h.max(1))
                 };
@@ -1789,21 +1787,20 @@ impl super::Evaluator {
             }
 
             "present" => {
-                let host = match host() { Some(h) => h.clone(), None => { eprintln!("❌ ERROR: Gui.present: no GUI host"); return EvalResult::Error; } };
+                let host = match host() { Some(h) => h.clone(), None => { return self.rt_err_kind("GuiError", "Gui.present: no GUI host"); } };
                 match self.gui_state.as_mut() {
                     Some(st) => { st.present(&host); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.present: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.present: no window open") }
                 }
             }
 
             "clear" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.clear(color) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.clear(color) requires 1 argument");
                 }
                 let color = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(v) => (v as u32) & 0x00FF_FFFF,
-                    None => { eprintln!("❌ ERROR: Gui.clear color must be an integer 0xRRGGBB"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.clear color must be an integer 0xRRGGBB"); }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => {
@@ -1819,7 +1816,7 @@ impl super::Evaluator {
                         st.clip_stack.clear();
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { eprintln!("❌ ERROR: Gui.clear: no window open (call Gui.open first)"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.clear: no window open (call Gui.open first)") }
                 }
             }
 
@@ -1829,14 +1826,13 @@ impl super::Evaluator {
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => { st.fill_rect(x as i32, y as i32, w as i32, h as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.fillRect: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.fillRect: no window open") }
                 }
             }
 
             "fillRectAlpha" => {
                 if dot_call.arguments.len() != 6 {
-                    eprintln!("❌ ERROR: Gui.fillRectAlpha(x, y, w, h, color, alpha) requires 6 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.fillRectAlpha(x, y, w, h, color, alpha) requires 6 arguments");
                 }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
@@ -1847,7 +1843,7 @@ impl super::Evaluator {
                 let (x, y, w, h, color, alpha) = match (x, y, w, h, c, a) {
                     (Some(x), Some(y), Some(w), Some(h), Some(c), Some(a)) =>
                         (x as i32, y as i32, w as i32, h as i32, (c as u32) & 0x00FF_FFFF, a.clamp(0, 255) as u32),
-                    _ => { eprintln!("❌ ERROR: Gui.fillRectAlpha requires 6 integers"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.fillRectAlpha requires 6 integers"); }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => {
@@ -1857,32 +1853,30 @@ impl super::Evaluator {
                         st.blend_rect(x, y, w, h, r, g, b, alpha);
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { eprintln!("❌ ERROR: Gui.fillRectAlpha: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.fillRectAlpha: no window open") }
                 }
             }
 
             "setPixel" => {
                 if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Gui.setPixel(x, y, color) requires 3 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.setPixel(x, y, color) requires 3 arguments");
                 }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
                 let c = self.gui_int_arg(&dot_call.arguments[2]);
                 let (x, y, color) = match (x, y, c) {
                     (Some(x), Some(y), Some(c)) => (x as i32, y as i32, (c as u32) & 0x00FF_FFFF),
-                    _ => { eprintln!("❌ ERROR: Gui.setPixel requires 3 integers"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.setPixel requires 3 integers"); }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => { st.put(x, y, color); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.setPixel: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.setPixel: no window open") }
                 }
             }
 
             "drawLine" => {
                 if dot_call.arguments.len() != 5 {
-                    eprintln!("❌ ERROR: Gui.drawLine(x0, y0, x1, y1, color) requires 5 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.drawLine(x0, y0, x1, y1, color) requires 5 arguments");
                 }
                 let x0 = self.gui_int_arg(&dot_call.arguments[0]);
                 let y0 = self.gui_int_arg(&dot_call.arguments[1]);
@@ -1891,11 +1885,11 @@ impl super::Evaluator {
                 let c  = self.gui_int_arg(&dot_call.arguments[4]);
                 let (x0, y0, x1, y1, color) = match (x0, y0, x1, y1, c) {
                     (Some(a), Some(b), Some(c), Some(d), Some(e)) => (a as i32, b as i32, c as i32, d as i32, (e as u32) & 0x00FF_FFFF),
-                    _ => { eprintln!("❌ ERROR: Gui.drawLine requires 5 integers"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.drawLine requires 5 integers"); }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => { st.draw_line(x0, y0, x1, y1, color); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.drawLine: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.drawLine: no window open") }
                 }
             }
 
@@ -1907,8 +1901,7 @@ impl super::Evaluator {
                 // (nChars-1)*spacing aparte para situar el caret.
                 let n = dot_call.arguments.len();
                 if n < 5 || n > 7 {
-                    eprintln!("❌ ERROR: Gui.drawText(x, y, text, scale, color [, style [, letterSpacing]]) requires 5 to 7 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.drawText(x, y, text, scale, color [, style [, letterSpacing]]) requires 5 to 7 arguments");
                 }
                 let x     = self.gui_int_arg(&dot_call.arguments[0]);
                 let y     = self.gui_int_arg(&dot_call.arguments[1]);
@@ -1920,11 +1913,10 @@ impl super::Evaluator {
                 let (x, y, text, scale, color) = match (x, y, text, scale, c) {
                     (Some(x), Some(y), Some(t), Some(s), Some(c)) =>
                         (x as i32, y as i32, t, s.max(1) as i32, (c as u32) & 0x00FF_FFFF),
-                    _ => { eprintln!("❌ ERROR: Gui.drawText requires (int, int, string, int, int [, int [, int]])"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.drawText requires (int, int, string, int, int [, int [, int]])"); }
                 };
                 if self.gui_state.is_none() {
-                    eprintln!("❌ ERROR: Gui.drawText: no window open");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("GuiError", "Gui.drawText: no window open");
                 }
                 if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
                 let fonts = self.gui_fonts.as_mut().unwrap();
@@ -1935,14 +1927,13 @@ impl super::Evaluator {
 
             "measureText" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Gui.measureText(text, scale) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.measureText(text, scale) requires 2 arguments");
                 }
                 let text  = self.gui_str_arg(&dot_call.arguments[0]);
                 let scale = self.gui_int_arg(&dot_call.arguments[1]);
                 let (text, scale) = match (text, scale) {
                     (Some(t), Some(s)) => (t, s.max(1)),
-                    _ => { eprintln!("❌ ERROR: Gui.measureText requires (string, int)"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.measureText requires (string, int)"); }
                 };
                 // Familia default → aritmética de rejilla (sin tocar FontSystem);
                 // familia custom → ancho real por advances (proporcional).
@@ -1959,28 +1950,26 @@ impl super::Evaluator {
 
             "loadFont" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.loadFont(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.loadFont(path) requires 1 argument");
                 }
                 let path = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { eprintln!("❌ ERROR: Gui.loadFont path must be a string"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.loadFont path must be a string"); }
                 };
                 if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
                 match self.gui_fonts.as_mut().unwrap().load_font_file(&path) {
                     Some(family) => EvalResult::Value(self.alloc(ObjectData::Str(family))),
-                    None => { eprintln!("❌ ERROR: Gui.loadFont: could not load font file '{}'", path); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", format!("Gui.loadFont: could not load font file '{}'", path)) }
                 }
             }
 
             "setFont" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.setFont(family) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.setFont(family) requires 1 argument");
                 }
                 let name = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { eprintln!("❌ ERROR: Gui.setFont family must be a string"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.setFont family must be a string"); }
                 };
                 if self.gui_fonts.is_none() {
                     // Sin FontSystem todavía: el reset a default no necesita crearlo.
@@ -2002,14 +1991,13 @@ impl super::Evaluator {
 
             "fillRoundRect" => {
                 if dot_call.arguments.len() != 6 {
-                    eprintln!("❌ ERROR: Gui.fillRoundRect(x, y, w, h, radius, color) requires 6 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.fillRoundRect(x, y, w, h, radius, color) requires 6 arguments");
                 }
                 let mut vals = [0i64; 6];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { eprintln!("❌ ERROR: Gui.fillRoundRect requires 6 integers"); return EvalResult::Error; }
+                        None => { return self.rt_err_kind("TypeError", "Gui.fillRoundRect requires 6 integers"); }
                     }
                 }
                 let color = (vals[5] as u32) & 0x00FF_FFFF;
@@ -2018,7 +2006,7 @@ impl super::Evaluator {
                         st.fill_round_rect(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, vals[4] as i32, color);
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { eprintln!("❌ ERROR: Gui.fillRoundRect: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.fillRoundRect: no window open") }
                 }
             }
 
@@ -2033,79 +2021,75 @@ impl super::Evaluator {
 
             "drawRect" => {
                 if dot_call.arguments.len() != 5 {
-                    eprintln!("❌ ERROR: Gui.drawRect(x, y, w, h, color) requires 5 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.drawRect(x, y, w, h, color) requires 5 arguments");
                 }
                 let mut vals = [0i64; 5];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { eprintln!("❌ ERROR: Gui.drawRect requires 5 integers"); return EvalResult::Error; }
+                        None => { return self.rt_err_kind("TypeError", "Gui.drawRect requires 5 integers"); }
                     }
                 }
                 let color = (vals[4] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
                     Some(st) => { st.draw_rect(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.drawRect: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.drawRect: no window open") }
                 }
             }
 
             "fillCircle" => {
                 if dot_call.arguments.len() != 4 {
-                    eprintln!("❌ ERROR: Gui.fillCircle(cx, cy, radius, color) requires 4 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.fillCircle(cx, cy, radius, color) requires 4 arguments");
                 }
                 let mut vals = [0i64; 4];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { eprintln!("❌ ERROR: Gui.fillCircle requires 4 integers"); return EvalResult::Error; }
+                        None => { return self.rt_err_kind("TypeError", "Gui.fillCircle requires 4 integers"); }
                     }
                 }
                 let color = (vals[3] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
                     Some(st) => { st.fill_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.fillCircle: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.fillCircle: no window open") }
                 }
             }
 
             // Contorno de círculo (1px).
             "drawCircle" => {
                 if dot_call.arguments.len() != 4 {
-                    eprintln!("❌ ERROR: Gui.drawCircle(cx, cy, radius, color) requires 4 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.drawCircle(cx, cy, radius, color) requires 4 arguments");
                 }
                 let mut vals = [0i64; 4];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { eprintln!("❌ ERROR: Gui.drawCircle requires 4 integers"); return EvalResult::Error; }
+                        None => { return self.rt_err_kind("TypeError", "Gui.drawCircle requires 4 integers"); }
                     }
                 }
                 let color = (vals[3] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
                     Some(st) => { st.draw_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.drawCircle: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.drawCircle: no window open") }
                 }
             }
 
             // Línea de grosor configurable (extremos/juntas redondeados, antialiased).
             "drawLineThick" => {
                 if dot_call.arguments.len() != 6 {
-                    eprintln!("❌ ERROR: Gui.drawLineThick(x0, y0, x1, y1, width, color) requires 6 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.drawLineThick(x0, y0, x1, y1, width, color) requires 6 arguments");
                 }
                 let mut vals = [0i64; 6];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { eprintln!("❌ ERROR: Gui.drawLineThick requires 6 integers"); return EvalResult::Error; }
+                        None => { return self.rt_err_kind("TypeError", "Gui.drawLineThick requires 6 integers"); }
                     }
                 }
                 let color = (vals[5] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
                     Some(st) => { st.draw_thick_line(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, vals[4] as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.drawLineThick: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.drawLineThick: no window open") }
                 }
             }
 
@@ -2113,18 +2097,17 @@ impl super::Evaluator {
             // Gui.drawPolyline(points, width, color).
             "drawPolyline" => {
                 if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Gui.drawPolyline(points, width, color) requires 3 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.drawPolyline(points, width, color) requires 3 arguments");
                 }
                 let pts = match self.gui_int_vec_arg(&dot_call.arguments[0]) {
                     Some(p) => p,
-                    None => { eprintln!("❌ ERROR: Gui.drawPolyline points must be a flat int array [x0,y0,x1,y1,…]"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.drawPolyline points must be a flat int array [x0,y0,x1,y1,…]"); }
                 };
                 let width = self.gui_int_arg(&dot_call.arguments[1]);
                 let color = self.gui_int_arg(&dot_call.arguments[2]);
                 let (width, color) = match (width, color) {
                     (Some(w), Some(c)) => (w.max(1) as i32, (c as u32) & 0x00FF_FFFF),
-                    _ => { eprintln!("❌ ERROR: Gui.drawPolyline requires (int[], int, int)"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.drawPolyline requires (int[], int, int)"); }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => {
@@ -2135,7 +2118,7 @@ impl super::Evaluator {
                         }
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { eprintln!("❌ ERROR: Gui.drawPolyline: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.drawPolyline: no window open") }
                 }
             }
 
@@ -2143,34 +2126,32 @@ impl super::Evaluator {
             // Gui.fillPolygon(points, color).
             "fillPolygon" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Gui.fillPolygon(points, color) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.fillPolygon(points, color) requires 2 arguments");
                 }
                 let pts = match self.gui_int_vec_arg(&dot_call.arguments[0]) {
                     Some(p) => p,
-                    None => { eprintln!("❌ ERROR: Gui.fillPolygon points must be a flat int array [x0,y0,x1,y1,…]"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.fillPolygon points must be a flat int array [x0,y0,x1,y1,…]"); }
                 };
                 let color = match self.gui_int_arg(&dot_call.arguments[1]) {
                     Some(c) => (c as u32) & 0x00FF_FFFF,
-                    None => { eprintln!("❌ ERROR: Gui.fillPolygon color must be an integer"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.fillPolygon color must be an integer"); }
                 };
                 let verts: Vec<(i32, i32)> = pts.chunks_exact(2).map(|c| (c[0] as i32, c[1] as i32)).collect();
                 match self.gui_state.as_mut() {
                     Some(st) => { st.fill_polygon(&verts, color); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.fillPolygon: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.fillPolygon: no window open") }
                 }
             }
 
             "setImePosition" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Gui.setImePosition(x, y) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.setImePosition(x, y) requires 2 arguments");
                 }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
                 let (x, y) = match (x, y) {
                     (Some(x), Some(y)) => (x as i32, y as i32),
-                    _ => { eprintln!("❌ ERROR: Gui.setImePosition requires 2 integers"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.setImePosition requires 2 integers"); }
                 };
                 if let Some(host) = host() {
                     let mut g = host.inner.lock().unwrap();
@@ -2217,12 +2198,11 @@ impl super::Evaluator {
 
             "keyDown" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.keyDown(name) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.keyDown(name) requires 1 argument");
                 }
                 let name = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { eprintln!("❌ ERROR: Gui.keyDown name must be a string"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.keyDown name must be a string"); }
                 };
                 let down = match self.gui_state.as_ref() {
                     Some(st) => match name.as_str() {
@@ -2330,8 +2310,7 @@ impl super::Evaluator {
 
             "clipboardSet" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.clipboardSet(text) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.clipboardSet(text) requires 1 argument");
                 }
                 let text = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
                 if let Some(st) = self.gui_state.as_mut() {
@@ -2380,12 +2359,11 @@ impl super::Evaluator {
             // Copia una imagen (por handle, como devuelve loadImage/loadImageBytes) al portapapeles.
             "clipboardSetImage" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.clipboardSetImage(handle) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.clipboardSetImage(handle) requires 1 argument");
                 }
                 let hnd = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(h) => h,
-                    None => { eprintln!("❌ ERROR: Gui.clipboardSetImage handle must be an integer"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.clipboardSetImage handle must be an integer"); }
                 };
                 // ARGB u32 (interno) → RGBA bytes (lo que espera arboard).
                 let rgba = self.gui_state.as_ref().and_then(|s| s.images.get(&hnd)).map(|im| {
@@ -2409,24 +2387,22 @@ impl super::Evaluator {
                         EvalResult::Value(self.null_ref)
                     }
                     None => {
-                        eprintln!("❌ ERROR: Gui.clipboardSetImage: invalid image handle");
-                        EvalResult::Error
+                        self.rt_err_kind("GuiError", "Gui.clipboardSetImage: invalid image handle")
                     }
                 }
             }
 
             "loadImage" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.loadImage(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.loadImage(path) requires 1 argument");
                 }
                 let path = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { eprintln!("❌ ERROR: Gui.loadImage path must be a string"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.loadImage path must be a string"); }
                 };
                 let decoded = match image::open(&path) {
                     Ok(img) => img.to_rgba8(),
-                    Err(e) => { eprintln!("❌ ERROR: Gui.loadImage: {}", e); return EvalResult::Error; }
+                    Err(e) => { return self.rt_err_kind("GuiError", format!("Gui.loadImage: {}", e)); }
                 };
                 let (w, h) = (decoded.width() as usize, decoded.height() as usize);
                 let mut px = Vec::with_capacity(w * h);
@@ -2441,7 +2417,7 @@ impl super::Evaluator {
                         st.images.insert(id, ImageData { w, h, px });
                         EvalResult::Value(self.int_ref(id))
                     }
-                    None => { eprintln!("❌ ERROR: Gui.loadImage: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.loadImage: no window open") }
                 }
             }
 
@@ -2450,8 +2426,7 @@ impl super::Evaluator {
                 // (0–255, como devuelve File binario / fetch / Binary.*), no desde una ruta.
                 // Sirve para imágenes fetcheadas o generadas sin tocar el disco.
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.loadImageBytes(bytes) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.loadImageBytes(bytes) requires 1 argument");
                 }
                 let r = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -2460,18 +2435,18 @@ impl super::Evaluator {
                 };
                 let elems = match self.resolve(r) {
                     Some(ObjectData::Array { elements, .. }) => elements.clone(),
-                    _ => { eprintln!("❌ ERROR: Gui.loadImageBytes: argument must be a byte array"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.loadImageBytes: argument must be a byte array"); }
                 };
                 let mut bytes = Vec::with_capacity(elems.len());
                 for elem in elems {
                     match elem {
                         OwnedValue::Integer(b) => bytes.push(b as u8),
-                        _ => { eprintln!("❌ ERROR: Gui.loadImageBytes: all elements must be integers (0–255)"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Gui.loadImageBytes: all elements must be integers (0–255)"); }
                     }
                 }
                 let decoded = match image::load_from_memory(&bytes) {
                     Ok(img) => img.to_rgba8(),
-                    Err(e) => { eprintln!("❌ ERROR: Gui.loadImageBytes: {}", e); return EvalResult::Error; }
+                    Err(e) => { return self.rt_err_kind("GuiError", format!("Gui.loadImageBytes: {}", e)); }
                 };
                 let (w, h) = (decoded.width() as usize, decoded.height() as usize);
                 let mut px = Vec::with_capacity(w * h);
@@ -2486,7 +2461,7 @@ impl super::Evaluator {
                         st.images.insert(id, ImageData { w, h, px });
                         EvalResult::Value(self.int_ref(id))
                     }
-                    None => { eprintln!("❌ ERROR: Gui.loadImageBytes: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.loadImageBytes: no window open") }
                 }
             }
 
@@ -2496,15 +2471,14 @@ impl super::Evaluator {
                 //          6 args = (x,y,handle,w,h,alpha) escalado + alpha global 0–255.
                 let n = dot_call.arguments.len();
                 if n != 3 && n != 5 && n != 6 {
-                    eprintln!("❌ ERROR: Gui.drawImage requires (x,y,handle) | (x,y,handle,w,h) | (x,y,handle,w,h,alpha)");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.drawImage requires (x,y,handle) | (x,y,handle,w,h) | (x,y,handle,w,h,alpha)");
                 }
                 let mut vals = [0i64; 6];
                 vals[5] = 255; // alpha por defecto
                 for i in 0..n {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => vals[i] = v,
-                        None => { eprintln!("❌ ERROR: Gui.drawImage requires integers"); return EvalResult::Error; }
+                        None => { return self.rt_err_kind("TypeError", "Gui.drawImage requires integers"); }
                     }
                 }
                 let (x, y, hnd) = (vals[0] as i32, vals[1] as i32, vals[2]);
@@ -2517,20 +2491,19 @@ impl super::Evaluator {
                         }
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { eprintln!("❌ ERROR: Gui.drawImage: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.drawImage: no window open") }
                 }
             }
 
             "fillGradient" => {
                 if dot_call.arguments.len() != 7 {
-                    eprintln!("❌ ERROR: Gui.fillGradient(x, y, w, h, color1, color2, vertical) requires 7 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.fillGradient(x, y, w, h, color1, color2, vertical) requires 7 arguments");
                 }
                 let mut vals = [0i64; 6];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { eprintln!("❌ ERROR: Gui.fillGradient requires 6 integers (x,y,w,h,color1,color2) + vertical(bool)"); return EvalResult::Error; }
+                        None => { return self.rt_err_kind("TypeError", "Gui.fillGradient requires 6 integers (x,y,w,h,color1,color2) + vertical(bool)"); }
                     }
                 }
                 // `vertical` acepta bool (true=vertical) o int (≠0).
@@ -2542,25 +2515,24 @@ impl super::Evaluator {
                 let c2 = (vals[5] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
                     Some(st) => { st.fill_gradient(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, c1, c2, vertical); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.fillGradient: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.fillGradient: no window open") }
                 }
             }
 
             "blur" => {
                 if dot_call.arguments.len() != 5 {
-                    eprintln!("❌ ERROR: Gui.blur(x, y, w, h, radius) requires 5 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.blur(x, y, w, h, radius) requires 5 arguments");
                 }
                 let mut vals = [0i64; 5];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { eprintln!("❌ ERROR: Gui.blur requires 5 integers"); return EvalResult::Error; }
+                        None => { return self.rt_err_kind("TypeError", "Gui.blur requires 5 integers"); }
                     }
                 }
                 match self.gui_state.as_mut() {
                     Some(st) => { st.blur_region(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, vals[4] as i32); EvalResult::Value(self.null_ref) }
-                    None => { eprintln!("❌ ERROR: Gui.blur: no window open"); EvalResult::Error }
+                    None => { self.rt_err_kind("GuiError", "Gui.blur: no window open") }
                 }
             }
 
@@ -2571,14 +2543,13 @@ impl super::Evaluator {
 
             "textAdvances" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Gui.textAdvances(text, scale) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.textAdvances(text, scale) requires 2 arguments");
                 }
                 let text  = self.gui_str_arg(&dot_call.arguments[0]);
                 let scale = self.gui_int_arg(&dot_call.arguments[1]);
                 let (text, scale) = match (text, scale) {
                     (Some(t), Some(s)) => (t, s.max(1) as i32),
-                    _ => { eprintln!("❌ ERROR: Gui.textAdvances requires (string, int)"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.textAdvances requires (string, int)"); }
                 };
                 let xs = match self.gui_fonts.as_mut() {
                     Some(f) => f.advances(&text, scale),
@@ -2609,12 +2580,11 @@ impl super::Evaluator {
             // Ícono de la ventana desde un archivo de imagen ("" = quitar).
             "setWindowIcon" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.setWindowIcon(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.setWindowIcon(path) requires 1 argument");
                 }
                 let path = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { eprintln!("❌ ERROR: Gui.setWindowIcon path must be a string"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.setWindowIcon path must be a string"); }
                 };
                 let cmd = if path.is_empty() {
                     GuiCmd::SetWindowIcon(Vec::new(), 0, 0)
@@ -2625,7 +2595,7 @@ impl super::Evaluator {
                             let (w, h) = (rgba.width(), rgba.height());
                             GuiCmd::SetWindowIcon(rgba.into_raw(), w, h)
                         }
-                        Err(e) => { eprintln!("❌ ERROR: Gui.setWindowIcon: {}", e); return EvalResult::Error; }
+                        Err(e) => { return self.rt_err_kind("GuiError", format!("Gui.setWindowIcon: {}", e)); }
                     }
                 };
                 if let Some(host) = host() {
@@ -2638,18 +2608,17 @@ impl super::Evaluator {
             // Gui.setCursorImage(path, hotspotX, hotspotY); "" = restaurar el cursor por defecto.
             "setCursorImage" => {
                 if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Gui.setCursorImage(path, hotspotX, hotspotY) requires 3 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.setCursorImage(path, hotspotX, hotspotY) requires 3 arguments");
                 }
                 let path = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { eprintln!("❌ ERROR: Gui.setCursorImage path must be a string"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.setCursorImage path must be a string"); }
                 };
                 let hx = self.gui_int_arg(&dot_call.arguments[1]);
                 let hy = self.gui_int_arg(&dot_call.arguments[2]);
                 let (hx, hy) = match (hx, hy) {
                     (Some(a), Some(b)) => (a.max(0) as u32, b.max(0) as u32),
-                    _ => { eprintln!("❌ ERROR: Gui.setCursorImage hotspotX/hotspotY must be integers"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.setCursorImage hotspotX/hotspotY must be integers"); }
                 };
                 let cmd = if path.is_empty() {
                     GuiCmd::SetCustomCursor(Vec::new(), 0, 0, 0, 0)
@@ -2660,7 +2629,7 @@ impl super::Evaluator {
                             let (w, h) = (rgba.width(), rgba.height());
                             GuiCmd::SetCustomCursor(rgba.into_raw(), w, h, hx.min(w.saturating_sub(1)), hy.min(h.saturating_sub(1)))
                         }
-                        Err(e) => { eprintln!("❌ ERROR: Gui.setCursorImage: {}", e); return EvalResult::Error; }
+                        Err(e) => { return self.rt_err_kind("GuiError", format!("Gui.setCursorImage: {}", e)); }
                     }
                 };
                 if let Some(host) = host() {
@@ -2676,12 +2645,11 @@ impl super::Evaluator {
 
             "idleWait" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.idleWait(maxMs) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.idleWait(maxMs) requires 1 argument");
                 }
                 let ms = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(v) => v.max(0) as u64,
-                    None => { eprintln!("❌ ERROR: Gui.idleWait maxMs must be an integer"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.idleWait maxMs must be an integer"); }
                 };
                 if let Some(host) = host() {
                     let g = host.inner.lock().unwrap();
@@ -2696,12 +2664,11 @@ impl super::Evaluator {
 
             "imageSize" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.imageSize(handle) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.imageSize(handle) requires 1 argument");
                 }
                 let hnd = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(h) => h,
-                    None => { eprintln!("❌ ERROR: Gui.imageSize handle must be an integer"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", "Gui.imageSize handle must be an integer"); }
                 };
                 let (w, h) = self.gui_state.as_ref()
                     .and_then(|s| s.images.get(&hnd))
@@ -2715,8 +2682,7 @@ impl super::Evaluator {
 
             "pushClip" => {
                 if dot_call.arguments.len() != 4 {
-                    eprintln!("❌ ERROR: Gui.pushClip(x, y, w, h) requires 4 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.pushClip(x, y, w, h) requires 4 arguments");
                 }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
@@ -2724,7 +2690,7 @@ impl super::Evaluator {
                 let h = self.gui_int_arg(&dot_call.arguments[3]);
                 let (x, y, w, h) = match (x, y, w, h) {
                     (Some(x), Some(y), Some(w), Some(h)) => (x as i32, y as i32, w as i32, h as i32),
-                    _ => { eprintln!("❌ ERROR: Gui.pushClip requires 4 integers"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.pushClip requires 4 integers"); }
                 };
                 if let Some(st) = self.gui_state.as_mut() {
                     st.clip_stack.push(st.clip);
@@ -2751,8 +2717,7 @@ impl super::Evaluator {
 
             "setTitle" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.setTitle(text) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.setTitle(text) requires 1 argument");
                 }
                 let t = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
                 if let Some(h) = host() {
@@ -2765,8 +2730,7 @@ impl super::Evaluator {
 
             "setCursor" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Gui.setCursor(style) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Gui.setCursor(style) requires 1 argument");
                 }
                 let name = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
                 if let Some(h) = host() {
@@ -2787,7 +2751,7 @@ impl super::Evaluator {
                 EvalResult::Value(self.null_ref)
             }
 
-            _ => { eprintln!("❌ ERROR: Unknown Gui method '{}'", dot_call.method); EvalResult::Error }
+            _ => { self.rt_err_kind("TypeError", format!("Unknown Gui method '{}'", dot_call.method)) }
         }
     }
 
@@ -2874,7 +2838,7 @@ impl super::Evaluator {
     fn gui_window_control(&mut self, method: &str, dot_call: &ast::DotCallExpression) -> EvalResult {
         let cmd = match method {
             "setMinSize" | "setMaxSize" => {
-                if dot_call.arguments.len() != 2 { eprintln!("❌ ERROR: Gui.{}(w, h) requires 2 arguments", method); return EvalResult::Error; }
+                if dot_call.arguments.len() != 2 { return self.rt_err_kind("TypeError", format!("Gui.{}(w, h) requires 2 arguments", method)); }
                 let w = self.gui_int_arg(&dot_call.arguments[0]);
                 let h = self.gui_int_arg(&dot_call.arguments[1]);
                 match (w, h) {
@@ -2882,23 +2846,23 @@ impl super::Evaluator {
                         let (w, h) = (w.max(0) as u32, h.max(0) as u32);
                         if method == "setMinSize" { GuiCmd::SetMinSize(w, h) } else { GuiCmd::SetMaxSize(w, h) }
                     }
-                    _ => { eprintln!("❌ ERROR: Gui.{} requires 2 integers", method); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", format!("Gui.{} requires 2 integers", method)); }
                 }
             }
             "setPosition" => {
-                if dot_call.arguments.len() != 2 { eprintln!("❌ ERROR: Gui.setPosition(x, y) requires 2 arguments"); return EvalResult::Error; }
+                if dot_call.arguments.len() != 2 { return self.rt_err_kind("TypeError", "Gui.setPosition(x, y) requires 2 arguments"); }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
                 match (x, y) {
                     (Some(x), Some(y)) => GuiCmd::SetPosition(x as i32, y as i32),
-                    _ => { eprintln!("❌ ERROR: Gui.setPosition requires 2 integers"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Gui.setPosition requires 2 integers"); }
                 }
             }
             _ => {
-                if dot_call.arguments.len() != 1 { eprintln!("❌ ERROR: Gui.{}(bool) requires 1 argument", method); return EvalResult::Error; }
+                if dot_call.arguments.len() != 1 { return self.rt_err_kind("TypeError", format!("Gui.{}(bool) requires 1 argument", method)); }
                 let b = match self.gui_bool_arg(&dot_call.arguments[0]) {
                     Some(b) => b,
-                    None => { eprintln!("❌ ERROR: Gui.{} requires a boolean", method); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("TypeError", format!("Gui.{} requires a boolean", method)); }
                 };
                 match method {
                     "setResizable"     => GuiCmd::SetResizable(b),
@@ -2925,15 +2889,14 @@ impl super::Evaluator {
     /// (el hilo main muestra el diálogo modal) vía handshake dialog_seq/dialog_done.
     fn gui_file_dialog(&mut self, save: bool, dot_call: &ast::DotCallExpression) -> EvalResult {
         if self.gui_state.is_none() {
-            eprintln!("❌ ERROR: Gui file dialog: no window open");
-            return EvalResult::Error;
+            return self.rt_err_kind("GuiError", "Gui file dialog: no window open");
         }
         let n = dot_call.arguments.len();
         let filter_name  = if n >= 1 { self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default() } else { String::new() };
         let exts_csv     = if n >= 2 { self.gui_str_arg(&dot_call.arguments[1]).unwrap_or_default() } else { String::new() };
         let default_name = if save && n >= 3 { self.gui_str_arg(&dot_call.arguments[2]).unwrap_or_default() } else { String::new() };
         let filter_exts: Vec<String> = exts_csv.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        let host = match host() { Some(h) => h.clone(), None => { eprintln!("❌ ERROR: Gui file dialog: no GUI host"); return EvalResult::Error; } };
+        let host = match host() { Some(h) => h.clone(), None => { return self.rt_err_kind("GuiError", "Gui file dialog: no GUI host"); } };
         let want = {
             let mut g = host.inner.lock().unwrap();
             g.dialog_seq += 1;

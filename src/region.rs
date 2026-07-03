@@ -108,6 +108,91 @@ impl OwnedValue {
     }
 }
 
+/// Canonical key string used for ALL dict lookups (read, index-assign). Keeping
+/// it in one place guarantees the hash index and the linear scans agree — e.g.
+/// `d[5]` finds a `"5"` key, exactly like the historical inline conversions.
+pub fn dict_key_str(k: &OwnedValue) -> String {
+    match k {
+        OwnedValue::Str(s) => s.clone(),
+        OwnedValue::Integer(i) => i.to_string(),
+        OwnedValue::Decimal(d) => d.to_string(),
+        OwnedValue::Boolean(b) => b.to_string(),
+        _ => format!("{:?}", k),
+    }
+}
+
+/// Lazy hash index over a dict's entries: canonical key string → entry position.
+/// It is a pure cache — `lookup` validates every hit against the real entries, so
+/// code that mutates `entries` directly (get_mut paths) can never make it return
+/// a wrong position; at worst it triggers a rebuild. Cloning a dict resets the
+/// index (rebuilt on demand), keeping value-semantics copies cheap.
+#[derive(Debug, Default)]
+pub struct DictIndex {
+    // (key → first position, entries.len() at build time, canonical key of the
+    // last entry at build time). len+last-key stamp detects every mutation shape
+    // the evaluator can produce (append, clear, and any future remove/re-push);
+    // in-place VALUE updates keep keys at their positions and stay valid.
+    #[allow(clippy::type_complexity)]
+    cache: std::cell::RefCell<(std::collections::HashMap<String, usize>, usize, String)>,
+}
+
+impl Clone for DictIndex {
+    fn clone(&self) -> Self {
+        DictIndex::default()
+    }
+}
+
+/// Below this size a linear scan beats building/consulting the hash map.
+const DICT_INDEX_MIN: usize = 16;
+
+impl DictIndex {
+    /// Position of `key` in `entries`, or None. O(1) amortized on large dicts,
+    /// plain linear scan on small ones (same cost as before the index existed).
+    /// The cache can never produce a wrong answer: hits are validated against the
+    /// real entry and false positions fall back to the linear scan; a key present
+    /// in `entries` is always present in a freshly built cache, so a miss after
+    /// a stamp-checked build is a true miss.
+    pub fn lookup(&self, entries: &[(OwnedValue, OwnedValue)], key: &str) -> Option<usize> {
+        if entries.len() < DICT_INDEX_MIN {
+            return entries.iter().position(|(k, _)| dict_key_str(k) == key);
+        }
+        let mut guard = self.cache.borrow_mut();
+        let (cache, built_len, built_last) = &mut *guard;
+        let last_key = dict_key_str(&entries[entries.len() - 1].0);
+        if *built_len != entries.len() || *built_last != last_key {
+            cache.clear();
+            for (i, (k, _)) in entries.iter().enumerate() {
+                // First occurrence wins, matching linear find-first semantics.
+                cache.entry(dict_key_str(k)).or_insert(i);
+            }
+            *built_len = entries.len();
+            *built_last = last_key;
+        }
+        match cache.get(key) {
+            Some(&i) if dict_key_str(&entries[i].0) == key => Some(i),
+            // Validated-hit failure: positions shifted without touching len or
+            // the last key. The key set is still covered by the cache, so the
+            // linear scan below stays correct — just slower until a rebuild.
+            Some(_) => entries.iter().position(|(k, _)| dict_key_str(k) == key),
+            None => None,
+        }
+    }
+
+    /// Keeps the cache warm across an append (`entries.push` right after a missed
+    /// `lookup`). Without this, building a large dict key-by-key would rebuild the
+    /// whole cache once per insert — O(N²) again. Only applies when the cache was
+    /// valid for the pre-push length; otherwise the next lookup rebuilds anyway.
+    pub fn record_append(&self, key: &str, pos: usize) {
+        let mut guard = self.cache.borrow_mut();
+        let (cache, built_len, built_last) = &mut *guard;
+        if *built_len == pos && !cache.is_empty() {
+            cache.entry(key.to_string()).or_insert(pos);
+            *built_len = pos + 1;
+            *built_last = key.to_string();
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ObjectData {
     Integer(i64),
@@ -123,6 +208,7 @@ pub enum ObjectData {
         key_type: String,
         value_type: String,
         entries: Vec<(OwnedValue, OwnedValue)>,
+        index: DictIndex,
     },
     Function {
         return_type: Option<String>,

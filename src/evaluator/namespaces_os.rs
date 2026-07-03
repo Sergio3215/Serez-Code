@@ -150,7 +150,7 @@ impl super::Evaluator {
                             elements: vec![self.extract(cr), self.extract(rr)],
                         }))
                     }
-                    Err(e) => { eprintln!("❌ ERROR: Terminal.getSize failed: {}", e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("Terminal.getSize failed: {}", e)),
                 }
             }
 
@@ -158,46 +158,43 @@ impl super::Evaluator {
                 use crossterm::{ExecutableCommand, terminal::{Clear, ClearType}};
                 match std::io::stdout().execute(Clear(ClearType::All)) {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: Terminal.clear failed: {}", e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("Terminal.clear failed: {}", e)),
                 }
             }
 
             "setCursor" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Terminal.setCursor(row, col) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Terminal.setCursor(row, col) requires 2 arguments");
                 }
                 let rr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let cr = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let row = match self.resolve(rr).cloned() {
                     Some(ObjectData::Integer(v)) => v as u16,
-                    _ => { eprintln!("❌ ERROR: Terminal.setCursor row must be an integer"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "Terminal.setCursor row must be an integer"),
                 };
                 let col = match self.resolve(cr).cloned() {
                     Some(ObjectData::Integer(v)) => v as u16,
-                    _ => { eprintln!("❌ ERROR: Terminal.setCursor col must be an integer"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "Terminal.setCursor col must be an integer"),
                 };
                 use crossterm::{ExecutableCommand, cursor::MoveTo};
                 match std::io::stdout().execute(MoveTo(col, row)) {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: Terminal.setCursor failed: {}", e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("Terminal.setCursor failed: {}", e)),
                 }
             }
 
             "writeByte" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Terminal.writeByte(byte) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Terminal.writeByte(byte) requires 1 argument");
                 }
                 let br = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let byte = match self.resolve(br).cloned() {
                     Some(ObjectData::Integer(v)) if v >= 0 && v <= 255 => v as u8,
-                    _ => { eprintln!("❌ ERROR: Terminal.writeByte requires an integer 0-255"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "Terminal.writeByte requires an integer 0-255"),
                 };
                 let mut out = std::io::stdout();
                 if out.write_all(&[byte]).is_err() || out.flush().is_err() {
-                    eprintln!("❌ ERROR: Terminal.writeByte write failed");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("IOError", "Terminal.writeByte write failed");
                 }
                 EvalResult::Value(self.null_ref)
             }
@@ -205,13 +202,12 @@ impl super::Evaluator {
             "setRawMode" => {
                 require_unsafe!(self, "Terminal.setRawMode");
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Terminal.setRawMode(bool) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Terminal.setRawMode(bool) requires 1 argument");
                 }
                 let ar = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let enable = match self.resolve(ar).cloned() {
                     Some(ObjectData::Boolean(b)) => b,
-                    _ => { eprintln!("❌ ERROR: Terminal.setRawMode requires a boolean"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "Terminal.setRawMode requires a boolean"),
                 };
                 let result = if enable {
                     crossterm::terminal::enable_raw_mode()
@@ -220,33 +216,31 @@ impl super::Evaluator {
                 };
                 match result {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: Terminal.setRawMode failed: {}", e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("Terminal.setRawMode failed: {}", e)),
                 }
             }
 
             "readByte" => {
                 require_unsafe!(self, "Terminal.readByte");
                 if !dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Terminal.readByte() takes no arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Terminal.readByte() takes no arguments");
                 }
                 let mut buf = [0u8; 1];
                 match std::io::stdin().lock().read_exact(&mut buf) {
                     Ok(_) => EvalResult::Value(self.alloc(ObjectData::Integer(buf[0] as i64))),
-                    Err(e) => { eprintln!("❌ ERROR: Terminal.readByte failed: {}", e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("Terminal.readByte failed: {}", e)),
                 }
             }
 
             "enableMouse" => {
                 require_unsafe!(self, "Terminal.enableMouse");
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Terminal.enableMouse(bool) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Terminal.enableMouse(bool) requires 1 argument");
                 }
                 let ar = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let enable = match self.resolve(ar).cloned() {
                     Some(ObjectData::Boolean(b)) => b,
-                    _ => { eprintln!("❌ ERROR: Terminal.enableMouse requires a boolean"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "Terminal.enableMouse requires a boolean"),
                 };
                 use crossterm::{ExecutableCommand, event::{EnableMouseCapture, DisableMouseCapture}};
                 let mut out = std::io::stdout();
@@ -257,7 +251,7 @@ impl super::Evaluator {
                 };
                 match result {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: Terminal.enableMouse failed: {}", e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("Terminal.enableMouse failed: {}", e)),
                 }
             }
 
@@ -268,8 +262,7 @@ impl super::Evaluator {
             "readEvent" => {
                 require_unsafe!(self, "Terminal.readEvent");
                 if !dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Terminal.readEvent() takes no arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Terminal.readEvent() takes no arguments");
                 }
                 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind, MouseButton};
                 match event::read() {
@@ -351,12 +344,15 @@ impl super::Evaluator {
                             ],
                         }))
                     }
-                    Err(e) => { eprintln!("❌ ERROR: Terminal.readEvent failed: {}", e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("IOError", format!("Terminal.readEvent failed: {}", e)),
                     _ => EvalResult::Value(self.null_ref),
                 }
             }
 
-            _ => { eprintln!("❌ ERROR: Unknown Terminal method '{}'", dot_call.method); EvalResult::Error }
+            _ => {
+                let m = dot_call.method.clone();
+                self.rt_err_kind("TypeError", format!("Unknown Terminal method '{}'", m))
+            }
         }
     }
 
@@ -377,13 +373,12 @@ impl super::Evaluator {
             "exec" => {
                 require_unsafe!(self, "OS.exec");
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: OS.exec(cmd, args) requires at least 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "OS.exec(cmd, args) requires at least 1 argument");
                 }
                 let cr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let cmd = match self.resolve(cr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: OS.exec: first argument must be a string command"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "OS.exec: first argument must be a string command"),
                 };
                 // Block system paths
                 let blocked = ["C:\\Windows\\System32", "/etc/", "/bin/", "/sbin/", "/usr/bin/"];
@@ -416,7 +411,7 @@ impl super::Evaluator {
                             ],
                         }))
                     }
-                    Err(e) => { eprintln!("❌ ERROR: OS.exec '{}' failed: {}", cmd, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("OSError", format!("OS.exec '{}' failed: {}", cmd, e)),
                 }
             }
 
@@ -427,13 +422,12 @@ impl super::Evaluator {
                 // La notificación de fin/error se cosecha por OS.tick() (poll-based).
                 require_unsafe!(self, "OS.spawn");
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: OS.spawn(cmd, [args]) requires at least 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "OS.spawn(cmd, [args]) requires at least 1 argument");
                 }
                 let cr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let cmd = match self.resolve(cr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: OS.spawn: first argument must be a string command"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "OS.spawn: first argument must be a string command"),
                 };
                 let blocked = ["C:\\Windows\\System32", "/etc/", "/bin/", "/sbin/", "/usr/bin/"];
                 if blocked.iter().any(|b| cmd.contains(b)) {
@@ -521,13 +515,12 @@ impl super::Evaluator {
             "kill" => {
                 require_unsafe!(self, "OS.kill");
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: OS.kill(pid) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "OS.kill(pid) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let pid = match self.resolve(pr).cloned() {
                     Some(ObjectData::Integer(v)) => v,
-                    _ => { eprintln!("❌ ERROR: OS.kill: pid must be an integer"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "OS.kill: pid must be an integer"),
                 };
                 #[cfg(windows)]
                 let result = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).status();
@@ -535,11 +528,14 @@ impl super::Evaluator {
                 let result = std::process::Command::new("kill").arg(pid.to_string()).status();
                 match result {
                     Ok(_) => EvalResult::Value(self.null_ref),
-                    Err(e) => { eprintln!("❌ ERROR: OS.kill {} failed: {}", pid, e); EvalResult::Error }
+                    Err(e) => self.rt_err_kind("OSError", format!("OS.kill {} failed: {}", pid, e)),
                 }
             }
 
-            _ => { eprintln!("❌ ERROR: Unknown OS method '{}'", dot_call.method); EvalResult::Error }
+            _ => {
+                let m = dot_call.method.clone();
+                self.rt_err_kind("TypeError", format!("Unknown OS method '{}'", m))
+            }
         }
     }
 
@@ -551,13 +547,12 @@ impl super::Evaluator {
 
             "get" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Env.get(key) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Env.get(key) requires 1 argument");
                 }
                 let kr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let key = match self.resolve(kr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: Env.get requires a string key"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "Env.get requires a string key"),
                 };
                 match std::env::var(&key) {
                     Ok(val) => EvalResult::Value(self.alloc(ObjectData::Str(val))),
@@ -578,21 +573,23 @@ impl super::Evaluator {
             "set" => {
                 require_unsafe!(self, "Env.set");
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Env.set(key, value) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Env.set(key, value) requires 2 arguments");
                 }
                 let kr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let vr = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let key = match self.resolve(kr).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: Env.set key must be a string"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "Env.set key must be a string"),
                 };
                 let val = self.display(vr);
                 unsafe { std::env::set_var(&key, &val) };
                 EvalResult::Value(self.null_ref)
             }
 
-            _ => { eprintln!("❌ ERROR: Unknown Env method '{}'", dot_call.method); EvalResult::Error }
+            _ => {
+                let m = dot_call.method.clone();
+                self.rt_err_kind("TypeError", format!("Unknown Env method '{}'", m))
+            }
         }
     }
 
@@ -612,19 +609,21 @@ impl super::Evaluator {
 
             "sleep" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Time.sleep(ms) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Time.sleep(ms) requires 1 argument");
                 }
                 let mr = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(v) => v, _ => return EvalResult::Error };
                 let ms = match self.resolve(mr).cloned() {
                     Some(ObjectData::Integer(v)) => v.max(0) as u64,
-                    _ => { eprintln!("❌ ERROR: Time.sleep requires an integer (milliseconds)"); return EvalResult::Error; }
+                    _ => return self.rt_err_kind("TypeError", "Time.sleep requires an integer (milliseconds)"),
                 };
                 std::thread::sleep(std::time::Duration::from_millis(ms));
                 EvalResult::Value(self.null_ref)
             }
 
-            _ => { eprintln!("❌ ERROR: Unknown Time method '{}'", dot_call.method); EvalResult::Error }
+            _ => {
+                let m = dot_call.method.clone();
+                self.rt_err_kind("TypeError", format!("Unknown Time method '{}'", m))
+            }
         }
     }
 
@@ -655,7 +654,10 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Integer(os_uptime_secs())))
             }
 
-            _ => { eprintln!("❌ ERROR: Unknown System method '{}'", dot_call.method); EvalResult::Error }
+            _ => {
+                let m = dot_call.method.clone();
+                self.rt_err_kind("TypeError", format!("Unknown System method '{}'", m))
+            }
         }
     }
 }

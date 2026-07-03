@@ -138,8 +138,7 @@ impl super::Evaluator {
 
             "tape" => {
                 if !dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Autodiff.tape() takes no arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.tape() takes no arguments");
                 }
                 self.ad_recording = true;
                 self.ad_tape.clear();
@@ -165,8 +164,7 @@ impl super::Evaluator {
 
             "backward" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Autodiff.backward(loss) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.backward(loss) requires 1 argument");
                 }
                 let loss_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -174,13 +172,12 @@ impl super::Evaluator {
                 };
                 let (loss_data, loss_tid) = match self.resolve(loss_ref).cloned() {
                     Some(ObjectData::Tensor { data, tid, .. }) => (data, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.backward() argument must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.backward() argument must be a Tensor"); }
                 };
                 let seed_id = match self.ad_tensor_ids.get(&loss_tid).copied() {
                     Some(id) => id,
                     None => {
-                        eprintln!("❌ ERROR: Autodiff.backward() loss tensor was not created during tape recording");
-                        return EvalResult::Error;
+                        return self.rt_err_kind("AutodiffError", "Autodiff.backward() loss tensor was not created during tape recording");
                     }
                 };
                 self.ad_grads.insert(seed_id, vec![1.0; loss_data.len()]);
@@ -842,8 +839,7 @@ impl super::Evaluator {
 
             "gradient" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Autodiff.gradient(tensor) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.gradient(tensor) requires 1 argument");
                 }
                 let t_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -851,13 +847,12 @@ impl super::Evaluator {
                 };
                 let (shape, t_tid) = match self.resolve(t_ref).cloned() {
                     Some(ObjectData::Tensor { shape, tid, .. }) => (shape, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.gradient() argument must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.gradient() argument must be a Tensor"); }
                 };
                 let tape_id = match self.ad_tensor_ids.get(&t_tid).copied() {
                     Some(id) => id,
                     None => {
-                        eprintln!("❌ ERROR: Autodiff.gradient() tensor was not recorded during tape (tid={})", t_tid);
-                        return EvalResult::Error;
+                        return self.rt_err_kind("AutodiffError", format!("Autodiff.gradient() tensor was not recorded during tape (tid={})", t_tid));
                     }
                 };
                 let grad_data = self.ad_grads.get(&tape_id).cloned()
@@ -868,22 +863,20 @@ impl super::Evaluator {
             // ── Phase 1: Loss functions ───────────────────────────────────────
             "mseLoss" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Autodiff.mseLoss(pred, target) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.mseLoss(pred, target) requires 2 arguments");
                 }
                 let pred_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let tgt_ref  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let (pred_data, pred_shape, pred_tid) = match self.resolve(pred_ref).cloned() {
                     Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.mseLoss pred must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.mseLoss pred must be a Tensor"); }
                 };
                 let target_data = match self.resolve(tgt_ref).cloned() {
                     Some(ObjectData::Tensor { data, .. }) => data,
-                    _ => { eprintln!("❌ ERROR: Autodiff.mseLoss target must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.mseLoss target must be a Tensor"); }
                 };
                 if pred_data.len() != target_data.len() {
-                    eprintln!("❌ ERROR: Autodiff.mseLoss pred and target must have same size");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("AutodiffError", "Autodiff.mseLoss pred and target must have same size");
                 }
                 let n = pred_data.len();
                 let loss: f64 = pred_data.iter().zip(target_data.iter())
@@ -901,18 +894,17 @@ impl super::Evaluator {
 
             "maeLoss" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Autodiff.maeLoss(pred, target) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.maeLoss(pred, target) requires 2 arguments");
                 }
                 let pred_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let tgt_ref  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let (pred_data, _pred_shape, pred_tid) = match self.resolve(pred_ref).cloned() {
                     Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.maeLoss pred must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.maeLoss pred must be a Tensor"); }
                 };
                 let target_data = match self.resolve(tgt_ref).cloned() {
                     Some(ObjectData::Tensor { data, .. }) => data,
-                    _ => { eprintln!("❌ ERROR: Autodiff.maeLoss target must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.maeLoss target must be a Tensor"); }
                 };
                 let n = pred_data.len();
                 let loss: f64 = pred_data.iter().zip(target_data.iter())
@@ -929,18 +921,17 @@ impl super::Evaluator {
 
             "bceLoss" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Autodiff.bceLoss(pred, target) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.bceLoss(pred, target) requires 2 arguments");
                 }
                 let pred_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let tgt_ref  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let (pred_data, _ps, pred_tid) = match self.resolve(pred_ref).cloned() {
                     Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.bceLoss pred must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.bceLoss pred must be a Tensor"); }
                 };
                 let target_data = match self.resolve(tgt_ref).cloned() {
                     Some(ObjectData::Tensor { data, .. }) => data,
-                    _ => { eprintln!("❌ ERROR: Autodiff.bceLoss target must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.bceLoss target must be a Tensor"); }
                 };
                 let n = pred_data.len();
                 let eps = 1e-12_f64;
@@ -959,14 +950,13 @@ impl super::Evaluator {
 
             "crossEntropyLoss" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Autodiff.crossEntropyLoss(logits, targets) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.crossEntropyLoss(logits, targets) requires 2 arguments");
                 }
                 let logits_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let tgt_ref    = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let (logits_data, logits_shape, logits_tid) = match self.resolve(logits_ref).cloned() {
                     Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.crossEntropyLoss logits must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.crossEntropyLoss logits must be a Tensor"); }
                 };
                 // targets: either [batch] integer tensor or [batch, classes] one-hot
                 let target_data = match self.resolve(tgt_ref).cloned() {
@@ -980,17 +970,15 @@ impl super::Evaluator {
                             }
                         }).collect()
                     }
-                    _ => { eprintln!("❌ ERROR: Autodiff.crossEntropyLoss targets must be a Tensor or Array"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.crossEntropyLoss targets must be a Tensor or Array"); }
                 };
                 let (batch, classes) = if logits_shape.len() == 2 {
                     (logits_shape[0], logits_shape[1])
                 } else {
-                    eprintln!("❌ ERROR: Autodiff.crossEntropyLoss logits must be 2D [batch, classes]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.crossEntropyLoss logits must be 2D [batch, classes]");
                 };
                 if target_data.len() != batch {
-                    eprintln!("❌ ERROR: Autodiff.crossEntropyLoss targets length {} != batch {}", target_data.len(), batch);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("AutodiffError", format!("Autodiff.crossEntropyLoss targets length {} != batch {}", target_data.len(), batch));
                 }
                 // Compute softmax probabilities per row (numerically stable)
                 let mut probs = vec![0.0f64; batch * classes];
@@ -1019,19 +1007,18 @@ impl super::Evaluator {
             // ── Phase 1: Gradient clipping ────────────────────────────────────
             "clipGrad" => {
                 if dot_call.arguments.len() < 2 {
-                    eprintln!("❌ ERROR: Autodiff.clipGrad(grad, max_norm) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.clipGrad(grad, max_norm) requires 2 arguments");
                 }
                 let grad_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let max_norm_ref = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let (grad_data, grad_shape) = match self.resolve(grad_ref).cloned() {
                     Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
-                    _ => { eprintln!("❌ ERROR: Autodiff.clipGrad grad must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.clipGrad grad must be a Tensor"); }
                 };
                 let max_norm = match self.resolve(max_norm_ref) {
                     Some(ObjectData::Decimal(v)) => *v,
                     Some(ObjectData::Integer(v)) => *v as f64,
-                    _ => { eprintln!("❌ ERROR: Autodiff.clipGrad max_norm must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.clipGrad max_norm must be a number"); }
                 };
                 let norm: f64 = grad_data.iter().map(|x| x * x).sum::<f64>().sqrt();
                 let clipped: Vec<f64> = if norm > max_norm {
@@ -1046,19 +1033,18 @@ impl super::Evaluator {
             "clipGradNorm" => {
                 // clipGradNorm(grads_array, max_norm) — clips a collection of gradients by global norm
                 if dot_call.arguments.len() < 2 {
-                    eprintln!("❌ ERROR: Autodiff.clipGradNorm(grads, max_norm) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.clipGradNorm(grads, max_norm) requires 2 arguments");
                 }
                 let grads_ref  = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let max_norm_r = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let max_norm = match self.resolve(max_norm_r) {
                     Some(ObjectData::Decimal(v)) => *v,
                     Some(ObjectData::Integer(v)) => *v as f64,
-                    _ => { eprintln!("❌ ERROR: Autodiff.clipGradNorm max_norm must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.clipGradNorm max_norm must be a number"); }
                 };
                 let elements = match self.resolve(grads_ref).cloned() {
                     Some(ObjectData::Array { elements, .. }) => elements,
-                    _ => { eprintln!("❌ ERROR: Autodiff.clipGradNorm grads must be an Array of Tensors"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.clipGradNorm grads must be an Array of Tensors"); }
                 };
                 // Compute global norm
                 let mut global_norm_sq = 0.0_f64;
@@ -1069,7 +1055,7 @@ impl super::Evaluator {
                             global_norm_sq += data.iter().map(|x| x * x).sum::<f64>();
                             grads_data.push((data.clone(), shape.clone()));
                         }
-                        _ => { eprintln!("❌ ERROR: Autodiff.clipGradNorm all elements must be Tensors"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Autodiff.clipGradNorm all elements must be Tensors"); }
                     }
                 }
                 let global_norm = global_norm_sq.sqrt();
@@ -1086,8 +1072,7 @@ impl super::Evaluator {
             // ── Phase 1: Weight initialization ───────────────────────────────
             "xavierUniform" => {
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Autodiff.xavierUniform([shape]) requires shape argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.xavierUniform([shape]) requires shape argument");
                 }
                 let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
                     Ok(s) => s, Err(e) => return e,
@@ -1104,8 +1089,7 @@ impl super::Evaluator {
 
             "xavierNormal" => {
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Autodiff.xavierNormal([shape]) requires shape argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.xavierNormal([shape]) requires shape argument");
                 }
                 let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
                     Ok(s) => s, Err(e) => return e,
@@ -1119,8 +1103,7 @@ impl super::Evaluator {
 
             "heUniform" => {
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Autodiff.heUniform([shape]) requires shape argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.heUniform([shape]) requires shape argument");
                 }
                 let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
                     Ok(s) => s, Err(e) => return e,
@@ -1137,8 +1120,7 @@ impl super::Evaluator {
 
             "heNormal" => {
                 if dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: Autodiff.heNormal([shape]) requires shape argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.heNormal([shape]) requires shape argument");
                 }
                 let shape = match self.eval_shape_expr(&dot_call.arguments[0]) {
                     Ok(s) => s, Err(e) => return e,
@@ -1155,8 +1137,7 @@ impl super::Evaluator {
                 // adamStep(param, grad, m, v, step, lr, beta1=0.9, beta2=0.999, eps=1e-8)
                 // Returns Array [new_param, new_m, new_v]
                 if dot_call.arguments.len() < 6 {
-                    eprintln!("❌ ERROR: Autodiff.adamStep(param, grad, m, v, step, lr, [beta1, beta2, eps])");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("AutodiffError", "Autodiff.adamStep(param, grad, m, v, step, lr, [beta1, beta2, eps])");
                 }
                 let mut args = Vec::new();
                 for arg in &dot_call.arguments {
@@ -1167,29 +1148,29 @@ impl super::Evaluator {
                 }
                 let (param, p_shape) = match self.resolve(args[0]).cloned() {
                     Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
-                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep param must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.adamStep param must be a Tensor"); }
                 };
                 let (grad, _) = match self.resolve(args[1]).cloned() {
                     Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
-                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep grad must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.adamStep grad must be a Tensor"); }
                 };
                 let (m_data, _) = match self.resolve(args[2]).cloned() {
                     Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
-                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep m must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.adamStep m must be a Tensor"); }
                 };
                 let (v_data, _) = match self.resolve(args[3]).cloned() {
                     Some(ObjectData::Tensor { data, shape, .. }) => (data, shape),
-                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep v must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.adamStep v must be a Tensor"); }
                 };
                 let step = match self.resolve(args[4]) {
                     Some(ObjectData::Integer(n)) => *n as f64,
                     Some(ObjectData::Decimal(d)) => *d,
-                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep step must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.adamStep step must be a number"); }
                 };
                 let lr = match self.resolve(args[5]) {
                     Some(ObjectData::Decimal(d)) => *d,
                     Some(ObjectData::Integer(n)) => *n as f64,
-                    _ => { eprintln!("❌ ERROR: Autodiff.adamStep lr must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.adamStep lr must be a number"); }
                 };
                 let beta1 = if args.len() > 6 { match self.resolve(args[6]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => 0.9 } } else { 0.9 };
                 let beta2 = if args.len() > 7 { match self.resolve(args[7]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => 0.999 } } else { 0.999 };
@@ -1220,19 +1201,18 @@ impl super::Evaluator {
             "adamwStep" => {
                 // adamwStep(param, grad, m, v, step, lr, wd=0.01, beta1=0.9, beta2=0.999, eps=1e-8)
                 if dot_call.arguments.len() < 6 {
-                    eprintln!("❌ ERROR: Autodiff.adamwStep(param, grad, m, v, step, lr, [wd, beta1, beta2, eps])");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("AutodiffError", "Autodiff.adamwStep(param, grad, m, v, step, lr, [wd, beta1, beta2, eps])");
                 }
                 let mut args = Vec::new();
                 for arg in &dot_call.arguments {
                     match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other }
                 }
-                let (param, p_shape) = match self.resolve(args[0]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: Autodiff.adamwStep param must be Tensor"); return EvalResult::Error; } };
-                let (grad, _)   = match self.resolve(args[1]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: Autodiff.adamwStep grad must be Tensor"); return EvalResult::Error; } };
-                let (m_data, _) = match self.resolve(args[2]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: Autodiff.adamwStep m must be Tensor"); return EvalResult::Error; } };
-                let (v_data, _) = match self.resolve(args[3]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: Autodiff.adamwStep v must be Tensor"); return EvalResult::Error; } };
-                let step = match self.resolve(args[4]) { Some(ObjectData::Integer(n)) => *n as f64, Some(ObjectData::Decimal(d)) => *d, _ => { eprintln!("❌ ERROR: step must be number"); return EvalResult::Error; } };
-                let lr   = match self.resolve(args[5]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => { eprintln!("❌ ERROR: lr must be number"); return EvalResult::Error; } };
+                let (param, p_shape) = match self.resolve(args[0]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "Autodiff.adamwStep param must be Tensor"); } };
+                let (grad, _)   = match self.resolve(args[1]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "Autodiff.adamwStep grad must be Tensor"); } };
+                let (m_data, _) = match self.resolve(args[2]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "Autodiff.adamwStep m must be Tensor"); } };
+                let (v_data, _) = match self.resolve(args[3]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "Autodiff.adamwStep v must be Tensor"); } };
+                let step = match self.resolve(args[4]) { Some(ObjectData::Integer(n)) => *n as f64, Some(ObjectData::Decimal(d)) => *d, _ => { return self.rt_err_kind("TypeError", "step must be number"); } };
+                let lr   = match self.resolve(args[5]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => { return self.rt_err_kind("TypeError", "lr must be number"); } };
                 let wd    = if args.len() > 6 { match self.resolve(args[6]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => 0.01 } } else { 0.01 };
                 let beta1 = if args.len() > 7 { match self.resolve(args[7]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.9 } } else { 0.9 };
                 let beta2 = if args.len() > 8 { match self.resolve(args[8]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.999 } } else { 0.999 };
@@ -1261,15 +1241,14 @@ impl super::Evaluator {
                 // sgdStep(param, grad, velocity, lr, momentum=0.9, weight_decay=0.0)
                 // Returns [new_param, new_velocity]
                 if dot_call.arguments.len() < 4 {
-                    eprintln!("❌ ERROR: Autodiff.sgdStep(param, grad, velocity, lr, [momentum, weight_decay])");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("AutodiffError", "Autodiff.sgdStep(param, grad, velocity, lr, [momentum, weight_decay])");
                 }
                 let mut args = Vec::new();
                 for arg in &dot_call.arguments { match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other } }
-                let (param, p_shape) = match self.resolve(args[0]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: param must be Tensor"); return EvalResult::Error; } };
-                let (mut grad, _) = match self.resolve(args[1]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: grad must be Tensor"); return EvalResult::Error; } };
-                let (vel, _) = match self.resolve(args[2]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: velocity must be Tensor"); return EvalResult::Error; } };
-                let lr = match self.resolve(args[3]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => { eprintln!("❌ ERROR: lr must be number"); return EvalResult::Error; } };
+                let (param, p_shape) = match self.resolve(args[0]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "param must be Tensor"); } };
+                let (mut grad, _) = match self.resolve(args[1]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "grad must be Tensor"); } };
+                let (vel, _) = match self.resolve(args[2]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "velocity must be Tensor"); } };
+                let lr = match self.resolve(args[3]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => { return self.rt_err_kind("TypeError", "lr must be number"); } };
                 let momentum = if args.len() > 4 { match self.resolve(args[4]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.9 } } else { 0.9 };
                 let wd = if args.len() > 5 { match self.resolve(args[5]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.0 } } else { 0.0 };
                 if wd > 0.0 { for i in 0..grad.len() { grad[i] += wd * param[i]; } }
@@ -1290,15 +1269,14 @@ impl super::Evaluator {
                 // rmspropStep(param, grad, sq_avg, lr, alpha=0.99, eps=1e-8)
                 // Returns [new_param, new_sq_avg]
                 if dot_call.arguments.len() < 4 {
-                    eprintln!("❌ ERROR: Autodiff.rmspropStep(param, grad, sq_avg, lr, [alpha, eps])");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("AutodiffError", "Autodiff.rmspropStep(param, grad, sq_avg, lr, [alpha, eps])");
                 }
                 let mut args = Vec::new();
                 for arg in &dot_call.arguments { match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other } }
-                let (param, p_shape) = match self.resolve(args[0]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: param must be Tensor"); return EvalResult::Error; } };
-                let (grad, _) = match self.resolve(args[1]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: grad must be Tensor"); return EvalResult::Error; } };
-                let (sq_avg, _) = match self.resolve(args[2]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { eprintln!("❌ ERROR: sq_avg must be Tensor"); return EvalResult::Error; } };
-                let lr = match self.resolve(args[3]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => { eprintln!("❌ ERROR: lr must be number"); return EvalResult::Error; } };
+                let (param, p_shape) = match self.resolve(args[0]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "param must be Tensor"); } };
+                let (grad, _) = match self.resolve(args[1]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "grad must be Tensor"); } };
+                let (sq_avg, _) = match self.resolve(args[2]).cloned() { Some(ObjectData::Tensor { data, shape, .. }) => (data, shape), _ => { return self.rt_err_kind("TypeError", "sq_avg must be Tensor"); } };
+                let lr = match self.resolve(args[3]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => { return self.rt_err_kind("TypeError", "lr must be number"); } };
                 let alpha = if args.len() > 4 { match self.resolve(args[4]) { Some(ObjectData::Decimal(d)) => *d, _ => 0.99 } } else { 0.99 };
                 let eps   = if args.len() > 5 { match self.resolve(args[5]) { Some(ObjectData::Decimal(d)) => *d, _ => 1e-8 } } else { 1e-8 };
                 let mut new_sq = vec![0.0f64; param.len()];
@@ -1320,22 +1298,21 @@ impl super::Evaluator {
                 // x: [N, C] tensor; gamma, beta: [C] tensors
                 // Returns normalized tensor [N, C]
                 if dot_call.arguments.len() < 4 {
-                    eprintln!("❌ ERROR: Autodiff.batchNorm(x, gamma, beta, training, [eps])");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("AutodiffError", "Autodiff.batchNorm(x, gamma, beta, training, [eps])");
                 }
                 let mut args = Vec::new();
                 for arg in &dot_call.arguments { match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other } }
                 let (x_data, x_shape, x_tid) = match self.resolve(args[0]).cloned() {
                     Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.batchNorm x must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.batchNorm x must be a Tensor"); }
                 };
                 let (g_data, g_tid) = match self.resolve(args[1]).cloned() {
                     Some(ObjectData::Tensor { data, tid, .. }) => (data, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.batchNorm gamma must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.batchNorm gamma must be a Tensor"); }
                 };
                 let (b_data, b_tid) = match self.resolve(args[2]).cloned() {
                     Some(ObjectData::Tensor { data, tid, .. }) => (data, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.batchNorm beta must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.batchNorm beta must be a Tensor"); }
                 };
                 let training = match self.resolve(args[3]) {
                     Some(ObjectData::Boolean(b)) => *b,
@@ -1345,8 +1322,7 @@ impl super::Evaluator {
                     match self.resolve(args[4]) { Some(ObjectData::Decimal(d)) => *d, Some(ObjectData::Integer(n)) => *n as f64, _ => 1e-5 }
                 } else { 1e-5 };
                 if x_shape.len() != 2 {
-                    eprintln!("❌ ERROR: Autodiff.batchNorm x must be 2D [N, C]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.batchNorm x must be 2D [N, C]");
                 }
                 let (n, c) = (x_shape[0], x_shape[1]);
                 let nf = n as f64;
@@ -1396,19 +1372,18 @@ impl super::Evaluator {
                 // dropout(x, p, training)
                 // p = drop probability (0 = no drop, 1 = drop all)
                 if dot_call.arguments.len() < 2 {
-                    eprintln!("❌ ERROR: Autodiff.dropout(x, p, [training=true])");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("AutodiffError", "Autodiff.dropout(x, p, [training=true])");
                 }
                 let mut args = Vec::new();
                 for arg in &dot_call.arguments { match self.eval_expression(arg) { EvalResult::Value(r) => args.push(r), other => return other } }
                 let (x_data, x_shape, x_tid) = match self.resolve(args[0]).cloned() {
                     Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.dropout x must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.dropout x must be a Tensor"); }
                 };
                 let p = match self.resolve(args[1]) {
                     Some(ObjectData::Decimal(d)) => *d,
                     Some(ObjectData::Integer(n)) => *n as f64,
-                    _ => { eprintln!("❌ ERROR: Autodiff.dropout p must be a number"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.dropout p must be a number"); }
                 };
                 let training = if args.len() > 2 {
                     match self.resolve(args[2]) { Some(ObjectData::Boolean(b)) => *b, _ => true }
@@ -1438,18 +1413,16 @@ impl super::Evaluator {
                 // weight:  [vocab_size, emb_dim] Tensor
                 // Returns: [seq_len, emb_dim] Tensor
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Autodiff.embedding(indices, weight) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.embedding(indices, weight) requires 2 arguments");
                 }
                 let idx_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let w_ref   = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let (w_data, w_shape, w_tid) = match self.resolve(w_ref).cloned() {
                     Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
-                    _ => { eprintln!("❌ ERROR: Autodiff.embedding weight must be a Tensor [vocab, emb_dim]"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.embedding weight must be a Tensor [vocab, emb_dim]"); }
                 };
                 if w_shape.len() != 2 {
-                    eprintln!("❌ ERROR: Autodiff.embedding weight must be 2D [vocab_size, emb_dim]");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.embedding weight must be 2D [vocab_size, emb_dim]");
                 }
                 let (vocab_size, emb_dim) = (w_shape[0], w_shape[1]);
                 let indices: Vec<usize> = match self.resolve(idx_ref).cloned() {
@@ -1463,7 +1436,7 @@ impl super::Evaluator {
                             }
                         }).collect()
                     }
-                    _ => { eprintln!("❌ ERROR: Autodiff.embedding indices must be a Tensor or Array"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.embedding indices must be a Tensor or Array"); }
                 };
                 let seq_len = indices.len();
                 let mut out_data = vec![0.0_f64; seq_len * emb_dim];
@@ -1485,18 +1458,17 @@ impl super::Evaluator {
                 // Autodiff.saveWeights(path, tensors_array)
                 // Saves an array of tensors to a .szw binary file.
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Autodiff.saveWeights(path, tensors) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.saveWeights(path, tensors) requires 2 arguments");
                 }
                 let path_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let arr_ref  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
                 let path = match self.resolve(path_ref).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: Autodiff.saveWeights path must be a string"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.saveWeights path must be a string"); }
                 };
                 let elements = match self.resolve(arr_ref).cloned() {
                     Some(ObjectData::Array { elements, .. }) => elements,
-                    _ => { eprintln!("❌ ERROR: Autodiff.saveWeights tensors must be an Array"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.saveWeights tensors must be an Array"); }
                 };
                 // Collect tensor data
                 let mut tensors: Vec<(Vec<usize>, Vec<f64>)> = Vec::new();
@@ -1505,7 +1477,7 @@ impl super::Evaluator {
                         crate::region::OwnedValue::Tensor { shape, data, .. } => {
                             tensors.push((shape.clone(), data.clone()));
                         }
-                        _ => { eprintln!("❌ ERROR: Autodiff.saveWeights all elements must be Tensors"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Autodiff.saveWeights all elements must be Tensors"); }
                     }
                 }
                 // Write binary file
@@ -1515,8 +1487,7 @@ impl super::Evaluator {
                         EvalResult::Value(self.null_ref)
                     }
                     Err(e) => {
-                        eprintln!("❌ ERROR: Autodiff.saveWeights failed: {}", e);
-                        EvalResult::Error
+                        self.rt_err_kind("AutodiffError", format!("Autodiff.saveWeights failed: {}", e))
                     }
                 }
             }
@@ -1524,13 +1495,12 @@ impl super::Evaluator {
             "loadWeights" => {
                 // Autodiff.loadWeights(path) → Array of Tensors
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Autodiff.loadWeights(path) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.loadWeights(path) requires 1 argument");
                 }
                 let path_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let path = match self.resolve(path_ref).cloned() {
                     Some(ObjectData::Str(s)) => s,
-                    _ => { eprintln!("❌ ERROR: Autodiff.loadWeights path must be a string"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.loadWeights path must be a string"); }
                 };
                 match Self::read_weights_file(&path) {
                     Ok(tensors) => {
@@ -1543,8 +1513,7 @@ impl super::Evaluator {
                         EvalResult::Value(self.alloc(arr))
                     }
                     Err(e) => {
-                        eprintln!("❌ ERROR: Autodiff.loadWeights failed: {}", e);
-                        EvalResult::Error
+                        self.rt_err_kind("AutodiffError", format!("Autodiff.loadWeights failed: {}", e))
                     }
                 }
             }
@@ -1552,20 +1521,18 @@ impl super::Evaluator {
             // ── Phase 3: stopGrad / detach ────────────────────────────────────
             "stopGrad" | "detach" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Autodiff.stopGrad(tensor) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Autodiff.stopGrad(tensor) requires 1 argument");
                 }
                 let t_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let (shape, data) = match self.resolve(t_ref).cloned() {
                     Some(ObjectData::Tensor { shape, data, .. }) => (shape, data),
-                    _ => { eprintln!("❌ ERROR: Autodiff.stopGrad() argument must be a Tensor"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "Autodiff.stopGrad() argument must be a Tensor"); }
                 };
                 EvalResult::Value(self.alloc(ObjectData::Tensor { shape, data, tid: 0 }))
             }
 
             _ => {
-                eprintln!("❌ ERROR: Unknown Autodiff method '{}'", dot_call.method);
-                EvalResult::Error
+                self.rt_err_kind("TypeError", format!("Unknown Autodiff method '{}'", dot_call.method))
             }
         }
     }

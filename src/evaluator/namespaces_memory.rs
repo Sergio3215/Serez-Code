@@ -8,13 +8,12 @@ impl super::Evaluator {
             // Memory.sizeof(type_name) → int — size in bytes of the given type name
             "sizeof" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Memory.sizeof(type) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Memory.sizeof(type) requires 1 argument");
                 }
                 let type_name = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
-                        _ => { eprintln!("❌ ERROR: Memory.sizeof() argument must be a string type name"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Memory.sizeof() argument must be a string type name"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
@@ -37,8 +36,7 @@ impl super::Evaluator {
                     "ptr"     => 8,
                     "str"     => 8,
                     other => {
-                        eprintln!("❌ ERROR: Memory.sizeof() — unknown type '{}'", other);
-                        return EvalResult::Error;
+                        return self.rt_err_kind("MemoryError", format!("Memory.sizeof() — unknown type '{}'", other));
                     }
                 };
                 EvalResult::Value(self.alloc(ObjectData::Integer(size)))
@@ -51,16 +49,14 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Memory.alloc(n) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Memory.alloc(n) requires 1 argument");
                 }
                 let n = match self.eval_memory_usize(&dot_call.arguments[0]) {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
                 if n == 0 || n > 256 * 1024 * 1024 {
-                    eprintln!("❌ ERROR: Memory.alloc() size must be between 1 and 256 MiB, got {}", n);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", format!("Memory.alloc() size must be between 1 and 256 MiB, got {}", n));
                 }
                 let id = self.memory_heap_next_id;
                 self.memory_heap_next_id += 1;
@@ -75,16 +71,14 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Memory.free(handle) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Memory.free(handle) requires 1 argument");
                 }
                 let id = match self.eval_memory_id(&dot_call.arguments[0]) {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
                 if self.memory_heap.remove(&id).is_none() {
-                    eprintln!("❌ ERROR: Memory.free() — no allocation with handle {}", id);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("MemoryError", format!("Memory.free() — no allocation with handle {}", id));
                 }
                 EvalResult::Value(self.null_ref)
             }
@@ -92,8 +86,7 @@ impl super::Evaluator {
             // Memory.size(handle) → int — size in bytes of an existing allocation
             "size" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Memory.size(handle) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Memory.size(handle) requires 1 argument");
                 }
                 let id = match self.eval_memory_id(&dot_call.arguments[0]) {
                     Ok(v) => v,
@@ -102,8 +95,7 @@ impl super::Evaluator {
                 match self.memory_heap.get(&id) {
                     Some(buf) => EvalResult::Value(self.alloc(ObjectData::Integer(buf.len() as i64))),
                     None => {
-                        eprintln!("❌ ERROR: Memory.size() — no allocation with handle {}", id);
-                        EvalResult::Error
+                        self.rt_err_kind("MemoryError", format!("Memory.size() — no allocation with handle {}", id))
                     }
                 }
             }
@@ -115,8 +107,7 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Memory.read(handle, offset, type) requires 3 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Memory.read(handle, offset, type) requires 3 arguments");
                 }
                 let id = match self.eval_memory_id(&dot_call.arguments[0]) {
                     Ok(v) => v, Err(e) => return e,
@@ -127,48 +118,48 @@ impl super::Evaluator {
                 let type_name = match self.eval_expression(&dot_call.arguments[2]) {
                     EvalResult::Value(r) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
-                        _ => { eprintln!("❌ ERROR: Memory.read() type must be a string"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Memory.read() type must be a string"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let buf = match self.memory_heap.get(&id) {
                     Some(b) => b.clone(),
-                    None => { eprintln!("❌ ERROR: Memory.read() — no allocation with handle {}", id); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("MemoryError", format!("Memory.read() — no allocation with handle {}", id)); }
                 };
                 match type_name.as_str() {
                     "bool" | "int8" | "byte" | "uint8" => {
-                        if offset >= buf.len() { eprintln!("❌ ERROR: Memory.read() offset {} out of bounds (size {})", offset, buf.len()); return EvalResult::Error; }
+                        if offset >= buf.len() { return self.rt_err_kind("MemoryError", format!("Memory.read() offset {} out of bounds (size {})", offset, buf.len())); }
                         EvalResult::Value(self.alloc(ObjectData::Integer(buf[offset] as i64)))
                     }
                     "int16" | "uint16" => {
-                        if offset + 2 > buf.len() { eprintln!("❌ ERROR: Memory.read() offset {} out of bounds for int16 (size {})", offset, buf.len()); return EvalResult::Error; }
+                        if offset + 2 > buf.len() { return self.rt_err_kind("MemoryError", format!("Memory.read() offset {} out of bounds for int16 (size {})", offset, buf.len())); }
                         let v = i16::from_le_bytes([buf[offset], buf[offset+1]]);
                         EvalResult::Value(self.alloc(ObjectData::Integer(v as i64)))
                     }
                     "int32" | "uint32" => {
-                        if offset + 4 > buf.len() { eprintln!("❌ ERROR: Memory.read() offset {} out of bounds for int32 (size {})", offset, buf.len()); return EvalResult::Error; }
+                        if offset + 4 > buf.len() { return self.rt_err_kind("MemoryError", format!("Memory.read() offset {} out of bounds for int32 (size {})", offset, buf.len())); }
                         let v = i32::from_le_bytes([buf[offset], buf[offset+1], buf[offset+2], buf[offset+3]]);
                         EvalResult::Value(self.alloc(ObjectData::Integer(v as i64)))
                     }
                     "int64" | "int" | "uint64" => {
-                        if offset + 8 > buf.len() { eprintln!("❌ ERROR: Memory.read() offset {} out of bounds for int64 (size {})", offset, buf.len()); return EvalResult::Error; }
+                        if offset + 8 > buf.len() { return self.rt_err_kind("MemoryError", format!("Memory.read() offset {} out of bounds for int64 (size {})", offset, buf.len())); }
                         let bytes: [u8; 8] = buf[offset..offset+8].try_into().unwrap();
                         let v = i64::from_le_bytes(bytes);
                         EvalResult::Value(self.alloc(ObjectData::Integer(v)))
                     }
                     "float32" => {
-                        if offset + 4 > buf.len() { eprintln!("❌ ERROR: Memory.read() offset {} out of bounds for float32 (size {})", offset, buf.len()); return EvalResult::Error; }
+                        if offset + 4 > buf.len() { return self.rt_err_kind("MemoryError", format!("Memory.read() offset {} out of bounds for float32 (size {})", offset, buf.len())); }
                         let bits = u32::from_le_bytes([buf[offset], buf[offset+1], buf[offset+2], buf[offset+3]]);
                         EvalResult::Value(self.alloc(ObjectData::Decimal(f32::from_bits(bits) as f64)))
                     }
                     "float64" | "decimal" => {
-                        if offset + 8 > buf.len() { eprintln!("❌ ERROR: Memory.read() offset {} out of bounds for float64 (size {})", offset, buf.len()); return EvalResult::Error; }
+                        if offset + 8 > buf.len() { return self.rt_err_kind("MemoryError", format!("Memory.read() offset {} out of bounds for float64 (size {})", offset, buf.len())); }
                         let bytes: [u8; 8] = buf[offset..offset+8].try_into().unwrap();
                         let v = f64::from_le_bytes(bytes);
                         EvalResult::Value(self.alloc(ObjectData::Decimal(v)))
                     }
-                    other => { eprintln!("❌ ERROR: Memory.read() — unknown type '{}'", other); EvalResult::Error }
+                    other => { self.rt_err_kind("MemoryError", format!("Memory.read() — unknown type '{}'", other)) }
                 }
             }
 
@@ -179,8 +170,7 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 if dot_call.arguments.len() != 4 {
-                    eprintln!("❌ ERROR: Memory.write(handle, offset, type, value) requires 4 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Memory.write(handle, offset, type, value) requires 4 arguments");
                 }
                 let id = match self.eval_memory_id(&dot_call.arguments[0]) {
                     Ok(v) => v, Err(e) => return e,
@@ -191,7 +181,7 @@ impl super::Evaluator {
                 let type_name = match self.eval_expression(&dot_call.arguments[2]) {
                     EvalResult::Value(r) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
-                        _ => { eprintln!("❌ ERROR: Memory.write() type must be a string"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Memory.write() type must be a string"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
@@ -203,16 +193,15 @@ impl super::Evaluator {
                 };
                 let val_data = match self.resolve(val_ref).cloned() {
                     Some(d) => d,
-                    None => { eprintln!("❌ ERROR: Memory.write() — null value"); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("MemoryError", "Memory.write() — null value"); }
                 };
                 let buf = match self.memory_heap.get_mut(&id) {
                     Some(b) => b,
-                    None => { eprintln!("❌ ERROR: Memory.write() — no allocation with handle {}", id); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("MemoryError", format!("Memory.write() — no allocation with handle {}", id)); }
                 };
                 let write_result = Self::memory_write_typed(buf, offset, &type_name, &val_data);
                 if let Err(msg) = write_result {
-                    eprintln!("❌ ERROR: Memory.write() — {}", msg);
-                    return EvalResult::Error;
+                    return self.rt_err_kind("MemoryError", format!("Memory.write() — {}", msg));
                 }
                 EvalResult::Value(self.null_ref)
             }
@@ -224,8 +213,7 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 if dot_call.arguments.len() != 3 {
-                    eprintln!("❌ ERROR: Memory.copy(src, dst, n) requires 3 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Memory.copy(src, dst, n) requires 3 arguments");
                 }
                 let src_id = match self.eval_memory_id(&dot_call.arguments[0]) {
                     Ok(v) => v, Err(e) => return e,
@@ -239,22 +227,23 @@ impl super::Evaluator {
                 let src_bytes: Vec<u8> = match self.memory_heap.get(&src_id) {
                     Some(b) => {
                         if n > b.len() {
-                            eprintln!("❌ ERROR: Memory.copy() — src size {} < n {}", b.len(), n);
-                            return EvalResult::Error;
+                            return self.rt_err_kind("MemoryError", format!("Memory.copy() — src size {} < n {}", b.len(), n));
                         }
                         b[..n].to_vec()
                     }
-                    None => { eprintln!("❌ ERROR: Memory.copy() — no src allocation {}", src_id); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("MemoryError", format!("Memory.copy() — no src allocation {}", src_id)); }
                 };
-                let dst = match self.memory_heap.get_mut(&dst_id) {
-                    Some(b) => b,
-                    None => { eprintln!("❌ ERROR: Memory.copy() — no dst allocation {}", dst_id); return EvalResult::Error; }
+                // Validate size BEFORE taking the &mut borrow — rt_err_kind needs &mut self.
+                let dst_len = match self.memory_heap.get(&dst_id) {
+                    Some(b) => b.len(),
+                    None => { return self.rt_err_kind("MemoryError", format!("Memory.copy() — no dst allocation {}", dst_id)); }
                 };
-                if n > dst.len() {
-                    eprintln!("❌ ERROR: Memory.copy() — dst size {} < n {}", dst.len(), n);
-                    return EvalResult::Error;
+                if n > dst_len {
+                    return self.rt_err_kind("MemoryError", format!("Memory.copy() — dst size {} < n {}", dst_len, n));
                 }
-                dst[..n].copy_from_slice(&src_bytes);
+                if let Some(dst) = self.memory_heap.get_mut(&dst_id) {
+                    dst[..n].copy_from_slice(&src_bytes);
+                }
                 EvalResult::Value(self.null_ref)
             }
 
@@ -265,8 +254,7 @@ impl super::Evaluator {
                     return EvalResult::Error;
                 }
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Memory.fill(handle, byte_value) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Memory.fill(handle, byte_value) requires 2 arguments");
                 }
                 let id = match self.eval_memory_id(&dot_call.arguments[0]) {
                     Ok(v) => v, Err(e) => return e,
@@ -274,17 +262,17 @@ impl super::Evaluator {
                 let byte_val = match self.eval_expression(&dot_call.arguments[1]) {
                     EvalResult::Value(r) => match self.resolve(r).cloned() {
                         Some(ObjectData::Integer(n)) => {
-                            if n < 0 || n > 255 { eprintln!("❌ ERROR: Memory.fill() byte value must be 0–255"); return EvalResult::Error; }
+                            if n < 0 || n > 255 { return self.rt_err_kind("TypeError", "Memory.fill() byte value must be 0–255"); }
                             n as u8
                         }
-                        _ => { eprintln!("❌ ERROR: Memory.fill() byte value must be an integer 0–255"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Memory.fill() byte value must be an integer 0–255"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 match self.memory_heap.get_mut(&id) {
                     Some(buf) => { buf.iter_mut().for_each(|b| *b = byte_val); }
-                    None => { eprintln!("❌ ERROR: Memory.fill() — no allocation with handle {}", id); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("MemoryError", format!("Memory.fill() — no allocation with handle {}", id)); }
                 }
                 EvalResult::Value(self.null_ref)
             }
@@ -292,13 +280,12 @@ impl super::Evaluator {
             // Memory.offsetOf(class_name, field_name) → int — simulated word-aligned field offset
             "offsetOf" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Memory.offsetOf(class, field) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Memory.offsetOf(class, field) requires 2 arguments");
                 }
                 let class_name = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
-                        _ => { eprintln!("❌ ERROR: Memory.offsetOf() class must be a string"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Memory.offsetOf() class must be a string"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
@@ -306,26 +293,25 @@ impl super::Evaluator {
                 let field_name = match self.eval_expression(&dot_call.arguments[1]) {
                     EvalResult::Value(r) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
-                        _ => { eprintln!("❌ ERROR: Memory.offsetOf() field must be a string"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "Memory.offsetOf() field must be a string"); }
                     },
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let class = match self.class_registry.get(&class_name).cloned() {
                     Some(c) => c,
-                    None => { eprintln!("❌ ERROR: Memory.offsetOf() — unknown class '{}'", class_name); return EvalResult::Error; }
+                    None => { return self.rt_err_kind("MemoryError", format!("Memory.offsetOf() — unknown class '{}'", class_name)); }
                 };
                 // Compute word-aligned offset for the named field
                 let field_idx = class.fields.iter().position(|f| f.name == field_name);
                 match field_idx {
                     Some(idx) => EvalResult::Value(self.alloc(ObjectData::Integer((idx * 8) as i64))),
-                    None => { eprintln!("❌ ERROR: Memory.offsetOf() — class '{}' has no field '{}'", class_name, field_name); EvalResult::Error }
+                    None => { self.rt_err_kind("MemoryError", format!("Memory.offsetOf() — class '{}' has no field '{}'", class_name, field_name)) }
                 }
             }
 
             other => {
-                eprintln!("❌ ERROR: Unknown Memory method '{}'", other);
-                EvalResult::Error
+                self.rt_err_kind("TypeError", format!("Unknown Memory method '{}'", other))
             }
         }
     }

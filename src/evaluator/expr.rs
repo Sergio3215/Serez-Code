@@ -421,7 +421,6 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
 
-                let left_data = self.resolve(left_ref).unwrap().clone();
                 let idx_data = self.resolve(idx_ref).unwrap().clone();
                 // A DateField indexes as its integer value (e.g. arr[date.month]).
                 let idx_data = match idx_data {
@@ -429,6 +428,19 @@ impl super::Evaluator {
                     other => other,
                 };
 
+                // Dict fast path: look up against the arena slot directly — no O(N)
+                // clone of the whole dict per read, and the slot-resident hash index
+                // stays warm across lookups (cloning a dict resets its index).
+                if let Some(ObjectData::Dict { entries, index, .. }) = self.resolve(left_ref) {
+                    let search_key = obj_data_to_key_str(&idx_data);
+                    let found = index.lookup(entries, &search_key).map(|i| entries[i].1.clone());
+                    return match found {
+                        Some(v) => EvalResult::Value(self.plant_global(v)),
+                        None => EvalResult::Value(self.null_ref),
+                    };
+                }
+
+                let left_data = self.resolve(left_ref).unwrap().clone();
                 match (&left_data, &idx_data) {
                     (ObjectData::Str(s), ObjectData::Integer(i)) => {
                         let chars: Vec<char> = s.chars().collect();
@@ -445,23 +457,6 @@ impl super::Evaluator {
                             self.rt_err_kind("IndexOutOfBounds", format!("Index out of bounds: {} (length {})", i, len))
                         } else {
                             EvalResult::Value(self.plant(elements[*i as usize].clone()))
-                        }
-                    }
-                    (ObjectData::Dict { entries, value_type, .. }, _) => {
-                        let search_key = obj_data_to_key_str(&idx_data);
-                        let found = entries.iter().find(|(k, _)| {
-                            let key_str = match k {
-                                OwnedValue::Str(s) => s.clone(),
-                                OwnedValue::Integer(i) => i.to_string(),
-                                OwnedValue::Decimal(d) => d.to_string(),
-                                OwnedValue::Boolean(b) => b.to_string(),
-                                _ => format!("{:?}", k),
-                            };
-                            key_str == search_key
-                        });
-                        match found {
-                            Some((_, v)) => EvalResult::Value(self.plant_global(v.clone())),
-                            None => EvalResult::Value(self.null_ref),
                         }
                     }
                     _ => {
@@ -508,6 +503,7 @@ impl super::Evaluator {
                     key_type: dict_lit.key_type.clone(),
                     value_type: dict_lit.value_type.clone(),
                     entries,
+                    index: Default::default(),
                 }))
             }
 
@@ -687,7 +683,7 @@ impl super::Evaluator {
                         // Writeback: if array came from dict["key"], update the dict entry
                         if let Some((dict_ref, key_str)) = dict_writeback_ctx {
                             let updated = self.extract(obj_ref);
-                            if let Some(ObjectData::Dict { key_type, value_type, mut entries }) =
+                            if let Some(ObjectData::Dict { key_type, value_type, mut entries, .. }) =
                                 self.resolve(dict_ref).cloned()
                             {
                                 let mut found = false;
@@ -700,7 +696,7 @@ impl super::Evaluator {
                                     if ks == key_str { entry.1 = updated.clone(); found = true; break; }
                                 }
                                 if !found { entries.push((OwnedValue::Str(key_str), updated)); }
-                                let new_dict = ObjectData::Dict { key_type, value_type, entries };
+                                let new_dict = ObjectData::Dict { key_type, value_type, entries, index: Default::default() };
                                 match dict_ref.region {
                                     crate::region::RegionId::Global => self.global_arena.update(dict_ref.index, new_dict),
                                     crate::region::RegionId::Scoped => self.scopes.arena.update(dict_ref.index, new_dict),
@@ -716,7 +712,7 @@ impl super::Evaluator {
                     }
 
                     // ── Dict methods ──────────────────────────────────────────
-                    ObjectData::Dict { key_type, value_type, entries } => {
+                    ObjectData::Dict { key_type, value_type, entries, .. } => {
                         let mut entries = entries;
                         match dot_call.method.as_str() {
                             "Add" => {

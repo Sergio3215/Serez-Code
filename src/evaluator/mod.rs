@@ -581,7 +581,7 @@ impl Evaluator {
                     elements: elements.iter().map(|e| self.extract_inner_owned(e.clone(), depth + 1)).collect(),
                 }
             }
-            Some(ObjectData::Dict { key_type, value_type, entries }) => OwnedValue::Dict {
+            Some(ObjectData::Dict { key_type, value_type, entries, .. }) => OwnedValue::Dict {
                 key_type: key_type.clone(),
                 value_type: value_type.clone(),
                 entries: entries.iter().map(|(k, v)| (self.extract_inner_owned(k.clone(), depth + 1), self.extract_inner_owned(v.clone(), depth + 1))).collect(),
@@ -637,7 +637,7 @@ impl Evaluator {
                 self.alloc(ObjectData::Array { element_type, elements: items })
             }
             OwnedValue::Dict { key_type, value_type, entries } => {
-                self.alloc(ObjectData::Dict { key_type, value_type, entries })
+                self.alloc(ObjectData::Dict { key_type, value_type, entries, index: Default::default() })
             }
             OwnedValue::Function {
                 return_type,
@@ -717,6 +717,7 @@ impl Evaluator {
                     key_type,
                     value_type,
                     entries,
+                    index: Default::default(),
                 });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
@@ -835,7 +836,7 @@ impl Evaluator {
         value_type: String,
         entries: Vec<(OwnedValue, OwnedValue)>,
     ) {
-        let data = ObjectData::Dict { key_type, value_type, entries };
+        let data = ObjectData::Dict { key_type, value_type, entries, index: Default::default() };
         match obj_ref.region {
             RegionId::Global => self.global_arena.update(obj_ref.index, data),
             RegionId::Scoped => self.scopes.arena.update(obj_ref.index, data),
@@ -1135,7 +1136,7 @@ pub(super) fn owned_to_obj_data(owned: &OwnedValue) -> ObjectData {
             ObjectData::Array { element_type: element_type.clone(), elements: Vec::new() }
         }
         OwnedValue::Dict { key_type, value_type, entries: _ } => {
-            ObjectData::Dict { key_type: key_type.clone(), value_type: value_type.clone(), entries: Vec::new() }
+            ObjectData::Dict { key_type: key_type.clone(), value_type: value_type.clone(), entries: Vec::new(), index: Default::default() }
         }
         OwnedValue::Set { elements: _ } => ObjectData::Set { elements: Vec::new() },
         OwnedValue::Function { .. } => ObjectData::Null,

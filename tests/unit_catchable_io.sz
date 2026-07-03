@@ -1,0 +1,116 @@
+// Unit tests: errores de I/O capturables (File/JSON/Socket/OS) — tanda jul-2026 #2.
+// Los errores de PROGRAMACIÓN e I/O ligan un Error con .kind específico
+// (IOError/JsonError/SocketError/OSError/TypeError); los de SEGURIDAD
+// (permisos, gates unsafe, límites de recursos) siguen fatales — ver
+// sec_runtime_not_catchable.sz.
+
+use permissions { File, Socket }
+
+test("File.read de archivo inexistente es capturable con kind IOError", () => {
+    let kind = "none";
+    try {
+        let c = File.read("__no_existe_unit_catchable__.txt");
+    } catch (e) {
+        kind = e.kind;
+    }
+    assert(kind == "IOError", "File.read ausente debe dar IOError, dio: " + kind);
+});
+
+test("File.read con argumento no-string es capturable con kind TypeError", () => {
+    let kind = "none";
+    try {
+        let c = File.read(42);
+    } catch (e) {
+        kind = e.kind;
+    }
+    assert(kind == "TypeError", "File.read(42) debe dar TypeError, dio: " + kind);
+});
+
+test("File.stat de ruta inexistente es capturable", () => {
+    let caught = false;
+    try {
+        let s = File.stat("__no_existe_unit_catchable__/nada");
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "File.stat de ruta ausente debe lanzar");
+});
+
+test("JSON.parse invalido es capturable con kind JsonError", () => {
+    let kind = "none";
+    try {
+        let j = JSON.parse("esto no es json");
+    } catch (e) {
+        kind = e.kind;
+    }
+    assert(kind == "JsonError", "JSON.parse invalido debe dar JsonError, dio: " + kind);
+});
+
+test("Socket.connect rechazado es capturable con kind SocketError", () => {
+    let kind = "none";
+    try {
+        let s = Socket.connect("127.0.0.1", 1);
+    } catch (e) {
+        kind = e.kind;
+    }
+    assert(kind == "SocketError", "Socket.connect rechazado debe dar SocketError, dio: " + kind);
+});
+
+test("Socket.send a id inexistente es capturable", () => {
+    let kind = "none";
+    try {
+        Socket.send(99999, "data");
+    } catch (e) {
+        kind = e.kind;
+    }
+    assert(kind == "SocketError", "Socket.send a id invalido debe dar SocketError, dio: " + kind);
+});
+
+test("el programa continua tras capturar errores de I/O", () => {
+    let vivos = 0;
+    try { File.read("__nx1__.txt"); } catch (e) { vivos = vivos + 1; }
+    try { JSON.parse("x!"); } catch (e) { vivos = vivos + 1; }
+    try { Socket.connect("127.0.0.1", 1); } catch (e) { vivos = vivos + 1; }
+    assert(vivos == 3, "los 3 errores deben capturarse y el programa seguir");
+});
+
+test("e.message trae el detalle del fallo de I/O", () => {
+    let msg = "";
+    try {
+        let c = File.read("__no_existe_unit_catchable__.txt");
+    } catch (e) {
+        msg = e.message;
+    }
+    assert(msg.includes("__no_existe_unit_catchable__"), "el mensaje debe incluir la ruta");
+});
+
+test("Tensor shape mismatch es capturable con kind TensorError", () => {
+    let kind = "none";
+    try {
+        let a = Tensor.from([[1.0, 2.0]]);
+        let b = Tensor.from([[1.0, 2.0]]);
+        let c = a.matmul(b);
+    } catch (e) {
+        kind = e.kind;
+    }
+    assert(kind == "TensorError", "matmul 1x2*1x2 debe dar TensorError, dio: " + kind);
+});
+
+test("GPU buffer inexistente es capturable con kind GpuError", () => {
+    let kind = "none";
+    try {
+        GPU.readBuffer(424242);
+    } catch (e) {
+        kind = e.kind;
+    }
+    assert(kind == "GpuError", "GPU.readBuffer invalido debe dar GpuError, dio: " + kind);
+});
+
+test("errores de Tensor/GPU capturados no matan el programa", () => {
+    let vivos = 0;
+    try { let t = Tensor.from([[1.0]]); t.matmul(t.reshape([1, 1])); vivos = vivos + 1; } catch (e) { vivos = vivos + 1; }
+    try { GPU.readBuffer(999999); } catch (e) { vivos = vivos + 1; }
+    assert(vivos == 2, "el programa debe seguir tras capturar");
+});
+
+summary();
