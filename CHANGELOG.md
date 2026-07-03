@@ -37,6 +37,18 @@ Order: most recent to oldest.
   preserved; small dicts keep the plain linear scan. Benchmark: 20 000 inserts +
   20 000 reads went from 39 689 ms to 46 ms.
 
+### Perf: Set membership is O(1) on large sets (~1 500× on 20k elements)
+
+- `has`/`contains`/`add` run directly against the arena slot (no O(N) clone of
+  the whole set per call) and use a lazy hash index over TYPE-TAGGED element
+  fingerprints — faithful to `obj_data_eq`: `5` and `"5"` stay distinct
+  elements, `1.50m` equals `1.5m` (scale-insensitive `dec`), `-0.0` equals
+  `0.0`, NaN never equals itself, and compound values keep the authoritative
+  linear scan. `new Set([...])` deduplicates via hash in O(N) instead of the
+  old O(N²) pairwise scan. Benchmark: 20 000 adds + 20 000 `has` went from
+  71 383 ms to 48 ms. Small sets (< 16) keep the plain linear scan. New suite
+  file `unit_set_index.sz` pins the equality semantics.
+
 ### Fixed: top-level loops no longer grow the global arena
 
 - A `while` / `do-while` at top level leaked one global-arena slot per
