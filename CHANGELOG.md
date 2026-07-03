@@ -5,6 +5,49 @@ Order: most recent to oldest.
 
 ---
 
+## [Unreleased] — branch `improve` (2026-07-02)
+
+### New: I/O and namespace errors are catchable (second pass, ~530 sites)
+
+- All runtime failures across **File, JSON, Math, OS, Terminal, Env, Time,
+  System, Socket, Gui, Tensor, Autodiff, GPU, Memory, Binary and Crypto** are
+  now catchable with `try/catch`, binding the structured `Error` object. New
+  `.kind` categories: **`IOError`**, **`JsonError`**, **`OSError`**,
+  **`SocketError`**, **`GuiError`**, **`TensorError`**, **`AutodiffError`**,
+  **`GpuError`**, **`MemoryError`**, **`BinaryError`**. Invalid arguments
+  (wrong count/type, unknown method) raise `TypeError`. A missing file, a
+  refused socket or a tensor shape mismatch no longer kill the process.
+- **Unchanged and still fatal**: permission denials, `unsafe {}` gates, the
+  System32 exec block, and resource limits (256 MB file reads, 10M-element
+  tensors, GPU buffer caps). The sandbox invariant is untouched
+  (`sec_runtime_not_catchable` still passes).
+- Compat notes: `OS.spawn` still returns `-1` when the process fails to start,
+  and `Socket.recvWsFrame` still returns `null` on protocol errors (APIs relied
+  upon by serez-ui/serez-http).
+- New suite file `unit_catchable_io.sz` (11 assertions) pins the behavior.
+
+### Perf: dict lookups are O(1) on large dicts (~860× on 20k keys)
+
+- `d[key]` reads no longer clone the whole dict — the lookup runs directly
+  against the arena slot.
+- Dicts now carry a lazy hash index (canonical key → position) built on first
+  lookup once the dict has ≥ 16 entries, kept warm incrementally on
+  `d[key] = value` inserts, and validated on every hit (a stale cache can only
+  fall back to the linear scan, never return a wrong entry). Insertion order is
+  preserved; small dicts keep the plain linear scan. Benchmark: 20 000 inserts +
+  20 000 reads went from 39 689 ms to 46 ms.
+
+### Fixed: top-level loops no longer grow the global arena
+
+- A `while` / `do-while` at top level leaked one global-arena slot per
+  iteration (the condition's temporary, allocated with no scope active). Loops
+  now run inside an ephemeral frame so those temporaries land in the scoped
+  arena and are reclaimed per iteration; `do-while` additionally gained the
+  per-iteration condition cleanup it was missing at any depth. A 2 000-iteration
+  top-level loop now leaves the arena at baseline (~261 slots, was ~2 262).
+
+---
+
 ## [Unreleased] — branch `improve` (2026-07-01)
 
 ### New: catchable runtime errors + structured `Error` object

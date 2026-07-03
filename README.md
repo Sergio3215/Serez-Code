@@ -1053,9 +1053,8 @@ throw { code: 404, msg: "Not found" };
 **Catchable runtime errors.** Ordinary programming errors — index out of range,
 division by zero, type mismatches, invalid assignment targets — are catchable
 too. Inside `catch` they bind a structured **`Error`** object with `.message`
-(human-readable) and `.kind` (a category such as `IndexOutOfBounds`,
-`DivisionByZero`, `TypeError`, `InvalidAssignTarget`, `Overflow`, `RuntimeError`).
-Concatenating the error with a string uses its message:
+(human-readable) and `.kind` (a category). Concatenating the error with a string
+uses its message:
 
 ```serez
 let a = [1, 2, 3];
@@ -1070,6 +1069,42 @@ try {
 
 A thrown value keeps its original type (`throw "x"` binds the string `"x"`); only
 errors raised by the runtime bind an `Error` object.
+
+**I/O and namespace errors are catchable too.** A missing file, a refused socket
+connection, an invalid JSON body or a tensor shape mismatch no longer abort the
+program — they raise an `Error` your code can handle:
+
+```serez
+use permissions { File }
+
+try {
+    let config = File.read("config.json");
+} catch (e) {
+    out e.kind;      // → IOError
+    out e.message;   // → File error reading 'config.json': ... (os error 2)
+}
+```
+
+**`Error.kind` reference:**
+
+| Kind | Raised by |
+|---|---|
+| `IndexOutOfBounds` | Array/string access outside `[0, len-1]` |
+| `DivisionByZero` | `/` or `%` with zero on the right |
+| `TypeError` | Type mismatches, wrong argument counts/types, unknown methods |
+| `InvalidAssignTarget` | Index-assign into a nested/temporary target (`m[i][j] = x`) |
+| `Overflow` | Integer arithmetic outside the `i64` range |
+| `IOError` | `File.*` failures (missing file, permissions), `Terminal.*` I/O |
+| `JsonError` | `JSON.parse` on invalid JSON |
+| `OSError` | `OS.exec` / `OS.kill` process failures |
+| `SocketError` | `Socket.*` network failures (refused, reset, invalid id) |
+| `GuiError` | `Gui.*` runtime failures (no window open, no GUI host) |
+| `TensorError` | `Tensor` shape/value errors (matmul mismatch, bad reshape) |
+| `AutodiffError` | `Autodiff.*` runtime failures |
+| `GpuError` | `GPU.*` buffer errors (invalid handle, size mismatch) |
+| `MemoryError` | `Memory.*` runtime failures inside `unsafe {}` (bad handle, OOB) |
+| `BinaryError` | `Binary.*` decode/encode failures |
+| `RuntimeError` | Anything else raised by the runtime (e.g. invalid `Regex` patterns) |
 
 `catch` is optional. `finally` is optional. Both together are also valid:
 
@@ -1459,7 +1494,7 @@ out precios["jamon"];  // → 12
 out mixto["Shen"];     // → true
 ```
 
-For **untyped dicts** (`<K, any>`), accessing a missing key returns `null`. Use `??` to provide a default: `d["missing"] ?? 0`. For **typed dicts** (`<K, V>` where V ≠ `any`), accessing a missing key is a **runtime error**.
+Accessing a missing key returns `null` (typed and untyped dicts alike). Use `??` to provide a default: `d["missing"] ?? 0`. Writing a **value of the wrong type** into a typed dict (`<K, V>`) is a runtime error.
 
 #### Printing the whole dict
 
@@ -3342,8 +3377,7 @@ sz script.sz > output.txt 2> errors.txt
 | `❌ ERROR: Attempt to call a non-function` | Calling a value that is not a function |
 | `❌ ERROR: Function expected N arguments, got M` | Arity mismatch at call site |
 | `❌ ERROR: Index out of bounds` | Array access outside `[0, len-1]` |
-| `❌ ERROR: Key 'k' not found in typed dict` | Accessing a missing key in a typed dict `<K, V>` (V ≠ `any`) |
-| (untyped dict: missing key → `null`) | Accessing a missing key in an untyped dict returns `null`; use `??` for a default |
+| (dict: missing key → `null`) | Accessing a missing key in a dict returns `null`; use `??` for a default |
 | `❌ ERROR: Unknown dict method 'x'` | Calling an undefined method on a dict |
 | `❌ TYPE ERROR: Dict key/value type mismatch` | Adding an entry whose types violate the dict's annotation |
 | `❌ ERROR: Division by zero` | `/` with zero on the right |
