@@ -1,0 +1,60 @@
+// Unit tests: indice hash O(1) de Set (jul-2026) — fija la semantica exacta
+// de obj_data_eq que el indice debe reproducir: tipos ESTRICTOS (5 != "5"),
+// dec insensible a escala (1.50m == 1.5m), compuestos nunca iguales.
+
+test("tipos estrictos: int 5 y string 5 son elementos distintos", () => {
+    let s = new Set([]);
+    s.add(5);
+    assert(s.has(5), "int 5 debe estar");
+    assert(!s.has("5"), "string 5 NO debe estar (tipos estrictos)");
+    s.add("5");
+    assert(s.size() == 2, "int 5 y string 5 coexisten");
+});
+
+test("dec con escala distinta es el mismo elemento", () => {
+    let s = new Set([]);
+    s.add(1.50m);
+    assert(s.has(1.5m), "1.50m y 1.5m son el mismo dec");
+    s.add(1.5m);
+    assert(s.size() == 1, "no debe duplicar");
+});
+
+test("dedup del constructor con tipos mezclados", () => {
+    let m = new Set([1, "1", 1, true, "1", null, null]);
+    assert(m.size() == 4, "1, string 1, true y null = 4 elementos");
+});
+
+test("set grande (indice activo): has exacto en bordes y ausentes", () => {
+    let g = new Set([]);
+    let i = 0;
+    while (i < 100) { g.add("k{i}"); i = i + 1; }
+    assert(g.size() == 100, "100 elementos unicos");
+    assert(g.has("k0"), "primero");
+    assert(g.has("k99"), "ultimo");
+    assert(!g.has("kX"), "ausente");
+    assert(!g.has(50), "int 50 no es string k50 ni existe");
+});
+
+test("add duplicado en set grande no crece", () => {
+    let g = new Set([]);
+    let i = 0;
+    while (i < 50) { g.add(i); i = i + 1; }
+    g.add(25);
+    g.add(0);
+    g.add(49);
+    assert(g.size() == 50, "duplicados ignorados con indice activo");
+});
+
+test("delete invalida el indice y has sigue exacto", () => {
+    let g = new Set([]);
+    let i = 0;
+    while (i < 60) { g.add("e{i}"); i = i + 1; }
+    g.delete("e30");
+    assert(!g.has("e30"), "borrado no debe encontrarse");
+    assert(g.has("e59"), "el resto sigue");
+    assert(g.size() == 59, "size tras delete");
+    g.add("e30");
+    assert(g.has("e30"), "re-agregado se encuentra");
+});
+
+summary();

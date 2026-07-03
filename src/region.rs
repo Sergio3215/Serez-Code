@@ -193,6 +193,86 @@ impl DictIndex {
     }
 }
 
+/// Canonical, TYPE-TAGGED fingerprint of a Set element, or None when the value
+/// has no cheap identity. Mirrors `obj_data_eq` EXACTLY — which, unlike dict
+/// keys, is strict about types (`5` and `"5"` are DIFFERENT set elements, and
+/// compound values are never equal to anything). Edge cases handled: `-0.0`
+/// folds into `0.0` (f64 `==` says they're equal), NaN gets no fingerprint
+/// (NaN != NaN), and `dec` normalizes scale (1.50 == 1.5).
+pub fn set_key_str(v: &OwnedValue) -> Option<String> {
+    match v {
+        OwnedValue::Str(s) => Some(format!("s:{}", s)),
+        OwnedValue::Integer(i) => Some(format!("i:{}", i)),
+        OwnedValue::Boolean(b) => Some(format!("b:{}", b)),
+        OwnedValue::Dec(d) => Some(format!("d:{}", d.normalize())),
+        OwnedValue::Decimal(f) if !f.is_nan() => {
+            let f = if *f == 0.0 { 0.0 } else { *f };
+            Some(format!("f:{}", f.to_bits()))
+        }
+        OwnedValue::Null => Some("n".to_string()),
+        _ => None, // compound values: obj_data_eq never matches them — no identity
+    }
+}
+
+/// Threshold shared with dicts: below this size a linear scan wins.
+pub const SET_INDEX_MIN: usize = DICT_INDEX_MIN;
+
+/// Lazy hash index over a Set's elements: fingerprint → position. Same design
+/// and guarantees as `DictIndex` (pure cache, validated hits, len+last stamp,
+/// Clone resets). Elements without a fingerprint are skipped when building —
+/// they can never equal a fingerprintable probe under `obj_data_eq`.
+#[derive(Debug, Default)]
+pub struct SetIndex {
+    #[allow(clippy::type_complexity)]
+    cache: std::cell::RefCell<(std::collections::HashMap<String, usize>, usize, String)>,
+}
+
+impl Clone for SetIndex {
+    fn clone(&self) -> Self {
+        SetIndex::default()
+    }
+}
+
+impl SetIndex {
+    /// Position of the element whose fingerprint is `key`, or None. Callers use
+    /// this only at/above SET_INDEX_MIN; small sets keep the linear scan.
+    pub fn lookup(&self, elements: &[OwnedValue], key: &str) -> Option<usize> {
+        let mut guard = self.cache.borrow_mut();
+        let (cache, built_len, built_last) = &mut *guard;
+        let last_key = elements.last().and_then(set_key_str).unwrap_or_default();
+        if *built_len != elements.len() || *built_last != last_key {
+            cache.clear();
+            for (i, e) in elements.iter().enumerate() {
+                if let Some(k) = set_key_str(e) {
+                    cache.entry(k).or_insert(i);
+                }
+            }
+            *built_len = elements.len();
+            *built_last = last_key;
+        }
+        match cache.get(key) {
+            Some(&i) if set_key_str(&elements[i]).as_deref() == Some(key) => Some(i),
+            Some(_) => elements
+                .iter()
+                .position(|e| set_key_str(e).as_deref() == Some(key)),
+            None => None,
+        }
+    }
+
+    /// Keeps the cache warm across an append (`elements.push` right after a
+    /// missed `lookup`), so building a big set via `add` in a loop stays O(1)
+    /// per insert instead of rebuilding the cache once per insert.
+    pub fn record_append(&self, key: &str, pos: usize) {
+        let mut guard = self.cache.borrow_mut();
+        let (cache, built_len, built_last) = &mut *guard;
+        if *built_len == pos && !cache.is_empty() {
+            cache.entry(key.to_string()).or_insert(pos);
+            *built_len = pos + 1;
+            *built_last = key.to_string();
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ObjectData {
     Integer(i64),
@@ -228,6 +308,7 @@ pub enum ObjectData {
     },
     Set {
         elements: Vec<OwnedValue>,
+        index: SetIndex,
     },
     Tensor {
         shape: Vec<usize>,

@@ -635,6 +635,17 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
 
+                // Set fast path: has/contains/add run against the arena slot —
+                // no O(N) clone of the whole set per call, and the slot-resident
+                // hash index stays warm across lookups. Other arities/methods
+                // fall through to the generic path (identical error behavior).
+                if matches!(self.resolve(obj_ref), Some(ObjectData::Set { .. }))
+                    && matches!(dot_call.method.as_str(), "has" | "contains" | "add")
+                    && dot_call.arguments.len() == 1
+                {
+                    return self.eval_set_fast(obj_ref, dot_call);
+                }
+
                 let obj_data = match self.resolve(obj_ref) {
                     Some(d) => d.clone(),
                     None => {
@@ -853,7 +864,7 @@ impl super::Evaluator {
                     }
 
                     // ── Set methods ───────────────────────────────────────────
-                    ObjectData::Set { elements } => {
+                    ObjectData::Set { elements, .. } => {
                         self.eval_set_method(obj_ref, elements, dot_call)
                     }
 

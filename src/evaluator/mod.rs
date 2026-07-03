@@ -513,7 +513,7 @@ impl Evaluator {
             Some(ObjectData::EnumVariant { enum_name, variant }) => {
                 format!("{}.{}", enum_name, variant)
             }
-            Some(ObjectData::Set { elements }) => {
+            Some(ObjectData::Set { elements, .. }) => {
                 let elems: Vec<String> = elements.iter().map(|e| e.display_str()).collect();
                 format!("Set[{}]", elems.join(", "))
             }
@@ -607,7 +607,7 @@ impl Evaluator {
                 enum_name: enum_name.clone(),
                 variant: variant.clone(),
             },
-            Some(ObjectData::Set { elements }) => OwnedValue::Set {
+            Some(ObjectData::Set { elements, .. }) => OwnedValue::Set {
                 elements: elements.iter().map(|e| self.extract_inner_owned(e.clone(), depth + 1)).collect(),
             },
             Some(ObjectData::Tensor { shape, data, tid }) => {
@@ -659,7 +659,7 @@ impl Evaluator {
                 self.alloc(ObjectData::EnumVariant { enum_name, variant })
             }
             OwnedValue::Set { elements: items } => {
-                self.alloc(ObjectData::Set { elements: items })
+                self.alloc(ObjectData::Set { elements: items, index: Default::default() })
             }
             OwnedValue::Tensor { shape, data, tid } => {
                 self.alloc(ObjectData::Tensor { shape, data, tid })
@@ -740,7 +740,7 @@ impl Evaluator {
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Set { elements: items } => {
-                let idx = self.global_arena.alloc(ObjectData::Set { elements: items });
+                let idx = self.global_arena.alloc(ObjectData::Set { elements: items, index: Default::default() });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
             OwnedValue::Tensor { shape, data, tid } => {
@@ -1138,7 +1138,7 @@ pub(super) fn owned_to_obj_data(owned: &OwnedValue) -> ObjectData {
         OwnedValue::Dict { key_type, value_type, entries: _ } => {
             ObjectData::Dict { key_type: key_type.clone(), value_type: value_type.clone(), entries: Vec::new(), index: Default::default() }
         }
-        OwnedValue::Set { elements: _ } => ObjectData::Set { elements: Vec::new() },
+        OwnedValue::Set { elements: _ } => ObjectData::Set { elements: Vec::new(), index: Default::default() },
         OwnedValue::Function { .. } => ObjectData::Null,
         OwnedValue::Instance { class_name, fields: _ } => ObjectData::Instance { class_name: class_name.clone(), fields: Vec::new() },
         OwnedValue::Tensor { shape, data, tid } => ObjectData::Tensor { shape: shape.clone(), data: data.clone(), tid: *tid },
