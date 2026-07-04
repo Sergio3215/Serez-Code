@@ -1700,6 +1700,18 @@ let tripled = [1, 2, 3, 4].map(x => x * multiplier);
 out tripled;   // → [3, 6, 9, 12]
 ```
 
+A closure and its enclosing scope **share** each captured variable (cell semantics, like JavaScript's `let`): mutating it inside the closure is visible outside, and later outer writes are visible inside. A `for` counter is captured **fresh per iteration** (each closure keeps its own iteration's value); a variable declared outside a `while` is a single shared cell across iterations.
+
+```serez
+fn any makeCounter() {
+    let n = 0;
+    return () => { n = n + 1; return n; };   // mutation persists across calls
+}
+let c = makeCounter();
+out c();   // → 1
+out c();   // → 2
+```
+
 ---
 
 ### Enums
@@ -2520,6 +2532,69 @@ Gui.close()
 ```
 
 See `apps/09_gui_window.sz` for a full graphical form (text field + clickable button).
+
+#### Multiple windows
+
+Open extra windows alongside the main one. The window from `Gui.open` is id `0`; `Gui.openWindow` returns a new id. `Gui.selectWindow(id)` makes all subsequent drawing and input calls apply to that window — each has its own canvas and input.
+
+| Function | Description |
+|---|---|
+| `Gui.openWindow(title, w, h)` | Opens a secondary window; returns its `int` id (≥ 1). |
+| `Gui.selectWindow(id)` | Directs drawing/input to window `id` (`0` = the main window). |
+| `Gui.currentWindow()` | Returns the id of the selected window. |
+| `Gui.closeWindow(id)` | Closes a secondary window. |
+
+#### Retained-mode (scene graph)
+
+Instead of clearing and redrawing every frame (immediate mode), declare **persistent nodes** once and mutate their properties; the core redraws them natively. `Gui.renderScene(bg)` repaints **only if the scene changed** (dirty-skip) and returns `bool` (`true` if it repainted). The scene is per-window.
+
+| Function | Description |
+|---|---|
+| `Gui.nodeRect(x, y, w, h, color)` | Creates a node; returns its `int` id. Also `nodeRoundRect`, `nodeRectAlpha`, `nodeRectOutline`, `nodeCircle`, `nodeLine`, `nodePolyline`, `nodePolygon`, `nodeText`, `nodeImage`, `nodeClipPush`/`nodeClipPop`. |
+| `Gui.nodeSet(id, prop, value)` | Updates a property: `x, y, w, h, r, x2, y2, color, z, visible, text, scale, font, style, spacing, radius, alpha, width, points`. |
+| `Gui.nodeDelete(id)` / `Gui.sceneClear()` | Remove one node / all nodes. |
+| `Gui.nodeCount()` | Number of active nodes. |
+| `Gui.renderScene(bg)` | Repaints the scene if dirty and presents; returns `bool` (repainted?). |
+
+```serez
+use permissions { Gui }
+
+Gui.open("Scene", 640, 480)
+let box = Gui.nodeRect(100, 100, 200, 150, 0x3b82f6)
+Gui.nodeText(100, 300, "Persistent", 2, 0xffffff)
+
+while (Gui.isOpen()) {
+    Gui.nodeSet(box, "x", 100 + Gui.time() / 20)   // animate by mutating
+    Gui.renderScene(0x0f172a)                       // redraws only if changed
+    Gui.idleWait(16)
+}
+Gui.close()
+```
+
+---
+
+### Media
+
+`Media` plays audio files (WAV, MP3, FLAC, Vorbis) asynchronously. Each `playSound` returns an `int` id you use to control that sound. **Requires `use permissions { Media }`.**
+
+| Function | Returns | Description |
+|---|---|---|
+| `Media.playSound(path)` | `int` | Starts a sound asynchronously; returns its id. |
+| `Media.stop(id)` / `Media.stopAll()` | `bool` / — | Stop one sound / all sounds. |
+| `Media.pause(id)` / `Media.resume(id)` | `bool` | Pause / resume a sound. |
+| `Media.setVolume(id, volume)` | `bool` | Volume `0`–`200` (100 = normal). |
+| `Media.isPlaying(id)` | `bool` | Is that sound currently playing? |
+| `Media.playingCount()` | `int` | Number of sounds playing. |
+
+```serez
+use permissions { Media, Time }
+
+let id = Media.playSound("chime.mp3")
+Media.setVolume(id, 150)
+while (Media.isPlaying(id)) { Time.sleep(50) }
+```
+
+A missing file throws a catchable `IOError`; an unsupported format or no audio device throws a catchable `MediaError`.
 
 ---
 
