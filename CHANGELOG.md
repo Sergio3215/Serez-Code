@@ -5,7 +5,170 @@ Order: most recent to oldest.
 
 ---
 
-## [Unreleased] — branch `improve` (2026-07-02)
+## [Unreleased] — 2026-07-03
+
+### Tanda "deuda técnica": parser estricto, semántica de closures, multi-ventana, retained-mode, audio
+
+- **Parser: se acabaron las recuperaciones silenciosas.** `let x = ;`, `let = 5;`,
+  `let x;`, `return a +`, literales numéricos inválidos y el resto de huecos donde
+  el parser descartaba statements sin reportar ahora emiten `PARSER ERROR` con
+  posición y caret. Un programa con errores de parseo **ya no se ejecuta a medias**
+  (aborta con exit 1), y los `import` de módulos con errores de parseo abortan en
+  vez de evaluar el módulo parcial. El `;` suelto es un statement vacío legal.
+  Esto destapó y corrigió 2 bugs latentes en serez-ui (renderer.sz: `"{·"` sin
+  escapar disparaba el parser de interpolación y el `out` entero se descartaba
+  en silencio — el Select de TUI nunca imprimió). Nuevos tests `err_parse_*`.
+- **Los errores del parser dicen el ARCHIVO** (`PARSER ERROR [ruta line:col]`),
+  incluidos los módulos importados y las expresiones interpoladas.
+- **Lexer: `token.column` uniforme.** Todos los tokens llevan la posición de su
+  PRIMER carácter (antes: identificadores apuntaban una posición después del
+  último char). El LSP eliminó su corrección `ident_start_col`.
+- **Semántica: closures con CELDA compartida.** Una lambda y el scope que la
+  envuelve comparten la variable capturada a cualquier nivel de anidación: las
+  mutaciones dentro del closure escapan (contadores `makeCounter` funcionan) y
+  las escrituras posteriores son visibles dentro. El contador de un `for` es
+  fresco por iteración (como `let` de JS): los closures del loop conservan el
+  valor de su iteración (10,20,30 — no 40,40,40). Un contador declarado fuera de
+  un `while` es una celda única compartida (333). Tests de semántica actualizados.
+- **Semántica: un parámetro no-invocable ya no oculta una función homónima en
+  LLAMADAS** (el caso del param `h` que rompía render de serez-ui): `nombre(...)`
+  cae al binding invocable más cercano; las lecturas siguen viendo la sombra.
+- **Gui multi-ventana:** `Gui.openWindow(title,w,h) -> id`, `Gui.selectWindow(id)`
+  (todo el dibujo/input existente pasa a esa ventana), `Gui.currentWindow()`,
+  `Gui.closeWindow(id)`. La ventana clásica de `Gui.open` es la id 0 y su
+  protocolo no cambia (serez-ui intacto). Cada ventana extra tiene canvas e
+  input propios (mouse/teclado/scroll/foco). Verificado con demo de 2 ventanas
+  (~2 600 presents/s combinados).
+- **Gui retained-mode (scene graph):** nodos persistentes que el core redibuja
+  en Rust — `nodeRect/nodeCircle/nodeLine/nodeText/nodeImage -> id`,
+  `nodeSet(id, prop, valor)` (x, y, w, h, r, x2, y2, color, z, visible, text,
+  scale, image), `nodeDelete`, `sceneClear`, `nodeCount` y
+  `Gui.renderScene(bg) -> bool` que redibuja SOLO si la escena está sucia (si
+  no, re-presenta y devuelve false). Elimina re-ejecutar el árbol de dibujo
+  interpretado cada frame.
+- **Nuevo namespace `Media` (audio, permiso `Media`):** `playSound(path) -> id`
+  (wav/mp3/flac/vorbis vía rodio, asíncrono), `stop/stopAll/pause/resume`,
+  `setVolume(id, 0..200)`, `isPlaying(id)`, `playingCount()`. Errores
+  capturables: `IOError` (archivo) y `MediaError` (formato/dispositivo);
+  la denegación de permiso sigue siendo fatal (`sec_media_no_permission`).
+  Video queda fuera: decodificarlo exige ffmpeg (decisión de diseño pendiente).
+- **LSP:** análisis multi-archivo (símbolos/definición/completado siguen los
+  `import` transitivos, caché por mtime), soporte `.szx` (símbolos/outline sin
+  diagnósticos: el parser no habla JSX), `rename`, `references` y
+  `signatureHelp` (funciones de usuario, builtins y métodos de namespace).
+  Extensión **1.8.0**: cliente para `.szx`, soporte parcial de Restricted Mode
+  (`untrustedWorkspaces: limited` — resaltado/formatter sí; sz-lsp solo en
+  workspaces de confianza, y arranca solo al conceder la confianza).
+- Suite: **398/0** (+9 tests nuevos); fuzz 300 casos sin panics; LSP 27 tests +
+  smoke 9/9; ecosistema completo verde (ui 17/17, http/ai/pack/apipack/agentai/
+  graph 3/0, dotenv 2/0, cobol 23+22, strike 53/0).
+
+### Adopción en el ecosistema (misma fecha): escena con paridad total + serez-ui retained
+
+- **La escena retained ganó paridad con TODAS las primitivas que usa serez-ui**:
+  `nodeRoundRect`, `nodeRectAlpha`, `nodeRectOutline`, `nodePolygon`,
+  `nodePolyline`, `nodeClipPush`/`nodeClipPop` (clipping como marcadores en el
+  orden de dibujo) y texto con fuente/estilo/espaciado por nodo (`nodeSet`:
+  `font`, `style`, `spacing`, `radius`, `alpha`, `width`, `points`).
+- **La escena es POR VENTANA** (cada ventana tiene su scene graph; `node*` y
+  `renderScene` operan sobre la ventana seleccionada) — dos ventanas retained
+  ya no chocan.
+- **Click por EVENTO en ventanas extra**: `Gui.mousePressed()` de una ventana
+  secundaria cuenta presses como eventos en su acumulador — un click corto
+  entre dos presents ya no se pierde (antes era flanco por nivel).
+- **`serez.json` ilegible ya no falla en silencio**: si existe pero no parsea
+  (p.ej. sin `"version"`), se avisa con WARNING en vez de correr sin permisos.
+- **serez-ui (2.3.0)**: el renderer GUI migró a retained-mode (métodos `sw*` con
+  reuso posicional de nodos; `Gui.renderScene` en vez de `clear+draw+present`;
+  paridad visual pixel-perfect verificada contra el motor anterior) y ganó
+  **ventanas secundarias**: `openPanel/closePanel/panelCount` + `renderPanel(id)`
+  en el propio componente (clicks de Button/Link ruteados por panel; verificado
+  con demo real: click en panel → estado del app → re-render de la principal).
+- **serez-pack**: compatible verificado end-to-end (app con permiso `Media`
+  empaquetada y ejecutada); ahora valida al empaquetar que el `serez.json`
+  tenga `"version"` (sin él, la app instalada correría sin permisos).
+
+---
+
+## [Unreleased] — 2026-07-02
+
+### New: `sz-lsp` — Language Server Protocol for editor support
+
+- **New binary `sz-lsp`** (`src/lsp_main.rs` + `src/lsp/`): an LSP server over
+  stdio JSON-RPC that closes the last open roadmap checkbox. It reuses the
+  interpreter's lexer/parser/type-checker directly (second `[[bin]]` target;
+  the `sz` binary and the runtime are untouched). No async runtime: a
+  synchronous framed loop over `serde_json` (the only new dependency).
+- **Capabilities:** live diagnostics on every keystroke (parser errors as
+  errors + static type checker findings as warnings, with real ranges),
+  completion (keywords, the 21 native namespaces with their real methods,
+  builtin functions, and the document's own symbols — `File.` lists `read`,
+  `write`, …), hover (user signatures `fn int suma(int a, int b)`, namespace
+  summaries), go-to-definition (functions/classes/enums/variables +
+  `import "…"` jumps to the file) and hierarchical document symbols.
+- **Symbol index works on broken files:** it scans tokens (which carry
+  line/column) instead of the AST, so completion/outline keep working while
+  the user is mid-keystroke — the normal state in an editor.
+- **Parser/type checker now *collect* their errors** (`Parser::take_errors`,
+  `TypeChecker::take_errors`, with 1-based positions) in addition to printing
+  them; CLI output is unchanged (suite 389/0).
+- **Namespace/method catalog is generated** from the evaluator sources by
+  `tools/gen_lsp_builtins.py` (21 namespaces, 227 methods + value methods of
+  array/string/set/dec/tensor) into `src/lsp/builtins_gen.rs` — re-run it when
+  a namespace gains methods.
+- **VS Code extension 1.7.0** (`vscode-serez/`): starts `sz-lsp` automatically
+  for `.sz` (new settings `serez.lsp.enabled`, `serez.lsp.path`; uses `PATH`
+  by default). Formatter and highlighting are unchanged and keep working if
+  the binary is missing.
+- **Tests:** 22 Rust tests (`cargo test --bin sz-lsp`) covering analysis,
+  symbol scanning and the full protocol handshake, plus
+  `tools/lsp_smoke.py` — a real LSP session against the compiled binary
+  (initialize → didOpen broken file → diagnostics → completion → hover →
+  definition → shutdown), 9/9.
+
+---
+
+## [7.3.0] — 2026-07-02
+
+### New: language-level errors are catchable (third pass) + collections are O(1)
+
+- **Third pass of catchable errors — the language core itself.** `Variable not
+  found` and undeclared-variable assignments now raise a catchable
+  **`ReferenceError`**; calling a non-function, argument-count/spread mismatches,
+  `const` reassignment and all `builtins` failures (`parseInt`, `fetch`, `env`,
+  …) raise a catchable `TypeError`/`RuntimeError` instead of aborting. The call
+  path unwinds cleanly (scope / call-depth / call-stack restored) so a
+  `try/catch` in a loop can absorb thousands of these without corrupting the
+  evaluator. **Stack overflow and resource limits stay fatal** (a catchable
+  overflow would let infinite recursion retry forever).
+- **Array `push`/`pop` are O(1)** (run against the arena slot instead of cloning
+  the whole array per call): building an array with `a.push(x)` in a loop went
+  from O(N²) to O(N) — 20 000 pushes dropped from 8 824 ms to 11 ms. The
+  `dict["k"].push(x)` and `instance.field.push(x)` write-back patterns are
+  preserved.
+- **Lambda capture no longer leaks.** A lambda captured *every* visible local
+  into the global arena on each creation (a permanent slot per unused local per
+  lambda); it now snapshots only the identifiers the body actually references.
+  A lambda created per loop iteration dropped from linear arena growth to flat.
+
+### Security
+
+- **Fixed a string-escape bug that could dodge the `OS.exec` System32 block.**
+  An unknown escape (`"C:\Windows"`, `"a\d"`) duplicated the character after the
+  backslash (`C:\Windows` → `C:\WWindows`), which both corrupted the path and
+  made it slip past the blocked-path substring check. Escapes now keep both
+  characters verbatim without duplication.
+- New systematic non-catchable security tests (`sec_notcatch_*.sz`): permission
+  denials, `unsafe {}` gates, the System32 exec block, tensor size limits and
+  stack overflow are each verified to stay fatal inside a `try/catch`.
+- Added `fuzz_parser.py`: feeds garbage and mutated corpus to the lexer/parser
+  and asserts no Rust panic (0 crashes over 1 000 cases across two seeds).
+
+### Build
+
+- The AOT/LLVM backend (`src/compiler/`, ~3 000 lines) is now behind the
+  `llvm` Cargo feature (off by default): it is Phase-1 and not wired to any CLI
+  verb, so the default build skips it and the `inkwell`/LLVM-17 dependency.
 
 ### New: I/O and namespace errors are catchable (second pass, ~530 sites)
 
@@ -48,6 +211,15 @@ Order: most recent to oldest.
   old O(N²) pairwise scan. Benchmark: 20 000 adds + 20 000 `has` went from
   71 383 ms to 48 ms. Small sets (< 16) keep the plain linear scan. New suite
   file `unit_set_index.sz` pins the equality semantics.
+- ALL Set methods now run against the arena slot: the generic dot-call path
+  used to clone the entire element vector before entering any method — even
+  `.size()` paid an O(N) copy — and mutations rewrote the whole slot.
+  `delete` finds its target through the index and removes in place (insertion
+  order preserved); `clear` truncates in place.
+- `union`/`intersection` went from O(N×M) pairwise comparisons to O(N+M) via
+  fingerprint sets: two 5 000-element sets took 2 546 ms / 1 563 ms, now 2 ms
+  each. Set argument/arity errors are now catchable (`TypeError`), matching
+  the rest of the runtime.
 
 ### Fixed: top-level loops no longer grow the global arena
 
@@ -60,7 +232,7 @@ Order: most recent to oldest.
 
 ---
 
-## [Unreleased] — branch `improve` (2026-07-01)
+## [7.3.0] — 2026-07-01 (earlier work in this release)
 
 ### New: catchable runtime errors + structured `Error` object
 

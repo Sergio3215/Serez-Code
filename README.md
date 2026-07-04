@@ -170,6 +170,33 @@ sz --version
 
 Pre-built binaries for Windows x64, Linux x64 (static musl), macOS ARM64, and macOS x64 are published automatically on every tagged release via GitHub Actions. No Rust installation required to run them.
 
+### Editor support (LSP)
+
+`sz-lsp` is a Language Server Protocol implementation for `.sz` files (stdio JSON-RPC, built from the same crate):
+
+```bash
+cargo build --release --bin sz-lsp
+```
+
+Capabilities:
+
+| Feature | Detail |
+|---|---|
+| Live diagnostics | Parser errors (as errors) + static type checker findings (as warnings), on every keystroke |
+| Completion | Keywords, the 21 native namespaces with their real methods (extracted from the evaluator), builtin functions, and the document's own functions/classes/variables; `File.` → `read`, `write`, … |
+| Hover | Signatures of user functions/classes (`fn int suma(int a, int b)`), namespace summaries, builtin signatures |
+| Go to definition | Functions, classes, enums, variables in the file; `import "…" ` lines jump to the imported file |
+| Document symbols | Outline with classes and their nested methods/fields |
+
+The VS Code extension (`vscode-serez/`, ≥ 1.7.0) starts it automatically for `.sz` files: it looks for `sz-lsp` on the `PATH` (or use the `serez.lsp.path` setting; disable with `serez.lsp.enabled: false`). Any other LSP-capable editor (Neovim, Zed, JetBrains, …) can launch `sz-lsp` as a stdio server.
+
+Regenerate the namespace/method catalog after adding native methods, and smoke-test the server end-to-end, with:
+
+```bash
+python tools/gen_lsp_builtins.py   # rebuilds src/lsp/builtins_gen.rs
+python tools/lsp_smoke.py          # drives a real LSP session over stdio
+```
+
 ---
 
 ## Language Reference
@@ -3775,7 +3802,7 @@ Then add evaluation in `eval_infix()` in `evaluator.rs`.
 - [x] VS Code extension — syntax highlighting and formatter for `.sz` files (`vscode-serez/`)
 - [x] Demo apps — five `apps/*.sz` programs that exercise every language feature end-to-end
 - [x] `.sz` file formatter — `DocumentFormattingEditProvider` integrado en la extensión VS Code; `formatOnSave` activado automáticamente para `.sz`
-- [ ] LSP server for editor support
+- [x] LSP server for editor support — `sz-lsp` binary (stdio JSON-RPC): live diagnostics (parser + type checker), completion (keywords, native namespaces + their methods, document symbols), hover, go-to-definition and document symbols; wired into the VS Code extension (`serez.lsp.enabled` / `serez.lsp.path`)
 
 ---
 
