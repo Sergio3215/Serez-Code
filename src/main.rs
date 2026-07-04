@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 mod ast;
+// AOT backend (AST->HIR->MIR->LLVM IR): compiled only with `--features llvm`.
+// Phase 1; not wired to any CLI verb yet - gating it keeps ~3k lines and the
+// inkwell dependency out of the default build until the backend is resumed.
+#[cfg(feature = "llvm")]
 mod compiler;
 mod evaluator;
 mod lexer;
@@ -37,6 +41,7 @@ fn run_file(file_path: &str, is_check: bool) -> i32 {
     let lexer = lexer::Lexer::new(input);
     let mut parser = parser::Parser::new(lexer);
     parser.set_source(source_lines.clone());
+    parser.set_source_name(file_path);
     let program = parser.parse_program();
     let parse_failed = parser.has_errors();
 
@@ -50,14 +55,26 @@ fn run_file(file_path: &str, is_check: bool) -> i32 {
     let file_path_obj = std::path::Path::new(file_path);
     if let Some(dir) = file_path_obj.parent() {
         let dir = if dir == std::path::Path::new("") { std::path::Path::new(".") } else { dir };
-        if let Ok(manifest) = package_manager::SerezManifest::load(dir) {
-            evaluator.set_permissions(manifest.permissions);
+        match package_manager::SerezManifest::load(dir) {
+            Ok(manifest) => evaluator.set_permissions(manifest.permissions),
+            Err(e) => {
+                // A serez.json that EXISTS but doesn't parse must not fail
+                // silently: the program would run with zero permissions and
+                // the user would only see a confusing permission error.
+                if dir.join("serez.json").exists() {
+                    eprintln!("⚠️  WARNING: serez.json found but not loaded ({}); running WITHOUT permissions.", e);
+                }
+            }
         }
     }
 
     evaluator.set_current_file(file_path_obj);
     let mut run_failed = false;
-    if is_check {
+    if parse_failed {
+        // A program with parse errors must not half-run: statements after the
+        // broken one would execute against missing definitions.
+        eprintln!("❌ Aborted: fix the parse errors above before running.");
+    } else if is_check {
         evaluator.check_program(&program);
     } else {
         // eval_program returns None on uncaught exception / runtime / flash-scope error

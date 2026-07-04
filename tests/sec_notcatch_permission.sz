@@ -1,0 +1,9 @@
+// Security: un permiso denegado NO debe ser capturable — el catch no puede
+// convertir una violacion del sandbox en flujo normal.
+try {
+    Socket.connect("127.0.0.1", 80);
+    out "unreachable: permiso bypasseado";
+} catch (e) {
+    out "unreachable: permiso capturado";
+}
+out "unreachable: debio abortar";

@@ -1,0 +1,45 @@
+// unit_fn_shadowing.sz — Un binding no-invocable (parámetro/local) con el
+// mismo nombre que una función externa NO debe ocultarla en una LLAMADA.
+// Las lecturas del nombre siguen viendo la sombra; solo `nombre(...)` cae
+// al binding invocable más cercano (caso real: param `h` rompía render en
+// serez-ui al pisar la función global `h`).
+
+fn string h(string tag) {
+    return "<" + tag + ">";
+}
+
+fn string render(int h) {
+    return h("div") + "|" + h;
+}
+
+fn int doble(int n) {
+    return n * 2;
+}
+
+test("param no-invocable no oculta la función en llamadas", () => {
+    assert(render(99) == "<div>|99", "h(...) llama a la función, h lee el param");
+});
+
+test("la lectura del nombre sigue viendo la sombra", () => {
+    let doble = 7;
+    assert(doble == 7, "leer la sombra");
+    assert(doble(4) == 8, "llamar cae a la función externa");
+});
+
+test("un local invocable SÍ gana a la función externa", () => {
+    let doble = (n) => { return n * 10; };
+    assert(doble(4) == 40, "la lambda local más cercana gana");
+});
+
+test("llamar un no-función sin función homónima sigue fallando", () => {
+    let boom = 5;
+    let fallo = false;
+    try {
+        boom(1);
+    } catch (e) {
+        fallo = e.kind == "TypeError";
+    }
+    assert(fallo, "TypeError capturable al llamar un int");
+});
+
+summary();

@@ -10,6 +10,67 @@ use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_st
             operator_to_method_name, owned_to_obj_data};
 
 impl super::Evaluator {
+    /// Slot fast path for push/pop (dispatched from expr.rs before the generic
+    /// dot-call clones the receiver). Mutates the array in place via get_mut —
+    /// no O(N) copy per call, no whole-slot rewrite. Error behavior is
+    /// byte-for-byte identical to the generic path (fatal eprintln, same messages).
+    pub(super) fn eval_array_fast(&mut self, arr_ref: ObjectRef, dot_call: &ast::DotCallExpression) -> EvalResult {
+        match dot_call.method.as_str() {
+            "push" => {
+                if dot_call.arguments.len() != 1 {
+                    eprintln!("❌ ERROR: push expects 1 argument");
+                    return EvalResult::Error;
+                }
+                let element_type = match self.resolve(arr_ref) {
+                    Some(ObjectData::Array { element_type, .. }) => element_type.clone(),
+                    _ => return EvalResult::Error,
+                };
+                let val_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    _ => return EvalResult::Error,
+                };
+                if let Some(ref et) = element_type {
+                    let data = self.resolve(val_ref).unwrap();
+                    if !type_matches(et, data) {
+                        eprintln!(
+                            "❌ TYPE ERROR: Cannot push '{}' into [{}] array",
+                            data.type_name(), et
+                        );
+                        return EvalResult::Error;
+                    }
+                }
+                let val = self.extract(val_ref);
+                let arena = match arr_ref.region {
+                    RegionId::Global => &mut self.global_arena,
+                    RegionId::Scoped => &mut self.scopes.arena,
+                };
+                if let Some(ObjectData::Array { elements, .. }) = arena.get_mut(arr_ref.index) {
+                    elements.push(val);
+                }
+                EvalResult::Value(self.null_ref)
+            }
+            "pop" => {
+                let arena = match arr_ref.region {
+                    RegionId::Global => &mut self.global_arena,
+                    RegionId::Scoped => &mut self.scopes.arena,
+                };
+                let popped = match arena.get_mut(arr_ref.index) {
+                    Some(ObjectData::Array { elements, .. }) => {
+                        if elements.is_empty() {
+                            eprintln!("❌ ERROR: pop() called on an empty array");
+                            return EvalResult::Error;
+                        }
+                        elements.pop().unwrap()
+                    }
+                    _ => return EvalResult::Error,
+                };
+                EvalResult::Value(self.plant(popped))
+            }
+            _ => EvalResult::Error, // unreachable: dispatcher only routes push/pop
+        }
+    }
+
     pub(super) fn eval_array_method(
         &mut self,
         arr_ref: ObjectRef,

@@ -12,8 +12,7 @@ use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_st
 impl super::Evaluator {
     pub(super) fn eval_assert(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.is_empty() || args.len() > 2 {
-            eprintln!("❌ ERROR: assert(condition) or assert(condition, message)");
-            return EvalResult::Error;
+            return self.rt_err_kind("RuntimeError", "assert(condition) or assert(condition, message)");
         }
         let cond_ref = match self.eval_expression(&args[0]) {
             EvalResult::Value(v) => v,
@@ -39,8 +38,7 @@ impl super::Evaluator {
 
     pub(super) fn eval_type_of(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.len() != 1 {
-            eprintln!("❌ ERROR: type_of expects 1 argument");
-            return EvalResult::Error;
+            return self.rt_err_kind("TypeError", "type_of expects 1 argument");
         }
         let r = match self.eval_expression(&args[0]) {
             EvalResult::Value(v) => v,
@@ -80,8 +78,7 @@ impl super::Evaluator {
 
     pub(super) fn eval_parse_int(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.len() != 1 {
-            eprintln!("❌ ERROR: parseInt expects 1 argument");
-            return EvalResult::Error;
+            return self.rt_err_kind("TypeError", "parseInt expects 1 argument");
         }
         let r = match self.eval_expression(&args[0]) {
             EvalResult::Value(r) => r,
@@ -92,26 +89,23 @@ impl super::Evaluator {
             Some(ObjectData::Integer(i)) => EvalResult::Value(self.alloc(ObjectData::Integer(i))),
             Some(ObjectData::Decimal(d)) => {
                 if !d.is_finite() || d > i64::MAX as f64 || d < i64::MIN as f64 {
-                    eprintln!("❌ ERROR: parseInt: decimal value is out of int range or not finite");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("RuntimeError", "parseInt: decimal value is out of int range or not finite");
                 }
                 EvalResult::Value(self.alloc(ObjectData::Integer(d as i64)))
             }
             Some(ObjectData::Str(s)) => match s.trim().parse::<i64>() {
                 Ok(n) => EvalResult::Value(self.alloc(ObjectData::Integer(n))),
                 Err(_) => {
-                    eprintln!("❌ ERROR: parseInt: cannot parse '{}' as int", s);
-                    EvalResult::Error
+                    self.rt_err_kind("RuntimeError", format!("parseInt: cannot parse '{}' as int", s))
                 }
             },
-            _ => { eprintln!("❌ ERROR: parseInt: unsupported type"); EvalResult::Error }
+            _ => { self.rt_err_kind("RuntimeError", "parseInt: unsupported type") }
         }
     }
 
     pub(super) fn eval_parse_decimal(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.len() != 1 {
-            eprintln!("❌ ERROR: parseDecimal expects 1 argument");
-            return EvalResult::Error;
+            return self.rt_err_kind("TypeError", "parseDecimal expects 1 argument");
         }
         let r = match self.eval_expression(&args[0]) {
             EvalResult::Value(r) => r,
@@ -124,11 +118,10 @@ impl super::Evaluator {
             Some(ObjectData::Str(s)) => match s.trim().parse::<f64>() {
                 Ok(n) => EvalResult::Value(self.alloc(ObjectData::Decimal(n))),
                 Err(_) => {
-                    eprintln!("❌ ERROR: parseDecimal: cannot parse '{}' as decimal", s);
-                    EvalResult::Error
+                    self.rt_err_kind("RuntimeError", format!("parseDecimal: cannot parse '{}' as decimal", s))
                 }
             },
-            _ => { eprintln!("❌ ERROR: parseDecimal: unsupported type"); EvalResult::Error }
+            _ => { self.rt_err_kind("RuntimeError", "parseDecimal: unsupported type") }
         }
     }
 
@@ -150,7 +143,7 @@ impl super::Evaluator {
         match name {
             // --- Single-argument ---
             "abs" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: abs() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "abs() expects 1 argument"); }
                 let r = match self.eval_expression(&args[0]) {
                     EvalResult::Value(r) => r,
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
@@ -159,57 +152,57 @@ impl super::Evaluator {
                 match self.resolve(r).cloned() {
                     Some(ObjectData::Integer(i)) => match i.checked_abs() {
                         Some(v) => EvalResult::Value(self.alloc(ObjectData::Integer(v))),
-                        None => { eprintln!("❌ ERROR: abs() overflow (i64::MIN has no positive representation)"); EvalResult::Error }
+                        None => { self.rt_err_kind("RuntimeError", "abs() overflow (i64::MIN has no positive representation)") }
                     },
                     Some(ObjectData::Decimal(d)) => EvalResult::Value(self.alloc(ObjectData::Decimal(d.abs()))),
-                    _ => { eprintln!("❌ ERROR: abs() expects a numeric argument"); EvalResult::Error }
+                    _ => { self.rt_err_kind("TypeError", "abs() expects a numeric argument") }
                 }
             }
             "sqrt" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: sqrt() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "sqrt() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v < 0.0 { eprintln!("❌ ERROR: sqrt() of negative number"); return EvalResult::Error; }
+                if v < 0.0 { return self.rt_err_kind("RuntimeError", "sqrt() of negative number"); }
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.sqrt())))
             }
             "floor" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: floor() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "floor() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v.is_nan() || v.is_infinite() { eprintln!("❌ ERROR: floor() argument must be a finite number"); return EvalResult::Error; }
+                if v.is_nan() || v.is_infinite() { return self.rt_err_kind("TypeError", "floor() argument must be a finite number"); }
                 EvalResult::Value(self.alloc(ObjectData::Integer(v.floor() as i64)))
             }
             "ceil" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: ceil() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "ceil() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v.is_nan() || v.is_infinite() { eprintln!("❌ ERROR: ceil() argument must be a finite number"); return EvalResult::Error; }
+                if v.is_nan() || v.is_infinite() { return self.rt_err_kind("TypeError", "ceil() argument must be a finite number"); }
                 EvalResult::Value(self.alloc(ObjectData::Integer(v.ceil() as i64)))
             }
             "round" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: round() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "round() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v.is_nan() || v.is_infinite() { eprintln!("❌ ERROR: round() argument must be a finite number"); return EvalResult::Error; }
+                if v.is_nan() || v.is_infinite() { return self.rt_err_kind("TypeError", "round() argument must be a finite number"); }
                 EvalResult::Value(self.alloc(ObjectData::Integer(v.round() as i64)))
             }
             "log" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: log() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "log() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v <= 0.0 { eprintln!("❌ ERROR: log() of non-positive number"); return EvalResult::Error; }
+                if v <= 0.0 { return self.rt_err_kind("RuntimeError", "log() of non-positive number"); }
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.ln())))
             }
             "log2" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: log2() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "log2() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v <= 0.0 { eprintln!("❌ ERROR: log2() of non-positive number"); return EvalResult::Error; }
+                if v <= 0.0 { return self.rt_err_kind("RuntimeError", "log2() of non-positive number"); }
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.log2())))
             }
             "log10" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: log10() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "log10() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v <= 0.0 { eprintln!("❌ ERROR: log10() of non-positive number"); return EvalResult::Error; }
+                if v <= 0.0 { return self.rt_err_kind("RuntimeError", "log10() of non-positive number"); }
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.log10())))
             }
             // --- Two-argument ---
             "min" => {
-                if args.is_empty() { eprintln!("❌ ERROR: min() expects at least 1 argument"); return EvalResult::Error; }
+                if args.is_empty() { return self.rt_err_kind("TypeError", "min() expects at least 1 argument"); }
                 let mut all_int = true;
                 let mut vals: Vec<f64> = Vec::new();
                 let mut int_vals: Vec<i64> = Vec::new();
@@ -218,7 +211,7 @@ impl super::Evaluator {
                     match self.resolve(r).cloned() {
                         Some(ObjectData::Integer(i)) => { vals.push(i as f64); int_vals.push(i); }
                         Some(ObjectData::Decimal(d)) => { vals.push(d); all_int = false; }
-                        _ => { eprintln!("❌ ERROR: min() expects numeric arguments"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "min() expects numeric arguments"); }
                     }
                 }
                 if all_int && int_vals.len() == args.len() {
@@ -229,7 +222,7 @@ impl super::Evaluator {
                 }
             }
             "max" => {
-                if args.is_empty() { eprintln!("❌ ERROR: max() expects at least 1 argument"); return EvalResult::Error; }
+                if args.is_empty() { return self.rt_err_kind("TypeError", "max() expects at least 1 argument"); }
                 let mut all_int = true;
                 let mut vals: Vec<f64> = Vec::new();
                 let mut int_vals: Vec<i64> = Vec::new();
@@ -238,7 +231,7 @@ impl super::Evaluator {
                     match self.resolve(r).cloned() {
                         Some(ObjectData::Integer(i)) => { vals.push(i as f64); int_vals.push(i); }
                         Some(ObjectData::Decimal(d)) => { vals.push(d); all_int = false; }
-                        _ => { eprintln!("❌ ERROR: max() expects numeric arguments"); return EvalResult::Error; }
+                        _ => { return self.rt_err_kind("TypeError", "max() expects numeric arguments"); }
                     }
                 }
                 if all_int && int_vals.len() == args.len() {
@@ -249,68 +242,67 @@ impl super::Evaluator {
                 }
             }
             "pow" => {
-                if args.len() != 2 { eprintln!("❌ ERROR: pow() expects 2 arguments (base, exp)"); return EvalResult::Error; }
+                if args.len() != 2 { return self.rt_err_kind("TypeError", "pow() expects 2 arguments (base, exp)"); }
                 let base = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
                 let exp  = match resolve_num(self, &args[1]) { Some(v) => v, None => return EvalResult::Error };
                 EvalResult::Value(self.alloc(ObjectData::Decimal(base.powf(exp))))
             }
             "sin" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: sin() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "sin() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.sin())))
             }
             "cos" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: cos() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "cos() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.cos())))
             }
             "tan" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: tan() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "tan() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.tan())))
             }
             "asin" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: asin() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "asin() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v < -1.0 || v > 1.0 { eprintln!("❌ ERROR: asin() argument must be in [-1, 1]"); return EvalResult::Error; }
+                if v < -1.0 || v > 1.0 { return self.rt_err_kind("TypeError", "asin() argument must be in [-1, 1]"); }
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.asin())))
             }
             "acos" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: acos() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "acos() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v < -1.0 || v > 1.0 { eprintln!("❌ ERROR: acos() argument must be in [-1, 1]"); return EvalResult::Error; }
+                if v < -1.0 || v > 1.0 { return self.rt_err_kind("TypeError", "acos() argument must be in [-1, 1]"); }
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.acos())))
             }
             "atan" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: atan() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "atan() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.atan())))
             }
             "atan2" => {
-                if args.len() != 2 { eprintln!("❌ ERROR: atan2() expects 2 arguments"); return EvalResult::Error; }
+                if args.len() != 2 { return self.rt_err_kind("TypeError", "atan2() expects 2 arguments"); }
                 let y = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
                 let x = match resolve_num(self, &args[1]) { Some(v) => v, None => return EvalResult::Error };
                 EvalResult::Value(self.alloc(ObjectData::Decimal(y.atan2(x))))
             }
             "trunc" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: trunc() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "trunc() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
-                if v.is_nan() || v.is_infinite() { eprintln!("❌ ERROR: trunc() argument must be a finite number"); return EvalResult::Error; }
+                if v.is_nan() || v.is_infinite() { return self.rt_err_kind("TypeError", "trunc() argument must be a finite number"); }
                 EvalResult::Value(self.alloc(ObjectData::Integer(v.trunc() as i64)))
             }
             "exp" => {
-                if args.len() != 1 { eprintln!("❌ ERROR: exp() expects 1 argument"); return EvalResult::Error; }
+                if args.len() != 1 { return self.rt_err_kind("TypeError", "exp() expects 1 argument"); }
                 let v = match resolve_num(self, &args[0]) { Some(v) => v, None => return EvalResult::Error };
                 EvalResult::Value(self.alloc(ObjectData::Decimal(v.exp())))
             }
-            _ => { eprintln!("❌ ERROR: Unknown math function '{}'", name); EvalResult::Error }
+            _ => { self.rt_err_kind("TypeError", format!("Unknown math function '{}'", name)) }
         }
     }
 
     pub(super) fn eval_read_line(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.len() > 1 {
-            eprintln!("❌ ERROR: readLine expects 0 or 1 argument");
-            return EvalResult::Error;
+            return self.rt_err_kind("TypeError", "readLine expects 0 or 1 argument");
         }
         if let Some(prompt_expr) = args.first() {
             match self.eval_expression(prompt_expr) {
@@ -330,8 +322,7 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Str(trimmed)))
             }
             Err(e) => {
-                eprintln!("❌ ERROR: readLine: failed to read from stdin — {}", e);
-                EvalResult::Error
+                self.rt_err_kind("RuntimeError", format!("readLine: failed to read from stdin — {}", e))
             }
         }
     }
@@ -349,8 +340,7 @@ impl super::Evaluator {
     //   { binary: true } → body is returned as a byte array [int] instead of a string.
     pub(super) fn eval_fetch(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.is_empty() || args.len() > 4 {
-            eprintln!("❌ ERROR: fetch(url, [method], [body], [options])");
-            return EvalResult::Error;
+            return self.rt_err_kind("RuntimeError", "fetch(url, [method], [body], [options])");
         }
 
         // ── arg[0]: url (required, string) ────────────────────────────────────
@@ -621,13 +611,12 @@ impl super::Evaluator {
     // ── env(name) — read environment variable ─────────────────────────────────
     pub(super) fn eval_builtin_env(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.len() != 1 {
-            eprintln!("❌ ERROR: env(name) requires exactly 1 argument");
-            return EvalResult::Error;
+            return self.rt_err_kind("TypeError", "env(name) requires exactly 1 argument");
         }
         let name = match self.eval_expression(&args[0]) {
             EvalResult::Value(r) => match self.resolve(r).cloned() {
                 Some(ObjectData::Str(s)) => s,
-                _ => { eprintln!("❌ ERROR: env() argument must be a string"); return EvalResult::Error; }
+                _ => { return self.rt_err_kind("TypeError", "env() argument must be a string"); }
             },
             EvalResult::Throw(v) => return EvalResult::Throw(v),
             _ => return EvalResult::Error,
@@ -644,7 +633,7 @@ impl super::Evaluator {
             match self.eval_expression(&args[0]) {
                 EvalResult::Value(r) => match self.resolve(r).cloned() {
                     Some(ObjectData::Integer(n)) => n as i32,
-                    _ => { eprintln!("❌ ERROR: exit() argument must be an integer"); return EvalResult::Error; }
+                    _ => { return self.rt_err_kind("TypeError", "exit() argument must be an integer"); }
                 },
                 EvalResult::Throw(v) => return EvalResult::Throw(v),
                 _ => return EvalResult::Error,

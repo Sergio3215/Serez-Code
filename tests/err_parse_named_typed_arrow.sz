@@ -1,0 +1,4 @@
+int doble(int n) => {
+    return n * 2;
+}
+out doble(21);

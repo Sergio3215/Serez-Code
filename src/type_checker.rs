@@ -1,10 +1,23 @@
 use crate::ast::{self, Expression, Program, Statement};
 use std::collections::HashMap;
 
+/// A type error with its source position (1-based; 0 = unknown position), as
+/// reported alongside the stderr message. Collected so tools (LSP) can map
+/// errors to ranges; the CLI keeps using stderr.
+#[derive(Debug, Clone)]
+pub struct TypeError {
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+}
+
 pub struct TypeChecker<'a> {
     program: &'a Program,
     functions: HashMap<String, ast::FunctionLiteral>,
     var_types: HashMap<String, String>,
+    /// Every error reported by `type_error`, in order. `RefCell` because the
+    /// check methods take `&self`.
+    errors: std::cell::RefCell<Vec<TypeError>>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -13,7 +26,21 @@ impl<'a> TypeChecker<'a> {
             program,
             functions: HashMap::new(),
             var_types: HashMap::new(),
+            errors: std::cell::RefCell::new(Vec::new()),
         }
+    }
+
+    /// All type errors reported by `check`, with positions where known.
+    pub fn take_errors(&self) -> Vec<TypeError> {
+        self.errors.borrow().clone()
+    }
+
+    /// Report a type error: stderr (CLI behavior, unchanged) + collected list.
+    fn type_error(&self, line: usize, column: usize, message: String) {
+        eprintln!("❌ TYPE ERROR{}: {}",
+            if line > 0 { format!(" [line {}:{}]", line, column) } else { String::new() },
+            message);
+        self.errors.borrow_mut().push(TypeError { line, column, message });
     }
 
     pub fn check(&mut self) {
@@ -84,10 +111,10 @@ impl<'a> TypeChecker<'a> {
                 if let Some(expected) = expected_return {
                     if let Some(actual) = self.infer_type(&ret.return_value) {
                         if !types_compatible(expected, &actual) {
-                            eprintln!(
-                                "❌ TYPE ERROR: Function declares return '{}' but 'return' expression has type '{}'.",
+                            self.type_error(0, 0, format!(
+                                "Function declares return '{}' but 'return' expression has type '{}'.",
                                 expected, actual
-                            );
+                            ));
                         }
                     }
                 }
@@ -237,10 +264,10 @@ impl<'a> TypeChecker<'a> {
                 None => continue,
             };
             if !types_compatible(element_type, &actual) {
-                eprintln!(
-                    "❌ TYPE ERROR: Array declared as [{}] but contains element of type '{}'.",
+                self.type_error(0, 0, format!(
+                    "Array declared as [{}] but contains element of type '{}'.",
                     element_type, actual
-                );
+                ));
             }
         }
     }
@@ -275,10 +302,10 @@ impl<'a> TypeChecker<'a> {
             } else {
                 format!("{}-{}", min_params, max_params)
             };
-            eprintln!(
-                "❌ TYPE ERROR: '{}' expects {} argument(s) but got {}.",
+            self.type_error(call.line, call.column, format!(
+                "'{}' expects {} argument(s) but got {}.",
                 func_name, expected_str, call.arguments.len()
-            );
+            ));
             return;
         }
 
@@ -295,12 +322,11 @@ impl<'a> TypeChecker<'a> {
             };
 
             if !types_compatible(expected, &actual) {
-                eprintln!(
-                    "❌ TYPE ERROR [line {}:{}]: Parameter '{}' of '{}' expected '{}' but received '{}'.",
-                    call.line, call.column,
+                self.type_error(call.line, call.column, format!(
+                    "Parameter '{}' of '{}' expected '{}' but received '{}'.",
                     param.name, func_name,
                     expected, actual
-                );
+                ));
             }
         }
     }

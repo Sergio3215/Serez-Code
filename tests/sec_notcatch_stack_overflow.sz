@@ -1,0 +1,10 @@
+// Security: el stack overflow NO debe ser capturable — un try alrededor de
+// recursion infinita quedaria reintentando para siempre (DoS).
+fn int inf(int n) { return inf(n + 1); }
+try {
+    inf(0);
+    out "unreachable";
+} catch (e) {
+    out "unreachable: overflow capturado";
+}
+out "unreachable: debio abortar";

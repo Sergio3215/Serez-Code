@@ -1,0 +1,4 @@
+fn int f(int a) {
+    return a +
+}
+out f(1);

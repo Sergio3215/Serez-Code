@@ -44,51 +44,56 @@ impl Lexer {
     pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
 
+        // Position of the token's FIRST character (1-based), uniform for all
+        // token kinds (multi-char operators, identifiers, numbers, strings).
+        let tok_line = self.line;
+        let tok_col = self.column;
+
         let token = match self.ch {
             '=' => {
                 if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::Eq, "==".to_string(), self.line, self.column)
+                    Token::new(TokenType::Eq, "==".to_string(), tok_line, tok_col)
                 } else if self.peek_char() == '>' {
                     self.read_char();
-                    Token::new(TokenType::Arrow, "=>".to_string(), self.line, self.column)
+                    Token::new(TokenType::Arrow, "=>".to_string(), tok_line, tok_col)
                 } else {
                     Token::new(
                         TokenType::Assign,
                         self.ch.to_string(),
-                        self.line,
-                        self.column,
+                        tok_line,
+                        tok_col,
                     )
                 }
             }
             '+' => {
                 if self.peek_char() == '+' {
                     self.read_char();
-                    Token::new(TokenType::PlusPlus, "++".to_string(), self.line, self.column)
+                    Token::new(TokenType::PlusPlus, "++".to_string(), tok_line, tok_col)
                 } else if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::PlusEq, "+=".to_string(), self.line, self.column)
+                    Token::new(TokenType::PlusEq, "+=".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::Plus, "+".to_string(), self.line, self.column)
+                    Token::new(TokenType::Plus, "+".to_string(), tok_line, tok_col)
                 }
             }
             '-' => {
                 if self.peek_char() == '-' {
                     self.read_char();
-                    Token::new(TokenType::MinusMinus, "--".to_string(), self.line, self.column)
+                    Token::new(TokenType::MinusMinus, "--".to_string(), tok_line, tok_col)
                 } else if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::MinusEq, "-=".to_string(), self.line, self.column)
+                    Token::new(TokenType::MinusEq, "-=".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::Minus, "-".to_string(), self.line, self.column)
+                    Token::new(TokenType::Minus, "-".to_string(), tok_line, tok_col)
                 }
             }
             '!' => {
                 if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::NotEq, "!=".to_string(), self.line, self.column)
+                    Token::new(TokenType::NotEq, "!=".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::Bang, self.ch.to_string(), self.line, self.column)
+                    Token::new(TokenType::Bang, self.ch.to_string(), tok_line, tok_col)
                 }
             }
             '/' => {
@@ -100,120 +105,120 @@ impl Lexer {
                     return self.next_token();
                 } else if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::SlashEq, "/=".to_string(), self.line, self.column)
+                    Token::new(TokenType::SlashEq, "/=".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::Slash, "/".to_string(), self.line, self.column)
+                    Token::new(TokenType::Slash, "/".to_string(), tok_line, tok_col)
                 }
             }
             '*' => {
                 if self.peek_char() == '*' {
                     self.read_char();
-                    Token::new(TokenType::Power, "**".to_string(), self.line, self.column)
+                    Token::new(TokenType::Power, "**".to_string(), tok_line, tok_col)
                 } else if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::StarEq, "*=".to_string(), self.line, self.column)
+                    Token::new(TokenType::StarEq, "*=".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::Asterisk, "*".to_string(), self.line, self.column)
+                    Token::new(TokenType::Asterisk, "*".to_string(), tok_line, tok_col)
                 }
             }
             '%' => {
                 if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::PercentEq, "%=".to_string(), self.line, self.column)
+                    Token::new(TokenType::PercentEq, "%=".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::Percent, "%".to_string(), self.line, self.column)
+                    Token::new(TokenType::Percent, "%".to_string(), tok_line, tok_col)
                 }
             }
             '<' => {
                 if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::LtEq, "<=".to_string(), self.line, self.column)
+                    Token::new(TokenType::LtEq, "<=".to_string(), tok_line, tok_col)
                 } else if self.peek_char() == '<' {
                     self.read_char();
-                    Token::new(TokenType::Shl, "<<".to_string(), self.line, self.column)
+                    Token::new(TokenType::Shl, "<<".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::Lt, self.ch.to_string(), self.line, self.column)
+                    Token::new(TokenType::Lt, self.ch.to_string(), tok_line, tok_col)
                 }
             }
             '>' => {
                 if self.peek_char() == '=' {
                     self.read_char();
-                    Token::new(TokenType::GtEq, ">=".to_string(), self.line, self.column)
+                    Token::new(TokenType::GtEq, ">=".to_string(), tok_line, tok_col)
                 } else if self.peek_char() == '>' {
                     self.read_char();
-                    Token::new(TokenType::Shr, ">>".to_string(), self.line, self.column)
+                    Token::new(TokenType::Shr, ">>".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::Gt, self.ch.to_string(), self.line, self.column)
+                    Token::new(TokenType::Gt, self.ch.to_string(), tok_line, tok_col)
                 }
             }
             '&' => {
                 if self.peek_char() == '&' {
                     self.read_char();
-                    Token::new(TokenType::And, "&&".to_string(), self.line, self.column)
+                    Token::new(TokenType::And, "&&".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::BitAnd, "&".to_string(), self.line, self.column)
+                    Token::new(TokenType::BitAnd, "&".to_string(), tok_line, tok_col)
                 }
             }
             '|' => {
                 if self.peek_char() == '|' {
                     self.read_char();
-                    Token::new(TokenType::Or, "||".to_string(), self.line, self.column)
+                    Token::new(TokenType::Or, "||".to_string(), tok_line, tok_col)
                 } else if self.peek_char() == '>' {
                     self.read_char();
-                    Token::new(TokenType::Pipe, "|>".to_string(), self.line, self.column)
+                    Token::new(TokenType::Pipe, "|>".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::BitOr, "|".to_string(), self.line, self.column)
+                    Token::new(TokenType::BitOr, "|".to_string(), tok_line, tok_col)
                 }
             }
-            '^' => Token::new(TokenType::BitXor, "^".to_string(), self.line, self.column),
-            '~' => Token::new(TokenType::BitNot, "~".to_string(), self.line, self.column),
+            '^' => Token::new(TokenType::BitXor, "^".to_string(), tok_line, tok_col),
+            '~' => Token::new(TokenType::BitNot, "~".to_string(), tok_line, tok_col),
             ';' => Token::new(
                 TokenType::Semicolon,
                 self.ch.to_string(),
-                self.line,
-                self.column,
+                tok_line,
+                tok_col,
             ),
             ',' => Token::new(
                 TokenType::Comma,
                 self.ch.to_string(),
-                self.line,
-                self.column,
+                tok_line,
+                tok_col,
             ),
             '(' => Token::new(
                 TokenType::LParen,
                 self.ch.to_string(),
-                self.line,
-                self.column,
+                tok_line,
+                tok_col,
             ),
             ')' => Token::new(
                 TokenType::RParen,
                 self.ch.to_string(),
-                self.line,
-                self.column,
+                tok_line,
+                tok_col,
             ),
             '{' => Token::new(
                 TokenType::LBrace,
                 self.ch.to_string(),
-                self.line,
-                self.column,
+                tok_line,
+                tok_col,
             ),
             '}' => Token::new(
                 TokenType::RBrace,
                 self.ch.to_string(),
-                self.line,
-                self.column,
+                tok_line,
+                tok_col,
             ),
             '[' => Token::new(
                 TokenType::LBracket,
                 self.ch.to_string(),
-                self.line,
-                self.column,
+                tok_line,
+                tok_col,
             ),
             ']' => Token::new(
                 TokenType::RBracket,
                 self.ch.to_string(),
-                self.line,
-                self.column,
+                tok_line,
+                tok_col,
             ),
             '.' => {
                 // Check for `...` (spread/rest operator)
@@ -221,47 +226,47 @@ impl Lexer {
                     self.read_char(); // consume second '.'
                     if self.peek_char() == '.' {
                         self.read_char(); // consume third '.'
-                        Token::new(TokenType::DotDotDot, "...".to_string(), self.line, self.column)
+                        Token::new(TokenType::DotDotDot, "...".to_string(), tok_line, tok_col)
                     } else {
                         // Just two dots — illegal, but emit Dot and leave second dot for next token
-                        Token::new(TokenType::Dot, ".".to_string(), self.line, self.column)
+                        Token::new(TokenType::Dot, ".".to_string(), tok_line, tok_col)
                     }
                 } else {
-                    Token::new(TokenType::Dot, ".".to_string(), self.line, self.column)
+                    Token::new(TokenType::Dot, ".".to_string(), tok_line, tok_col)
                 }
             }
             '?' => {
                 if self.peek_char() == '?' {
                     self.read_char();
-                    Token::new(TokenType::NullCoalesce, "??".to_string(), self.line, self.column)
+                    Token::new(TokenType::NullCoalesce, "??".to_string(), tok_line, tok_col)
                 } else if self.peek_char() == '.' {
                     self.read_char();
-                    Token::new(TokenType::QuestionDot, "?.".to_string(), self.line, self.column)
+                    Token::new(TokenType::QuestionDot, "?.".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(TokenType::Question, "?".to_string(), self.line, self.column)
+                    Token::new(TokenType::Question, "?".to_string(), tok_line, tok_col)
                 }
             }
-            ':' => Token::new(TokenType::Colon, ":".to_string(), self.line, self.column),
+            ':' => Token::new(TokenType::Colon, ":".to_string(), tok_line, tok_col),
             '"' => {
-                let start_line = self.line;
-                let start_column = self.column;
+                let start_line = tok_line;
+                let start_column = tok_col;
                 let literal = self.read_string();
                 Token::new(TokenType::String, literal, start_line, start_column)
             }
             '\'' => {
-                let start_line = self.line;
-                let start_column = self.column;
+                let start_line = tok_line;
+                let start_column = tok_col;
                 let literal = self.read_single_quote_string();
                 Token::new(TokenType::String, literal, start_line, start_column)
             }
-            '\0' => Token::new(TokenType::Eof, "".to_string(), self.line, self.column),
+            '\0' => Token::new(TokenType::Eof, "".to_string(), tok_line, tok_col),
             _ => {
                 // Raw string r"..." — no interpolation, braces are literal.
                 // Only when `r` is immediately followed by `"` (not an identifier
                 // like `result`/`range`).
                 if self.ch == 'r' && self.peek_char() == '"' {
-                    let start_line = self.line;
-                    let start_column = self.column;
+                    let start_line = tok_line;
+                    let start_column = tok_col;
                     self.read_char(); // consume 'r' → self.ch == '"'
                     let literal = self.read_raw_string(); // leaves ch at closing '"'
                     self.read_char(); // consume closing '"'
@@ -270,12 +275,12 @@ impl Lexer {
                 if is_letter(self.ch) {
                     let literal = self.read_identifier();
                     let token_type = token::lookup_ident(&literal);
-                    let start_line = self.line;
-                    let start_column = self.column;
+                    let start_line = tok_line;
+                    let start_column = tok_col;
                     return Token::new(token_type, literal, start_line, start_column);
                 } else if is_digit(self.ch) {
-                    let start_line = self.line;
-                    let start_column = self.column;
+                    let start_line = tok_line;
+                    let start_column = tok_col;
                     let literal = self.read_number();
                     // `dec` literal suffix `m` (12.50m, 5m, 1e-7m). Only when the
                     // `m` stands alone — not when it begins an identifier (5meters).
@@ -299,8 +304,8 @@ impl Lexer {
                     Token::new(
                         TokenType::Illegal,
                         self.ch.to_string(),
-                        self.line,
-                        self.column,
+                        tok_line,
+                        tok_col,
                     )
                 }
             }
@@ -331,7 +336,12 @@ impl Lexer {
                         // \} → literal '}' (symmetric with \{; otherwise the
                         // backslash leaked through, e.g. "a\}b" → "a\}b")
                         '}'  => { self.read_char(); result.push('}'); }
-                        c    => { result.push('\\'); result.push(c);   }
+                        // Unknown escape (\d, \s, or a lone backslash before a
+                        // letter as in Windows paths): keep both chars verbatim,
+                        // but CONSUME the peeked char — without read_char() the
+                        // next loop iteration reads it again and duplicates it
+                        // ("x\y" → "x\yy", "C:\Windows" → "C:\WWindows").
+                        c    => { self.read_char(); result.push('\\'); result.push(c); }
                     }
                 }
                 '{' => { brace_depth += 1; result.push('{'); }

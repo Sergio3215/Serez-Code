@@ -48,14 +48,30 @@ pub fn token_precedence(token_type: &TokenType) -> Precedence {
     }
 }
 
+/// A parse error with its source position (1-based line/column), as reported
+/// by `parser_error`. Collected so tools (LSP) can map errors to ranges;
+/// the CLI keeps using stderr.
+#[derive(Debug, Clone)]
+pub struct ParseError {
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+}
+
 pub struct Parser {
     lexer: Lexer,
     current_token: Token,
     peek_token: Token,
     source_lines: Vec<String>,
+    /// File (or module) the source came from — prefixes error messages so
+    /// errors inside imports are attributable to their file.
+    source_name: Option<String>,
     /// Set whenever any parse error is reported. `Cell` so `parser_error(&self)`
     /// can flip it. Lets callers (main) fail with a non-zero exit code.
     had_error: std::cell::Cell<bool>,
+    /// Every error reported via `parser_error`, in order. `RefCell` for the
+    /// same reason as `had_error`.
+    errors: std::cell::RefCell<Vec<ParseError>>,
 }
 
 impl Parser {
@@ -67,12 +83,14 @@ impl Parser {
             current_token,
             peek_token,
             source_lines: Vec::new(),
+            source_name: None,
             had_error: std::cell::Cell::new(false),
+            errors: std::cell::RefCell::new(Vec::new()),
         }
     }
 
     fn is_reserved_name(&self, name: &str) -> bool {
-        matches!(name, "Task" | "Time" | "DateTime" | "System" | "Gui" | "Dec")
+        matches!(name, "Task" | "Time" | "DateTime" | "System" | "Gui" | "Dec" | "Media")
     }
 
     /// Whether any parse error was reported while building the program.
@@ -80,15 +98,30 @@ impl Parser {
         self.had_error.get()
     }
 
+    /// All parse errors reported so far, with positions. Used by tooling (LSP).
+    pub fn take_errors(&self) -> Vec<ParseError> {
+        self.errors.borrow().clone()
+    }
+
     pub fn set_source(&mut self, lines: Vec<String>) {
         self.source_lines = lines;
+    }
+
+    pub fn set_source_name(&mut self, name: &str) {
+        self.source_name = Some(name.to_string());
     }
 
     fn parser_error(&self, msg: &str) {
         self.had_error.set(true);
         let line = self.current_token.line;
         let col  = self.current_token.column;
-        eprintln!("❌ PARSER ERROR [line {}:{}]: {}", line, col, msg);
+        self.errors.borrow_mut().push(ParseError {
+            line, column: col, message: msg.to_string(),
+        });
+        match &self.source_name {
+            Some(name) => eprintln!("❌ PARSER ERROR [{} {}:{}]: {}", name, line, col, msg),
+            None => eprintln!("❌ PARSER ERROR [line {}:{}]: {}", line, col, msg),
+        }
         if let Some(src) = self.source_lines.get(line.saturating_sub(1)) {
             let ln = line.to_string();
             eprintln!("  {} | {}", ln, src.trim_end());
@@ -147,6 +180,12 @@ impl Parser {
         };
 
         while self.current_token.token_type != TokenType::Eof {
+            // Stray ';' is an empty statement (e.g. after `return;` inside a
+            // one-line block, or `unsafe { ... };`), not an error.
+            if self.current_token.token_type == TokenType::Semicolon {
+                self.next_token();
+                continue;
+            }
             match self.parse_statement() {
                 Some(stmt) => program.statements.push(stmt),
                 None => self.synchronize(),
@@ -368,6 +407,11 @@ impl Parser {
         while self.current_token.token_type != TokenType::RBrace
             && self.current_token.token_type != TokenType::Eof
         {
+            // Stray ';' is an empty statement, not an error.
+            if self.current_token.token_type == TokenType::Semicolon {
+                self.next_token();
+                continue;
+            }
             if let Some(stmt) = self.parse_statement() {
                 statements.push(stmt);
             }
@@ -657,6 +701,11 @@ impl Parser {
         while self.current_token.token_type != TokenType::RBrace
             && self.current_token.token_type != TokenType::Eof
         {
+            // Stray ';' is an empty statement, not an error.
+            if self.current_token.token_type == TokenType::Semicolon {
+                self.next_token();
+                continue;
+            }
             if let Some(stmt) = self.parse_statement() {
                 statements.push(stmt);
             }
@@ -1244,6 +1293,10 @@ impl Parser {
         }
 
         if self.peek_token.token_type != TokenType::Ident {
+            self.parser_error(&format!(
+                "Expected variable name after '{}'",
+                if is_const { "const" } else { "let" }
+            ));
             return None;
         }
         self.next_token();
@@ -1308,6 +1361,11 @@ impl Parser {
         }
 
         if self.peek_token.token_type != TokenType::Assign {
+            self.parser_error(&format!(
+                "Expected '=' after variable name '{}' in {} declaration",
+                name,
+                if is_const { "const" } else { "let" }
+            ));
             return None;
         }
         self.next_token(); // '='
@@ -1813,6 +1871,10 @@ impl Parser {
                 if let Ok(num) = self.current_token.literal.parse::<i64>() {
                     Some(Expression::Integer(num))
                 } else {
+                    self.parser_error(&format!(
+                        "Invalid integer literal '{}' (out of 64-bit range?)",
+                        self.current_token.literal
+                    ));
                     None
                 }
             }
@@ -1821,6 +1883,10 @@ impl Parser {
                 if let Ok(num) = self.current_token.literal.parse::<f64>() {
                     Some(Expression::Decimal(num))
                 } else {
+                    self.parser_error(&format!(
+                        "Invalid decimal literal '{}'",
+                        self.current_token.literal
+                    ));
                     None
                 }
             }
@@ -1828,14 +1894,20 @@ impl Parser {
             TokenType::Dec => {
                 match parse_dec_literal(&self.current_token.literal) {
                     Some(d) => Some(Expression::Dec(d)),
-                    None => None,
+                    None => {
+                        self.parser_error(&format!(
+                            "Invalid dec literal '{}'",
+                            self.current_token.literal
+                        ));
+                        None
+                    }
                 }
             }
 
             TokenType::String => {
                 let s = self.current_token.literal.clone();
                 if s.contains('{') {
-                    let parsed = parse_interpolated_string(&s);
+                    let parsed = parse_interpolated_string(&s, self.source_name.as_deref());
                     if parsed.is_none() {
                         self.had_error.set(true);
                     }
@@ -2035,7 +2107,17 @@ impl Parser {
                 Some(Expression::UnsafeBlock(block))
             }
 
-            _ => None,
+            _ => {
+                match self.current_token.token_type {
+                    TokenType::Eof => self.parser_error("Unexpected end of file: expected an expression"),
+                    TokenType::Semicolon => self.parser_error("Expected an expression before ';'"),
+                    _ => self.parser_error(&format!(
+                        "Unexpected token '{}': expected an expression",
+                        self.current_token.literal
+                    )),
+                }
+                None
+            }
         };
 
         // ── INFIX ─────────────────────────────────────────────────────────────
@@ -3122,7 +3204,7 @@ impl Parser {
     }
 }
 
-fn parse_interpolated_string(raw: &str) -> Option<Expression> {
+fn parse_interpolated_string(raw: &str, source_name: Option<&str>) -> Option<Expression> {
     use crate::lexer::Lexer;
     let mut parts: Vec<StringPart> = Vec::new();
     let mut rest = raw;
@@ -3163,6 +3245,9 @@ fn parse_interpolated_string(raw: &str) -> Option<Expression> {
         if !expr_src.is_empty() {
             let lexer = Lexer::new(expr_src.to_string());
             let mut sub = Parser::new(lexer);
+            if let Some(n) = source_name {
+                sub.set_source_name(n);
+            }
             let expr = sub.parse_expression(Precedence::Lowest)?;
             parts.push(StringPart::Expr(Box::new(expr)));
         }

@@ -41,12 +41,12 @@ impl super::Evaluator {
 
             Statement::Assign(assign_stmt) => {
                 if self.lookup_var(&assign_stmt.name).is_none() {
-                    eprintln!("❌ ERROR: Undeclared variable: {}", assign_stmt.name);
-                    return EvalResult::Error;
+                    let n = assign_stmt.name.clone();
+                    return self.rt_err_kind("ReferenceError", format!("Undeclared variable: {}", n));
                 }
                 if self.const_names.contains(&assign_stmt.name) {
-                    eprintln!("❌ ERROR: Cannot reassign const '{}'", assign_stmt.name);
-                    return EvalResult::Error;
+                    let n = assign_stmt.name.clone();
+                    return self.rt_err_kind("TypeError", format!("Cannot reassign const '{}'", n));
                 }
 
                 // Interface patch: person = { field: val, ... }
@@ -274,6 +274,19 @@ impl super::Evaluator {
                         }
                     }
 
+                    // Per-iteration loop variable (like JS `let`): if the body
+                    // captured the counter into a closure cell (the binding got
+                    // promoted to Global), cut the alias BEFORE the update so
+                    // each closure keeps the value of its own iteration instead
+                    // of all sharing the final counter value.
+                    if let Some(r) = self.scopes.lookup(&for_stmt.init.name) {
+                        if r.region == RegionId::Global {
+                            let data = self.resolve(r).unwrap().clone();
+                            let fresh = self.alloc(data);
+                            self.scopes.declare(for_stmt.init.name.clone(), fresh);
+                        }
+                    }
+
                     // Evaluate update, free its temporaries, then assign in-place
                     let update_mark = self.scopes.arena.watermark();
                     let new_val_ref = match self.eval_expression(&for_stmt.update.value) {
@@ -296,10 +309,8 @@ impl super::Evaluator {
                     {
                         self.global_arena.update(existing_ref.index, new_data);
                     } else {
-                        eprintln!(
-                            "❌ ERROR: Undeclared variable in for-loop update: {}",
-                            for_stmt.update.name
-                        );
+                        let n = for_stmt.update.name.clone();
+                        self.rt_err_kind("ReferenceError", format!("Undeclared variable in for-loop update: {}", n));
                         loop_error = true;
                         break;
                     }
@@ -586,8 +597,8 @@ impl super::Evaluator {
                 let obj_ref = match self.lookup_var(&stmt.object) {
                     Some(r) => r,
                     None => {
-                        eprintln!("❌ ERROR: Undeclared variable '{}' in field assignment", stmt.object);
-                        return EvalResult::Error;
+                        let n = stmt.object.clone();
+                        return self.rt_err_kind("ReferenceError", format!("Undeclared variable '{}' in field assignment", n));
                     }
                 };
 
@@ -1085,7 +1096,16 @@ impl super::Evaluator {
         let mut parser = crate::parser::Parser::new(lexer);
         let source_lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
         parser.set_source(source_lines);
+        let module_name = cache_file.display().to_string();
+        let module_name = module_name.trim_start_matches(r"\\?\");
+        parser.set_source_name(module_name);
         let program = parser.parse_program();
+        if parser.has_errors() {
+            eprintln!("❌ Import aborted: fix the parse errors in '{}' first.", module_name);
+            self.current_module_exports = prev_exports;
+            self.current_dir = prev_dir;
+            return EvalResult::Error;
+        }
         let result = self.eval_program(&program);
 
         let exports = self.current_module_exports.take().unwrap_or_default();
@@ -1211,7 +1231,16 @@ impl super::Evaluator {
         let mut parser = crate::parser::Parser::new(lexer);
         let source_lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
         parser.set_source(source_lines);
+        let module_name = canonical.display().to_string();
+        let module_name = module_name.trim_start_matches(r"\\?\");
+        parser.set_source_name(module_name);
         let program = parser.parse_program();
+        if parser.has_errors() {
+            eprintln!("❌ Import aborted: fix the parse errors in '{}' first.", module_name);
+            self.current_module_exports = prev_exports;
+            self.current_dir = prev_dir;
+            return EvalResult::Error;
+        }
 
         let result = self.eval_program(&program);
 

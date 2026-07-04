@@ -70,25 +70,24 @@ test("flash-scope: return rescue preserves a locally-built nested structure", ()
     assert(r["nums"].length() == 3, "the rescued array is intact");
 });
 
-// 8 ── closures: capture is a snapshot; a returned closure keeps its OWN state
-test("closures: snapshot capture vs a returned closure's own state", () => {
+// 8 ── closures: CELL capture — the closure and the enclosing scope share
+// the variable (a returned closure keeps its own live cell).
+test("closures: cell capture and a returned closure's own state", () => {
     fn any makeCounter() { let n = 0; return () => { n = n + 1; return n; }; }
     let c = makeCounter();
     assert(c() == 1, "returned counter advances: 1");
     assert(c() == 2, "returned counter advances: 2");
     assert(c() == 3, "returned counter advances: 3");
-    // A closure captures a SNAPSHOT of an enclosing variable: later writes are
-    // unseen, and mutating it inside the closure does not escape to the original.
+    // Cell semantics: later writes to the variable ARE seen by the closure,
+    // and mutations inside the closure escape to the original.
     let v = 10;
     let readV = () => v;
     v = 20;
-    assert(readV() == 10, "closure sees the value captured at definition, not v=20");
+    assert(readV() == 20, "closure shares the cell: sees v=20");
     let top = 0;
     let bump = () => { top = top + 1; };
     bump(); bump();
-    // HALLAZGO: README/Internals 1.3 says "closures only mutate top-level vars",
-    // but empirically a captured top-level var is NOT mutated (snapshot semantics).
-    assert(top == 0, "mutating a captured top-level var does not escape the closure");
+    assert(top == 2, "mutating a captured var escapes the closure (cell)");
 });
 
 // 9 ── crypto: Ed25519 sign/verify round-trip and tamper detection

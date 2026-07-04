@@ -1,0 +1,9 @@
+// Security: el limite de recursos de Tensor (10M elementos) NO debe ser
+// capturable — capturarlo permitiria reintentar la asignacion gigante en loop.
+try {
+    let t = new Tensor([4000, 4000], 0.0);
+    out "unreachable: limite bypasseado";
+} catch (e) {
+    out "unreachable: limite capturado";
+}
+out "unreachable: debio abortar";

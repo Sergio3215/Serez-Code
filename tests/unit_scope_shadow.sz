@@ -57,14 +57,14 @@ test("named fn closure captures outer variable by reference", () => {
     assert(count == 3, "named fn closure increments captured count to 3");
 });
 
-test("arrow lambda captures by snapshot: outer variable unchanged", () => {
-    // Arrow lambdas use value-snapshot semantics — mutations inside do not
-    // propagate back to the outer binding.
+test("arrow lambda captures by cell: outer variable shares the mutation", () => {
+    // Cell semantics: the lambda and the enclosing scope share the variable,
+    // so mutations inside the closure are visible outside.
     let n = 10;
     let bump = () => { n = n + 1; };
     bump();
     bump();
-    assert(n == 10, "arrow lambda captures by value; outer n unchanged at 10");
+    assert(n == 12, "arrow lambda mutations propagate; outer n is 12");
 });
 
 test("recursive function: each call has its own scope", () => {

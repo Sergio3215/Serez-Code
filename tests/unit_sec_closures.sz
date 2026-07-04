@@ -1,11 +1,14 @@
 // Security unit tests: closure scoping and capture safety
 // Closures should not leak variables, expose private state, or confuse scopes
 
-test("arrow lambda: outer variable not mutated (snapshot semantics)", () => {
+test("arrow lambda: outer variable shared by cell (intended semantics)", () => {
+    // Cell semantics: a closure mutating a captured variable IS visible
+    // outside — this is the documented behavior, not a scope leak. What must
+    // NOT happen is bleeding into unrelated scopes (covered below).
     let secret = 42;
-    let tryLeak = () => { secret = 0; };
-    tryLeak();
-    assert(secret == 42, "arrow lambda cannot mutate outer variable");
+    let mutate = () => { secret = 0; };
+    mutate();
+    assert(secret == 0, "arrow lambda mutation propagates to the shared cell");
 });
 
 test("named fn closure: own local does not bleed into outer", () => {

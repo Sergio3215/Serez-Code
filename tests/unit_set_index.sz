@@ -57,4 +57,32 @@ test("delete invalida el indice y has sigue exacto", () => {
     assert(g.has("e30"), "re-agregado se encuentra");
 });
 
+
+test("union con tipos mezclados respeta igualdad estricta", () => {
+    let a = new Set([1, "1", true, 1.50m]);
+    let b = new Set(["1", 2, 1.5m, false]);
+    let u = a.union(b);
+    assert(u.size() == 6, "1, str1, true, 1.5m, 2, false = 6");
+    assert(u.has(1) && u.has("1") && u.has(2) && u.has(1.5m), "todos presentes");
+});
+
+test("intersection con tipos mezclados y dec por valor", () => {
+    let a = new Set([1, "1", true, 1.50m]);
+    let b = new Set(["1", 2, 1.5m, false]);
+    let x = a.intersection(b);
+    assert(x.size() == 2, "solo str1 y el dec");
+    assert(x.has("1") && x.has(1.5m), "str1 y 1.5m");
+    assert(!x.has(1), "int 1 no esta en b");
+});
+
+test("size y toArray sobre set grande siguen exactos", () => {
+    let g = new Set([]);
+    let i = 0;
+    while (i < 40) { g.add(i * 2); i = i + 1; }
+    assert(g.size() == 40, "size");
+    let arr = g.toArray();
+    assert(arr.length() == 40, "toArray largo");
+    assert(arr[0] == 0 && arr[39] == 78, "orden de insercion preservado");
+});
+
 summary();

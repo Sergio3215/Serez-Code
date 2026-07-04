@@ -1,33 +1,53 @@
-// 45_closure_capture_e2e.sz — B-83: lambda capture is value-snapshot consistently,
-// including referenced TOP-LEVEL globals (previously resolved live, inconsistent
-// with function-local snapshot). Referenced global functions stay live (not
-// snapshotted) so recursion / calls keep working.
+// 45_closure_capture_e2e.sz — Semántica de CELDA en closures: la lambda y el
+// scope que la envuelve COMPARTEN la variable capturada (a cualquier nivel de
+// anidación). Escrituras posteriores son visibles dentro del closure y las
+// mutaciones dentro del closure escapan afuera. (Antes: snapshot B-83.)
 
-// Snapshot a global data var captured by a lambda
+// Una global capturada comparte la celda: el closure ve escrituras posteriores
 let x = 10
 let f = () => x
 x = 20
-out f()                                      // 10 (snapshot at creation, not 20)
+out f()                                      // 20 (celda compartida, no snapshot)
 
-// Each loop iteration's lambda captures its own snapshot of the global
+// Un contador declarado FUERA de un while es UNA sola celda: todos los
+// closures del loop la comparten (como `var` en JS)
 let fns = []
 let i = 0
 while (i < 3) {
     fns.push(() => i)
     i = i + 1
 }
-out "" + fns[0]() + fns[1]() + fns[2]()       // 012
+out "" + fns[0]() + fns[1]() + fns[2]()       // 333 (celda única compartida)
 
-// A referenced global function stays live/callable (not snapshotted away)
+// El contador de un FOR es fresco por iteración (como `let` de JS): cada
+// closure conserva el valor de su propia iteración
+let gns = []
+for (let k = 0; k < 3; k = k + 1) {
+    gns.push(() => k)
+}
+out "" + gns[0]() + gns[1]() + gns[2]()       // 012 (binding por iteración)
+
+// Una función global referenciada sigue viva/llamable (no se captura como dato)
 fn int helper(int n) { return n * 2 }
 let g = () => helper(5)
 out g()                                       // 10
 
-// Consistency with function scope: same pattern inside a function
+// Consistencia en scope de función: misma celda compartida
 fn int inFunc() {
     let y = 10
     let h = () => y
     y = 20
     return h()
 }
-out inFunc()                                  // 10
+out inFunc()                                  // 20
+
+// La mutación dentro del closure escapa al scope de la función envolvente
+fn int counterDemo() {
+    let n = 0
+    let inc = () => { n = n + 1; }
+    inc()
+    inc()
+    inc()
+    return n
+}
+out counterDemo()                             // 3

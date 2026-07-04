@@ -1,0 +1,11 @@
+// Security: el bloqueo de rutas de sistema en OS.exec NO debe ser capturable.
+use permissions { OS }
+unsafe {
+    try {
+        OS.exec("C:\Windows\System32\cmd.exe", ["/c", "echo hi"]);
+        out "unreachable: bloqueo bypasseado";
+    } catch (e) {
+        out "unreachable: bloqueo capturado";
+    }
+}
+out "unreachable: debio abortar";

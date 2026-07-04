@@ -14,7 +14,9 @@ impl super::Evaluator {
         match self.eval_expression(expr) {
             EvalResult::Value(r) => match self.resolve(r).cloned() {
                 Some(ObjectData::Str(s)) => Some(s),
-                _ => { eprintln!("❌ ERROR: Expected string argument"); None }
+                // rt_err_kind records the recoverable error; callers turn the
+                // None into EvalResult::Error, which try/catch can then bind.
+                _ => { self.rt_err_kind("TypeError", "Expected string argument"); None }
             },
             _ => None,
         }
@@ -24,7 +26,7 @@ impl super::Evaluator {
         match self.eval_expression(expr) {
             EvalResult::Value(r) => match self.resolve(r).cloned() {
                 Some(ObjectData::Integer(i)) => Some(i),
-                _ => { eprintln!("❌ ERROR: Expected int argument"); None }
+                _ => { self.rt_err_kind("TypeError", "Expected int argument"); None }
             },
             _ => None,
         }

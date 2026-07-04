@@ -10,6 +10,26 @@ use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_st
             operator_to_method_name};
 
 impl super::Evaluator {
+    /// Writes a mutated collection (`obj_ref`) back into the instance field it
+    /// was read from — the `instance.field.mutate(...)` pattern. Shared by the
+    /// generic dot-call path and the slot fast paths for Set/Array (value
+    /// semantics plant a copy on field read; without this, the mutation would
+    /// be lost).
+    pub(super) fn apply_field_writeback(&mut self, inner_obj_expr: &Expression, field_name: &str, obj_ref: ObjectRef) {
+        if let EvalResult::Value(inst_ref) = self.eval_expression(inner_obj_expr) {
+            if let Some(ObjectData::Instance { class_name, mut fields }) = self.resolve(inst_ref).cloned() {
+                let updated = self.extract(obj_ref);
+                if let Some(f) = fields.iter_mut().find(|(n, _)| n == field_name) {
+                    f.1 = updated;
+                }
+                match inst_ref.region {
+                    RegionId::Global => self.global_arena.update(inst_ref.index, ObjectData::Instance { class_name, fields }),
+                    RegionId::Scoped => self.scopes.arena.update(inst_ref.index, ObjectData::Instance { class_name, fields }),
+                }
+            }
+        }
+    }
+
     pub(super) fn eval_expression(&mut self, expr: &Expression) -> EvalResult {
         match expr {
             Expression::Integer(i) => EvalResult::Value(self.int_ref(*i)),
@@ -22,8 +42,8 @@ impl super::Evaluator {
             Expression::Identifier(name) => match self.lookup_var(name) {
                 Some(r) => EvalResult::Value(r),
                 None => {
-                    eprintln!("❌ ERROR: Variable not found: {}", name);
-                    EvalResult::Error
+                    let n = name.clone();
+                    self.rt_err_kind("ReferenceError", format!("Variable not found: {}", n))
                 }
             },
 
@@ -106,8 +126,8 @@ impl super::Evaluator {
                     // variable binding, it must be one of the built-in natives listed above; if it
                     // reached here there is no Rust implementation for it.
                     if self.native_fns.contains(name) && self.lookup_var(name).is_none() {
-                        eprintln!("❌ ERROR: native function '{}' has no Rust implementation registered", name);
-                        return EvalResult::Error;
+                        let n = name.clone();
+                        return self.rt_err_kind("TypeError", format!("native function '{}' has no Rust implementation registered", n));
                     }
                 }
 
@@ -137,7 +157,18 @@ impl super::Evaluator {
 
                 self.scopes.push();
 
-                let func_data = self.resolve(func_ref).cloned();
+                let mut func_data = self.resolve(func_ref).cloned();
+                // A non-callable shadow (e.g. a parameter named like an outer
+                // function) must not hide that function from a CALL — reads
+                // still see the shadow, but `name(...)` falls back to the
+                // nearest binding that actually holds a function.
+                if !matches!(func_data, Some(ObjectData::Function { .. })) {
+                    if let Expression::Identifier(name) = call_expr.function.as_ref() {
+                        if let Some(fref) = self.lookup_callable(name) {
+                            func_data = self.resolve(fref).cloned();
+                        }
+                    }
+                }
                 let (return_type, parameters, body, captured, is_generator) = match func_data {
                     Some(ObjectData::Function {
                         return_type,
@@ -147,11 +178,14 @@ impl super::Evaluator {
                         is_generator,
                     }) => (return_type, parameters, body, captured, is_generator),
                     _ => {
-                        eprintln!("❌ ERROR: Attempt to call a non-function");
+                        // Raise BEFORE unwinding so the printed call stack still
+                        // shows the failing frame; state is restored either way,
+                        // so a catching try/catch sees a consistent evaluator.
+                        let err = self.rt_err_kind("TypeError", "Attempt to call a non-function");
                         self.scopes.pop();
                         self.call_depth -= 1;
                         self.call_stack.pop();
-                        return EvalResult::Error;
+                        return err;
                     }
                 };
 
@@ -171,9 +205,9 @@ impl super::Evaluator {
                                 }
                             }
                             _ => {
-                                eprintln!("❌ ERROR: Spread in function call requires an array");
+                                let err = self.rt_err_kind("TypeError", "Spread in function call requires an array");
                                 self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
-                                return EvalResult::Error;
+                                return err;
                             }
                         }
                         continue;
@@ -203,15 +237,16 @@ impl super::Evaluator {
                     } else {
                         format!("{}-{}", min_params, max_params)
                     };
-                    eprintln!(
-                        "❌ ERROR: Function expected {} argument(s), got {}",
+                    // rt_err_kind prints the message + call stack (uncaught case)
+                    // with the failing frame still on it; then unwind.
+                    let err = self.rt_err_kind("TypeError", format!(
+                        "Function expected {} argument(s), got {}",
                         expected_str, arg_refs.len()
-                    );
-                    self.print_call_stack();
+                    ));
                     self.scopes.pop();
                     self.call_depth -= 1;
                     self.call_stack.pop();
-                    return EvalResult::Error;
+                    return err;
                 }
 
                 for (i, param) in parameters.iter().enumerate() {
@@ -579,6 +614,9 @@ impl super::Evaluator {
                     if name == "Gui" {
                         return self.eval_gui_namespace(dot_call);
                     }
+                    if name == "Media" {
+                        return self.eval_media_namespace(dot_call);
+                    }
                     if name == "Task" {
                         return self.eval_task_namespace(dot_call);
                     }
@@ -635,15 +673,35 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
 
-                // Set fast path: has/contains/add run against the arena slot —
-                // no O(N) clone of the whole set per call, and the slot-resident
-                // hash index stays warm across lookups. Other arities/methods
-                // fall through to the generic path (identical error behavior).
-                if matches!(self.resolve(obj_ref), Some(ObjectData::Set { .. }))
-                    && matches!(dot_call.method.as_str(), "has" | "contains" | "add")
-                    && dot_call.arguments.len() == 1
+                // All Set methods run against the arena slot (methods_set.rs):
+                // no O(N) clone of the receiver per call — even .size() paid
+                // one — and the slot-resident hash index stays warm. Sets never
+                // participated in the dict["key"] writeback (Array-only), but
+                // `instance.field.remove/clear(...)` DOES write the mutated set
+                // back into the field — same as the generic path below.
+                if matches!(self.resolve(obj_ref), Some(ObjectData::Set { .. })) {
+                    let result = self.eval_set_method_slot(obj_ref, dot_call);
+                    if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+                        self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+                    }
+                    return result;
+                }
+
+                // Array fast path for the loop builders/drainers: push/pop run
+                // against the arena slot instead of cloning the whole array per
+                // call (the generic path below made `a.push(x)` O(N) — building
+                // an array in a loop was O(N²) in time). Index receivers
+                // (`d["k"].push`, `m[i].push`) keep the generic path: they need
+                // the dict-writeback machinery below.
+                if matches!(dot_call.method.as_str(), "push" | "pop")
+                    && !matches!(dot_call.object.as_ref(), Expression::Index(_))
+                    && matches!(self.resolve(obj_ref), Some(ObjectData::Array { .. }))
                 {
-                    return self.eval_set_fast(obj_ref, dot_call);
+                    let result = self.eval_array_fast(obj_ref, dot_call);
+                    if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+                        self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+                    }
+                    return result;
                 }
 
                 let obj_data = match self.resolve(obj_ref) {
@@ -863,10 +921,8 @@ impl super::Evaluator {
                         self.eval_instance_dot(obj_ref, class_name, fields, dot_call)
                     }
 
-                    // ── Set methods ───────────────────────────────────────────
-                    ObjectData::Set { elements, .. } => {
-                        self.eval_set_method(obj_ref, elements, dot_call)
-                    }
+                    // (Set methods are intercepted before this match — see the
+                    // slot fast path above; a Set can never reach here.)
 
                     // ── Tensor methods ────────────────────────────────────────
                     ObjectData::Tensor { shape, data, .. } => {
@@ -913,18 +969,7 @@ impl super::Evaluator {
 
                 // Write back mutated array/dict to its instance field after mutation
                 if let Some((inner_obj_expr, field_name)) = writeback_ctx {
-                    if let EvalResult::Value(inst_ref) = self.eval_expression(&inner_obj_expr) {
-                        if let Some(ObjectData::Instance { class_name, mut fields }) = self.resolve(inst_ref).cloned() {
-                            let updated = self.extract(obj_ref);
-                            if let Some(f) = fields.iter_mut().find(|(n, _)| n == &field_name) {
-                                f.1 = updated;
-                            }
-                            match inst_ref.region {
-                                RegionId::Global => self.global_arena.update(inst_ref.index, ObjectData::Instance { class_name, fields }),
-                                RegionId::Scoped => self.scopes.arena.update(inst_ref.index, ObjectData::Instance { class_name, fields }),
-                            }
-                        }
-                    }
+                    self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
                 }
 
                 result

@@ -230,6 +230,10 @@
 #   err_modulo_zero        Operador % con divisor cero
 #   err_not_function       Llamar un valor que no es función (e.g. un int)
 #   err_overflow           Desbordamiento aritmético en int (i64::MAX + 1)
+#   err_parse_incomplete_expr  Expresión cortada (`return a +`) reporta error de parseo
+#   err_parse_let_noname   `let = 5;` sin nombre de variable reporta error de parseo
+#   err_parse_let_novalue  `let x = ;` sin valor reporta error de parseo
+#   err_parse_named_typed_arrow  `int f(int n) => {}` (forma inválida) reporta error de parseo
 #   err_private            Acceso a campo privado de clase desde fuera
 #   err_return_toplevel    return en nivel superior (fuera de función)
 #   err_return_type_mismatch Función declarada int devuelve string

@@ -23,6 +23,7 @@ mod namespaces_os;
 pub(crate) mod namespaces_gui;
 mod namespaces_task;
 mod namespaces_regex;
+mod namespaces_media;
 
 
 use crate::ast::{self, Program, Statement};
@@ -140,6 +141,8 @@ pub struct Evaluator {
     // Procesos lanzados con OS.spawn (no bloqueante). OS.tick() los cosecha y dispara
     // sus callbacks onOk/onErr en este hilo (cooperativo, sin background thread).
     spawned: Vec<namespaces_os::SpawnedJob>,
+    // Audio (Media.playSound): stream + sinks activos. None hasta el primer uso.
+    media: Option<namespaces_media::MediaState>,
     // ── Task context ──────────────────────────────────────────────────────────
     task_id: Option<i64>,
     task_arg: Option<String>,
@@ -294,6 +297,7 @@ impl Evaluator {
             tensor_id_counter: 1,
             gui_state: None,
             gui_fonts: None,
+            media: None,
             spawned: Vec::new(),
             task_id: None,
             task_arg: None,
@@ -420,6 +424,22 @@ impl Evaluator {
         self.global_bindings.get(name).copied()
     }
 
+    /// Nearest binding of `name` (inner → outer, then globals) that holds a
+    /// Function. Lets a call reach a function shadowed by a non-callable
+    /// binding of the same name (e.g. a parameter `h` over a global `fn h`).
+    pub(super) fn lookup_callable(&self, name: &str) -> Option<ObjectRef> {
+        for r in self.scopes.lookup_chain(name) {
+            if matches!(self.resolve(r), Some(ObjectData::Function { .. })) {
+                return Some(r);
+            }
+        }
+        let r = self.global_bindings.get(name).copied()?;
+        match self.resolve(r) {
+            Some(ObjectData::Function { .. }) => Some(r),
+            _ => None,
+        }
+    }
+
     /// Captures the current lexical environment as global-arena ObjectRefs.
     /// Each captured variable is promoted to the global arena so that mutations
     /// inside the closure persist across calls (B-27 fix).
@@ -451,28 +471,58 @@ impl Evaluator {
         result
     }
 
-    /// Capture for lambdas (B-83). `capture_env(false)` already snapshots scoped
-    /// locals, but referenced GLOBAL data vars were resolved live at call time —
-    /// so the same lambda captured locals by value yet globals by reference,
-    /// depending on scope. Here we additionally snapshot referenced global DATA
-    /// vars (functions are skipped so recursion / late binding keep working),
-    /// making lambda capture value-snapshot consistently at every scope level.
+    /// Capture for lambdas — CELL semantics: the lambda and the enclosing
+    /// scope share the variable, so mutations inside the closure are visible
+    /// outside (and vice versa), at every nesting level. A scoped local is
+    /// promoted once to a global-arena cell and the OUTER binding is rebound
+    /// to that same cell (exactly like named `fn` captures, `rebind_outer`);
+    /// a second lambda capturing the same variable sees the already-Global
+    /// ref and reuses the cell. Referenced global data vars are captured as
+    /// their live binding (no snapshot). Per-iteration `let`s still get one
+    /// fresh cell per iteration because each iteration declares a new binding.
+    ///
+    /// Scoped locals are captured ONLY when the body references them: each
+    /// cell lives in the GLOBAL arena (it must outlive the frame), which
+    /// never shrinks — capturing every visible local leaked one permanent
+    /// slot per unused local per lambda creation (deadly for per-frame /
+    /// per-iteration lambdas). `this` is always considered referenced,
+    /// defensively.
     fn capture_lambda_env(&mut self, body: &crate::ast::BlockStatement) -> Vec<(String, ObjectRef)> {
-        let mut captured = self.capture_env(false);
         let mut names: Vec<String> = Vec::new();
         collect_idents_block(body, &mut names);
+        let mut referenced: std::collections::HashSet<String> = names.into_iter().collect();
+        referenced.insert("this".to_string());
+
+        // Same walk/order as capture_env, filtered to referenced names.
+        let bindings = self.scopes.all_bindings();
+        let mut captured = Vec::new();
+        for (name, r) in bindings {
+            if !referenced.contains(&name) { continue; }
+            let global_ref = match r.region {
+                RegionId::Global => r,
+                RegionId::Scoped => {
+                    let owned = self.extract(r);
+                    let gref = self.plant_global(owned);
+                    // Alias the enclosing binding to the promoted cell so a
+                    // mutation inside the closure is seen by the outer scope.
+                    self.scopes.rebind(&name, gref);
+                    gref
+                }
+            };
+            captured.push((name, global_ref));
+        }
+
         let mut have: std::collections::HashSet<String> =
             captured.iter().map(|(n, _)| n.clone()).collect();
-        for name in names {
+        for name in referenced {
             if have.contains(&name) { continue; }
             have.insert(name.clone());
-            // Scoped locals are already captured by capture_env above.
+            // Scoped locals are already captured above.
             if self.scopes.lookup(&name).is_some() { continue; }
             let gref = match self.global_bindings.get(&name) { Some(&r) => r, None => continue };
             if matches!(self.resolve(gref), Some(ObjectData::Function { .. })) { continue; }
-            let owned = self.extract(gref);
-            let snap = self.plant_global(owned);
-            captured.push((name, snap));
+            // Live binding, not a snapshot: writes meet in the global slot.
+            captured.push((name, gref));
         }
         captured
     }

@@ -1,0 +1,55 @@
+// unit_slot_fastpath_writeback.sz — los fast-paths por slot (Set/Array jul-2026)
+// deben conservar los DOS writebacks del dot-call generico:
+//   instancia.campo.metodoMutante(...) y dict["k"].metodoMutante(...)
+
+class Caja {
+    public Caja() { this.items = [1]; this.tags = new Set(["a", "b"]); }
+    public void agregar(int x) { this.items.push(x); }
+    public void quitarTag(string t) { this.tags.remove(t); }
+}
+
+test("this.campo.push persiste en la instancia (writeback + fast path)", () => {
+    let c = new Caja();
+    c.agregar(2);
+    c.agregar(3);
+    assert(c.items.length() == 3, "push sobre campo debe persistir");
+});
+
+test("this.campo(set).remove persiste en la instancia", () => {
+    let c = new Caja();
+    c.quitarTag("a");
+    assert(c.tags.size() == 1, "remove sobre set-campo debe persistir");
+    assert(!c.tags.has("a"), "el tag quitado no debe estar");
+});
+
+test("this.campo(set).clear persiste en la instancia", () => {
+    let c = new Caja();
+    c.tags.clear();
+    assert(c.tags.size() == 0, "clear sobre set-campo debe persistir");
+});
+
+test("dict[clave].push sigue con su writeback (camino generico)", () => {
+    let d <string, any> = ({"lista", [1, 2]});
+    d["lista"].push(3);
+    let l = d["lista"];
+    assert(l.length() == 3, "push sobre valor de dict debe persistir");
+});
+
+test("push/pop rapidos: semantica basica intacta", () => {
+    let a = [];
+    let i = 0;
+    while (i < 100) { a.push(i); i = i + 1; }
+    assert(a.length() == 100, "100 pushes");
+    let p = a.pop();
+    assert(p == 99 && a.length() == 99, "pop devuelve el ultimo");
+    assert(a[0] == 0 && a[98] == 98, "contenido integro");
+});
+
+test("push tipado sigue validando", () => {
+    let ok = true;
+    let nums = [int];
+    nums.push(5);
+    assert(nums.length() == 1 && nums[0] == 5, "push valido entra");
+});
+
+summary();

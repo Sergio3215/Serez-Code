@@ -1,0 +1,53 @@
+// unit_catchable_core.sz — 3a pasada jul-2026: errores del LENGUAJE capturables
+// (ReferenceError/TypeError) con unwinding sano. Stack overflow sigue fatal
+// (ver sec_stack_overflow).
+
+test("variable inexistente es capturable con ReferenceError", () => {
+    let kind = "none";
+    try { let x = estaVariableNoExiste; } catch (e) { kind = e.kind; }
+    assert(kind == "ReferenceError", "esperaba ReferenceError, dio: " + kind);
+});
+
+test("asignar a no declarada es capturable con ReferenceError", () => {
+    let kind = "none";
+    try { variableJamasDeclarada = 5; } catch (e) { kind = e.kind; }
+    assert(kind == "ReferenceError", "esperaba ReferenceError, dio: " + kind);
+});
+
+test("llamar a un no-funcion es capturable con TypeError", () => {
+    let n = 42;
+    let kind = "none";
+    try { n(); } catch (e) { kind = e.kind; }
+    assert(kind == "TypeError", "esperaba TypeError, dio: " + kind);
+});
+
+test("reasignar const es capturable con TypeError", () => {
+    const PI2 = 3;
+    let kind = "none";
+    try { PI2 = 4; } catch (e) { kind = e.kind; }
+    assert(kind == "TypeError", "esperaba TypeError, dio: " + kind);
+});
+
+test("builtin con argumento invalido es capturable", () => {
+    let caught = false;
+    try { let p = parseInt("no-es-numero"); } catch (e) { caught = true; }
+    assert(caught, "parseInt invalido debe lanzar capturable");
+});
+
+test("unwinding: 1000 catches de llamada invalida no corrompen el evaluador", () => {
+    let noFn = 7;
+    let c = 0;
+    let k = 0;
+    while (k < 1000) {
+        try { noFn(); } catch (e) { c = c + 1; }
+        k = k + 1;
+    }
+    assert(c == 1000, "los 1000 deben capturarse");
+});
+
+test("tras los catches, llamadas y recursion siguen sanas", () => {
+    fn int fact(int n) { if (n <= 1) { return 1; } return n * fact(n - 1); }
+    assert(fact(10) == 3628800, "recursion sana tras el estres");
+});
+
+summary();

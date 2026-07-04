@@ -37,8 +37,8 @@ test("closure mantiene estado entre llamadas", () => {
     assert(inc() == 1, "count 1");
     assert(inc() == 2, "count 2");
     assert(inc() == 3, "count 3");
-    // la variable exterior no se modifica; el closure tiene su propia copia
-    assert(count == 0, "outer var no afectada");
+    // semántica de celda: el closure y el scope externo COMPARTEN la variable
+    assert(count == 3, "outer var comparte la celda del closure");
 });
 
 test("currying con closures", () => {

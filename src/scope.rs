@@ -101,6 +101,18 @@ impl ScopeStack {
         }
     }
 
+    /// Todas las apariciones de `name` en la cadena (inner → outer), incluidas
+    /// las sombreadas. Para fallbacks que necesitan un binding más externo
+    /// cuando el más interno no sirve (p.ej. llamar una función sombreada por
+    /// un parámetro homónimo).
+    pub fn lookup_chain(&self, name: &str) -> Vec<ObjectRef> {
+        self.frames
+            .iter()
+            .rev()
+            .filter_map(|f| f.bindings.get(name).copied())
+            .collect()
+    }
+
     /// Busca el ObjectRef de una variable (inner → outer).
     pub fn lookup(&self, name: &str) -> Option<ObjectRef> {
         for frame in self.frames.iter().rev() {

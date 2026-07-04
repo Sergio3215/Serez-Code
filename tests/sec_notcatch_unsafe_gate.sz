@@ -1,0 +1,9 @@
+// Security: el gate `unsafe { }` de OS.exec NO debe ser capturable.
+use permissions { OS }
+try {
+    OS.exec("cmd", ["/c", "echo hi"]);
+    out "unreachable: gate bypasseado";
+} catch (e) {
+    out "unreachable: gate capturado";
+}
+out "unreachable: debio abortar";

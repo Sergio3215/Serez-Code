@@ -199,6 +199,9 @@ test("autodiff — mha gradients on all weight matrices", () => {
 });
 
 test("autodiff — TransformerBlock-style residual + layer_norm chain", () => {
+    // Semilla fija: sin ella los tensores aleatorios hacían el assert de
+    // dWq.norm() > 0 esporádicamente falso (flaky en la suite completa).
+    Random.seed(20260703)
     let d   = 8
     let std = 0.05
     let x  = Random.normalTensor([3, d], 0.0, std)
