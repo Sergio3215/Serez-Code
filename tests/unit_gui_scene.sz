@@ -1,0 +1,45 @@
+// unit_gui_scene.sz — tests headless del modo retenido (scene graph).
+// Sin ventana: validación de argumentos, errores capturables y defaults.
+// El camino con ventana real (render, dirty-skip, animación) se verificó
+// con la demo rm_demo (r1=true r2=false, 32k frames).
+use permissions { Gui }
+
+test("nodeRect sin ventana -> GuiError capturable", () => {
+    let fallo = false
+    try {
+        Gui.nodeRect(0, 0, 10, 10, 0xFF0000)
+    } catch (e) {
+        fallo = e.kind == "GuiError"
+    }
+    assert(fallo, "GuiError sin ventana")
+})
+
+test("renderScene sin ventana -> GuiError capturable", () => {
+    let fallo = false
+    try {
+        Gui.renderScene(0x000000)
+    } catch (e) {
+        fallo = e.kind == "GuiError"
+    }
+    assert(fallo, "GuiError sin ventana")
+})
+
+test("nodeCount sin ventana = 0", () => {
+    assert(Gui.nodeCount() == 0, "escena vacia por defecto")
+})
+
+test("nodeDelete sin ventana = false", () => {
+    assert(Gui.nodeDelete(99) == false, "nada que borrar")
+})
+
+test("nodeSet valida tipos", () => {
+    let fallo = false
+    try {
+        Gui.nodeSet("no-un-id", "x", 5)
+    } catch (e) {
+        fallo = e.kind == "TypeError"
+    }
+    assert(fallo, "id no entero -> TypeError")
+})
+
+summary()

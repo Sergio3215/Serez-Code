@@ -1,6 +1,6 @@
 [package]
 name = "serez-code"
-version = "7.2.0"
+version = "7.3.0"
 edition = "2024"
 description = "Serez Code - The programming language for AI, UI, systems, and GPU in a single runtime"
 license = "MIT"
@@ -30,9 +30,11 @@ image = "0.25.9"
 arboard = "3.6.1"
 rfd = "0.15"
 ed25519-dalek = "2"
+rodio = "0.20"
 getrandom = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 rust_decimal = { version = "1", default-features = false, features = ["std"] }
+serde_json = "1"
 
 [dependencies.inkwell]
 version = "0.4"
@@ -42,6 +44,11 @@ features = ["llvm17-0"]
 [[bin]]
 name = "sz"
 path = "src/main.rs"
+
+# LSP server (editor support). Reuses the frontend modules; see src/lsp_main.rs.
+[[bin]]
+name = "sz-lsp"
+path = "src/lsp_main.rs"
 
 # The profile that 'dist' will build with
 [profile.dist]

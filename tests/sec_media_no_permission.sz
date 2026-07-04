@@ -1,0 +1,7 @@
+// Media sin permiso 'Media' debe fallar en seco (no capturable).
+try {
+    Media.playSound("x.wav")
+    out "NO DEBIO LLEGAR"
+} catch (e) {
+    out "NO DEBIO SER CAPTURABLE: " + e.kind
+}

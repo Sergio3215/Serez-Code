@@ -131,6 +131,30 @@ enum GuiCmd {
     // Diálogo de archivo nativo (rfd) — ejecutado por el hilo main; el resultado
     // vuelve por SharedInner.dialog_result / dialog_seq (handshake como present).
     FileDialog { save: bool, filter_name: String, filter_exts: Vec<String>, default_name: String },
+    // ── Multi-ventana (aditivo): ventanas EXTRA con id ≥ 1; la ventana clásica
+    //    de Gui.open es la id 0 y conserva su protocolo intacto. ──
+    OpenExtra { id: u32, title: String, w: u32, h: u32 },
+    CloseExtra { id: u32 },
+    SetTitleExtra { id: u32, title: String },
+}
+
+/// Estado compartido de UNA ventana extra (id ≥ 1). Protocolo de present
+/// idéntico al de la ventana clásica, pero por entrada del mapa.
+#[derive(Default)]
+struct ExtraShared {
+    canvas: Vec<u32>,
+    canvas_w: usize,
+    canvas_h: usize,
+    bg_color: u32,
+    present_seq: u64,
+    done_seq: u64,
+    window_ready: bool,
+    window_open: bool,
+    should_close: bool,
+    open_failed: bool,
+    win_w: usize,
+    win_h: usize,
+    input: InputSnapshot,
 }
 
 struct SharedInner {
@@ -166,6 +190,8 @@ struct SharedInner {
     virtual_scroll_y: i32,
     virtual_scroll_x: i32,
     bg_color: u32,
+    /// Ventanas extra (multi-ventana), por id ≥ 1.
+    extra: HashMap<u32, ExtraShared>,
 }
 
 impl SharedInner {
@@ -200,6 +226,7 @@ impl SharedInner {
             virtual_scroll_y: 0,
             virtual_scroll_x: 0,
             bg_color: 0xFFFFFFFF,
+            extra: HashMap::new(),
         }
     }
 }
@@ -247,6 +274,40 @@ struct ImageData {
     w: usize,
     h: usize,
     px: Vec<u32>,
+}
+
+// ── Modo retenido (scene graph) ────────────────────────────────────────────────
+// Nodos persistentes que el core redibuja en Rust: el .sz los declara una vez y
+// luego solo muta propiedades (nodeSet). renderScene() redibuja el canvas SOLO
+// si la escena está sucia; si no, re-presenta el frame anterior (recoge input
+// sin pagar el redibujado). El ahorro grande es no re-ejecutar el árbol de
+// dibujo interpretado cada frame.
+
+enum SceneNodeKind {
+    Rect { w: i32, h: i32 },
+    RectAlpha { w: i32, h: i32, alpha: u32 },
+    RectOutline { w: i32, h: i32 },
+    RoundRect { w: i32, h: i32, radius: i32 },
+    Circle { r: i32 },
+    Line { x2: i32, y2: i32 },
+    Polygon { points: Vec<i32> },
+    Polyline { points: Vec<i32>, width: i32 },
+    Text { text: String, scale: i32, font: String, style: u8, spacing: i32 },
+    Image { handle: i64 },
+    // Marcadores de clipping: se ejecutan en orden de dibujo (z, id), igual
+    // que pushClip/popClip en modo inmediato.
+    ClipPush { w: i32, h: i32 },
+    ClipPop,
+}
+
+struct SceneNode {
+    id: i64,
+    kind: SceneNodeKind,
+    x: i32,
+    y: i32,
+    color: u32,
+    z: i32,
+    visible: bool,
 }
 
 struct Glyph {
@@ -424,6 +485,29 @@ impl GuiFonts {
 }
 
 /// Estado GUI del lado del intérprete: canvas local + snapshot de input.
+/// Campos POR VENTANA de GuiState, intercambiables con `switch_to`: GuiState
+/// siempre representa "la ventana seleccionada"; las demás viven aquí. Así los
+/// ~50 métodos de dibujo no saben nada de multi-ventana.
+struct WinSlot {
+    open: bool,
+    canvas: Vec<u32>,
+    width: usize,
+    height: usize,
+    win_w: usize,
+    win_h: usize,
+    bg: u32,
+    clip: (i32, i32, i32, i32),
+    clip_stack: Vec<(i32, i32, i32, i32)>,
+    input: InputSnapshot,
+    scale_factor: f64,
+    win_x: i32,
+    win_y: i32,
+    // La escena retained es POR VENTANA (cada ventana tiene su scene graph);
+    // los ids de nodo sí son globales (next_node no se swapea).
+    scene: Vec<SceneNode>,
+    scene_dirty: bool,
+}
+
 pub struct GuiState {
     open: bool,
     canvas: Vec<u32>,
@@ -443,6 +527,15 @@ pub struct GuiState {
     win_x: i32,                      // posición outer de la ventana (refrescada en present)
     win_y: i32,
     monitors: Vec<MonitorInfo>,      // monitores conectados (refrescados en present)
+    // ── Multi-ventana ──
+    current_win: u32,                    // ventana seleccionada (0 = la de Gui.open)
+    bg_windows: HashMap<u32, WinSlot>,   // ventanas NO seleccionadas
+    next_win_id: u32,                    // ids para Gui.openWindow (≥ 1)
+    // ── Modo retenido ──
+    scene: Vec<SceneNode>,               // nodos persistentes (una escena, se
+                                         // dibuja sobre la ventana seleccionada)
+    next_node: i64,
+    scene_dirty: bool,
 }
 
 impl GuiState {
@@ -466,6 +559,202 @@ impl GuiState {
             win_x: 0,
             win_y: 0,
             monitors: Vec::new(),
+            current_win: 0,
+            bg_windows: HashMap::new(),
+            next_win_id: 1,
+            scene: Vec::new(),
+            next_node: 1,
+            scene_dirty: true,
+        }
+    }
+
+    /// Añade un nodo a la escena y devuelve su id.
+    fn scene_add(&mut self, kind: SceneNodeKind, x: i32, y: i32, color: u32) -> i64 {
+        let id = self.next_node;
+        self.next_node += 1;
+        self.scene.push(SceneNode { id, kind, x, y, color, z: 0, visible: true });
+        self.scene_dirty = true;
+        id
+    }
+
+    /// Redibuja la escena en el canvas (orden: z, luego inserción).
+    fn scene_render(&mut self, fonts: &mut GuiFonts, bg: u32) {
+        // Reconciliar canvas al tamaño de la ventana (como Gui.clear).
+        if self.win_w != self.width || self.win_h != self.height {
+            self.width = self.win_w.max(1);
+            self.height = self.win_h.max(1);
+            self.canvas = vec![bg; self.width * self.height];
+        }
+        self.bg = bg;
+        for px in self.canvas.iter_mut() {
+            *px = bg;
+        }
+        self.clip = (0, 0, self.width as i32, self.height as i32);
+        self.clip_stack.clear();
+
+        // take + devolver: dibujar necesita &mut self mientras se itera la escena.
+        let mut nodes = std::mem::take(&mut self.scene);
+        nodes.sort_by_key(|n| (n.z, n.id));
+        for n in &nodes {
+            if !n.visible {
+                continue;
+            }
+            match &n.kind {
+                SceneNodeKind::Rect { w, h } => self.fill_rect(n.x, n.y, *w, *h, n.color),
+                SceneNodeKind::RectAlpha { w, h, alpha } => {
+                    let r = ((n.color >> 16) & 0xff) as u8;
+                    let g = ((n.color >> 8) & 0xff) as u8;
+                    let b = (n.color & 0xff) as u8;
+                    self.blend_rect(n.x, n.y, *w, *h, r, g, b, *alpha);
+                }
+                SceneNodeKind::RectOutline { w, h } => self.draw_rect(n.x, n.y, *w, *h, n.color),
+                SceneNodeKind::RoundRect { w, h, radius } => {
+                    self.fill_round_rect(n.x, n.y, *w, *h, *radius, n.color)
+                }
+                SceneNodeKind::Circle { r } => self.fill_circle(n.x, n.y, *r, n.color),
+                SceneNodeKind::Line { x2, y2 } => self.draw_line(n.x, n.y, *x2, *y2, n.color),
+                SceneNodeKind::Polygon { points } => {
+                    let pts: Vec<(i32, i32)> = points.chunks(2)
+                        .filter(|c| c.len() == 2)
+                        .map(|c| (c[0], c[1]))
+                        .collect();
+                    self.fill_polygon(&pts, n.color);
+                }
+                SceneNodeKind::Polyline { points, width } => {
+                    let mut i = 0;
+                    while i + 3 < points.len() {
+                        self.draw_thick_line(points[i], points[i + 1], points[i + 2], points[i + 3], *width, n.color);
+                        i += 2;
+                    }
+                }
+                SceneNodeKind::Text { text, scale, font, style, spacing } => {
+                    if font.is_empty() {
+                        self.draw_text(fonts, n.x, n.y, text, *scale, n.color, *style, *spacing);
+                    } else {
+                        // Fuente por nodo: fijar y restaurar la familia actual.
+                        let prev = fonts.current;
+                        fonts.set_family(font);
+                        self.draw_text(fonts, n.x, n.y, text, *scale, n.color, *style, *spacing);
+                        fonts.current = prev;
+                    }
+                }
+                SceneNodeKind::Image { handle } => self.draw_image(n.x, n.y, *handle),
+                SceneNodeKind::ClipPush { w, h } => {
+                    self.clip_stack.push(self.clip);
+                    let (cx0, cy0, cx1, cy1) = self.clip;
+                    let nx0 = n.x.max(cx0);
+                    let ny0 = n.y.max(cy0);
+                    let nx1 = (n.x + *w).min(cx1);
+                    let ny1 = (n.y + *h).min(cy1);
+                    self.clip = (nx0, ny0, nx1.max(nx0), ny1.max(ny0));
+                }
+                SceneNodeKind::ClipPop => {
+                    self.clip = self.clip_stack.pop()
+                        .unwrap_or((0, 0, self.width as i32, self.height as i32));
+                }
+            }
+        }
+        // Un ClipPush sin su ClipPop no debe dejar el clip pegado.
+        self.clip = (0, 0, self.width as i32, self.height as i32);
+        self.clip_stack.clear();
+        self.scene = nodes;
+        self.scene_dirty = false;
+    }
+
+    /// Extrae los campos por-ventana actuales como un WinSlot.
+    fn take_slot(&mut self) -> WinSlot {
+        WinSlot {
+            open: self.open,
+            canvas: std::mem::take(&mut self.canvas),
+            width: self.width,
+            height: self.height,
+            win_w: self.win_w,
+            win_h: self.win_h,
+            bg: self.bg,
+            clip: self.clip,
+            clip_stack: std::mem::take(&mut self.clip_stack),
+            input: std::mem::take(&mut self.input),
+            scale_factor: self.scale_factor,
+            win_x: self.win_x,
+            win_y: self.win_y,
+            scene: std::mem::take(&mut self.scene),
+            scene_dirty: self.scene_dirty,
+        }
+    }
+
+    fn put_slot(&mut self, s: WinSlot) {
+        self.open = s.open;
+        self.canvas = s.canvas;
+        self.width = s.width;
+        self.height = s.height;
+        self.win_w = s.win_w;
+        self.win_h = s.win_h;
+        self.bg = s.bg;
+        self.clip = s.clip;
+        self.clip_stack = s.clip_stack;
+        self.input = s.input;
+        self.scale_factor = s.scale_factor;
+        self.win_x = s.win_x;
+        self.win_y = s.win_y;
+        self.scene = s.scene;
+        self.scene_dirty = s.scene_dirty;
+    }
+
+    /// Cambia la ventana seleccionada intercambiando los campos por-ventana.
+    /// Devuelve false si `id` no existe.
+    fn switch_to(&mut self, id: u32) -> bool {
+        if id == self.current_win {
+            return true;
+        }
+        let target = match self.bg_windows.remove(&id) {
+            Some(t) => t,
+            None => return false,
+        };
+        let old = self.take_slot();
+        self.bg_windows.insert(self.current_win, old);
+        self.put_slot(target);
+        self.current_win = id;
+        true
+    }
+
+    /// Present de una ventana EXTRA (la seleccionada, id ≥ 1): mismo handshake
+    /// que `present`, contra su entrada del mapa `extra`.
+    fn present_extra(&mut self, host: &GuiHost, id: u32) {
+        let mut g = host.inner.lock().unwrap();
+        let want = {
+            let e = match g.extra.get_mut(&id) {
+                Some(e) => e,
+                None => { self.open = false; return; }
+            };
+            e.canvas.clear();
+            e.canvas.extend_from_slice(&self.canvas);
+            e.canvas_w = self.width;
+            e.canvas_h = self.height;
+            e.bg_color = self.bg;
+            e.present_seq += 1;
+            e.present_seq
+        };
+        host.cv.notify_all();
+        drop(g);
+        host.wake_main();
+        let mut g = host.inner.lock().unwrap();
+        loop {
+            let (done, alive) = match g.extra.get(&id) {
+                Some(e) => (e.done_seq, e.window_open && !e.should_close),
+                None => (want, false),
+            };
+            if done >= want || !alive {
+                break;
+            }
+            g = host.cv.wait(g).unwrap();
+        }
+        if let Some(e) = g.extra.get(&id) {
+            self.input = e.input.clone();
+            self.win_w = e.win_w.max(1);
+            self.win_h = e.win_h.max(1);
+            self.open = e.window_open && !e.should_close;
+        } else {
+            self.open = false;
         }
     }
 
@@ -942,6 +1231,73 @@ impl GuiState {
 
 // ── Lado del hilo MAIN: ventana + EventLoop ───────────────────────────────────────
 
+/// Input acumulado de una ventana EXTRA (subconjunto útil: mouse + teclado +
+/// scroll + foco; gestos/drop/IME quedan en la ventana principal).
+#[derive(Default)]
+struct ExtraAccum {
+    keys_down: HashSet<String>,
+    keys_pressed: Vec<String>,
+    keys_repeated: Vec<String>,
+    keys_released: Vec<String>,
+    chars_typed: String,
+    mouse_x: i32,
+    mouse_y: i32,
+    mouse_l: bool,
+    mouse_r: bool,
+    mouse_m: bool,
+    prev_l: bool,
+    /// Presses de botón izquierdo (EVENTOS) desde el último take_input: un
+    /// click corto entre dos presents no se pierde (el nivel sí se perdería).
+    clicks: u32,
+    scroll_x: f32,
+    scroll_y: f32,
+    focused: bool,
+    cursor_in: bool,
+}
+
+impl ExtraAccum {
+    fn take_input(&mut self, mods: &ModifiersState) -> InputSnapshot {
+        let pressed = self.clicks > 0 || (self.mouse_l && !self.prev_l);
+        self.clicks = 0;
+        self.prev_l = self.mouse_l;
+        let snap = InputSnapshot {
+            keys_down: self.keys_down.clone(),
+            shift: mods.shift_key(),
+            ctrl: mods.control_key(),
+            alt: mods.alt_key(),
+            sup: mods.super_key(),
+            mouse_x: self.mouse_x,
+            mouse_y: self.mouse_y,
+            mouse_l: self.mouse_l,
+            mouse_r: self.mouse_r,
+            mouse_m: self.mouse_m,
+            mouse_pressed: pressed,
+            keys_pressed: std::mem::take(&mut self.keys_pressed),
+            keys_repeated: std::mem::take(&mut self.keys_repeated),
+            keys_released: std::mem::take(&mut self.keys_released),
+            chars_typed: std::mem::take(&mut self.chars_typed),
+            scroll_x: self.scroll_x as i64,
+            scroll_y: self.scroll_y as i64,
+            focused: self.focused,
+            mouse_in: self.cursor_in,
+            ..InputSnapshot::default()
+        };
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
+        snap
+    }
+}
+
+/// Una ventana extra viva en el hilo main.
+struct ExtraWin {
+    window: Rc<Window>,
+    _context: Context<Rc<Window>>,
+    surface: Surface<Rc<Window>, Rc<Window>>,
+    accum: ExtraAccum,
+    last_present: u64,
+    close_requested: bool,
+}
+
 struct GuiMain {
     host: Arc<GuiHost>,
     window: Option<Rc<Window>>,
@@ -949,6 +1305,10 @@ struct GuiMain {
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
     session_active: bool,
     close_requested: bool,
+    // ── multi-ventana ──
+    extras: HashMap<u32, ExtraWin>,
+    extra_ids: HashMap<WindowId, u32>,
+    pending_extra_opens: Vec<(u32, String, u32, u32)>,
     // input — nivel
     keys_down: HashSet<String>,
     mods: ModifiersState,
@@ -991,6 +1351,9 @@ impl GuiMain {
             surface: None,
             session_active: false,
             close_requested: false,
+            extras: HashMap::new(),
+            extra_ids: HashMap::new(),
+            pending_extra_opens: Vec::new(),
             keys_down: HashSet::new(),
             mods: ModifiersState::empty(),
             mouse_x: -1,
@@ -1095,6 +1458,87 @@ impl GuiMain {
         self.host.cv.notify_all();
     }
 
+    /// Crea las ventanas EXTRA pendientes (necesita el ActiveEventLoop).
+    fn ensure_extra_windows(&mut self, el: &ActiveEventLoop) {
+        let pending = std::mem::take(&mut self.pending_extra_opens);
+        for (id, title, w, h) in pending {
+            let attrs = Window::default_attributes()
+                .with_title(title)
+                .with_inner_size(LogicalSize::new(w as f64, h as f64));
+            let created = el.create_window(attrs).ok().map(Rc::new).and_then(|window| {
+                let context = Context::new(window.clone()).ok()?;
+                let surface = Surface::new(&context, window.clone()).ok()?;
+                Some((window, context, surface))
+            });
+            let mut g = self.host.inner.lock().unwrap();
+            match created {
+                Some((window, context, surface)) => {
+                    let size = window.inner_size();
+                    if let Some(e) = g.extra.get_mut(&id) {
+                        e.window_ready = true;
+                        e.window_open = true;
+                        e.should_close = false;
+                        e.win_w = size.width.max(1) as usize;
+                        e.win_h = size.height.max(1) as usize;
+                    }
+                    self.extra_ids.insert(window.id(), id);
+                    self.extras.insert(id, ExtraWin {
+                        window,
+                        _context: context,
+                        surface,
+                        accum: ExtraAccum { focused: true, ..ExtraAccum::default() },
+                        last_present: 0,
+                        close_requested: false,
+                    });
+                }
+                None => {
+                    if let Some(e) = g.extra.get_mut(&id) {
+                        e.open_failed = true;
+                    }
+                }
+            }
+            self.host.cv.notify_all();
+        }
+    }
+
+    /// Atiende presents/cierres de las ventanas EXTRA (con el lock ya tomado).
+    fn service_extras(&mut self, g: &mut SharedInner) {
+        let mut to_drop: Vec<u32> = Vec::new();
+        for (id, win) in self.extras.iter_mut() {
+            let shared = match g.extra.get_mut(id) {
+                Some(s) => s,
+                None => { to_drop.push(*id); continue; }
+            };
+            // Cierre pedido por el usuario (X) o por el intérprete.
+            if win.close_requested || shared.should_close || g.interp_done || !self.session_active {
+                shared.window_open = false;
+                shared.should_close = true;
+                // Despierta a un present_extra que esté esperando este frame.
+                shared.done_seq = shared.present_seq;
+                to_drop.push(*id);
+                continue;
+            }
+            // Tamaño vivo.
+            let s = win.window.inner_size();
+            shared.win_w = s.width.max(1) as usize;
+            shared.win_h = s.height.max(1) as usize;
+            // Present pendiente → blit + input propio de esa ventana.
+            if shared.present_seq > win.last_present {
+                win.last_present = shared.present_seq;
+                shared.done_seq = shared.present_seq;
+                shared.input = win.accum.take_input(&self.mods);
+                let canvas = shared.canvas.clone();
+                let (cw, ch, bg) = (shared.canvas_w, shared.canvas_h, shared.bg_color);
+                blit_plain(&win.window, &mut win.surface, &canvas, cw, ch, bg);
+            }
+        }
+        for id in to_drop {
+            if let Some(w) = self.extras.remove(&id) {
+                self.extra_ids.remove(&w.window.id());
+            }
+        }
+    }
+
     /// Atiende comandos + present pendientes (llamado tras cada pump).
     fn service(&mut self) {
         let host = self.host.clone();
@@ -1189,6 +1633,20 @@ impl GuiMain {
                     GuiCmd::FileDialog { save, filter_name, filter_exts, default_name } => {
                         pending_dialog = Some((g.dialog_seq, save, filter_name, filter_exts, default_name));
                     }
+                    // multi-ventana
+                    GuiCmd::OpenExtra { id, title, w, h } => {
+                        self.pending_extra_opens.push((id, title, w, h));
+                    }
+                    GuiCmd::CloseExtra { id } => {
+                        if let Some(win) = self.extras.get_mut(&id) {
+                            win.close_requested = true;
+                        }
+                    }
+                    GuiCmd::SetTitleExtra { id, title } => {
+                        if let Some(win) = self.extras.get(&id) {
+                            win.window.set_title(&title);
+                        }
+                    }
                 }
             }
             g.cmds = keep;
@@ -1237,6 +1695,9 @@ impl GuiMain {
                 g.window_open = false;
                 self.session_active = false;
             }
+            // Ventanas extra: presents/cierres/tamaños (después del bloque de
+            // cierre, para que la muerte de la sesión las libere ya).
+            self.service_extras(&mut g);
             host.cv.notify_all();
         }
         // Diálogo nativo (fuera del lock): bloquea hasta elegir, luego publica el resultado.
@@ -1259,6 +1720,11 @@ impl GuiMain {
             self.surface = None;
             self.context = None;
             self.close_requested = false;
+            // La sesión terminó: las ventanas extra mueren con ella (ya
+            // marcadas cerradas en service_extras).
+            self.extras.clear();
+            self.extra_ids.clear();
+            self.pending_extra_opens.clear();
         }
     }
 
@@ -1366,6 +1832,45 @@ impl GuiMain {
     }
 }
 
+/// Blit simple (sin scroll virtual) para ventanas extra.
+fn blit_plain(
+    window: &Rc<Window>,
+    surface: &mut Surface<Rc<Window>, Rc<Window>>,
+    canvas: &[u32],
+    cw: usize,
+    ch: usize,
+    bg: u32,
+) {
+    let size = window.inner_size();
+    let (bw, bh) = (size.width as usize, size.height as usize);
+    if bw == 0 || bh == 0 {
+        return;
+    }
+    if let (Some(nw), Some(nh)) = (NonZeroU32::new(bw as u32), NonZeroU32::new(bh as u32)) {
+        let _ = surface.resize(nw, nh);
+    }
+    let mut buffer = match surface.buffer_mut() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let n = bw.min(cw);
+    for y in 0..bh {
+        let brow = y * bw;
+        if y < ch {
+            let crow = y * cw;
+            buffer[brow..brow + n].copy_from_slice(&canvas[crow..crow + n]);
+            for x in n..bw {
+                buffer[brow + x] = bg;
+            }
+        } else {
+            for x in 0..bw {
+                buffer[brow + x] = bg;
+            }
+        }
+    }
+    let _ = buffer.present();
+}
+
 impl ApplicationHandler for GuiMain {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.ensure_window(event_loop);
@@ -1373,6 +1878,7 @@ impl ApplicationHandler for GuiMain {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.ensure_window(event_loop);
+        self.ensure_extra_windows(event_loop);
         // Aplicar un cursor custom pendiente: requiere el ActiveEventLoop para crearlo.
         if let Some((rgba, w, h, hx, hy)) = self.pending_cursor.take() {
             if let Some(win) = &self.window {
@@ -1391,6 +1897,86 @@ impl ApplicationHandler for GuiMain {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {}
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // ── Ruteo multi-ventana: los eventos de una ventana EXTRA van a su
+        //    acumulador propio (mouse/teclado/scroll/foco/cierre). ──
+        if let Some(&wid) = self.extra_ids.get(&_id) {
+            self.pending_input = true;
+            match event {
+                WindowEvent::ModifiersChanged(m) => {
+                    self.mods = m.state();
+                    return;
+                }
+                WindowEvent::Resized(_) | WindowEvent::RedrawRequested => {
+                    self.service();
+                    return;
+                }
+                _ => {}
+            }
+            if let Some(win) = self.extras.get_mut(&wid) {
+                let acc = &mut win.accum;
+                match event {
+                    WindowEvent::CloseRequested => win.close_requested = true,
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        let name = key_name(&event.logical_key);
+                        match event.state {
+                            ElementState::Pressed => {
+                                if let Some(n) = name.clone() {
+                                    if !event.repeat {
+                                        acc.keys_pressed.push(n.clone());
+                                        acc.keys_down.insert(n.clone());
+                                    }
+                                    acc.keys_repeated.push(n);
+                                }
+                                if let Some(t) = &event.text {
+                                    for c in t.chars() {
+                                        if !c.is_control() {
+                                            acc.chars_typed.push(c);
+                                        }
+                                    }
+                                }
+                            }
+                            ElementState::Released => {
+                                if let Some(n) = name {
+                                    acc.keys_released.push(n.clone());
+                                    acc.keys_down.remove(&n);
+                                }
+                            }
+                        }
+                    }
+                    WindowEvent::CursorMoved { position, .. } => {
+                        acc.mouse_x = position.x as i32;
+                        acc.mouse_y = position.y as i32;
+                    }
+                    WindowEvent::MouseInput { state, button, .. } => {
+                        let down = state == ElementState::Pressed;
+                        match button {
+                            MouseButton::Left => {
+                                acc.mouse_l = down;
+                                if down {
+                                    acc.clicks += 1;
+                                }
+                            }
+                            MouseButton::Right => acc.mouse_r = down,
+                            MouseButton::Middle => acc.mouse_m = down,
+                            _ => {}
+                        }
+                    }
+                    WindowEvent::MouseWheel { delta, .. } => {
+                        let (dx, dy) = match delta {
+                            MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
+                            MouseScrollDelta::PixelDelta(p) => ((p.x as f32) / 12.0, (p.y as f32) / 12.0),
+                        };
+                        acc.scroll_x += dx;
+                        acc.scroll_y += dy;
+                    }
+                    WindowEvent::Focused(b) => acc.focused = b,
+                    WindowEvent::CursorEntered { .. } => acc.cursor_in = true,
+                    WindowEvent::CursorLeft { .. } => acc.cursor_in = false,
+                    _ => {}
+                }
+            }
+            return;
+        }
         // Solo el INPUT REAL (teclado/mouse/IME/modificadores) y el resize del usuario
         // marcan input pendiente → el próximo service() sube input_epoch y despierta a
         // Gui.idleWait(). RedrawRequested NO: lo dispara nuestro propio blit, y marcarlo
@@ -1770,11 +2356,475 @@ impl super::Evaluator {
                 EvalResult::Value(self.null_ref)
             }
 
+            // ── Multi-ventana ────────────────────────────────────────────────
+            // Gui.openWindow(title, w, h) -> id (int ≥ 1). Requiere la ventana
+            // principal abierta (Gui.open): su sesión mantiene vivo el event loop.
+            "openWindow" => {
+                if dot_call.arguments.len() != 3 {
+                    return self.rt_err_kind("TypeError", "Gui.openWindow(title, width, height) requires 3 arguments");
+                }
+                let title = match self.gui_str_arg(&dot_call.arguments[0]) {
+                    Some(s) => s,
+                    None => { return self.rt_err_kind("TypeError", "Gui.openWindow title must be a string"); }
+                };
+                let w = match self.gui_int_arg(&dot_call.arguments[1]) {
+                    Some(v) if v > 0 => v as u32,
+                    _ => { return self.rt_err_kind("TypeError", "Gui.openWindow width must be a positive integer"); }
+                };
+                let h = match self.gui_int_arg(&dot_call.arguments[2]) {
+                    Some(v) if v > 0 => v as u32,
+                    _ => { return self.rt_err_kind("TypeError", "Gui.openWindow height must be a positive integer"); }
+                };
+                if self.gui_state.is_none() {
+                    return self.rt_err_kind("GuiError", "Gui.openWindow: open the primary window first (Gui.open)");
+                }
+                let host = match host() {
+                    Some(hh) => hh.clone(),
+                    None => { return self.rt_err_kind("GuiError", "Gui.openWindow: GUI host not initialized"); }
+                };
+                let id = {
+                    let st = self.gui_state.as_mut().unwrap();
+                    let id = st.next_win_id;
+                    st.next_win_id += 1;
+                    id
+                };
+                let (ww, wh) = {
+                    let mut g = host.inner.lock().unwrap();
+                    g.extra.insert(id, ExtraShared::default());
+                    g.cmds.push_back(GuiCmd::OpenExtra { id, title, w, h });
+                    host.cv.notify_all();
+                    drop(g);
+                    host.wake_main();
+                    let mut g = host.inner.lock().unwrap();
+                    loop {
+                        let (ready, failed) = g.extra.get(&id)
+                            .map(|e| (e.window_ready, e.open_failed))
+                            .unwrap_or((false, true));
+                        if ready || failed {
+                            if failed {
+                                g.extra.remove(&id);
+                                drop(g);
+                                return self.rt_err_kind("GuiError", "Gui.openWindow: failed to create window");
+                            }
+                            break;
+                        }
+                        g = host.cv.wait(g).unwrap();
+                    }
+                    let e = g.extra.get(&id).unwrap();
+                    (e.win_w.max(1), e.win_h.max(1))
+                };
+                let st = self.gui_state.as_mut().unwrap();
+                st.bg_windows.insert(id, WinSlot {
+                    open: true,
+                    canvas: vec![0u32; ww * wh],
+                    width: ww,
+                    height: wh,
+                    win_w: ww,
+                    win_h: wh,
+                    bg: 0,
+                    clip: (0, 0, ww as i32, wh as i32),
+                    clip_stack: Vec::new(),
+                    input: InputSnapshot::default(),
+                    scale_factor: st.scale_factor,
+                    win_x: 0,
+                    win_y: 0,
+                    scene: Vec::new(),
+                    scene_dirty: true,
+                });
+                EvalResult::Value(self.alloc(ObjectData::Integer(id as i64)))
+            }
+
+            // Gui.selectWindow(id): el dibujo y el input pasan a esa ventana
+            // (0 = la principal). Todas las primitivas existentes la respetan.
+            "selectWindow" => {
+                if dot_call.arguments.len() != 1 {
+                    return self.rt_err_kind("TypeError", "Gui.selectWindow(id) requires 1 argument");
+                }
+                let id = match self.gui_int_arg(&dot_call.arguments[0]) {
+                    Some(v) if v >= 0 => v as u32,
+                    _ => { return self.rt_err_kind("TypeError", "Gui.selectWindow id must be a non-negative integer"); }
+                };
+                match self.gui_state.as_mut() {
+                    Some(st) => {
+                        if st.switch_to(id) {
+                            EvalResult::Value(self.null_ref)
+                        } else {
+                            self.rt_err_kind("GuiError", &format!("Gui.selectWindow: unknown window id {}", id))
+                        }
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.selectWindow: no window open"),
+                }
+            }
+
+            "currentWindow" => {
+                let id = self.gui_state.as_ref().map(|s| s.current_win as i64).unwrap_or(0);
+                EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+            }
+
+            // Gui.closeWindow(id): cierra una ventana extra (id ≥ 1). Si era la
+            // seleccionada, la selección vuelve a la principal (0).
+            "closeWindow" => {
+                if dot_call.arguments.len() != 1 {
+                    return self.rt_err_kind("TypeError", "Gui.closeWindow(id) requires 1 argument");
+                }
+                let id = match self.gui_int_arg(&dot_call.arguments[0]) {
+                    Some(v) if v >= 1 => v as u32,
+                    _ => { return self.rt_err_kind("TypeError", "Gui.closeWindow id must be an integer >= 1"); }
+                };
+                let host = match host() {
+                    Some(hh) => hh.clone(),
+                    None => { return self.rt_err_kind("GuiError", "Gui.closeWindow: no GUI host"); }
+                };
+                if let Some(st) = self.gui_state.as_mut() {
+                    if st.current_win == id {
+                        st.switch_to(0);
+                    }
+                    st.bg_windows.remove(&id);
+                }
+                let mut g = host.inner.lock().unwrap();
+                if let Some(e) = g.extra.get_mut(&id) {
+                    e.should_close = true;
+                }
+                g.cmds.push_back(GuiCmd::CloseExtra { id });
+                host.cv.notify_all();
+                drop(g);
+                host.wake_main();
+                EvalResult::Value(self.null_ref)
+            }
+
+            // ── Modo retenido (scene graph) ──────────────────────────────────
+            "nodeRect" | "nodeCircle" | "nodeLine" | "nodeText" | "nodeImage" => {
+                let method = dot_call.method.as_str();
+                if self.gui_state.is_none() {
+                    return self.rt_err_kind("GuiError", &format!("Gui.{}: no window open", method));
+                }
+                let node = match method {
+                    "nodeRect" => {
+                        if dot_call.arguments.len() != 5 {
+                            return self.rt_err_kind("TypeError", "Gui.nodeRect(x, y, w, h, color) requires 5 arguments");
+                        }
+                        let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
+                        match (a[0], a[1], a[2], a[3], a[4]) {
+                            (Some(x), Some(y), Some(w), Some(h), Some(c)) =>
+                                Some((SceneNodeKind::Rect { w: w as i32, h: h as i32 }, x as i32, y as i32, (c as u32) & 0xFF_FFFF)),
+                            _ => None,
+                        }
+                    }
+                    "nodeCircle" => {
+                        if dot_call.arguments.len() != 4 {
+                            return self.rt_err_kind("TypeError", "Gui.nodeCircle(x, y, r, color) requires 4 arguments");
+                        }
+                        let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
+                        match (a[0], a[1], a[2], a[3]) {
+                            (Some(x), Some(y), Some(r), Some(c)) =>
+                                Some((SceneNodeKind::Circle { r: r as i32 }, x as i32, y as i32, (c as u32) & 0xFF_FFFF)),
+                            _ => None,
+                        }
+                    }
+                    "nodeLine" => {
+                        if dot_call.arguments.len() != 5 {
+                            return self.rt_err_kind("TypeError", "Gui.nodeLine(x1, y1, x2, y2, color) requires 5 arguments");
+                        }
+                        let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
+                        match (a[0], a[1], a[2], a[3], a[4]) {
+                            (Some(x), Some(y), Some(x2), Some(y2), Some(c)) =>
+                                Some((SceneNodeKind::Line { x2: x2 as i32, y2: y2 as i32 }, x as i32, y as i32, (c as u32) & 0xFF_FFFF)),
+                            _ => None,
+                        }
+                    }
+                    "nodeText" => {
+                        if dot_call.arguments.len() != 5 {
+                            return self.rt_err_kind("TypeError", "Gui.nodeText(x, y, text, scale, color) requires 5 arguments");
+                        }
+                        let x = self.gui_int_arg(&dot_call.arguments[0]);
+                        let y = self.gui_int_arg(&dot_call.arguments[1]);
+                        let t = self.gui_str_arg(&dot_call.arguments[2]);
+                        let s = self.gui_int_arg(&dot_call.arguments[3]);
+                        let c = self.gui_int_arg(&dot_call.arguments[4]);
+                        match (x, y, t, s, c) {
+                            (Some(x), Some(y), Some(t), Some(s), Some(c)) =>
+                                Some((SceneNodeKind::Text {
+                                    text: t,
+                                    scale: s.max(1) as i32,
+                                    font: String::new(),
+                                    style: 0,
+                                    spacing: 0,
+                                }, x as i32, y as i32, (c as u32) & 0xFF_FFFF)),
+                            _ => None,
+                        }
+                    }
+                    _ => {
+                        if dot_call.arguments.len() != 3 {
+                            return self.rt_err_kind("TypeError", "Gui.nodeImage(x, y, imageId) requires 3 arguments");
+                        }
+                        let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
+                        match (a[0], a[1], a[2]) {
+                            (Some(x), Some(y), Some(h)) =>
+                                Some((SceneNodeKind::Image { handle: h }, x as i32, y as i32, 0)),
+                            _ => None,
+                        }
+                    }
+                };
+                match node {
+                    Some((kind, x, y, color)) => {
+                        let st = self.gui_state.as_mut().unwrap();
+                        let id = st.scene_add(kind, x, y, color);
+                        EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                    }
+                    None => self.rt_err_kind("TypeError", &format!("Gui.{}: invalid argument types", method)),
+                }
+            }
+
+            // Constructores de nodos con paridad de primitivas (serez-ui):
+            // nodeRoundRect(x,y,w,h,radius,color), nodeRectAlpha(x,y,w,h,color,alpha),
+            // nodeRectOutline(x,y,w,h,color), nodePolygon(points,color),
+            // nodePolyline(points,width,color), nodeClipPush(x,y,w,h), nodeClipPop()
+            "nodeRoundRect" | "nodeRectAlpha" | "nodeRectOutline" | "nodeClipPush" => {
+                let method = dot_call.method.as_str();
+                let want = match method {
+                    "nodeRoundRect" | "nodeRectAlpha" => 6,
+                    "nodeRectOutline" => 5,
+                    _ => 4, // nodeClipPush
+                };
+                if dot_call.arguments.len() != want {
+                    return self.rt_err_kind("TypeError", &format!("Gui.{} requires {} arguments", method, want));
+                }
+                let mut vals = vec![0i64; want];
+                for (i, slot) in vals.iter_mut().enumerate() {
+                    match self.gui_int_arg(&dot_call.arguments[i]) {
+                        Some(v) => *slot = v,
+                        None => { return self.rt_err_kind("TypeError", &format!("Gui.{}: all arguments must be integers", method)); }
+                    }
+                }
+                if self.gui_state.is_none() {
+                    return self.rt_err_kind("GuiError", &format!("Gui.{}: no window open", method));
+                }
+                let (kind, color) = match method {
+                    "nodeRoundRect" => (
+                        SceneNodeKind::RoundRect { w: vals[2] as i32, h: vals[3] as i32, radius: vals[4] as i32 },
+                        (vals[5] as u32) & 0xFF_FFFF,
+                    ),
+                    "nodeRectAlpha" => (
+                        SceneNodeKind::RectAlpha { w: vals[2] as i32, h: vals[3] as i32, alpha: vals[5].clamp(0, 255) as u32 },
+                        (vals[4] as u32) & 0xFF_FFFF,
+                    ),
+                    "nodeRectOutline" => (
+                        SceneNodeKind::RectOutline { w: vals[2] as i32, h: vals[3] as i32 },
+                        (vals[4] as u32) & 0xFF_FFFF,
+                    ),
+                    _ => (
+                        SceneNodeKind::ClipPush { w: vals[2] as i32, h: vals[3] as i32 },
+                        0,
+                    ),
+                };
+                let st = self.gui_state.as_mut().unwrap();
+                let id = st.scene_add(kind, vals[0] as i32, vals[1] as i32, color);
+                EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+            }
+
+            "nodePolygon" | "nodePolyline" => {
+                let method = dot_call.method.as_str();
+                let want = if method == "nodePolygon" { 2 } else { 3 };
+                if dot_call.arguments.len() != want {
+                    return self.rt_err_kind("TypeError", &format!("Gui.{} requires {} arguments", method, want));
+                }
+                let pts = match self.gui_int_vec_arg(&dot_call.arguments[0]) {
+                    Some(p) => p.iter().map(|v| *v as i32).collect::<Vec<i32>>(),
+                    None => { return self.rt_err_kind("TypeError", &format!("Gui.{} points must be a flat int array [x0,y0,x1,y1,…]", method)); }
+                };
+                let (kind, color) = if method == "nodePolygon" {
+                    let c = match self.gui_int_arg(&dot_call.arguments[1]) {
+                        Some(v) => (v as u32) & 0xFF_FFFF,
+                        None => { return self.rt_err_kind("TypeError", "Gui.nodePolygon color must be an integer"); }
+                    };
+                    (SceneNodeKind::Polygon { points: pts }, c)
+                } else {
+                    let w = self.gui_int_arg(&dot_call.arguments[1]);
+                    let c = self.gui_int_arg(&dot_call.arguments[2]);
+                    match (w, c) {
+                        (Some(w), Some(c)) => (
+                            SceneNodeKind::Polyline { points: pts, width: w.max(1) as i32 },
+                            (c as u32) & 0xFF_FFFF,
+                        ),
+                        _ => { return self.rt_err_kind("TypeError", "Gui.nodePolyline requires (int[], int, int)"); }
+                    }
+                };
+                match self.gui_state.as_mut() {
+                    Some(st) => {
+                        let id = st.scene_add(kind, 0, 0, color);
+                        EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                    }
+                    None => self.rt_err_kind("GuiError", &format!("Gui.{}: no window open", method)),
+                }
+            }
+
+            "nodeClipPop" => {
+                match self.gui_state.as_mut() {
+                    Some(st) => {
+                        let id = st.scene_add(SceneNodeKind::ClipPop, 0, 0, 0);
+                        EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.nodeClipPop: no window open"),
+                }
+            }
+
+            // Gui.nodeSet(id, prop, value): muta una propiedad de un nodo.
+            // props int: x, y, w, h, r, x2, y2, color, z, scale, image, radius,
+            //            alpha, width, style, spacing
+            // props especiales: text/font (string), visible (bool), points (int[])
+            "nodeSet" => {
+                if dot_call.arguments.len() != 3 {
+                    return self.rt_err_kind("TypeError", "Gui.nodeSet(id, prop, value) requires 3 arguments");
+                }
+                let id = match self.gui_int_arg(&dot_call.arguments[0]) {
+                    Some(v) => v,
+                    None => { return self.rt_err_kind("TypeError", "Gui.nodeSet id must be an integer"); }
+                };
+                let prop = match self.gui_str_arg(&dot_call.arguments[1]) {
+                    Some(p) => p,
+                    None => { return self.rt_err_kind("TypeError", "Gui.nodeSet prop must be a string"); }
+                };
+                // El tipo del valor depende de la prop.
+                enum V { I(i64), S(String), B(bool), P(Vec<i32>) }
+                let value = match prop.as_str() {
+                    "text" | "font" => self.gui_str_arg(&dot_call.arguments[2]).map(V::S),
+                    "visible" => self.gui_bool_arg(&dot_call.arguments[2]).map(V::B),
+                    "points" => self.gui_int_vec_arg(&dot_call.arguments[2])
+                        .map(|p| V::P(p.iter().map(|v| *v as i32).collect())),
+                    _ => self.gui_int_arg(&dot_call.arguments[2]).map(V::I),
+                };
+                let value = match value {
+                    Some(v) => v,
+                    None => { return self.rt_err_kind("TypeError", &format!("Gui.nodeSet: wrong value type for prop '{}'", prop)); }
+                };
+                let st = match self.gui_state.as_mut() {
+                    Some(s) => s,
+                    None => { return self.rt_err_kind("GuiError", "Gui.nodeSet: no window open"); }
+                };
+                let node = match st.scene.iter_mut().find(|n| n.id == id) {
+                    Some(n) => n,
+                    None => { return self.rt_err_kind("GuiError", &format!("Gui.nodeSet: unknown node id {}", id)); }
+                };
+                let ok = match (&prop[..], &value, &mut node.kind) {
+                    ("x", V::I(v), _) => { node.x = *v as i32; true }
+                    ("y", V::I(v), _) => { node.y = *v as i32; true }
+                    ("color", V::I(v), _) => { node.color = (*v as u32) & 0xFF_FFFF; true }
+                    ("z", V::I(v), _) => { node.z = *v as i32; true }
+                    ("visible", V::B(v), _) => { node.visible = *v; true }
+                    ("w", V::I(v), SceneNodeKind::Rect { w, .. })
+                    | ("w", V::I(v), SceneNodeKind::RectAlpha { w, .. })
+                    | ("w", V::I(v), SceneNodeKind::RectOutline { w, .. })
+                    | ("w", V::I(v), SceneNodeKind::RoundRect { w, .. })
+                    | ("w", V::I(v), SceneNodeKind::ClipPush { w, .. }) => { *w = *v as i32; true }
+                    ("h", V::I(v), SceneNodeKind::Rect { h, .. })
+                    | ("h", V::I(v), SceneNodeKind::RectAlpha { h, .. })
+                    | ("h", V::I(v), SceneNodeKind::RectOutline { h, .. })
+                    | ("h", V::I(v), SceneNodeKind::RoundRect { h, .. })
+                    | ("h", V::I(v), SceneNodeKind::ClipPush { h, .. }) => { *h = *v as i32; true }
+                    ("radius", V::I(v), SceneNodeKind::RoundRect { radius, .. }) => { *radius = *v as i32; true }
+                    ("alpha", V::I(v), SceneNodeKind::RectAlpha { alpha, .. }) => { *alpha = (*v).clamp(0, 255) as u32; true }
+                    ("r", V::I(v), SceneNodeKind::Circle { r }) => { *r = *v as i32; true }
+                    ("x2", V::I(v), SceneNodeKind::Line { x2, .. }) => { *x2 = *v as i32; true }
+                    ("y2", V::I(v), SceneNodeKind::Line { y2, .. }) => { *y2 = *v as i32; true }
+                    ("points", V::P(v), SceneNodeKind::Polygon { points }) => { *points = v.clone(); true }
+                    ("points", V::P(v), SceneNodeKind::Polyline { points, .. }) => { *points = v.clone(); true }
+                    ("width", V::I(v), SceneNodeKind::Polyline { width, .. }) => { *width = (*v).max(1) as i32; true }
+                    ("text", V::S(v), SceneNodeKind::Text { text, .. }) => { *text = v.clone(); true }
+                    ("scale", V::I(v), SceneNodeKind::Text { scale, .. }) => { *scale = (*v).max(1) as i32; true }
+                    ("font", V::S(v), SceneNodeKind::Text { font, .. }) => { *font = v.clone(); true }
+                    ("style", V::I(v), SceneNodeKind::Text { style, .. }) => { *style = (*v).clamp(0, 15) as u8; true }
+                    ("spacing", V::I(v), SceneNodeKind::Text { spacing, .. }) => { *spacing = *v as i32; true }
+                    ("image", V::I(v), SceneNodeKind::Image { handle }) => { *handle = *v; true }
+                    _ => false,
+                };
+                if !ok {
+                    return self.rt_err_kind("TypeError", &format!("Gui.nodeSet: prop '{}' does not apply to this node", prop));
+                }
+                st.scene_dirty = true;
+                EvalResult::Value(self.null_ref)
+            }
+
+            "nodeDelete" => {
+                if dot_call.arguments.len() != 1 {
+                    return self.rt_err_kind("TypeError", "Gui.nodeDelete(id) requires 1 argument");
+                }
+                let id = match self.gui_int_arg(&dot_call.arguments[0]) {
+                    Some(v) => v,
+                    None => { return self.rt_err_kind("TypeError", "Gui.nodeDelete id must be an integer"); }
+                };
+                let existed = match self.gui_state.as_mut() {
+                    Some(st) => {
+                        let before = st.scene.len();
+                        st.scene.retain(|n| n.id != id);
+                        let removed = st.scene.len() != before;
+                        if removed { st.scene_dirty = true; }
+                        removed
+                    }
+                    None => false,
+                };
+                EvalResult::Value(if existed { self.true_ref } else { self.false_ref })
+            }
+
+            "sceneClear" => {
+                if let Some(st) = self.gui_state.as_mut() {
+                    st.scene.clear();
+                    st.scene_dirty = true;
+                }
+                EvalResult::Value(self.null_ref)
+            }
+
+            "nodeCount" => {
+                let n = self.gui_state.as_ref().map(|s| s.scene.len() as i64).unwrap_or(0);
+                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+            }
+
+            // Gui.renderScene(bgColor): redibuja la escena SOLO si está sucia (o
+            // la ventana cambió de tamaño) y presenta. Devuelve true si redibujó.
+            "renderScene" => {
+                if dot_call.arguments.len() != 1 {
+                    return self.rt_err_kind("TypeError", "Gui.renderScene(bgColor) requires 1 argument");
+                }
+                let bg = match self.gui_int_arg(&dot_call.arguments[0]) {
+                    Some(v) => (v as u32) & 0xFF_FFFF,
+                    None => { return self.rt_err_kind("TypeError", "Gui.renderScene bgColor must be an integer 0xRRGGBB"); }
+                };
+                let host = match host() {
+                    Some(h) => h.clone(),
+                    None => { return self.rt_err_kind("GuiError", "Gui.renderScene: no GUI host"); }
+                };
+                if self.gui_state.is_none() {
+                    return self.rt_err_kind("GuiError", "Gui.renderScene: no window open");
+                }
+                if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
+                let fonts = self.gui_fonts.as_mut().unwrap();
+                let st = self.gui_state.as_mut().unwrap();
+                let redrew = st.scene_dirty || st.win_w != st.width || st.win_h != st.height;
+                if redrew {
+                    st.scene_render(fonts, bg);
+                }
+                if st.current_win == 0 {
+                    st.present(&host);
+                } else {
+                    let id = st.current_win;
+                    st.present_extra(&host, id);
+                }
+                EvalResult::Value(if redrew { self.true_ref } else { self.false_ref })
+            }
+
             "isOpen" => {
-                let open = host().map(|h| {
-                    let g = h.inner.lock().unwrap();
-                    g.window_open && !g.should_close
-                }).unwrap_or(false) && self.gui_state.is_some();
+                let open = match self.gui_state.as_ref() {
+                    None => false,
+                    Some(st) if st.current_win == 0 => host().map(|h| {
+                        let g = h.inner.lock().unwrap();
+                        g.window_open && !g.should_close
+                    }).unwrap_or(false),
+                    Some(st) => host().map(|h| {
+                        let g = h.inner.lock().unwrap();
+                        g.extra.get(&st.current_win)
+                            .map(|e| e.window_open && !e.should_close)
+                            .unwrap_or(false)
+                    }).unwrap_or(false),
+                };
                 EvalResult::Value(if open { self.true_ref } else { self.false_ref })
             }
 
@@ -1789,7 +2839,15 @@ impl super::Evaluator {
             "present" => {
                 let host = match host() { Some(h) => h.clone(), None => { return self.rt_err_kind("GuiError", "Gui.present: no GUI host"); } };
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.present(&host); EvalResult::Value(self.null_ref) }
+                    Some(st) => {
+                        if st.current_win == 0 {
+                            st.present(&host);
+                        } else {
+                            let id = st.current_win;
+                            st.present_extra(&host, id);
+                        }
+                        EvalResult::Value(self.null_ref)
+                    }
                     None => { self.rt_err_kind("GuiError", "Gui.present: no window open") }
                 }
             }
@@ -2757,7 +3815,7 @@ impl super::Evaluator {
 
     // ── arg helpers ──────────────────────────────────────────────────────────────
 
-    fn gui_int_arg(&mut self, expr: &ast::Expression) -> Option<i64> {
+    pub(super) fn gui_int_arg(&mut self, expr: &ast::Expression) -> Option<i64> {
         match self.eval_expression(expr) {
             EvalResult::Value(v) => match self.resolve(v).cloned() {
                 Some(ObjectData::Integer(n)) => Some(n),
@@ -2767,7 +3825,7 @@ impl super::Evaluator {
         }
     }
 
-    fn gui_str_arg(&mut self, expr: &ast::Expression) -> Option<String> {
+    pub(super) fn gui_str_arg(&mut self, expr: &ast::Expression) -> Option<String> {
         match self.eval_expression(expr) {
             EvalResult::Value(v) => match self.resolve(v).cloned() {
                 Some(ObjectData::Str(s)) => Some(s),

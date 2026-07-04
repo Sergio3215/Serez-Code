@@ -1,0 +1,49 @@
+// unit_media.sz — tests headless del namespace Media (audio, rodio).
+// No reproducen sonido: cubren rutas de error capturables y defaults.
+// La reproducción real (playSound → isPlaying → fin) se verificó a mano
+// con un WAV de 440Hz.
+use permissions { Media }
+
+test("playSound de archivo inexistente -> IOError capturable", () => {
+    let fallo = false
+    try {
+        Media.playSound("__no_existe__.wav")
+    } catch (e) {
+        fallo = e.kind == "IOError"
+    }
+    assert(fallo, "IOError capturable")
+})
+
+test("playSound de archivo no-audio -> MediaError capturable", () => {
+    let fallo = false
+    try {
+        Media.playSound("README.md")
+    } catch (e) {
+        fallo = e.kind == "MediaError"
+    }
+    assert(fallo, "MediaError capturable en formato invalido")
+})
+
+test("ids desconocidos: stop/isPlaying/pause devuelven false", () => {
+    assert(Media.stop(12345) == false, "stop desconocido")
+    assert(Media.isPlaying(12345) == false, "isPlaying desconocido")
+    assert(Media.pause(12345) == false, "pause desconocido")
+    assert(Media.resume(12345) == false, "resume desconocido")
+    assert(Media.setVolume(12345, 50) == false, "setVolume desconocido")
+})
+
+test("playingCount sin sonidos = 0", () => {
+    assert(Media.playingCount() == 0, "cuenta 0")
+})
+
+test("metodo desconocido -> TypeError capturable", () => {
+    let fallo = false
+    try {
+        Media.noExiste()
+    } catch (e) {
+        fallo = e.kind == "TypeError"
+    }
+    assert(fallo, "TypeError capturable")
+})
+
+summary()

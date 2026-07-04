@@ -1,0 +1,51 @@
+// unit_gui_multiwindow.sz — tests headless de la API multi-ventana.
+// No abren ventana: cubren validación de argumentos, errores capturables y
+// defaults sin ventana. El camino con ventanas reales se verifica a mano
+// (demo con 2 ventanas) porque la suite corre sin sesión gráfica garantizada.
+use permissions { Gui }
+
+test("openWindow sin ventana principal -> GuiError capturable", () => {
+    let fallo = false
+    try {
+        Gui.openWindow("secundaria", 200, 100)
+    } catch (e) {
+        fallo = e.kind == "GuiError"
+    }
+    assert(fallo, "GuiError: requiere Gui.open primero")
+})
+
+test("openWindow valida argumentos", () => {
+    let fallo = false
+    try {
+        Gui.openWindow("x", -5, 100)
+    } catch (e) {
+        fallo = e.kind == "TypeError"
+    }
+    assert(fallo, "ancho negativo -> TypeError")
+})
+
+test("selectWindow sin ventana -> GuiError capturable", () => {
+    let fallo = false
+    try {
+        Gui.selectWindow(1)
+    } catch (e) {
+        fallo = e.kind == "GuiError"
+    }
+    assert(fallo, "GuiError: no hay ventana")
+})
+
+test("currentWindow sin ventana = 0 (la principal)", () => {
+    assert(Gui.currentWindow() == 0, "default 0")
+})
+
+test("closeWindow valida id >= 1", () => {
+    let fallo = false
+    try {
+        Gui.closeWindow(0)
+    } catch (e) {
+        fallo = e.kind == "TypeError"
+    }
+    assert(fallo, "id 0 (principal) no se cierra con closeWindow")
+})
+
+summary()
