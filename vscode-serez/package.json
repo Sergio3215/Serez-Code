@@ -1,8 +1,8 @@
 {
   "name": "serez-code-formatter",
   "displayName": "Serez-Code Formatter",
-  "description": "Syntax highlighting, formatter and color theme for Serez-Code — .sz, .szx (JSX) and .szs (styles)",
-  "version": "1.6.1",
+  "description": "Syntax highlighting, formatter, color theme and language server (diagnostics, completion, hover, go-to-definition) for Serez-Code — .sz, .szx (JSX) and .szs (styles)",
+  "version": "1.8.0",
   "icon": "icon.png",
   "license": "MIT",
   "publisher": "sd-tools",
@@ -19,6 +19,19 @@
     "Themes"
   ],
   "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "En Restricted Mode funcionan el resaltado y el formatter; el servidor LSP (sz-lsp, un binario configurable) solo arranca en workspaces de confianza.",
+      "restrictedConfigurations": [
+        "serez.lsp.path",
+        "serez.lsp.enabled"
+      ]
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
   "activationEvents": [
     "onLanguage:serez-code",
     "onLanguage:serez-code-jsx",
@@ -86,6 +99,21 @@
         "path": "./themes/serez-dark-color-theme.json"
       }
     ],
+    "configuration": {
+      "title": "Serez-Code",
+      "properties": {
+        "serez.lsp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Activar el servidor de lenguaje (sz-lsp): diagnósticos en vivo, autocompletado, hover e ir-a-definición."
+        },
+        "serez.lsp.path": {
+          "type": "string",
+          "default": "",
+          "description": "Ruta al ejecutable sz-lsp. Vacío = buscar 'sz-lsp' en el PATH."
+        }
+      }
+    },
     "configurationDefaults": {
       "[serez-code]": {
         "editor.defaultFormatter": "sd-tools.serez-code-formatter",

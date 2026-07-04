@@ -1,0 +1,170 @@
+# Generates src/lsp/builtins_gen.rs from the evaluator sources.
+#
+# Scans every `fn eval_<name>_namespace(...)` (and the Tensor static /
+# value-method dispatchers) for the string match arms of its top-level
+# `match`, and emits them as static tables the LSP server uses for
+# completion/hover. Re-run after adding methods to a namespace:
+#
+#   python tools/gen_lsp_builtins.py
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EVAL_DIR = os.path.join(ROOT, "src", "evaluator")
+OUT = os.path.join(ROOT, "src", "lsp", "builtins_gen.rs")
+
+# fn name -> namespace label; discovered dynamically for eval_*_namespace,
+# these are the extra dispatchers that don't follow that naming.
+EXTRA_FNS = {
+    "eval_tensor_static": "Tensor",
+}
+
+# Namespaces whose dispatch isn't a normal multi-line match (kept in sync by
+# hand). Regex validates the method with an inline one-line lookup.
+HARDCODED = {
+    "Regex": ["test", "match", "findAll", "split", "replace"],
+}
+
+# Value-method dispatchers: fn substring -> receiver label.
+VALUE_FNS = [
+    ("methods_array.rs", "array"),
+    ("methods_string.rs", "string"),
+    ("methods_set.rs", "set"),
+    ("methods_dec.rs", "dec"),
+    ("methods_tensor.rs", "tensor"),
+]
+
+ARM_RE = re.compile(r'^\s*"([A-Za-z_][A-Za-z0-9_]*)"(?:\s*\|\s*"([A-Za-z_][A-Za-z0-9_]*)")*\s*(?:if\b[^=]*)?=>')
+ALL_NAMES_RE = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"')
+
+
+def strip_strings(line):
+    """Blank out string literal contents so braces inside them don't count."""
+    out = []
+    i, n = 0, len(line)
+    in_str = False
+    while i < n:
+        c = line[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+                out.append('"')
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append('"')
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def extract_fn_arms(src, fn_start):
+    """From the byte offset of a `fn`, find its body and collect the string
+    arms of the first top-level `match` inside it."""
+    lines = src[fn_start:].split("\n")
+    depth = 0
+    started = False
+    match_depth = None
+    arms = []
+    for line in lines:
+        stripped = strip_strings(line)
+        if match_depth is None and started and re.search(r"\bmatch\b", stripped):
+            # arms of this match live at current depth after its `{` opens
+            match_depth = depth + stripped.count("{") - stripped.count("}")
+        if match_depth is not None and depth == match_depth and ARM_RE.match(line):
+            arms.extend(ALL_NAMES_RE.findall(line.split("=>")[0]))
+        for ch in stripped:
+            if ch == "{":
+                depth += 1
+                started = True
+            elif ch == "}":
+                depth -= 1
+        if started and depth <= 0:
+            break
+    return arms
+
+
+def collect():
+    namespaces = {}
+    values = {}
+    for fname in sorted(os.listdir(EVAL_DIR)):
+        if not fname.endswith(".rs"):
+            continue
+        path = os.path.join(EVAL_DIR, fname)
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        for m in re.finditer(r"fn (eval_([a-z0-9_]+)_namespace)\s*\(", src):
+            label = m.group(2).capitalize()
+            # match the label the interpreter dispatches on
+            label = {
+                "Os": "OS", "Json": "JSON", "Gpu": "GPU", "Datetime": "DateTime",
+            }.get(label, label)
+            arms = extract_fn_arms(src, m.start())
+            if arms:
+                namespaces.setdefault(label, [])
+                namespaces[label] += [a for a in arms if a not in namespaces[label]]
+        for fn_name, label in EXTRA_FNS.items():
+            for m in re.finditer(r"fn " + fn_name + r"\s*\(", src):
+                arms = extract_fn_arms(src, m.start())
+                if arms:
+                    namespaces.setdefault(label, [])
+                    namespaces[label] += [a for a in arms if a not in namespaces[label]]
+        for vf, label in VALUE_FNS:
+            if fname == vf:
+                arms = []
+                for m in re.finditer(r"fn eval_[a-z0-9_]+\s*\(", src):
+                    arms += extract_fn_arms(src, m.start())
+                seen = []
+                for a in arms:
+                    if a not in seen:
+                        seen.append(a)
+                if seen:
+                    values.setdefault(label, [])
+                    values[label] += [a for a in seen if a not in values[label]]
+    return namespaces, values
+
+
+def main():
+    namespaces, values = collect()
+    if not namespaces:
+        print("ERROR: no namespaces found", file=sys.stderr)
+        sys.exit(1)
+    for ns, methods in HARDCODED.items():
+        namespaces.setdefault(ns, [])
+        namespaces[ns] += [m for m in methods if m not in namespaces[ns]]
+    lines = []
+    lines.append("// GENERATED by tools/gen_lsp_builtins.py — do not edit by hand.")
+    lines.append("// Re-run the script after adding methods to evaluator namespaces.")
+    lines.append("")
+    lines.append("/// Native namespaces and their methods, extracted from the evaluator.")
+    lines.append("pub static NAMESPACES: &[(&str, &[&str])] = &[")
+    for ns in sorted(namespaces):
+        methods = ", ".join('"%s"' % m for m in sorted(set(namespaces[ns])))
+        lines.append('    ("%s", &[%s]),' % (ns, methods))
+    lines.append("];")
+    lines.append("")
+    lines.append("/// Methods available on values (arrays, strings, sets, dec, tensors).")
+    lines.append("pub static VALUE_METHODS: &[(&str, &[&str])] = &[")
+    for label in sorted(values):
+        methods = ", ".join('"%s"' % m for m in sorted(set(values[label])))
+        lines.append('    ("%s", &[%s]),' % (label, methods))
+    lines.append("];")
+    lines.append("")
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    with open(OUT, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines))
+    total = sum(len(v) for v in namespaces.values())
+    print("Wrote %s: %d namespaces (%d methods), %d value receivers"
+          % (OUT, len(namespaces), total, len(values)))
+    for ns in sorted(namespaces):
+        print("  %-10s %d" % (ns, len(set(namespaces[ns]))))
+
+
+if __name__ == "__main__":
+    main()

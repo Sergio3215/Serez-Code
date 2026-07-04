@@ -1,9 +1,19 @@
 # Serez-Code Formatter
 
-Syntax highlighting, formatter and a dedicated **color theme** for **Serez-Code** — a hand-crafted interpreted language written in Rust. Supports the three file kinds of the ecosystem: `.sz` (code), `.szx` (JSX authoring for serez-ui) and `.szs` (CSS-with-logic styles).
+Syntax highlighting, formatter, **language server client** and a dedicated **color theme** for **Serez-Code** — a hand-crafted interpreted language written in Rust. Supports the three file kinds of the ecosystem: `.sz` (code), `.szx` (JSX authoring for serez-ui) and `.szs` (CSS-with-logic styles).
 
 ## Features
 
+- **Language server (desde 1.7.0)** — si el binario `sz-lsp` está disponible
+  (en el `PATH` junto a `sz`, o vía el setting `serez.lsp.path`), los `.sz`
+  ganan: **diagnósticos en vivo** (errores del parser + avisos del type
+  checker mientras escribes), **autocompletado** (keywords, namespaces
+  nativos con sus métodos — `File.` lista `read`/`write`/… —, funciones y
+  variables del archivo), **hover** con firmas, **ir a definición** (F12,
+  incluidas líneas `import`) y **outline** de símbolos. Se construye con
+  `cargo build --release --bin sz-lsp` en el repo del core. Desactivable con
+  `serez.lsp.enabled: false`; sin el binario, la extensión sigue funcionando
+  como siempre (resaltado + formatter).
 - **Syntax highlighting**
   - `.sz` — keywords, types, **built-in namespaces** (`Math`, `JSON`, `File`, `Terminal`, `OS`, `Env`, `Time`, `DateTime`, `System`, `Random`, `Tensor`, `Autodiff`, `Gui`, `Crypto`, `Socket`, `Set`, `Binary`, `GPU`, `Memory`), operators, strings, numbers, comments
   - `.szx` — everything in `.sz` **plus JSX** (tags, components, attributes, `{…}` embedded expressions)
