@@ -21,24 +21,30 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary: sz.exe
             asset: sz-windows-x64.exe
+            flags: ""
 
+          # Linux estático (musl): sin audio — enlazar ALSA en musl-static es
+          # inviable. Media.* da un error capturable en este binario.
           - os: ubuntu-latest
             name: Linux x64
             target: x86_64-unknown-linux-musl
             binary: sz
             asset: sz-linux-x64
+            flags: "--no-default-features"
 
           - os: macos-latest
             name: macOS ARM64
             target: aarch64-apple-darwin
             binary: sz
             asset: sz-macos-arm64
+            flags: ""
 
           - os: macos-latest
             name: macOS x64
             target: x86_64-apple-darwin
             binary: sz
             asset: sz-macos-x64
+            flags: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +61,7 @@ jobs:
       - name: Build release binary
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.flags }}
 
       - name: Package binary
         shell: bash

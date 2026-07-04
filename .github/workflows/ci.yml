@@ -20,6 +20,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # rodio (namespace Media) enlaza ALSA en Linux; sus cabeceras no vienen
+      # en ubuntu-latest. Sin esto, alsa-sys falla al compilar.
+      - name: Install ALSA (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+
       - name: Build
         run: cargo build
 

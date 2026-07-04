@@ -615,7 +615,10 @@ impl super::Evaluator {
                         return self.eval_gui_namespace(dot_call);
                     }
                     if name == "Media" {
+                        #[cfg(feature = "audio")]
                         return self.eval_media_namespace(dot_call);
+                        #[cfg(not(feature = "audio"))]
+                        return self.rt_err_kind("MediaError", "Media (audio) no disponible: este binario se compilo sin la feature 'audio'");
                     }
                     if name == "Task" {
                         return self.eval_task_namespace(dot_call);

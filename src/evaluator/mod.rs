@@ -23,6 +23,7 @@ mod namespaces_os;
 pub(crate) mod namespaces_gui;
 mod namespaces_task;
 mod namespaces_regex;
+#[cfg(feature = "audio")]
 mod namespaces_media;
 
 
@@ -142,6 +143,7 @@ pub struct Evaluator {
     // sus callbacks onOk/onErr en este hilo (cooperativo, sin background thread).
     spawned: Vec<namespaces_os::SpawnedJob>,
     // Audio (Media.playSound): stream + sinks activos. None hasta el primer uso.
+    #[cfg(feature = "audio")]
     media: Option<namespaces_media::MediaState>,
     // ── Task context ──────────────────────────────────────────────────────────
     task_id: Option<i64>,
@@ -297,6 +299,7 @@ impl Evaluator {
             tensor_id_counter: 1,
             gui_state: None,
             gui_fonts: None,
+            #[cfg(feature = "audio")]
             media: None,
             spawned: Vec::new(),
             task_id: None,
