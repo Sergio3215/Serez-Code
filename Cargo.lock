@@ -3676,7 +3676,7 @@ dependencies = [
 
 [[package]]
 name = "serez-code"
-version = "7.3.0"
+version = "8.2.0"
 dependencies = [
  "arboard",
  "chrono",
