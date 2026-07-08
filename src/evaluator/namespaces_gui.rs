@@ -764,6 +764,21 @@ fn prim_node_parts(o: &OwnedValue) -> Option<(&str, &[OwnedValue], &[OwnedValue]
     None
 }
 
+/// Reparte `free` px libres en un eje flex de `n` items según justify-content. Devuelve
+/// (offset_inicial, separación_extra_entre_items); el `gap` de CSS se suma aparte. Solo
+/// aplica cuando hay espacio libre (ningún hijo crece).
+fn prim_justify(mode: &str, free: i32, n: i32) -> (i32, i32) {
+    if free <= 0 || n <= 0 { return (0, 0); }
+    match mode {
+        "flex-end" | "end" => (free, 0),
+        "center" => (free / 2, 0),
+        "space-between" => if n > 1 { (0, free / (n - 1)) } else { (0, 0) },
+        "space-around" => { let unit = free / (2 * n); (unit, unit * 2) }
+        "space-evenly" => { let unit = free / (n + 1); (unit, unit) }
+        _ => (0, 0), // flex-start / start / default
+    }
+}
+
 /// Layout + emit de un nodo. Devuelve el alto vertical consumido (incl. márgenes).
 fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i32, y: i32, avail_w: i32,
     sheet: Option<&NativeStylesheet>, ctx: &[(String, String)], depth: i32, fonts: &mut Option<GuiFonts>, st: &mut GuiState, regions: &mut Vec<PrimRegion>) -> i32 {
@@ -825,33 +840,91 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
         let overflow_scroll = sget(&style, "overflow") == Some("scroll");
         let fixed_h = snum(&style, "height", -1);
         if dir_row {
-            // Reparto por PESO flex (attr/prop `flex` del hijo, default 1) + gap.
-            let mut weights: Vec<i32> = Vec::new();
+            // Flexbox en el eje principal (horizontal). Cada hijo puede CRECER (flex≥1) o
+            // ser de ancho FIJO (`width` sin `flex`); sin flex ni width crece y llena
+            // (default, compat con lo anterior). `flex`/`width` se leen del estilo efectivo
+            // del hijo (inline o CSS por clase). justify-content reparte el espacio libre
+            // SOLO cuando nadie crece (todos fijos); align-items alinea en el eje cruzado.
+            struct FlexKid { grow: i32, base: i32 }
+            let mut kinfo: Vec<FlexKid> = Vec::with_capacity(kids.len());
             for k in kids {
-                if let Some((_, cs, _)) = prim_node_parts(k) {
-                    weights.push(prim_attr(cs, "flex").and_then(|s| s.trim().parse().ok()).unwrap_or(1).max(1));
-                } else if let OwnedValue::Str(_) = k {
-                    weights.push(1);
-                }
+                let (grow, base) = if let Some((ct, cs, _)) = prim_node_parts(k) {
+                    let cclass = prim_attr(cs, "class").unwrap_or_default();
+                    let cclasses: Vec<&str> = cclass.split_whitespace().collect();
+                    let cid = prim_attr(cs, "id");
+                    let cstyle = prim_eff_style(sheet, ctx, ct, &cclasses, cid.as_deref(), cs);
+                    let flex = sget(&cstyle, "flex").and_then(|s| s.trim().parse::<i32>().ok());
+                    let width = sget(&cstyle, "width").and_then(|s| s.trim().parse::<i32>().ok());
+                    let grow = match (flex, width) {
+                        (Some(f), _) => f.max(0),   // flex explícito manda (0 = no crece)
+                        (None, Some(_)) => 0,       // width sin flex ⇒ ancho fijo
+                        (None, None) => 1,          // default: crece y llena
+                    };
+                    (grow, width.unwrap_or(0).max(0))
+                } else {
+                    (1, 0) // texto suelto: crece
+                };
+                kinfo.push(FlexKid { grow, base });
             }
-            let total_w: i32 = weights.iter().sum::<i32>().max(1);
-            let ncols = weights.len().max(1) as i32;
+            let ncols = kinfo.len().max(1) as i32;
             let total_gap = gap * (ncols - 1).max(0);
-            let usable = (content_w - total_gap).max(1);
-            let mut cx = content_x;
-            let mut max_h = 0;
-            let mut wi = 0;
-            for k in kids {
-                let each = (usable * weights.get(wi).copied().unwrap_or(1) / total_w).max(1);
-                if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    let h = prim_render(ct, cs, ck, cx, y + pad, each, sheet, ctx, depth + 1, fonts, st, regions);
-                    if h > max_h { max_h = h; }
-                } else if let OwnedValue::Str(s) = k {
-                    let h = prim_emit_text(st, fonts, s, cx, y + pad, each, scale, 8 * scale + 4, text_col, tstyle, i32::MAX);
-                    if h > max_h { max_h = h; }
+            let total_grow: i32 = kinfo.iter().map(|k| k.grow).sum();
+            let sum_base: i32 = kinfo.iter().map(|k| k.base).sum();
+
+            let mut widths: Vec<i32> = Vec::with_capacity(kinfo.len());
+            let start_off;
+            let extra_between;
+            if total_grow > 0 {
+                // Hay quien crece: los growers reparten el sobrante; sin espacio libre.
+                let free_for_grow = (content_w - sum_base - total_gap).max(0);
+                for k in &kinfo {
+                    let w = if k.grow > 0 { k.base + free_for_grow * k.grow / total_grow } else { k.base };
+                    widths.push(w.max(1));
                 }
-                cx += each + gap;
-                wi += 1;
+                start_off = 0;
+                extra_between = 0;
+            } else {
+                // Todos fijos: justify-content reparte el espacio libre.
+                for k in &kinfo { widths.push(k.base.max(1)); }
+                let used: i32 = widths.iter().sum::<i32>() + total_gap;
+                let free = (content_w - used).max(0);
+                let justify = sget(&style, "justify-content").or_else(|| sget(&style, "justify")).unwrap_or("flex-start");
+                let (s, e) = prim_justify(justify, free, ncols);
+                start_off = s;
+                extra_between = e;
+            }
+
+            let align = sget(&style, "align-items").or_else(|| sget(&style, "align")).unwrap_or("").to_string();
+            let want_align = align == "center" || align == "flex-end" || align == "end";
+
+            let mut cx = content_x + start_off;
+            let mut max_h = 0;
+            // Rango de nodos/regions por hijo para alinearlo en vertical tras conocer max_h.
+            let mut ranges: Vec<(usize, usize, usize, usize, i32)> = Vec::new();
+            for (i, k) in kids.iter().enumerate() {
+                let each = widths.get(i).copied().unwrap_or(1);
+                let sc0 = st.scene.len();
+                let rg0 = regions.len();
+                let h = if let Some((ct, cs, ck)) = prim_node_parts(k) {
+                    prim_render(ct, cs, ck, cx, y + pad, each, sheet, ctx, depth + 1, fonts, st, regions)
+                } else if let OwnedValue::Str(s) = k {
+                    prim_emit_text(st, fonts, s, cx, y + pad, each, scale, 8 * scale + 4, text_col, tstyle, i32::MAX)
+                } else { 0 };
+                if h > max_h { max_h = h; }
+                if want_align { ranges.push((sc0, st.scene.len(), rg0, regions.len(), h)); }
+                cx += each + gap + extra_between;
+            }
+            // align-items: desplaza en vertical cada hijo dentro de la banda [0, max_h].
+            // (post-pase: prim_render mide+emite en una sola pasada, así que el alto de
+            //  cada hijo se conoce recién después de dibujarlo.)
+            if want_align {
+                for (sc0, sc1, rg0, rg1, h) in ranges {
+                    let off = if align == "center" { (max_h - h) / 2 } else { max_h - h };
+                    if off > 0 {
+                        for n in st.scene[sc0..sc1].iter_mut() { n.y += off; }
+                        for r in regions[rg0..rg1].iter_mut() { r.y += off; }
+                    }
+                }
             }
             total_h = max_h + 2 * pad;
         } else if overflow_scroll && fixed_h > 0 {
@@ -4839,5 +4912,48 @@ mod prim_clip_tests {
         st.scene_render(&mut fonts, 0x000000);
         assert_eq!(st.canvas[50 * 100 + 25], 0xFFFFFF, "mitad izquierda pintada");
         assert_eq!(st.canvas[50 * 100 + 75], 0x000000, "mitad derecha recortada por el stack");
+    }
+}
+
+#[cfg(test)]
+mod prim_flex_tests {
+    // El reparto de espacio libre de justify-content (offset inicial + separación extra).
+    // free=180, n=2 salvo que se indique. gap se suma aparte (no lo cubre este helper).
+    use super::prim_justify;
+
+    #[test]
+    fn flex_start_no_reparte() {
+        assert_eq!(prim_justify("flex-start", 180, 2), (0, 0));
+    }
+    #[test]
+    fn flex_end_todo_al_inicio() {
+        assert_eq!(prim_justify("flex-end", 180, 2), (180, 0));
+    }
+    #[test]
+    fn center_mitad_al_inicio() {
+        assert_eq!(prim_justify("center", 180, 2), (90, 0));
+    }
+    #[test]
+    fn space_between_reparte_entre_items() {
+        assert_eq!(prim_justify("space-between", 180, 2), (0, 180));
+    }
+    #[test]
+    fn space_between_un_item_no_reparte() {
+        assert_eq!(prim_justify("space-between", 180, 1), (0, 0));
+    }
+    #[test]
+    fn space_around_lados_iguales() {
+        // unit = 180/(2*2) = 45; extra_between = 2*unit = 90.
+        assert_eq!(prim_justify("space-around", 180, 2), (45, 90));
+    }
+    #[test]
+    fn space_evenly_gaps_iguales() {
+        // unit = 180/(2+1) = 60.
+        assert_eq!(prim_justify("space-evenly", 180, 2), (60, 60));
+    }
+    #[test]
+    fn sin_espacio_libre_no_reparte() {
+        assert_eq!(prim_justify("center", 0, 3), (0, 0));
+        assert_eq!(prim_justify("space-between", -10, 3), (0, 0));
     }
 }
