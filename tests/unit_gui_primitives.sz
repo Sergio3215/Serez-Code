@@ -1,0 +1,60 @@
+// unit_gui_primitives.sz — tests headless del motor de primitivos de render
+// (Gui.loadStylesheet / Gui.loadSvg / Gui.renderTree). Sin ventana: loadStylesheet
+// y loadSvg parsean y devuelven handle sin sesión gráfica; renderTree exige ventana
+// (GuiError). El layout/paint real (fuentes proporcionales, clip, flex, SVG) se
+// verifica con demos + screenshots (patrón rm_demo), no en la suite.
+use permissions { Gui }
+
+test("loadStylesheet devuelve handle >= 1", () => {
+    let h = Gui.loadStylesheet("div \{ padding: 4 \} .btn \{ background-color: #3b82f6 \}")
+    assert(h >= 1, "handle 1-based")
+})
+
+test("loadStylesheet valida el tipo del argumento", () => {
+    let fallo = false
+    try { Gui.loadStylesheet(123) } catch (e) { fallo = e.kind == "TypeError" }
+    assert(fallo, "src no-string -> TypeError")
+})
+
+test("loadSvg parsea markup y devuelve handle", () => {
+    let h = Gui.loadSvg("<svg viewBox='0 0 10 10'><rect width='10' height='10' fill='red'/></svg>")
+    assert(h >= 1, "handle 1-based")
+})
+
+test("loadSvg entrega handles incrementales", () => {
+    let a = Gui.loadSvg("<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='4'/></svg>")
+    let b = Gui.loadSvg("<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='3'/></svg>")
+    assert(b == a + 1, "handles consecutivos")
+})
+
+test("loadSvg parsea path con curvas", () => {
+    let h = Gui.loadSvg("<svg viewBox='0 0 24 24'><path d='M12 2 C6 2 2 6 2 12 C2 18 6 22 12 22 Z' fill='#38bdf8'/></svg>")
+    assert(h >= 1, "path bezier parseado")
+})
+
+test("loadSvg con SVG sin shapes -> GuiError capturable", () => {
+    let fallo = false
+    try { Gui.loadSvg("<svg viewBox='0 0 10 10'></svg>") } catch (e) { fallo = e.kind == "GuiError" }
+    assert(fallo, "SVG vacio no produce shapes")
+})
+
+test("loadSvg valida el tipo del argumento", () => {
+    let fallo = false
+    try { Gui.loadSvg(42) } catch (e) { fallo = e.kind == "TypeError" }
+    assert(fallo, "arg no-string -> TypeError")
+})
+
+test("renderTree sin ventana -> GuiError capturable", () => {
+    let fallo = false
+    let tree = ["div", [], ["hola"]]
+    try { Gui.renderTree(tree, 0, 100, 100) } catch (e) { fallo = e.kind == "GuiError" }
+    assert(fallo, "renderTree requiere ventana abierta")
+})
+
+test("renderTree valida la cantidad de argumentos", () => {
+    let fallo = false
+    try { Gui.renderTree(["div", [], []]) } catch (e) { fallo = e.kind == "TypeError" }
+    assert(fallo, "faltan argumentos -> TypeError")
+})
+
+summary()

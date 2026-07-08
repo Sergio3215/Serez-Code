@@ -23,6 +23,7 @@ mod namespaces_os;
 pub(crate) mod namespaces_gui;
 mod namespaces_task;
 mod namespaces_regex;
+mod svg;
 #[cfg(feature = "audio")]
 mod namespaces_media;
 
@@ -142,6 +143,9 @@ pub struct Evaluator {
     // Hojas de estilo nativas (Gui.loadStylesheet → handle = índice+1). Motor de
     // primitivos: match CSS en Rust (Fase 1). Global, no per-ventana.
     gui_stylesheets: Vec<namespaces_gui::NativeStylesheet>,
+    // SVGs parseados (Gui.loadSvg → handle = índice+1). El primitivo `svg` los
+    // rasteriza con tiny-skia a la caja (Fase 2b). Global, no per-ventana.
+    gui_svgs: Vec<svg::ParsedSvg>,
     // Procesos lanzados con OS.spawn (no bloqueante). OS.tick() los cosecha y dispara
     // sus callbacks onOk/onErr en este hilo (cooperativo, sin background thread).
     spawned: Vec<namespaces_os::SpawnedJob>,
@@ -303,6 +307,7 @@ impl Evaluator {
             gui_state: None,
             gui_fonts: None,
             gui_stylesheets: Vec::new(),
+            gui_svgs: Vec::new(),
             #[cfg(feature = "audio")]
             media: None,
             spawned: Vec::new(),

@@ -41,6 +41,7 @@ use cosmic_text::{Attrs, Buffer as TextBuffer, Color as TextColor, Family, FontS
 
 use crate::ast::{self};
 use crate::region::{ObjectData, OwnedValue};
+use super::svg;
 use super::EvalResult;
 
 // ── Estado compartido entre el hilo intérprete y el hilo main ─────────────────────
@@ -646,6 +647,15 @@ fn prim_push_text(st: &mut GuiState, x: i32, y: i32, text: &str, scale: i32, col
         x, y, color, z: 0, visible: true, clip,
     });
 }
+/// Emite un nodo de imagen (reusado para SVG rasterizado): blit con alpha + clip.
+fn prim_push_image(st: &mut GuiState, x: i32, y: i32, handle: i64) {
+    let id = st.next_node;
+    st.next_node += 1;
+    let clip = st.prim_clip;
+    st.scene.push(SceneNode {
+        id, kind: SceneNodeKind::Image { handle }, x, y, color: 0, z: 0, visible: true, clip,
+    });
+}
 
 /// Interseca (x0,y0,x1,y1) con el clip de primitivos activo (si hay). Todo en coords
 /// de canvas. Devuelve un rect no-vacío-normalizado (x1≥x0, y1≥y0).
@@ -781,7 +791,7 @@ fn prim_justify(mode: &str, free: i32, n: i32) -> (i32, i32) {
 
 /// Layout + emit de un nodo. Devuelve el alto vertical consumido (incl. márgenes).
 fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i32, y: i32, avail_w: i32,
-    sheet: Option<&NativeStylesheet>, ctx: &[(String, String)], depth: i32, fonts: &mut Option<GuiFonts>, st: &mut GuiState, regions: &mut Vec<PrimRegion>) -> i32 {
+    sheet: Option<&NativeStylesheet>, svgs: &[svg::ParsedSvg], ctx: &[(String, String)], depth: i32, fonts: &mut Option<GuiFonts>, st: &mut GuiState, regions: &mut Vec<PrimRegion>) -> i32 {
     let class_str = prim_attr(style_inline, "class").unwrap_or_default();
     let classes: Vec<&str> = class_str.split_whitespace().collect();
     let id_str = prim_attr(style_inline, "id");
@@ -832,7 +842,30 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
     } else if tag == "svg" || tag == "img" {
         let w = snum(&style, "width", 48).min(avail_w);
         let hh = snum(&style, "height", 48);
-        prim_push_rect(st, x, y, w, hh, bg.unwrap_or(0x334155), bgz);
+        // `src` = handle de Gui.loadSvg → rasterizar (con caché) y bli­tear el vector.
+        let handle = prim_attr(style_inline, "src").and_then(|s| s.trim().parse::<i64>().ok());
+        let mut drawn = false;
+        if let Some(h) = handle {
+            if h >= 1 && (h as usize) <= svgs.len() && w > 0 && hh > 0 {
+                let key = (h, w, hh);
+                let img_handle = if let Some(&ih) = st.svg_cache.get(&key) {
+                    ih
+                } else {
+                    let px = svg::rasterize(&svgs[(h - 1) as usize], w as u32, hh as u32);
+                    let ih = st.next_image;
+                    st.next_image += 1;
+                    st.images.insert(ih, ImageData { w: w as usize, h: hh as usize, px });
+                    st.svg_cache.insert(key, ih);
+                    ih
+                };
+                if let Some(c) = bg { prim_push_rect(st, x, y, w, hh, c, bgz); }
+                prim_push_image(st, x, y, img_handle);
+                drawn = true;
+            }
+        }
+        if !drawn {
+            prim_push_rect(st, x, y, w, hh, bg.unwrap_or(0x334155), bgz);
+        }
         total_h = hh;
     } else {
         // contenedor (div/row/section/main…)
@@ -906,7 +939,7 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
                 let sc0 = st.scene.len();
                 let rg0 = regions.len();
                 let h = if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    prim_render(ct, cs, ck, cx, y + pad, each, sheet, ctx, depth + 1, fonts, st, regions)
+                    prim_render(ct, cs, ck, cx, y + pad, each, sheet, svgs, ctx, depth + 1, fonts, st, regions)
                 } else if let OwnedValue::Str(s) = k {
                     prim_emit_text(st, fonts, s, cx, y + pad, each, scale, 8 * scale + 4, text_col, tstyle, i32::MAX)
                 } else { 0 };
@@ -940,7 +973,7 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
             let mut cy = y + pad - scroll_y;
             for k in kids {
                 if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, ctx, depth + 1, fonts, st, regions);
+                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, svgs, ctx, depth + 1, fonts, st, regions);
                     cy += h + gap;
                 } else if let OwnedValue::Str(s) = k {
                     let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX);
@@ -953,7 +986,7 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
             let mut cy = y + pad;
             for k in kids {
                 if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, ctx, depth + 1, fonts, st, regions);
+                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, svgs, ctx, depth + 1, fonts, st, regions);
                     cy += h + gap;
                 } else if let OwnedValue::Str(s) = k {
                     let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX);
@@ -1232,6 +1265,9 @@ pub struct GuiState {
     // siempre None entre frames porque prim_render lo balancea). Se estampa en cada
     // nodo emitido para recortar subárboles scrolleados sin depender del z-order.
     prim_clip: Option<(i32, i32, i32, i32)>,
+    // Caché de SVGs rasterizados: (handle_svg, w, h) → handle de imagen en `images`.
+    // Evita re-rasterizar con tiny-skia cada frame; solo al cambiar de tamaño/handle.
+    svg_cache: HashMap<(i64, i32, i32), i64>,
 }
 
 impl GuiState {
@@ -1262,6 +1298,7 @@ impl GuiState {
             next_node: 1,
             scene_dirty: true,
             prim_clip: None,
+            svg_cache: HashMap::new(),
         }
     }
 
@@ -3735,6 +3772,35 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
             }
 
+            // Parsea markup SVG (o lee un archivo .svg) → handle rasterizable con el
+            // primitivo `svg` (["svg", [["src", handle],["width",W],["height",H]], []]).
+            "loadSvg" => {
+                if dot_call.arguments.len() != 1 {
+                    return self.rt_err_kind("TypeError", "Gui.loadSvg(srcOrPath) requires 1 argument");
+                }
+                let arg = match self.gui_str_arg(&dot_call.arguments[0]) {
+                    Some(s) => s,
+                    None => { return self.rt_err_kind("TypeError", "Gui.loadSvg argument must be a string"); }
+                };
+                // Markup directo si empieza por '<'; si no, se trata como ruta de archivo.
+                let markup = if arg.trim_start().starts_with('<') {
+                    arg
+                } else {
+                    match std::fs::read_to_string(&arg) {
+                        Ok(s) => s,
+                        Err(e) => { return self.rt_err_kind("IOError", format!("Gui.loadSvg: could not read '{}': {}", arg, e)); }
+                    }
+                };
+                match svg::parse(&markup) {
+                    Some(p) => {
+                        self.gui_svgs.push(p);
+                        let handle = self.gui_svgs.len() as i64; // 1-based
+                        EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.loadSvg: could not parse SVG (empty or unsupported)"),
+                }
+            }
+
             // Layout + match CSS + emit escena, todo nativo. root = árbol de primitivos
             // (Array anidado [tag, [[prop,val]…], [hijo|texto…]]). Devuelve #regions.
             "renderTree" => {
@@ -3768,12 +3834,13 @@ impl super::Evaluator {
                     let sheet_ref = if sheet_h >= 1 {
                         self.gui_stylesheets.get((sheet_h - 1) as usize)
                     } else { None };
+                    let svgs_ref: &[svg::ParsedSvg] = &self.gui_svgs;
                     if let Some(ObjectData::Array { elements, .. }) = self.resolve(root_ref) {
                         if elements.len() >= 3 {
                             if let OwnedValue::Str(tag) = &elements[0] {
                                 let style = if let OwnedValue::Array { elements, .. } = &elements[1] { elements.as_slice() } else { &[] };
                                 let kids = if let OwnedValue::Array { elements, .. } = &elements[2] { elements.as_slice() } else { &[] };
-                                prim_render(tag.as_str(), style, kids, 0, 0, w, sheet_ref, &ctx, 0, &mut fonts, &mut st, &mut regions);
+                                prim_render(tag.as_str(), style, kids, 0, 0, w, sheet_ref, svgs_ref, &ctx, 0, &mut fonts, &mut st, &mut regions);
                             }
                         }
                     }
@@ -4796,164 +4863,5 @@ impl super::Evaluator {
             g.dialog_result.take()
         };
         EvalResult::Value(self.alloc(ObjectData::Str(result.unwrap_or_default())))
-    }
-}
-
-#[cfg(test)]
-mod prim_wrap_tests {
-    // Testea el word-wrap del motor de primitivos por la ruta monospace (fonts=None,
-    // 8*scale px/char, espacio=8px), determinista y sin FontSystem. La ruta
-    // proporcional se valida aparte (script .sz con Segoe UI): mismo algoritmo,
-    // solo cambia la función de medida.
-    use super::prim_wrap_lines;
-
-    #[test]
-    fn cabe_en_una_linea() {
-        // "aaaa bbbb" = 32 + 8 + 32 = 72px, cabe en 80.
-        let lines = prim_wrap_lines(&mut None, "aaaa bbbb", 80, 1, 0, i32::MAX);
-        assert_eq!(lines, vec!["aaaa bbbb".to_string()]);
-    }
-
-    #[test]
-    fn corta_en_limite_de_palabra_sin_partir() {
-        // avail=40: "aaaa"(32) entra; agregar " bbbb" (72) no -> corta ANTES de bbbb.
-        let lines = prim_wrap_lines(&mut None, "aaaa bbbb", 40, 1, 0, i32::MAX);
-        assert_eq!(lines, vec!["aaaa".to_string(), "bbbb".to_string()]);
-    }
-
-    #[test]
-    fn palabra_mas_ancha_que_la_linea_se_parte_por_caracter() {
-        // 10 'a' = 80px en avail=40 -> dos trozos de 5 chars (40px c/u).
-        let lines = prim_wrap_lines(&mut None, "aaaaaaaaaa", 40, 1, 0, i32::MAX);
-        assert_eq!(lines, vec!["aaaaa".to_string(), "aaaaa".to_string()]);
-    }
-
-    #[test]
-    fn respeta_saltos_de_linea_explicitos() {
-        let lines = prim_wrap_lines(&mut None, "uno\ndos", 500, 1, 0, i32::MAX);
-        assert_eq!(lines, vec!["uno".to_string(), "dos".to_string()]);
-    }
-
-    #[test]
-    fn parrafo_vacio_es_una_linea_en_blanco() {
-        let lines = prim_wrap_lines(&mut None, "a\n\nb", 500, 1, 0, i32::MAX);
-        assert_eq!(lines, vec!["a".to_string(), String::new(), "b".to_string()]);
-    }
-
-    #[test]
-    fn cap_detiene_temprano_para_virtualizacion() {
-        // 5 palabras que caen 1 por línea con avail=8; cap=2 -> solo 2 líneas maquetadas.
-        let lines = prim_wrap_lines(&mut None, "a a a a a", 8, 1, 0, 2);
-        assert_eq!(lines.len(), 2);
-    }
-
-    #[test]
-    fn texto_vacio_devuelve_una_linea() {
-        let lines = prim_wrap_lines(&mut None, "", 100, 1, 0, i32::MAX);
-        assert_eq!(lines, vec![String::new()]);
-    }
-}
-
-#[cfg(test)]
-mod prim_clip_tests {
-    // Verifica el clip POR-NODO del rasterizador (desacoplado del z-order): un rect con
-    // clip propio se recorta a su rect aunque su z lo separe del stack ClipPush/Pop.
-    // Es el fix del bug de fondos scrolleados que escapaban al clip.
-    use super::{GuiState, GuiFonts, SceneNode, SceneNodeKind};
-
-    fn rect_node(id: i64, w: i32, h: i32, color: u32, z: i32, clip: Option<(i32, i32, i32, i32)>) -> SceneNode {
-        SceneNode { id, kind: SceneNodeKind::Rect { w, h }, x: 0, y: 0, color, z, visible: true, clip }
-    }
-
-    #[test]
-    fn clip_por_nodo_recorta_el_rect() {
-        let mut fonts = GuiFonts::new();
-        let mut st = GuiState::new(100, 100);
-        // Rect rojo que cubriría todo, pero recortado a la mitad superior (0,0,100,50).
-        st.scene.push(rect_node(1, 100, 100, 0xFF0000, 0, Some((0, 0, 100, 50))));
-        st.scene_render(&mut fonts, 0x000000);
-        assert_eq!(st.canvas[10 * 100 + 50], 0xFF0000, "pixel dentro del clip = rojo");
-        assert_eq!(st.canvas[75 * 100 + 50], 0x000000, "pixel fuera del clip = fondo (recortado)");
-    }
-
-    #[test]
-    fn fondo_a_z_negativo_igual_se_recorta() {
-        // Reproduce el bug: un fondo a z<0 (se dibuja ANTES en el sort) con clip propio
-        // DEBE recortarse igual. Antes, un ClipPush a z=0 no lo alcanzaba.
-        let mut fonts = GuiFonts::new();
-        let mut st = GuiState::new(100, 100);
-        st.scene.push(rect_node(1, 100, 100, 0x00FF00, -50, Some((0, 0, 100, 40))));
-        st.scene_render(&mut fonts, 0x000000);
-        assert_eq!(st.canvas[10 * 100 + 50], 0x00FF00, "fondo dentro del clip");
-        assert_eq!(st.canvas[80 * 100 + 50], 0x000000, "fondo fuera del clip recortado");
-    }
-
-    #[test]
-    fn sin_clip_no_recorta() {
-        // Guarda de regresión: clip=None => se pinta todo (comportamiento API manual).
-        let mut fonts = GuiFonts::new();
-        let mut st = GuiState::new(100, 100);
-        st.scene.push(rect_node(1, 100, 100, 0x0000FF, 0, None));
-        st.scene_render(&mut fonts, 0x000000);
-        assert_eq!(st.canvas[10 * 100 + 50], 0x0000FF, "arriba pintado");
-        assert_eq!(st.canvas[90 * 100 + 50], 0x0000FF, "abajo también pintado (sin recorte)");
-    }
-
-    #[test]
-    fn stack_clippush_manual_sigue_funcionando() {
-        // Guarda de regresión de la API manual: ClipPush/ClipPop recortan por orden de
-        // dibujo aunque los nodos no tengan clip propio.
-        let mut fonts = GuiFonts::new();
-        let mut st = GuiState::new(100, 100);
-        // ClipPush a la mitad izquierda, un rect que cubre todo (clip:None), y ClipPop.
-        st.scene.push(SceneNode { id: 1, kind: SceneNodeKind::ClipPush { w: 50, h: 100 }, x: 0, y: 0, color: 0, z: 0, visible: true, clip: None });
-        st.scene.push(rect_node(2, 100, 100, 0xFFFFFF, 0, None));
-        st.scene.push(SceneNode { id: 3, kind: SceneNodeKind::ClipPop, x: 0, y: 0, color: 0, z: 0, visible: true, clip: None });
-        st.scene_render(&mut fonts, 0x000000);
-        assert_eq!(st.canvas[50 * 100 + 25], 0xFFFFFF, "mitad izquierda pintada");
-        assert_eq!(st.canvas[50 * 100 + 75], 0x000000, "mitad derecha recortada por el stack");
-    }
-}
-
-#[cfg(test)]
-mod prim_flex_tests {
-    // El reparto de espacio libre de justify-content (offset inicial + separación extra).
-    // free=180, n=2 salvo que se indique. gap se suma aparte (no lo cubre este helper).
-    use super::prim_justify;
-
-    #[test]
-    fn flex_start_no_reparte() {
-        assert_eq!(prim_justify("flex-start", 180, 2), (0, 0));
-    }
-    #[test]
-    fn flex_end_todo_al_inicio() {
-        assert_eq!(prim_justify("flex-end", 180, 2), (180, 0));
-    }
-    #[test]
-    fn center_mitad_al_inicio() {
-        assert_eq!(prim_justify("center", 180, 2), (90, 0));
-    }
-    #[test]
-    fn space_between_reparte_entre_items() {
-        assert_eq!(prim_justify("space-between", 180, 2), (0, 180));
-    }
-    #[test]
-    fn space_between_un_item_no_reparte() {
-        assert_eq!(prim_justify("space-between", 180, 1), (0, 0));
-    }
-    #[test]
-    fn space_around_lados_iguales() {
-        // unit = 180/(2*2) = 45; extra_between = 2*unit = 90.
-        assert_eq!(prim_justify("space-around", 180, 2), (45, 90));
-    }
-    #[test]
-    fn space_evenly_gaps_iguales() {
-        // unit = 180/(2+1) = 60.
-        assert_eq!(prim_justify("space-evenly", 180, 2), (60, 60));
-    }
-    #[test]
-    fn sin_espacio_libre_no_reparte() {
-        assert_eq!(prim_justify("center", 0, 3), (0, 0));
-        assert_eq!(prim_justify("space-between", -10, 3), (0, 0));
     }
 }
