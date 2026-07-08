@@ -308,11 +308,599 @@ struct SceneNode {
     color: u32,
     z: i32,
     visible: bool,
+    // Clip por-nodo (x0,y0,x1,y1 en coords de canvas), independiente del z-order.
+    // El motor de primitivos lo usa para recortar subárboles scrolleados: como los
+    // fondos van a z<0 y el sort por (z,id) los separa de un ClipPush a z=0, el
+    // stack no los alcanza. `None` = sin recorte propio (sigue el stack ClipPush/Pop
+    // de la API manual). Ver renderScene.
+    clip: Option<(i32, i32, i32, i32)>,
 }
 
 struct Glyph {
     cells: Vec<(i32, i32, u8)>,
     advance: i32,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Motor de primitivos (Fase 0/1): CSS nativo + layout/emit en Rust. Reemplaza el
+// walk interpretado de serez-ui (renderer_gui.sz/css.sz) por UNA pasada nativa.
+// Gui.loadStylesheet(src)->handle ; Gui.renderTree(root, sheet, w, h[, ctx])->#regions.
+// El árbol de primitivos es un Array anidado [tag, [[prop,val]…], [hijo|texto…]].
+// Ver PROPUESTA_RENDER_PRIMITIVOS_CORE.md.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Selector simple: tag y/o `.clase` y/o `#id` (o universal `*`). Un nodo casa si
+/// TODAS las partes presentes casan (Fase 2: habilita el lowering widget→div/span).
+struct Selector {
+    universal: bool,
+    tag: Option<String>,
+    class: Option<String>,
+    id: Option<String>,
+}
+
+/// Una regla CSS: selector + condición opcional (var op val) + decls.
+struct CssRule {
+    sel: Selector,
+    cond: Option<(String, String, String)>,
+    decls: Vec<(String, String)>,
+}
+
+/// Hoja de estilo nativa (port de css.sz). Match por tag/clase/id/`*` + condición reactiva.
+pub struct NativeStylesheet {
+    rules: Vec<CssRule>,
+}
+
+fn parse_selector(s: &str) -> Selector {
+    let s = s.trim();
+    if s == "*" {
+        return Selector { universal: true, tag: None, class: None, id: None };
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    let mut tag = None;
+    let mut class = None;
+    let mut id = None;
+    if i < chars.len() && chars[i] != '.' && chars[i] != '#' {
+        let mut t = String::new();
+        while i < chars.len() && chars[i] != '.' && chars[i] != '#' { t.push(chars[i]); i += 1; }
+        if !t.is_empty() { tag = Some(t); }
+    }
+    while i < chars.len() {
+        let kind = chars[i];
+        i += 1;
+        let mut name = String::new();
+        while i < chars.len() && chars[i] != '.' && chars[i] != '#' { name.push(chars[i]); i += 1; }
+        if kind == '.' && !name.is_empty() { class = Some(name); }
+        else if kind == '#' && !name.is_empty() { id = Some(name); }
+    }
+    Selector { universal: false, tag, class, id }
+}
+
+fn selector_matches(sel: &Selector, tag: &str, classes: &[&str], id: Option<&str>) -> bool {
+    if sel.universal { return true; }
+    if let Some(t) = &sel.tag { if t != tag { return false; } }
+    if let Some(c) = &sel.class { if !classes.iter().any(|x| x == c) { return false; } }
+    if let Some(i) = &sel.id { if id != Some(i.as_str()) { return false; } }
+    sel.tag.is_some() || sel.class.is_some() || sel.id.is_some()
+}
+
+impl NativeStylesheet {
+    /// Props aplicables al nodo (tag+clases+id), última gana, dado el ctx [(nombre,valor)].
+    fn props_for_node(&self, tag: &str, classes: &[&str], id: Option<&str>, ctx: &[(String, String)]) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for r in &self.rules {
+            if !selector_matches(&r.sel, tag, classes, id) {
+                continue;
+            }
+            if let Some((v, op, val)) = &r.cond {
+                if !css_cond_eval(v, op, val, ctx) {
+                    continue;
+                }
+            }
+            for (p, val) in &r.decls {
+                if let Some(slot) = out.iter_mut().find(|(pp, _)| pp == p) {
+                    slot.1 = val.clone();
+                } else {
+                    out.push((p.clone(), val.clone()));
+                }
+            }
+        }
+        out
+    }
+}
+
+fn css_is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '*'
+}
+
+fn css_cond_eval(var: &str, op: &str, val: &str, ctx: &[(String, String)]) -> bool {
+    let lv = match ctx.iter().find(|(n, _)| n == var) {
+        Some((_, v)) => v,
+        None => return false,
+    };
+    if let (Ok(l), Ok(r)) = (lv.trim().parse::<f64>(), val.trim().parse::<f64>()) {
+        return match op {
+            "==" => l == r, "!=" => l != r, "<" => l < r,
+            ">" => l > r, "<=" => l <= r, ">=" => l >= r, _ => false,
+        };
+    }
+    let r = val.trim().trim_matches(|c| c == '\'' || c == '"');
+    match op { "==" => lv == r, "!=" => lv != r, _ => false }
+}
+
+fn css_color(raw: &str) -> Option<u32> {
+    let s = raw.trim();
+    if let Some(hex) = s.strip_prefix('#') {
+        let hex = if hex.len() == 3 {
+            let b = hex.as_bytes();
+            format!("{0}{0}{1}{1}{2}{2}", b[0] as char, b[1] as char, b[2] as char)
+        } else {
+            hex.to_string()
+        };
+        if hex.len() != 6 { return None; }
+        return u32::from_str_radix(&hex, 16).ok().map(|c| c & 0x00FF_FFFF);
+    }
+    Some(match s {
+        "white" => 0xffffff, "black" => 0x000000, "red" => 0xff0000, "green" => 0x008000,
+        "blue" => 0x0000ff, "yellow" => 0xffff00, "gray" | "grey" => 0x808080,
+        _ => return None,
+    })
+}
+
+fn parse_cond(sraw: &str) -> (String, String, String) {
+    for op in ["==", "!=", "<=", ">="] {
+        if let Some(idx) = sraw.find(op) {
+            return (sraw[..idx].trim().to_string(), op.to_string(), sraw[idx + 2..].trim().to_string());
+        }
+    }
+    for op in ["<", ">"] {
+        if let Some(idx) = sraw.find(op) {
+            return (sraw[..idx].trim().to_string(), op.to_string(), sraw[idx + 1..].trim().to_string());
+        }
+    }
+    (sraw.trim().to_string(), String::new(), String::new())
+}
+
+/// Parser CSS (port de parseCss): selectores tag/"*" + (cond) + { decls }. Salta
+/// comentarios y bloques :import/:font.
+fn parse_css(src: &str) -> NativeStylesheet {
+    let s: Vec<char> = src.chars().collect();
+    let n = s.len();
+    let mut i = 0usize;
+    let mut rules: Vec<CssRule> = Vec::new();
+
+    fn skip(s: &[char], mut i: usize) -> usize {
+        loop {
+            let mut adv = false;
+            while i < s.len() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') { i += 1; adv = true; }
+            if i + 1 < s.len() && s[i] == '/' && s[i + 1] == '*' {
+                i += 2;
+                while i + 1 < s.len() && !(s[i] == '*' && s[i + 1] == '/') { i += 1; }
+                i = (i + 2).min(s.len());
+                adv = true;
+            }
+            if i + 1 < s.len() && s[i] == '/' && s[i + 1] == '/' {
+                i += 2;
+                while i < s.len() && s[i] != '\n' { i += 1; }
+                adv = true;
+            }
+            if !adv { break; }
+        }
+        i
+    }
+
+    while i < n {
+        i = skip(&s, i);
+        if i >= n { break; }
+        if s[i] == ':' {
+            let mut j = i + 1;
+            while j < n && css_is_name_char(s[j]) { j += 1; }
+            i = skip(&s, j);
+            if i < n && s[i] == '{' {
+                while i < n && s[i] != '}' { i += 1; }
+                if i < n { i += 1; }
+            }
+            continue;
+        }
+        let mut sel = String::new();
+        while i < n && (css_is_name_char(s[i]) || s[i] == '.' || s[i] == '#') { sel.push(s[i]); i += 1; }
+        if sel.is_empty() { i += 1; continue; }
+        i = skip(&s, i);
+        let mut cond = None;
+        if i < n && s[i] == '(' {
+            i += 1;
+            let mut cs = String::new();
+            while i < n && s[i] != ')' { cs.push(s[i]); i += 1; }
+            if i < n { i += 1; }
+            cond = Some(parse_cond(&cs));
+        }
+        i = skip(&s, i);
+        let mut decls: Vec<(String, String)> = Vec::new();
+        if i < n && s[i] == '{' {
+            i += 1;
+            while i < n && s[i] != '}' {
+                i = skip(&s, i);
+                if i >= n || s[i] == '}' { break; }
+                let mut prop = String::new();
+                while i < n && s[i] != ':' && s[i] != '}' && s[i] != ';' { prop.push(s[i]); i += 1; }
+                if i < n && s[i] == ':' {
+                    i += 1;
+                    let mut val = String::new();
+                    while i < n && s[i] != ';' && s[i] != '}' { val.push(s[i]); i += 1; }
+                    if i < n && s[i] == ';' { i += 1; }
+                    let pn = prop.trim();
+                    if !pn.is_empty() { decls.push((pn.to_string(), val.trim().to_string())); }
+                } else if i < n && s[i] == ';' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            if i < n && s[i] == '}' { i += 1; }
+        }
+        rules.push(CssRule { sel: parse_selector(&sel), cond, decls });
+    }
+    NativeStylesheet { rules }
+}
+
+// ── Layout + emit de primitivos (Fase 0) ──────────────────────────────────────
+
+fn prim_is_text_tag(tag: &str) -> bool {
+    matches!(tag, "p" | "span" | "label" | "b" | "i" | "strong" | "em"
+        | "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+}
+fn prim_default_scale(tag: &str) -> i32 {
+    match tag { "h1" => 3, "h2" => 2, "h3" => 2, _ => 1 }
+}
+
+fn prim_eff_style(sheet: Option<&NativeStylesheet>, ctx: &[(String, String)], tag: &str,
+    classes: &[&str], id: Option<&str>, inline: &[OwnedValue]) -> Vec<(String, String)> {
+    let mut out = sheet.map(|s| s.props_for_node(tag, classes, id, ctx)).unwrap_or_default();
+    for pair in inline {
+        if let OwnedValue::Array { elements, .. } = pair {
+            if elements.len() >= 2 {
+                if let OwnedValue::Str(p) = &elements[0] {
+                    // class/id/onClick no son props de estilo; el resto sí (inline override).
+                    if p == "class" || p == "id" || p == "onClick" { continue; }
+                    let vs = match &elements[1] {
+                        OwnedValue::Str(s) => s.clone(),
+                        OwnedValue::Integer(k) => k.to_string(),
+                        _ => String::new(),
+                    };
+                    if let Some(slot) = out.iter_mut().find(|(pp, _)| pp == p) { slot.1 = vs; }
+                    else { out.push((p.clone(), vs)); }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Valor string de un atributo del nodo (class/id/…), o None.
+fn prim_attr(inline: &[OwnedValue], name: &str) -> Option<String> {
+    for pair in inline {
+        if let OwnedValue::Array { elements, .. } = pair {
+            if elements.len() >= 2 {
+                if let OwnedValue::Str(p) = &elements[0] {
+                    if p == name {
+                        return match &elements[1] {
+                            OwnedValue::Str(s) => Some(s.clone()),
+                            OwnedValue::Integer(k) => Some(k.to_string()),
+                            _ => None,
+                        };
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// El valor de `onClick` del nodo (típicamente una función), clonado, o None.
+fn prim_find_onclick(inline: &[OwnedValue]) -> Option<OwnedValue> {
+    for pair in inline {
+        if let OwnedValue::Array { elements, .. } = pair {
+            if elements.len() >= 2 {
+                if let OwnedValue::Str(p) = &elements[0] {
+                    if p == "onClick" { return Some(elements[1].clone()); }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Región de hit-testing devuelta a `.sz`: caja + onClick (para enrutar clicks).
+struct PrimRegion {
+    tag: String,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    onclick: Option<OwnedValue>,
+}
+fn sget<'a>(st: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    st.iter().find(|(p, _)| p == name).map(|(_, v)| v.as_str())
+}
+fn snum(st: &[(String, String)], name: &str, d: i32) -> i32 {
+    sget(st, name).and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(d)
+}
+fn scol(st: &[(String, String)], name: &str) -> Option<u32> {
+    sget(st, name).and_then(css_color)
+}
+
+fn prim_push_rect(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, color: u32, z: i32) {
+    if w <= 0 || h <= 0 { return; }
+    let id = st.next_node;
+    st.next_node += 1;
+    let clip = st.prim_clip;
+    st.scene.push(SceneNode { id, kind: SceneNodeKind::Rect { w, h }, x, y, color, z, visible: true, clip });
+}
+fn prim_push_text(st: &mut GuiState, x: i32, y: i32, text: &str, scale: i32, color: u32, style: u8) {
+    if text.is_empty() { return; }
+    let id = st.next_node;
+    st.next_node += 1;
+    let clip = st.prim_clip;
+    st.scene.push(SceneNode {
+        id, kind: SceneNodeKind::Text { text: text.to_string(), scale, font: String::new(), style, spacing: 0 },
+        x, y, color, z: 0, visible: true, clip,
+    });
+}
+
+/// Interseca (x0,y0,x1,y1) con el clip de primitivos activo (si hay). Todo en coords
+/// de canvas. Devuelve un rect no-vacío-normalizado (x1≥x0, y1≥y0).
+fn prim_clip_intersect(prev: Option<(i32, i32, i32, i32)>, x0: i32, y0: i32, x1: i32, y1: i32) -> (i32, i32, i32, i32) {
+    match prev {
+        Some((ax0, ay0, ax1, ay1)) => {
+            let nx0 = x0.max(ax0);
+            let ny0 = y0.max(ay0);
+            (nx0, ny0, x1.min(ax1).max(nx0), y1.min(ay1).max(ny0))
+        }
+        None => (x0, y0, x1, y1),
+    }
+}
+
+/// Ancho en px de un texto para el layout de primitivos: proporcional si hay una
+/// familia de fuente custom activa; rejilla monospace 8*scale si no hay fuentes o
+/// es la familia default (mantiene compat con serez-ui sin `setFont`).
+fn prim_text_px(fonts: &mut Option<GuiFonts>, s: &str, scale: i32, style: u8) -> i32 {
+    match fonts.as_mut() {
+        Some(f) => f.text_width(s, scale, style) as i32,
+        None => s.chars().filter(|c| !c.is_control()).count() as i32 * (8 * scale.max(1)),
+    }
+}
+fn prim_char_px(fonts: &mut Option<GuiFonts>, ch: char, scale: i32, style: u8) -> i32 {
+    match fonts.as_mut() {
+        Some(f) => f.char_width(ch, scale, style) as i32,
+        None => if ch.is_control() { 0 } else { 8 * scale.max(1) },
+    }
+}
+
+/// Word-wrap de `text` (respeta '\n') en ≤ `cap` líneas de ancho `avail`. Anchos
+/// proporcionales si hay familia custom (si no, rejilla). Rompe por carácter las
+/// palabras más anchas que `avail`. Corta temprano al llegar a `cap` (virtualización:
+/// un textbox de 10 KB con 6 filas visibles no maqueta las 10 KB, solo 6 líneas).
+fn prim_wrap_lines(fonts: &mut Option<GuiFonts>, text: &str, avail: i32, scale: i32, style: u8, cap: i32) -> Vec<String> {
+    let avail = avail.max(1);
+    let space_w = prim_text_px(fonts, " ", scale, style).max(1);
+    let mut lines: Vec<String> = Vec::new();
+    for para in text.split('\n') {
+        if lines.len() as i32 >= cap { return lines; }
+        if para.is_empty() { lines.push(String::new()); continue; }
+        let mut cur = String::new();
+        let mut cur_w = 0i32;
+        for word in para.split(' ') {
+            if lines.len() as i32 >= cap { return lines; }
+            let ww = prim_text_px(fonts, word, scale, style);
+            // Si la palabra no cabe en lo que queda de la línea actual, cierra la línea.
+            if !cur.is_empty() && cur_w + space_w + ww > avail {
+                lines.push(std::mem::take(&mut cur));
+                cur_w = 0;
+            }
+            if cur.is_empty() && ww > avail {
+                // Palabra sola más ancha que la línea: romper por carácter.
+                let mut chunk = String::new();
+                let mut chunk_w = 0i32;
+                for ch in word.chars() {
+                    let cw = prim_char_px(fonts, ch, scale, style);
+                    if !chunk.is_empty() && chunk_w + cw > avail {
+                        lines.push(std::mem::take(&mut chunk));
+                        chunk_w = 0;
+                        if lines.len() as i32 >= cap { return lines; }
+                    }
+                    chunk.push(ch);
+                    chunk_w += cw;
+                }
+                cur = chunk;
+                cur_w = chunk_w;
+            } else {
+                if !cur.is_empty() { cur.push(' '); cur_w += space_w; }
+                cur.push_str(word);
+                cur_w += ww;
+            }
+        }
+        lines.push(cur);
+    }
+    if lines.is_empty() { lines.push(String::new()); }
+    lines
+}
+
+/// Ajusta (word-wrap) y emite texto en `avail_w`, hasta `cap` líneas (virtualización).
+/// Devuelve el alto consumido. `style`: bit0=bold, bit1=italic. Mide proporcional si
+/// hay una familia de fuente custom activa (si no, rejilla monospace 8*scale).
+fn prim_emit_text(st: &mut GuiState, fonts: &mut Option<GuiFonts>, text: &str, x: i32, y: i32, avail_w: i32, scale: i32, line_h: i32, color: u32, style: u8, cap: i32) -> i32 {
+    let lines = prim_wrap_lines(fonts, text, avail_w, scale, style, cap);
+    let n = (lines.len() as i32).min(cap).max(1);
+    let mut line = 0i32;
+    for seg in lines.iter() {
+        if line >= cap { break; }
+        if !seg.is_empty() {
+            prim_push_text(st, x, y + line * line_h, seg, scale, color, style);
+        }
+        line += 1;
+    }
+    n * line_h
+}
+
+/// Bits de estilo de texto (bold/italic) desde el tag y las props.
+fn prim_text_style(tag: &str, style: &[(String, String)]) -> u8 {
+    let mut s = 0u8;
+    if tag == "b" || tag == "strong" || sget(style, "font-weight") == Some("bold") { s |= 1; }
+    if tag == "i" || tag == "em" || sget(style, "font-style") == Some("italic") { s |= 2; }
+    s
+}
+
+/// Extrae (tag, inline-style, children) de un nodo OwnedValue [tag, [..], [..]].
+fn prim_node_parts(o: &OwnedValue) -> Option<(&str, &[OwnedValue], &[OwnedValue])> {
+    if let OwnedValue::Array { elements, .. } = o {
+        if elements.len() >= 3 {
+            if let OwnedValue::Str(tag) = &elements[0] {
+                let style = if let OwnedValue::Array { elements, .. } = &elements[1] { elements.as_slice() } else { &[] };
+                let kids = if let OwnedValue::Array { elements, .. } = &elements[2] { elements.as_slice() } else { &[] };
+                return Some((tag.as_str(), style, kids));
+            }
+        }
+    }
+    None
+}
+
+/// Layout + emit de un nodo. Devuelve el alto vertical consumido (incl. márgenes).
+fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i32, y: i32, avail_w: i32,
+    sheet: Option<&NativeStylesheet>, ctx: &[(String, String)], depth: i32, fonts: &mut Option<GuiFonts>, st: &mut GuiState, regions: &mut Vec<PrimRegion>) -> i32 {
+    let class_str = prim_attr(style_inline, "class").unwrap_or_default();
+    let classes: Vec<&str> = class_str.split_whitespace().collect();
+    let id_str = prim_attr(style_inline, "id");
+    let style = prim_eff_style(sheet, ctx, tag, &classes, id_str.as_deref(), style_inline);
+    let pad = snum(&style, "padding", 0);
+    let scale = snum(&style, "font-scale", prim_default_scale(tag));
+    let text_col = scol(&style, "color").unwrap_or(0xffffff);
+    let bg = scol(&style, "background-color").or_else(|| scol(&style, "background"));
+    let mt = snum(&style, "margin-top", 0);
+    let mb = snum(&style, "margin-bottom", 0);
+    let gap = snum(&style, "gap", 0);
+    let y = y + mt;
+    let content_x = x + pad;
+    let content_w = (avail_w - 2 * pad).max(1);
+    // z de fondos: por PROFUNDIDAD (ancestro detrás de descendiente), todos < 0 =
+    // debajo del contenido (texto/hr/clip a z=0). Arregla que el bg del padre,
+    // emitido tras los hijos, tapara los fondos de los hijos al mismo z.
+    let bgz = depth - 100;
+
+    let tstyle = prim_text_style(tag, &style);
+    let total_h: i32;
+    if prim_is_text_tag(tag) {
+        let mut text = String::new();
+        for k in kids { if let OwnedValue::Str(s) = k { text.push_str(s); } }
+        let line_h = 8 * scale + 4;
+        let h = prim_emit_text(st, fonts, &text, content_x, y + pad, content_w, scale, line_h, text_col, tstyle, i32::MAX);
+        total_h = h + 2 * pad;
+        if let Some(c) = bg { prim_push_rect(st, x, y, avail_w, total_h, c, bgz); }
+    } else if tag == "hr" {
+        let col = scol(&style, "color").unwrap_or(0x334155);
+        prim_push_rect(st, x, y + pad, avail_w, 2, col, 0);
+        total_h = 2 + 2 * pad;
+    } else if tag == "textbox" {
+        let rows = snum(&style, "rows", 6);
+        let mut text = String::new();
+        for k in kids { if let OwnedValue::Str(s) = k { text.push_str(s); } }
+        let line_h = 12 * scale + 6;
+        let box_pad = 6;
+        let box_h = rows * line_h + 2 * box_pad;
+        prim_push_rect(st, x, y, avail_w, box_h, bg.unwrap_or(0x1e293b), bgz);
+        // VIRTUALIZACIÓN + CLIP: solo las primeras `rows` líneas visibles, recortadas a
+        // la caja con clip-por-nodo (independiente del z-order).
+        let saved_clip = st.prim_clip;
+        st.prim_clip = Some(prim_clip_intersect(saved_clip, x, y, x + avail_w, y + box_h));
+        prim_emit_text(st, fonts, &text, content_x + box_pad, y + box_pad, (content_w - 2 * box_pad).max(1), scale, line_h, text_col, tstyle, rows);
+        st.prim_clip = saved_clip;
+        total_h = box_h;
+    } else if tag == "svg" || tag == "img" {
+        let w = snum(&style, "width", 48).min(avail_w);
+        let hh = snum(&style, "height", 48);
+        prim_push_rect(st, x, y, w, hh, bg.unwrap_or(0x334155), bgz);
+        total_h = hh;
+    } else {
+        // contenedor (div/row/section/main…)
+        let dir_row = tag == "row" || sget(&style, "direction") == Some("row") || sget(&style, "display") == Some("flex");
+        let overflow_scroll = sget(&style, "overflow") == Some("scroll");
+        let fixed_h = snum(&style, "height", -1);
+        if dir_row {
+            // Reparto por PESO flex (attr/prop `flex` del hijo, default 1) + gap.
+            let mut weights: Vec<i32> = Vec::new();
+            for k in kids {
+                if let Some((_, cs, _)) = prim_node_parts(k) {
+                    weights.push(prim_attr(cs, "flex").and_then(|s| s.trim().parse().ok()).unwrap_or(1).max(1));
+                } else if let OwnedValue::Str(_) = k {
+                    weights.push(1);
+                }
+            }
+            let total_w: i32 = weights.iter().sum::<i32>().max(1);
+            let ncols = weights.len().max(1) as i32;
+            let total_gap = gap * (ncols - 1).max(0);
+            let usable = (content_w - total_gap).max(1);
+            let mut cx = content_x;
+            let mut max_h = 0;
+            let mut wi = 0;
+            for k in kids {
+                let each = (usable * weights.get(wi).copied().unwrap_or(1) / total_w).max(1);
+                if let Some((ct, cs, ck)) = prim_node_parts(k) {
+                    let h = prim_render(ct, cs, ck, cx, y + pad, each, sheet, ctx, depth + 1, fonts, st, regions);
+                    if h > max_h { max_h = h; }
+                } else if let OwnedValue::Str(s) = k {
+                    let h = prim_emit_text(st, fonts, s, cx, y + pad, each, scale, 8 * scale + 4, text_col, tstyle, i32::MAX);
+                    if h > max_h { max_h = h; }
+                }
+                cx += each + gap;
+                wi += 1;
+            }
+            total_h = max_h + 2 * pad;
+        } else if overflow_scroll && fixed_h > 0 {
+            // Contenedor con scroll: alto fijo, hijos desplazados por `scrollY` y recortados.
+            let box_h = fixed_h;
+            if let Some(c) = bg { prim_push_rect(st, x, y, avail_w, box_h, c, bgz); }
+            let scroll_y = snum(&style, "scrollY", 0).max(0);
+            // CLIP por-nodo: recorta los hijos scrolleados (incluidos sus fondos a z<0)
+            // a la caja, sin depender del stack ClipPush/Pop (que el sort por (z,id) no
+            // respetaría: los fondos a z<0 se dibujarían antes del ClipPush a z=0).
+            let saved_clip = st.prim_clip;
+            st.prim_clip = Some(prim_clip_intersect(saved_clip, x, y, x + avail_w, y + box_h));
+            let mut cy = y + pad - scroll_y;
+            for k in kids {
+                if let Some((ct, cs, ck)) = prim_node_parts(k) {
+                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, ctx, depth + 1, fonts, st, regions);
+                    cy += h + gap;
+                } else if let OwnedValue::Str(s) = k {
+                    let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX);
+                    cy += h + gap;
+                }
+            }
+            st.prim_clip = saved_clip;
+            total_h = box_h;
+        } else {
+            let mut cy = y + pad;
+            for k in kids {
+                if let Some((ct, cs, ck)) = prim_node_parts(k) {
+                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, ctx, depth + 1, fonts, st, regions);
+                    cy += h + gap;
+                } else if let OwnedValue::Str(s) = k {
+                    let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX);
+                    cy += h + gap;
+                }
+            }
+            total_h = (cy - (y + pad)).max(0) + 2 * pad;
+        }
+        if let Some(c) = bg {
+            let bh = if overflow_scroll && fixed_h > 0 { fixed_h } else { total_h };
+            // el bg del scroll ya se emitió arriba; evitá duplicar
+            if !(overflow_scroll && fixed_h > 0) { prim_push_rect(st, x, y, avail_w, bh, c, bgz); }
+        }
+    }
+    regions.push(PrimRegion {
+        tag: tag.to_string(),
+        x, y, w: avail_w, h: total_h,
+        onclick: prim_find_onclick(style_inline),
+    });
+    mt + total_h + mb
 }
 
 /// Tipografía a nivel intérprete (independiente de la ventana): carga de .ttf/.otf,
@@ -457,6 +1045,37 @@ impl GuiFonts {
         w
     }
 
+    /// Ancho en px de `text` con la familia actual y `style` (bit0=bold, bit1=italic).
+    /// Como `measure`, pero considerando el estilo (bold/italic ensanchan el glifo).
+    /// Familia default → rejilla 8*scale; familia custom → advance real proporcional.
+    fn text_width(&mut self, text: &str, scale: i32, style: u8) -> i64 {
+        let scale = scale.max(1);
+        if self.current == 0 {
+            return text.chars().filter(|c| !c.is_control()).count() as i64 * 8 * scale as i64;
+        }
+        let mut w: i64 = 0;
+        for ch in text.chars() {
+            w += self.char_width(ch, scale, style);
+        }
+        w
+    }
+
+    /// Ancho de avance de un solo carácter con la familia/estilo actuales.
+    fn char_width(&mut self, ch: char, scale: i32, style: u8) -> i64 {
+        let scale = scale.max(1);
+        if self.current == 0 {
+            return if ch.is_control() { 0 } else { 8 * scale as i64 };
+        }
+        if ch.is_control() {
+            return 0;
+        }
+        self.ensure_glyph(ch, scale, style);
+        self.glyphs
+            .get(&(self.current, ch, scale, style))
+            .map(|g| g.advance as i64)
+            .unwrap_or(0)
+    }
+
     /// Posiciones x acumuladas en los límites de carácter (long = nº de chars + 1;
     /// [0] = 0, [i] = x tras i chars). Para situar caret/selección con fuente
     /// proporcional. Coincide con el avance de draw_text/measure.
@@ -536,6 +1155,10 @@ pub struct GuiState {
                                          // dibuja sobre la ventana seleccionada)
     next_node: i64,
     scene_dirty: bool,
+    // Clip activo del motor de primitivos DURANTE renderTree (scratch, no por-ventana:
+    // siempre None entre frames porque prim_render lo balancea). Se estampa en cada
+    // nodo emitido para recortar subárboles scrolleados sin depender del z-order.
+    prim_clip: Option<(i32, i32, i32, i32)>,
 }
 
 impl GuiState {
@@ -565,6 +1188,7 @@ impl GuiState {
             scene: Vec::new(),
             next_node: 1,
             scene_dirty: true,
+            prim_clip: None,
         }
     }
 
@@ -572,7 +1196,7 @@ impl GuiState {
     fn scene_add(&mut self, kind: SceneNodeKind, x: i32, y: i32, color: u32) -> i64 {
         let id = self.next_node;
         self.next_node += 1;
-        self.scene.push(SceneNode { id, kind, x, y, color, z: 0, visible: true });
+        self.scene.push(SceneNode { id, kind, x, y, color, z: 0, visible: true, clip: None });
         self.scene_dirty = true;
         id
     }
@@ -598,6 +1222,19 @@ impl GuiState {
         for n in &nodes {
             if !n.visible {
                 continue;
+            }
+            // Clip por-nodo (motor de primitivos): recorta este nodo a su rect propio,
+            // intersecado con el clip del stack. Los marcadores ClipPush/ClipPop mutan
+            // el clip del stack de forma persistente, así que NO se envuelven aquí.
+            let is_clip_marker = matches!(n.kind, SceneNodeKind::ClipPush { .. } | SceneNodeKind::ClipPop);
+            let saved_clip = self.clip;
+            if !is_clip_marker {
+                if let Some((cx0, cy0, cx1, cy1)) = n.clip {
+                    let (bx0, by0, bx1, by1) = self.clip;
+                    let nx0 = cx0.max(bx0);
+                    let ny0 = cy0.max(by0);
+                    self.clip = (nx0, ny0, cx1.min(bx1).max(nx0), cy1.min(by1).max(ny0));
+                }
             }
             match &n.kind {
                 SceneNodeKind::Rect { w, h } => self.fill_rect(n.x, n.y, *w, *h, n.color),
@@ -652,6 +1289,11 @@ impl GuiState {
                     self.clip = self.clip_stack.pop()
                         .unwrap_or((0, 0, self.width as i32, self.height as i32));
                 }
+            }
+            // Restaura el clip del stack tras un nodo dibujable (el clip por-nodo era
+            // solo para él). Los marcadores dejan su mutación del stack intacta.
+            if !is_clip_marker {
+                self.clip = saved_clip;
             }
         }
         // Un ClipPush sin su ClipPop no debe dejar el clip pegado.
@@ -3006,6 +3648,84 @@ impl super::Evaluator {
                 }))
             }
 
+            // ── Motor de primitivos (Fase 0/1) ──────────────────────────────────
+            "loadStylesheet" => {
+                if dot_call.arguments.len() != 1 {
+                    return self.rt_err_kind("TypeError", "Gui.loadStylesheet(src) requires 1 argument");
+                }
+                let src = match self.gui_str_arg(&dot_call.arguments[0]) {
+                    Some(s) => s,
+                    None => { return self.rt_err_kind("TypeError", "Gui.loadStylesheet src must be a string"); }
+                };
+                self.gui_stylesheets.push(parse_css(&src));
+                let handle = self.gui_stylesheets.len() as i64; // 1-based
+                EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
+            }
+
+            // Layout + match CSS + emit escena, todo nativo. root = árbol de primitivos
+            // (Array anidado [tag, [[prop,val]…], [hijo|texto…]]). Devuelve #regions.
+            "renderTree" => {
+                if dot_call.arguments.len() < 4 || dot_call.arguments.len() > 5 {
+                    return self.rt_err_kind("TypeError", "Gui.renderTree(root, sheet, w, h[, ctx]) requires 4-5 arguments");
+                }
+                let root_ref = match self.eval_expression(&dot_call.arguments[0]) {
+                    EvalResult::Value(v) => v,
+                    other => return other,
+                };
+                let sheet_h = self.gui_int_arg(&dot_call.arguments[1]).unwrap_or(0);
+                let w = self.gui_int_arg(&dot_call.arguments[2]).unwrap_or(0) as i32;
+                let h = self.gui_int_arg(&dot_call.arguments[3]).unwrap_or(0) as i32;
+                let ctx: Vec<(String, String)> = if dot_call.arguments.len() >= 5 {
+                    self.gui_read_ctx(&dot_call.arguments[4])
+                } else { Vec::new() };
+                if self.gui_state.is_none() {
+                    return self.rt_err_kind("GuiError", "Gui.renderTree: no window open");
+                }
+                let mut st = self.gui_state.take().unwrap();
+                // Sacamos las fuentes afuera para medir texto proporcional durante el
+                // layout (borrow mutable de un local, ajeno al arena de self).
+                let mut fonts = self.gui_fonts.take();
+                st.scene.clear();
+                st.prim_clip = None;
+                st.win_w = w.max(1) as usize;
+                st.win_h = h.max(1) as usize;
+                st.scene_dirty = true;
+                let mut regions: Vec<PrimRegion> = Vec::new();
+                {
+                    let sheet_ref = if sheet_h >= 1 {
+                        self.gui_stylesheets.get((sheet_h - 1) as usize)
+                    } else { None };
+                    if let Some(ObjectData::Array { elements, .. }) = self.resolve(root_ref) {
+                        if elements.len() >= 3 {
+                            if let OwnedValue::Str(tag) = &elements[0] {
+                                let style = if let OwnedValue::Array { elements, .. } = &elements[1] { elements.as_slice() } else { &[] };
+                                let kids = if let OwnedValue::Array { elements, .. } = &elements[2] { elements.as_slice() } else { &[] };
+                                prim_render(tag.as_str(), style, kids, 0, 0, w, sheet_ref, &ctx, 0, &mut fonts, &mut st, &mut regions);
+                            }
+                        }
+                    }
+                }
+                self.gui_fonts = fonts;
+                self.gui_state = Some(st);
+                // Regions → Array de [tag, x, y, w, h, onClick|null] para hit-testing en .sz.
+                let mut arr: Vec<OwnedValue> = Vec::with_capacity(regions.len());
+                for r in regions {
+                    let onclick = r.onclick.unwrap_or(OwnedValue::Null);
+                    arr.push(OwnedValue::Array {
+                        element_type: None,
+                        elements: vec![
+                            OwnedValue::Str(r.tag),
+                            OwnedValue::Integer(r.x as i64),
+                            OwnedValue::Integer(r.y as i64),
+                            OwnedValue::Integer(r.w as i64),
+                            OwnedValue::Integer(r.h as i64),
+                            onclick,
+                        ],
+                    });
+                }
+                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: arr }))
+            }
+
             "loadFont" => {
                 if dot_call.arguments.len() != 1 {
                     return self.rt_err_kind("TypeError", "Gui.loadFont(path) requires 1 argument");
@@ -3891,6 +4611,38 @@ impl super::Evaluator {
         }
     }
 
+    /// Lee el ctx de renderTree: un Array de pares [nombre, valor] → Vec<(String,String)>
+    /// (para las condiciones reactivas del CSS: media queries / estado).
+    fn gui_read_ctx(&mut self, expr: &ast::Expression) -> Vec<(String, String)> {
+        let v = match self.eval_expression(expr) {
+            EvalResult::Value(v) => v,
+            _ => return Vec::new(),
+        };
+        match self.resolve(v) {
+            Some(ObjectData::Array { elements, .. }) => {
+                let mut out = Vec::new();
+                for e in elements {
+                    if let OwnedValue::Array { elements, .. } = e {
+                        if elements.len() >= 2 {
+                            if let OwnedValue::Str(name) = &elements[0] {
+                                let val = match &elements[1] {
+                                    OwnedValue::Str(s) => s.clone(),
+                                    OwnedValue::Integer(k) => k.to_string(),
+                                    OwnedValue::Boolean(b) => b.to_string(),
+                                    OwnedValue::Decimal(d) => d.to_string(),
+                                    _ => String::new(),
+                                };
+                                out.push((name.clone(), val));
+                            }
+                        }
+                    }
+                }
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Control de ventana (setMinSize/setResizable/setFullscreen/maximize/setPosition/
     /// setDecorations): valida args y encola el GuiCmd para el hilo main.
     fn gui_window_control(&mut self, method: &str, dot_call: &ast::DotCallExpression) -> EvalResult {
@@ -3971,5 +4723,121 @@ impl super::Evaluator {
             g.dialog_result.take()
         };
         EvalResult::Value(self.alloc(ObjectData::Str(result.unwrap_or_default())))
+    }
+}
+
+#[cfg(test)]
+mod prim_wrap_tests {
+    // Testea el word-wrap del motor de primitivos por la ruta monospace (fonts=None,
+    // 8*scale px/char, espacio=8px), determinista y sin FontSystem. La ruta
+    // proporcional se valida aparte (script .sz con Segoe UI): mismo algoritmo,
+    // solo cambia la función de medida.
+    use super::prim_wrap_lines;
+
+    #[test]
+    fn cabe_en_una_linea() {
+        // "aaaa bbbb" = 32 + 8 + 32 = 72px, cabe en 80.
+        let lines = prim_wrap_lines(&mut None, "aaaa bbbb", 80, 1, 0, i32::MAX);
+        assert_eq!(lines, vec!["aaaa bbbb".to_string()]);
+    }
+
+    #[test]
+    fn corta_en_limite_de_palabra_sin_partir() {
+        // avail=40: "aaaa"(32) entra; agregar " bbbb" (72) no -> corta ANTES de bbbb.
+        let lines = prim_wrap_lines(&mut None, "aaaa bbbb", 40, 1, 0, i32::MAX);
+        assert_eq!(lines, vec!["aaaa".to_string(), "bbbb".to_string()]);
+    }
+
+    #[test]
+    fn palabra_mas_ancha_que_la_linea_se_parte_por_caracter() {
+        // 10 'a' = 80px en avail=40 -> dos trozos de 5 chars (40px c/u).
+        let lines = prim_wrap_lines(&mut None, "aaaaaaaaaa", 40, 1, 0, i32::MAX);
+        assert_eq!(lines, vec!["aaaaa".to_string(), "aaaaa".to_string()]);
+    }
+
+    #[test]
+    fn respeta_saltos_de_linea_explicitos() {
+        let lines = prim_wrap_lines(&mut None, "uno\ndos", 500, 1, 0, i32::MAX);
+        assert_eq!(lines, vec!["uno".to_string(), "dos".to_string()]);
+    }
+
+    #[test]
+    fn parrafo_vacio_es_una_linea_en_blanco() {
+        let lines = prim_wrap_lines(&mut None, "a\n\nb", 500, 1, 0, i32::MAX);
+        assert_eq!(lines, vec!["a".to_string(), String::new(), "b".to_string()]);
+    }
+
+    #[test]
+    fn cap_detiene_temprano_para_virtualizacion() {
+        // 5 palabras que caen 1 por línea con avail=8; cap=2 -> solo 2 líneas maquetadas.
+        let lines = prim_wrap_lines(&mut None, "a a a a a", 8, 1, 0, 2);
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn texto_vacio_devuelve_una_linea() {
+        let lines = prim_wrap_lines(&mut None, "", 100, 1, 0, i32::MAX);
+        assert_eq!(lines, vec![String::new()]);
+    }
+}
+
+#[cfg(test)]
+mod prim_clip_tests {
+    // Verifica el clip POR-NODO del rasterizador (desacoplado del z-order): un rect con
+    // clip propio se recorta a su rect aunque su z lo separe del stack ClipPush/Pop.
+    // Es el fix del bug de fondos scrolleados que escapaban al clip.
+    use super::{GuiState, GuiFonts, SceneNode, SceneNodeKind};
+
+    fn rect_node(id: i64, w: i32, h: i32, color: u32, z: i32, clip: Option<(i32, i32, i32, i32)>) -> SceneNode {
+        SceneNode { id, kind: SceneNodeKind::Rect { w, h }, x: 0, y: 0, color, z, visible: true, clip }
+    }
+
+    #[test]
+    fn clip_por_nodo_recorta_el_rect() {
+        let mut fonts = GuiFonts::new();
+        let mut st = GuiState::new(100, 100);
+        // Rect rojo que cubriría todo, pero recortado a la mitad superior (0,0,100,50).
+        st.scene.push(rect_node(1, 100, 100, 0xFF0000, 0, Some((0, 0, 100, 50))));
+        st.scene_render(&mut fonts, 0x000000);
+        assert_eq!(st.canvas[10 * 100 + 50], 0xFF0000, "pixel dentro del clip = rojo");
+        assert_eq!(st.canvas[75 * 100 + 50], 0x000000, "pixel fuera del clip = fondo (recortado)");
+    }
+
+    #[test]
+    fn fondo_a_z_negativo_igual_se_recorta() {
+        // Reproduce el bug: un fondo a z<0 (se dibuja ANTES en el sort) con clip propio
+        // DEBE recortarse igual. Antes, un ClipPush a z=0 no lo alcanzaba.
+        let mut fonts = GuiFonts::new();
+        let mut st = GuiState::new(100, 100);
+        st.scene.push(rect_node(1, 100, 100, 0x00FF00, -50, Some((0, 0, 100, 40))));
+        st.scene_render(&mut fonts, 0x000000);
+        assert_eq!(st.canvas[10 * 100 + 50], 0x00FF00, "fondo dentro del clip");
+        assert_eq!(st.canvas[80 * 100 + 50], 0x000000, "fondo fuera del clip recortado");
+    }
+
+    #[test]
+    fn sin_clip_no_recorta() {
+        // Guarda de regresión: clip=None => se pinta todo (comportamiento API manual).
+        let mut fonts = GuiFonts::new();
+        let mut st = GuiState::new(100, 100);
+        st.scene.push(rect_node(1, 100, 100, 0x0000FF, 0, None));
+        st.scene_render(&mut fonts, 0x000000);
+        assert_eq!(st.canvas[10 * 100 + 50], 0x0000FF, "arriba pintado");
+        assert_eq!(st.canvas[90 * 100 + 50], 0x0000FF, "abajo también pintado (sin recorte)");
+    }
+
+    #[test]
+    fn stack_clippush_manual_sigue_funcionando() {
+        // Guarda de regresión de la API manual: ClipPush/ClipPop recortan por orden de
+        // dibujo aunque los nodos no tengan clip propio.
+        let mut fonts = GuiFonts::new();
+        let mut st = GuiState::new(100, 100);
+        // ClipPush a la mitad izquierda, un rect que cubre todo (clip:None), y ClipPop.
+        st.scene.push(SceneNode { id: 1, kind: SceneNodeKind::ClipPush { w: 50, h: 100 }, x: 0, y: 0, color: 0, z: 0, visible: true, clip: None });
+        st.scene.push(rect_node(2, 100, 100, 0xFFFFFF, 0, None));
+        st.scene.push(SceneNode { id: 3, kind: SceneNodeKind::ClipPop, x: 0, y: 0, color: 0, z: 0, visible: true, clip: None });
+        st.scene_render(&mut fonts, 0x000000);
+        assert_eq!(st.canvas[50 * 100 + 25], 0xFFFFFF, "mitad izquierda pintada");
+        assert_eq!(st.canvas[50 * 100 + 75], 0x000000, "mitad derecha recortada por el stack");
     }
 }

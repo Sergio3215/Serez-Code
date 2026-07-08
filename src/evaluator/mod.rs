@@ -139,6 +139,9 @@ pub struct Evaluator {
     // Tipografía GUI (loadFont/setFont + cache de glifos). Vive fuera de gui_state
     // para sobrevivir abrir/cerrar ventana y servir measureText sin ventana.
     gui_fonts: Option<namespaces_gui::GuiFonts>,
+    // Hojas de estilo nativas (Gui.loadStylesheet → handle = índice+1). Motor de
+    // primitivos: match CSS en Rust (Fase 1). Global, no per-ventana.
+    gui_stylesheets: Vec<namespaces_gui::NativeStylesheet>,
     // Procesos lanzados con OS.spawn (no bloqueante). OS.tick() los cosecha y dispara
     // sus callbacks onOk/onErr en este hilo (cooperativo, sin background thread).
     spawned: Vec<namespaces_os::SpawnedJob>,
@@ -299,6 +302,7 @@ impl Evaluator {
             tensor_id_counter: 1,
             gui_state: None,
             gui_fonts: None,
+            gui_stylesheets: Vec::new(),
             #[cfg(feature = "audio")]
             media: None,
             spawned: Vec::new(),
