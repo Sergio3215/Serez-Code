@@ -626,6 +626,28 @@ fn sget<'a>(st: &'a [(String, String)], name: &str) -> Option<&'a str> {
 fn snum(st: &[(String, String)], name: &str, d: i32) -> i32 {
     sget(st, name).and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(d)
 }
+/// Shorthand CSS de 1–4 valores (`padding: 8 14`) → (top, right, bottom, left),
+/// como en la web: 1=todos, 2=vert/horiz, 3=top/horiz/bottom, 4=t r b l.
+/// Los props por-lado (`padding-top`, …) pisan al shorthand.
+fn prim_box_sides(st: &[(String, String)], name: &str) -> (i32, i32, i32, i32) {
+    let (mut t, mut r, mut b, mut l) = (0, 0, 0, 0);
+    if let Some(v) = sget(st, name) {
+        let n: Vec<i32> = v.split_whitespace()
+            .filter_map(|x| x.trim_end_matches("px").parse::<i32>().ok())
+            .collect();
+        match n.len() {
+            1 => { t = n[0]; r = n[0]; b = n[0]; l = n[0]; }
+            2 => { t = n[0]; b = n[0]; r = n[1]; l = n[1]; }
+            3 => { t = n[0]; r = n[1]; l = n[1]; b = n[2]; }
+            _ if n.len() >= 4 => { t = n[0]; r = n[1]; b = n[2]; l = n[3]; }
+            _ => {}
+        }
+    }
+    (snum(st, &format!("{}-top", name), t),
+     snum(st, &format!("{}-right", name), r),
+     snum(st, &format!("{}-bottom", name), b),
+     snum(st, &format!("{}-left", name), l))
+}
 fn scol(st: &[(String, String)], name: &str) -> Option<u32> {
     sget(st, name).and_then(css_color)
 }
@@ -637,24 +659,85 @@ fn prim_push_rect(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, color: u32,
     let clip = st.prim_clip;
     st.scene.push(SceneNode { id, kind: SceneNodeKind::Rect { w, h }, x, y, color, z, visible: true, clip });
 }
-fn prim_push_text(st: &mut GuiState, x: i32, y: i32, text: &str, scale: i32, color: u32, style: u8) {
+fn prim_push_roundrect(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32, z: i32) {
+    if w <= 0 || h <= 0 { return; }
+    let id = st.next_node;
+    st.next_node += 1;
+    let clip = st.prim_clip;
+    st.scene.push(SceneNode { id, kind: SceneNodeKind::RoundRect { w, h, radius }, x, y, color, z, visible: true, clip });
+}
+/// Rect (redondeado si radius>0). Helper interno sin borde.
+fn prim_push_fill(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, color: u32, z: i32, radius: i32) {
+    if radius > 0 { prim_push_roundrect(st, x, y, w, h, radius, color, z); }
+    else { prim_push_rect(st, x, y, w, h, color, z); }
+}
+/// Fondo de un box: `border-radius` + `border-width`/`border-color`. El borde se pinta
+/// con la técnica de inset (color de borde al tamaño completo, relleno adentro), que
+/// funciona con las primitivas existentes y respeta esquinas redondeadas.
+fn prim_push_bg(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, color: u32, z: i32, radius: i32, border_w: i32, border_col: Option<u32>) {
+    if border_w > 0 {
+        if let Some(bc) = border_col {
+            prim_push_fill(st, x, y, w, h, bc, z, radius);
+            let ir = (radius - border_w).max(0);
+            prim_push_fill(st, x + border_w, y + border_w, w - 2 * border_w, h - 2 * border_w, color, z, ir);
+            return;
+        }
+    }
+    prim_push_fill(st, x, y, w, h, color, z, radius);
+}
+fn prim_push_text(st: &mut GuiState, x: i32, y: i32, text: &str, scale: i32, color: u32, style: u8, font: &str, z: i32, spacing: i32) {
     if text.is_empty() { return; }
     let id = st.next_node;
     st.next_node += 1;
     let clip = st.prim_clip;
     st.scene.push(SceneNode {
-        id, kind: SceneNodeKind::Text { text: text.to_string(), scale, font: String::new(), style, spacing: 0 },
-        x, y, color, z: 0, visible: true, clip,
+        id, kind: SceneNodeKind::Text { text: text.to_string(), scale, font: font.to_string(), style, spacing },
+        x, y, color, z, visible: true, clip,
     });
 }
 /// Emite un nodo de imagen (reusado para SVG rasterizado): blit con alpha + clip.
-fn prim_push_image(st: &mut GuiState, x: i32, y: i32, handle: i64) {
+fn prim_push_image(st: &mut GuiState, x: i32, y: i32, handle: i64, z: i32) {
     let id = st.next_node;
     st.next_node += 1;
     let clip = st.prim_clip;
     st.scene.push(SceneNode {
-        id, kind: SceneNodeKind::Image { handle }, x, y, color: 0, z: 0, visible: true, clip,
+        id, kind: SceneNodeKind::Image { handle }, x, y, color: 0, z, visible: true, clip,
     });
+}
+fn prim_push_circle(st: &mut GuiState, cx: i32, cy: i32, r: i32, color: u32, z: i32) {
+    if r <= 0 { return; }
+    let id = st.next_node;
+    st.next_node += 1;
+    let clip = st.prim_clip;
+    st.scene.push(SceneNode { id, kind: SceneNodeKind::Circle { r }, x: cx, y: cy, color, z, visible: true, clip });
+}
+fn prim_push_line(st: &mut GuiState, x1: i32, y1: i32, x2: i32, y2: i32, color: u32, z: i32) {
+    let id = st.next_node;
+    st.next_node += 1;
+    let clip = st.prim_clip;
+    st.scene.push(SceneNode { id, kind: SceneNodeKind::Line { x2, y2 }, x: x1, y: y1, color, z, visible: true, clip });
+}
+fn prim_push_poly(st: &mut GuiState, pts: Vec<i32>, color: u32, z: i32, filled: bool, width: i32) {
+    let id = st.next_node;
+    st.next_node += 1;
+    let clip = st.prim_clip;
+    let kind = if filled { SceneNodeKind::Polygon { points: pts } } else { SceneNodeKind::Polyline { points: pts, width: width.max(1) } };
+    st.scene.push(SceneNode { id, kind, x: 0, y: 0, color, z, visible: true, clip });
+}
+/// Parsea "x1,y1 x2,y2 …" (o separado por espacios/comas) desplazado por (ox,oy).
+fn prim_parse_points(s: &str, ox: i32, oy: i32) -> Vec<i32> {
+    let nums: Vec<i32> = s.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| t.trim().parse::<f32>().ok().map(|f| f as i32))
+        .collect();
+    let mut out = Vec::with_capacity(nums.len());
+    let mut i = 0;
+    while i + 1 < nums.len() {
+        out.push(nums[i] + ox);
+        out.push(nums[i + 1] + oy);
+        i += 2;
+    }
+    out
 }
 
 /// Interseca (x0,y0,x1,y1) con el clip de primitivos activo (si hay). Todo en coords
@@ -678,6 +761,15 @@ fn prim_text_px(fonts: &mut Option<GuiFonts>, s: &str, scale: i32, style: u8) ->
         Some(f) => f.text_width(s, scale, style) as i32,
         None => s.chars().filter(|c| !c.is_control()).count() as i32 * (8 * scale.max(1)),
     }
+}
+/// Ancho en px de los primeros `n` caracteres de `text` con la familia `font` (para
+/// posicionar caret/selección de forma consistente con el dibujado).
+fn prim_prefix_px(fonts: &mut Option<GuiFonts>, text: &str, n: usize, scale: i32, style: u8, font: &str) -> i32 {
+    let prefix: String = text.chars().take(n).collect();
+    let prev = if !font.is_empty() { fonts.as_mut().map(|f| { let p = f.current; f.set_family(font); p }) } else { None };
+    let w = prim_text_px(fonts, &prefix, scale, style);
+    if let (Some(p), Some(f)) = (prev, fonts.as_mut()) { f.current = p; }
+    w
 }
 fn prim_char_px(fonts: &mut Option<GuiFonts>, ch: char, scale: i32, style: u8) -> i32 {
     match fonts.as_mut() {
@@ -738,25 +830,46 @@ fn prim_wrap_lines(fonts: &mut Option<GuiFonts>, text: &str, avail: i32, scale: 
 /// Ajusta (word-wrap) y emite texto en `avail_w`, hasta `cap` líneas (virtualización).
 /// Devuelve el alto consumido. `style`: bit0=bold, bit1=italic. Mide proporcional si
 /// hay una familia de fuente custom activa (si no, rejilla monospace 8*scale).
-fn prim_emit_text(st: &mut GuiState, fonts: &mut Option<GuiFonts>, text: &str, x: i32, y: i32, avail_w: i32, scale: i32, line_h: i32, color: u32, style: u8, cap: i32) -> i32 {
+fn prim_emit_text(st: &mut GuiState, fonts: &mut Option<GuiFonts>, text: &str, x: i32, y: i32, avail_w: i32, scale: i32, line_h: i32, color: u32, style: u8, cap: i32, font: &str, z: i32, align: u8, spacing: i32) -> i32 {
+    // Familia por nodo: mide+dibuja con `font` (restaura la familia previa al salir).
+    let prev = if !font.is_empty() {
+        fonts.as_mut().map(|f| { let p = f.current; f.set_family(font); p })
+    } else { None };
     let lines = prim_wrap_lines(fonts, text, avail_w, scale, style, cap);
     let n = (lines.len() as i32).min(cap).max(1);
     let mut line = 0i32;
     for seg in lines.iter() {
         if line >= cap { break; }
         if !seg.is_empty() {
-            prim_push_text(st, x, y + line * line_h, seg, scale, color, style);
+            // text-align: 1=center, 2=right → desplaza la línea dentro de `avail_w`.
+            let lx = if align == 0 { x } else {
+                let cc = seg.chars().count() as i32;
+                let lw = prim_text_px(fonts, seg, scale, style) + (cc - 1).max(0) * spacing;
+                let free = (avail_w - lw).max(0);
+                if align == 1 { x + free / 2 } else { x + free }
+            };
+            prim_push_text(st, lx, y + line * line_h, seg, scale, color, style, font, z, spacing);
         }
         line += 1;
     }
+    if let (Some(p), Some(f)) = (prev, fonts.as_mut()) { f.current = p; }
     n * line_h
 }
 
 /// Bits de estilo de texto (bold/italic) desde el tag y las props.
 fn prim_text_style(tag: &str, style: &[(String, String)]) -> u8 {
     let mut s = 0u8;
-    if tag == "b" || tag == "strong" || sget(style, "font-weight") == Some("bold") { s |= 1; }
+    // bold: tag, font-weight:bold|bolder, o numérico >=600 (como CSS).
+    let fw = sget(style, "font-weight");
+    let fw_bold = fw == Some("bold") || fw == Some("bolder")
+        || fw.and_then(|v| v.trim().parse::<i32>().ok()).map(|n| n >= 600).unwrap_or(false);
+    if tag == "b" || tag == "strong" || fw_bold { s |= 1; }
     if tag == "i" || tag == "em" || sget(style, "font-style") == Some("italic") { s |= 2; }
+    // text-decoration: underline (bit2) / line-through (bit3). Admite ambos.
+    if let Some(td) = sget(style, "text-decoration") {
+        if td.contains("underline") { s |= 0b100; }
+        if td.contains("line-through") { s |= 0b1000; }
+    }
     s
 }
 
@@ -789,41 +902,148 @@ fn prim_justify(mode: &str, free: i32, n: i32) -> (i32, i32) {
     }
 }
 
+/// Dimensión CSS: px (con o sin sufijo "px"), `N%` de `base`, o `auto`/ausente = -1.
+fn prim_dim(st: &[(String, String)], name: &str, base: i32) -> i32 {
+    match sget(st, name) {
+        Some(v) => {
+            let v = v.trim();
+            if v.eq_ignore_ascii_case("auto") { return -1; }
+            if let Some(p) = v.strip_suffix('%') {
+                return p.trim().parse::<f32>().ok().map(|pc| (base as f32 * pc / 100.0) as i32).unwrap_or(-1);
+            }
+            v.trim_end_matches("px").trim().parse::<i32>().ok().unwrap_or(-1)
+        }
+        None => -1,
+    }
+}
+/// `border: 1px solid #333` → (ancho, color). Ignora el estilo (solid/…).
+fn prim_border_shorthand(s: Option<&str>) -> (i32, Option<u32>) {
+    match s {
+        Some(v) => {
+            let mut w = 0;
+            let mut c = None;
+            for tok in v.split_whitespace() {
+                if let Ok(n) = tok.trim_end_matches("px").parse::<i32>() { w = n; }
+                else if let Some(col) = css_color(tok) { c = Some(col); }
+            }
+            (w, c)
+        }
+        None => (0, None),
+    }
+}
+
 /// Layout + emit de un nodo. Devuelve el alto vertical consumido (incl. márgenes).
 fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i32, y: i32, avail_w: i32,
-    sheet: Option<&NativeStylesheet>, svgs: &[svg::ParsedSvg], ctx: &[(String, String)], depth: i32, fonts: &mut Option<GuiFonts>, st: &mut GuiState, regions: &mut Vec<PrimRegion>) -> i32 {
+    sheet: Option<&NativeStylesheet>, svgs: &[svg::ParsedSvg], ctx: &[(String, String)], depth: i32, z_off: i32, pos_ox: i32, pos_oy: i32, pos_ow: i32, pos_oh: i32, fonts: &mut Option<GuiFonts>, st: &mut GuiState, regions: &mut Vec<PrimRegion>) -> i32 {
     let class_str = prim_attr(style_inline, "class").unwrap_or_default();
     let classes: Vec<&str> = class_str.split_whitespace().collect();
     let id_str = prim_attr(style_inline, "id");
     let style = prim_eff_style(sheet, ctx, tag, &classes, id_str.as_deref(), style_inline);
-    let pad = snum(&style, "padding", 0);
+    // display:none → no se dibuja ni ocupa flujo (como en la web).
+    if sget(&style, "display") == Some("none") { return 0; }
     let scale = snum(&style, "font-scale", prim_default_scale(tag));
     let text_col = scol(&style, "color").unwrap_or(0xffffff);
     let bg = scol(&style, "background-color").or_else(|| scol(&style, "background"));
-    let mt = snum(&style, "margin-top", 0);
-    let mb = snum(&style, "margin-bottom", 0);
+    // Borde: props sueltas o shorthand `border: 1px solid #333`.
+    let (bsh_w, bsh_c) = prim_border_shorthand(sget(&style, "border"));
+    let bwid = snum(&style, "border-width", bsh_w);
+    let bcol = scol(&style, "border-color").or(bsh_c);
+    let radius = snum(&style, "border-radius", 0);
     let gap = snum(&style, "gap", 0);
-    let y = y + mt;
-    let content_x = x + pad;
-    let content_w = (avail_w - 2 * pad).max(1);
-    // z de fondos: por PROFUNDIDAD (ancestro detrás de descendiente), todos < 0 =
-    // debajo del contenido (texto/hr/clip a z=0). Arregla que el bg del padre,
-    // emitido tras los hijos, tapara los fondos de los hijos al mismo z.
-    let bgz = depth - 100;
+    // Box model: shorthand de 1–4 valores + override por lado (como en la web).
+    let (pad_t, pad_r, pad_b, pad_l) = prim_box_sides(&style, "padding");
+    let (mt, mr, mb, ml) = prim_box_sides(&style, "margin");
+    // Familia de fuente por nodo (sin comillas). "" = usa la familia activa/rejilla.
+    let font_fam = sget(&style, "font-family")
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+        .unwrap_or_default();
+    let talign: u8 = match sget(&style, "text-align") { Some("center") => 1, Some("right") | Some("end") => 2, _ => 0 };
+    let tspacing = snum(&style, "letter-spacing", 0);
+    // width % (del disponible) / auto; height % (de la ventana) / auto / px.
+    let ex_w = prim_dim(&style, "width", avail_w);
+    let hgt = prim_dim(&style, "height", st.win_h as i32);
+    // z-index acumula una BANDA de overlay: el subárbol se pinta por encima de lo normal.
+    let z_off = z_off + snum(&style, "z-index", 0);
+    // position:absolute → posicionado respecto al ANCESTRO posicionado más cercano
+    // (containing block: `pos_ox`/`pos_oy`), como en CSS; NO consume flujo (devuelve 0).
+    // El root usa (0,0) = ventana.
+    let pos = sget(&style, "position");
+    let absolute = pos == Some("absolute");
+    let positioned = absolute || pos == Some("relative");
+    // left/top admiten `%` (del contenedor): el `avail_w` ENTRANTE (antes de que el
+    // width propio lo sobreescriba) es el ancho del bloque contenedor; win_h para top%.
+    // Sin left, `right` posiciona desde el borde derecho del containing block (requiere
+    // width explícito propio); sin top, `bottom` desde el inferior (requiere height
+    // explícito propio y del containing block — one-pass: el alto auto no se conoce).
+    let abs_x = if sget(&style, "left").is_some() {
+        pos_ox + prim_dim(&style, "left", avail_w).max(0)
+    } else if sget(&style, "right").is_some() && ex_w >= 0 && pos_ow >= 0 {
+        pos_ox + pos_ow - prim_dim(&style, "right", pos_ow).max(0) - ex_w
+    } else { pos_ox };
+    let abs_y = if sget(&style, "top").is_some() {
+        pos_oy + prim_dim(&style, "top", st.win_h as i32).max(0)
+    } else if sget(&style, "bottom").is_some() && hgt >= 0 && pos_oh >= 0 {
+        pos_oy + pos_oh - prim_dim(&style, "bottom", pos_oh).max(0) - hgt
+    } else { pos_oy };
+    let (x, y) = if absolute { (abs_x, abs_y) } else { (x + ml, y + mt) };
+    // Origen de posicionamiento para los hijos: este elemento si está posicionado.
+    let (cox, coy) = if positioned { (x, y) } else { (pos_ox, pos_oy) };
+    // Ancho de caja: explícito (compacto, acotado) o el disponible menos márgenes.
+    let avail_w = if ex_w >= 0 {
+        if absolute { ex_w } else { ex_w.min(avail_w) }
+    } else {
+        (avail_w - ml - mr).max(1)
+    };
+    // Dimensiones del containing block para los hijos (right/bottom): el ancho resuelto
+    // y el alto explícito de este elemento si está posicionado (auto = -1, no se conoce).
+    let (cow, coh) = if positioned { (avail_w, hgt) } else { (pos_ow, pos_oh) };
+    // Region en PRE-ORDEN (padre antes que hijos, mismo orden en que un framework
+    // recorre/baja su árbol): placeholder ahora, el alto se completa al final.
+    let region_idx = regions.len();
+    regions.push(PrimRegion {
+        tag: tag.to_string(),
+        x, y, w: avail_w, h: 0,
+        onclick: prim_find_onclick(style_inline),
+    });
+    let content_x = x + pad_l;
+    let content_w = (avail_w - pad_l - pad_r).max(1);
+    // z de fondos: banda de overlay (z_off) + PROFUNDIDAD (ancestro detrás de
+    // descendiente). Contenido (texto/formas) a z = z_off; fondos por debajo.
+    let bgz = z_off + depth - 100;
 
     let tstyle = prim_text_style(tag, &style);
-    let total_h: i32;
+    let mut total_h: i32;
     if prim_is_text_tag(tag) {
         let mut text = String::new();
         for k in kids { if let OwnedValue::Str(s) = k { text.push_str(s); } }
-        let line_h = 8 * scale + 4;
-        let h = prim_emit_text(st, fonts, &text, content_x, y + pad, content_w, scale, line_h, text_col, tstyle, i32::MAX);
-        total_h = h + 2 * pad;
-        if let Some(c) = bg { prim_push_rect(st, x, y, avail_w, total_h, c, bgz); }
+        let line_h = snum(&style, "line-height", 8 * scale + 4);
+        let h = prim_emit_text(st, fonts, &text, content_x, y + pad_t, content_w, scale, line_h, text_col, tstyle, i32::MAX, font_fam.as_str(), z_off, talign, tspacing);
+        total_h = if hgt >= 0 { hgt } else { h + pad_t + pad_b };
+        if let Some(c) = bg { prim_push_bg(st, x, y, avail_w, total_h, c, bgz, radius, bwid, bcol); }
     } else if tag == "hr" {
         let col = scol(&style, "color").unwrap_or(0x334155);
-        prim_push_rect(st, x, y + pad, avail_w, 2, col, 0);
-        total_h = 2 + 2 * pad;
+        prim_push_rect(st, x, y + pad_t, avail_w, 2, col, z_off);
+        total_h = 2 + pad_t + pad_b;
+    } else if tag == "circle" || tag == "line" || tag == "polyline" || tag == "polygon" {
+        // Primitivas vectoriales (para knobs, dots, gráficos). Coords relativas a (x,y).
+        if tag == "circle" {
+            let r = snum(&style, "r", (avail_w / 2).max(1));
+            let col = scol(&style, "color").or(bg).unwrap_or(0xffffff);
+            prim_push_circle(st, x + r, y + r, r, col, z_off);
+            total_h = if hgt >= 0 { hgt } else { 2 * r };
+        } else if tag == "line" {
+            let col = scol(&style, "color").unwrap_or(0xffffff);
+            let (x1, y1) = (snum(&style, "x1", 0), snum(&style, "y1", 0));
+            let (x2, y2) = (snum(&style, "x2", 0), snum(&style, "y2", 0));
+            prim_push_line(st, x + x1, y + y1, x + x2, y + y2, col, z_off);
+            total_h = if hgt >= 0 { hgt } else { y1.max(y2) };
+        } else {
+            let col = scol(&style, "color").or(bg).unwrap_or(0xffffff);
+            let pts = prim_attr(style_inline, "points").map(|s| prim_parse_points(&s, x, y)).unwrap_or_default();
+            let sw = snum(&style, "stroke-width", 2);
+            prim_push_poly(st, pts, col, z_off, tag == "polygon", sw);
+            total_h = if hgt >= 0 { hgt } else { 0 };
+        }
     } else if tag == "textbox" {
         let rows = snum(&style, "rows", 6);
         let mut text = String::new();
@@ -831,12 +1051,32 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
         let line_h = 12 * scale + 6;
         let box_pad = 6;
         let box_h = rows * line_h + 2 * box_pad;
-        prim_push_rect(st, x, y, avail_w, box_h, bg.unwrap_or(0x1e293b), bgz);
+        prim_push_bg(st, x, y, avail_w, box_h, bg.unwrap_or(0x1e293b), bgz, radius, bwid, bcol);
         // VIRTUALIZACIÓN + CLIP: solo las primeras `rows` líneas visibles, recortadas a
         // la caja con clip-por-nodo (independiente del z-order).
         let saved_clip = st.prim_clip;
         st.prim_clip = Some(prim_clip_intersect(saved_clip, x, y, x + avail_w, y + box_h));
-        prim_emit_text(st, fonts, &text, content_x + box_pad, y + box_pad, (content_w - 2 * box_pad).max(1), scale, line_h, text_col, tstyle, rows);
+        prim_emit_text(st, fonts, &text, content_x + box_pad, y + box_pad, (content_w - 2 * box_pad).max(1), scale, line_h, text_col, tstyle, rows, font_fam.as_str(), z_off, 0, tspacing);
+        // Caret + selección (edición): el .sz pasa `caret`/`sel-start`/`sel-end`/`focused`
+        // como atributos y el core los PINTA (modelo §5.1: estado de edición como props).
+        // Asume 1 línea (el caso Input); multi-línea es aproximado.
+        let fline = text.split('\n').next().unwrap_or("");
+        let caret = snum(&style, "caret", -1);
+        let sel_a = snum(&style, "sel-start", -1);
+        let sel_b = snum(&style, "sel-end", -1);
+        let focused = sget(&style, "focused") == Some("true");
+        let tx0 = content_x + box_pad;
+        let ty0 = y + box_pad;
+        if sel_a >= 0 && sel_b >= 0 && sel_a != sel_b {
+            let (a, b) = if sel_a < sel_b { (sel_a, sel_b) } else { (sel_b, sel_a) };
+            let ax = tx0 + prim_prefix_px(fonts, fline, a as usize, scale, tstyle, font_fam.as_str());
+            let bx = tx0 + prim_prefix_px(fonts, fline, b as usize, scale, tstyle, font_fam.as_str());
+            prim_push_rect(st, ax, ty0, (bx - ax).max(1), line_h, 0x2563eb, z_off + depth - 50);
+        }
+        if focused && caret >= 0 {
+            let cxp = tx0 + prim_prefix_px(fonts, fline, caret as usize, scale, tstyle, font_fam.as_str());
+            prim_push_rect(st, cxp, ty0, 2, line_h, text_col, z_off);
+        }
         st.prim_clip = saved_clip;
         total_h = box_h;
     } else if tag == "svg" || tag == "img" {
@@ -858,48 +1098,58 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
                     st.svg_cache.insert(key, ih);
                     ih
                 };
-                if let Some(c) = bg { prim_push_rect(st, x, y, w, hh, c, bgz); }
-                prim_push_image(st, x, y, img_handle);
+                if let Some(c) = bg { prim_push_bg(st, x, y, w, hh, c, bgz, radius, bwid, bcol); }
+                prim_push_image(st, x, y, img_handle, z_off);
                 drawn = true;
             }
         }
         if !drawn {
-            prim_push_rect(st, x, y, w, hh, bg.unwrap_or(0x334155), bgz);
+            prim_push_bg(st, x, y, w, hh, bg.unwrap_or(0x334155), bgz, radius, bwid, bcol);
         }
         total_h = hh;
     } else {
         // contenedor (div/row/section/main…)
-        let dir_row = tag == "row" || sget(&style, "direction") == Some("row") || sget(&style, "display") == Some("flex");
+        // flex-row: tag `row`, direction:row, o display:flex SIN flex-direction:column
+        // (column cae al layout de bloque vertical, como en la web).
+        let is_flex = sget(&style, "display") == Some("flex");
+        let col_dir = sget(&style, "flex-direction") == Some("column") || sget(&style, "direction") == Some("column");
+        let dir_row = (tag == "row" || sget(&style, "direction") == Some("row") || (is_flex && !col_dir)) && !col_dir;
         let overflow_scroll = sget(&style, "overflow") == Some("scroll");
-        let fixed_h = snum(&style, "height", -1);
+        let fixed_h = hgt;   // alto explícito (px o %), del box model
         if dir_row {
             // Flexbox en el eje principal (horizontal). Cada hijo puede CRECER (flex≥1) o
             // ser de ancho FIJO (`width` sin `flex`); sin flex ni width crece y llena
             // (default, compat con lo anterior). `flex`/`width` se leen del estilo efectivo
             // del hijo (inline o CSS por clase). justify-content reparte el espacio libre
             // SOLO cuando nadie crece (todos fijos); align-items alinea en el eje cruzado.
-            struct FlexKid { grow: i32, base: i32 }
+            struct FlexKid { grow: i32, base: i32, abs: bool }
             let mut kinfo: Vec<FlexKid> = Vec::with_capacity(kids.len());
             for k in kids {
-                let (grow, base) = if let Some((ct, cs, _)) = prim_node_parts(k) {
+                let (grow, base, abs) = if let Some((ct, cs, _)) = prim_node_parts(k) {
                     let cclass = prim_attr(cs, "class").unwrap_or_default();
                     let cclasses: Vec<&str> = cclass.split_whitespace().collect();
                     let cid = prim_attr(cs, "id");
                     let cstyle = prim_eff_style(sheet, ctx, ct, &cclasses, cid.as_deref(), cs);
-                    let flex = sget(&cstyle, "flex").and_then(|s| s.trim().parse::<i32>().ok());
-                    let width = sget(&cstyle, "width").and_then(|s| s.trim().parse::<i32>().ok());
-                    let grow = match (flex, width) {
-                        (Some(f), _) => f.max(0),   // flex explícito manda (0 = no crece)
-                        (None, Some(_)) => 0,       // width sin flex ⇒ ancho fijo
-                        (None, None) => 1,          // default: crece y llena
-                    };
-                    (grow, width.unwrap_or(0).max(0))
+                    // position:absolute = fuera de flujo (como en CSS): no participa del
+                    // reparto flex ni consume gap; se posiciona por left/top/right/bottom.
+                    if sget(&cstyle, "position") == Some("absolute") {
+                        (0, 0, true)
+                    } else {
+                        let flex = sget(&cstyle, "flex").and_then(|s| s.trim().parse::<i32>().ok());
+                        let width = sget(&cstyle, "width").and_then(|s| s.trim().parse::<i32>().ok());
+                        let grow = match (flex, width) {
+                            (Some(f), _) => f.max(0),   // flex explícito manda (0 = no crece)
+                            (None, Some(_)) => 0,       // width sin flex ⇒ ancho fijo
+                            (None, None) => 1,          // default: crece y llena
+                        };
+                        (grow, width.unwrap_or(0).max(0), false)
+                    }
                 } else {
-                    (1, 0) // texto suelto: crece
+                    (1, 0, false) // texto suelto: crece
                 };
-                kinfo.push(FlexKid { grow, base });
+                kinfo.push(FlexKid { grow, base, abs });
             }
-            let ncols = kinfo.len().max(1) as i32;
+            let ncols = (kinfo.iter().filter(|k| !k.abs).count().max(1)) as i32;
             let total_gap = gap * (ncols - 1).max(0);
             let total_grow: i32 = kinfo.iter().map(|k| k.grow).sum();
             let sum_base: i32 = kinfo.iter().map(|k| k.base).sum();
@@ -911,14 +1161,16 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
                 // Hay quien crece: los growers reparten el sobrante; sin espacio libre.
                 let free_for_grow = (content_w - sum_base - total_gap).max(0);
                 for k in &kinfo {
-                    let w = if k.grow > 0 { k.base + free_for_grow * k.grow / total_grow } else { k.base };
-                    widths.push(w.max(1));
+                    let w = if k.abs { 0 }
+                        else if k.grow > 0 { (k.base + free_for_grow * k.grow / total_grow).max(1) }
+                        else { k.base.max(1) };
+                    widths.push(w);
                 }
                 start_off = 0;
                 extra_between = 0;
             } else {
                 // Todos fijos: justify-content reparte el espacio libre.
-                for k in &kinfo { widths.push(k.base.max(1)); }
+                for k in &kinfo { widths.push(if k.abs { 0 } else { k.base.max(1) }); }
                 let used: i32 = widths.iter().sum::<i32>() + total_gap;
                 let free = (content_w - used).max(0);
                 let justify = sget(&style, "justify-content").or_else(|| sget(&style, "justify")).unwrap_or("flex-start");
@@ -935,78 +1187,102 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
             // Rango de nodos/regions por hijo para alinearlo en vertical tras conocer max_h.
             let mut ranges: Vec<(usize, usize, usize, usize, i32)> = Vec::new();
             for (i, k) in kids.iter().enumerate() {
+                // Fuera de flujo: se renderiza con el ancho del contenedor (para %/left)
+                // sin ocupar columna ni gap, y no participa de align-items.
+                if kinfo.get(i).map(|ki| ki.abs).unwrap_or(false) {
+                    if let Some((ct, cs, ck)) = prim_node_parts(k) {
+                        prim_render(ct, cs, ck, cx, y + pad_t, content_w, sheet, svgs, ctx, depth + 1, z_off, cox, coy, cow, coh, fonts, st, regions);
+                    }
+                    continue;
+                }
                 let each = widths.get(i).copied().unwrap_or(1);
                 let sc0 = st.scene.len();
                 let rg0 = regions.len();
                 let h = if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    prim_render(ct, cs, ck, cx, y + pad, each, sheet, svgs, ctx, depth + 1, fonts, st, regions)
+                    prim_render(ct, cs, ck, cx, y + pad_t, each, sheet, svgs, ctx, depth + 1, z_off, cox, coy, cow, coh, fonts, st, regions)
                 } else if let OwnedValue::Str(s) = k {
-                    prim_emit_text(st, fonts, s, cx, y + pad, each, scale, 8 * scale + 4, text_col, tstyle, i32::MAX)
+                    prim_emit_text(st, fonts, s, cx, y + pad_t, each, scale, 8 * scale + 4, text_col, tstyle, i32::MAX, font_fam.as_str(), z_off, talign, tspacing)
                 } else { 0 };
                 if h > max_h { max_h = h; }
                 if want_align { ranges.push((sc0, st.scene.len(), rg0, regions.len(), h)); }
                 cx += each + gap + extra_between;
             }
-            // align-items: desplaza en vertical cada hijo dentro de la banda [0, max_h].
+            // align-items: desplaza en vertical cada hijo dentro de la banda de cruce.
+            // La banda es el alto EXPLÍCITO del contenedor (menos padding) si lo hay —
+            // p. ej. un backdrop full-height centrando una caja — o el hijo más alto.
             // (post-pase: prim_render mide+emite en una sola pasada, así que el alto de
             //  cada hijo se conoce recién después de dibujarlo.)
             if want_align {
+                let band = if fixed_h > 0 { (fixed_h - pad_t - pad_b).max(max_h) } else { max_h };
                 for (sc0, sc1, rg0, rg1, h) in ranges {
-                    let off = if align == "center" { (max_h - h) / 2 } else { max_h - h };
+                    let off = if align == "center" { (band - h) / 2 } else { band - h };
                     if off > 0 {
                         for n in st.scene[sc0..sc1].iter_mut() { n.y += off; }
                         for r in regions[rg0..rg1].iter_mut() { r.y += off; }
                     }
                 }
             }
-            total_h = max_h + 2 * pad;
+            total_h = max_h + pad_t + pad_b;
         } else if overflow_scroll && fixed_h > 0 {
             // Contenedor con scroll: alto fijo, hijos desplazados por `scrollY` y recortados.
             let box_h = fixed_h;
-            if let Some(c) = bg { prim_push_rect(st, x, y, avail_w, box_h, c, bgz); }
+            if let Some(c) = bg { prim_push_bg(st, x, y, avail_w, box_h, c, bgz, radius, bwid, bcol); }
             let scroll_y = snum(&style, "scrollY", 0).max(0);
             // CLIP por-nodo: recorta los hijos scrolleados (incluidos sus fondos a z<0)
             // a la caja, sin depender del stack ClipPush/Pop (que el sort por (z,id) no
             // respetaría: los fondos a z<0 se dibujarían antes del ClipPush a z=0).
             let saved_clip = st.prim_clip;
             st.prim_clip = Some(prim_clip_intersect(saved_clip, x, y, x + avail_w, y + box_h));
-            let mut cy = y + pad - scroll_y;
+            let mut cy = y + pad_t - scroll_y;
             for k in kids {
                 if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, svgs, ctx, depth + 1, fonts, st, regions);
+                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, svgs, ctx, depth + 1, z_off, cox, coy, cow, coh, fonts, st, regions);
                     cy += h + gap;
                 } else if let OwnedValue::Str(s) = k {
-                    let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX);
+                    let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX, font_fam.as_str(), z_off, talign, tspacing);
                     cy += h + gap;
                 }
             }
             st.prim_clip = saved_clip;
             total_h = box_h;
         } else {
-            let mut cy = y + pad;
+            let mut cy = y + pad_t;
             for k in kids {
                 if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, svgs, ctx, depth + 1, fonts, st, regions);
+                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, svgs, ctx, depth + 1, z_off, cox, coy, cow, coh, fonts, st, regions);
                     cy += h + gap;
                 } else if let OwnedValue::Str(s) = k {
-                    let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX);
+                    let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX, font_fam.as_str(), z_off, talign, tspacing);
                     cy += h + gap;
                 }
             }
-            total_h = (cy - (y + pad)).max(0) + 2 * pad;
+            total_h = (cy - (y + pad_t)).max(0) + pad_t + pad_b;
         }
+        // Alto explícito del contenedor (caja de alto fijo; el contenido puede sobrar).
+        // El caso scroll ya usó fixed_h como box_h; no lo re-pisamos.
+        if fixed_h > 0 && !(overflow_scroll && fixed_h > 0) { total_h = fixed_h; }
         if let Some(c) = bg {
-            let bh = if overflow_scroll && fixed_h > 0 { fixed_h } else { total_h };
             // el bg del scroll ya se emitió arriba; evitá duplicar
-            if !(overflow_scroll && fixed_h > 0) { prim_push_rect(st, x, y, avail_w, bh, c, bgz); }
+            if !(overflow_scroll && fixed_h > 0) {
+                if let Some(opacity_str) = sget(&style, "opacity") {
+                    if let Ok(op) = opacity_str.trim().parse::<f32>() {
+                        let alpha = (op.clamp(0.0, 1.0) * 255.0) as u32;
+                        let id = st.scene_add(SceneNodeKind::RectAlpha { w: avail_w, h: total_h, alpha }, x, y, c);
+                        if let Some(node) = st.scene.iter_mut().find(|n| n.id == id) {
+                            node.z = bgz;
+                            node.clip = st.prim_clip;
+                        }
+                    } else {
+                        prim_push_bg(st, x, y, avail_w, total_h, c, bgz, radius, bwid, bcol);
+                    }
+                } else {
+                    prim_push_bg(st, x, y, avail_w, total_h, c, bgz, radius, bwid, bcol);
+                }
+            }
         }
     }
-    regions.push(PrimRegion {
-        tag: tag.to_string(),
-        x, y, w: avail_w, h: total_h,
-        onclick: prim_find_onclick(style_inline),
-    });
-    mt + total_h + mb
+    regions[region_idx].h = total_h;
+    if absolute { 0 } else { mt + total_h + mb }
 }
 
 /// Tipografía a nivel intérprete (independiente de la ventana): carga de .ttf/.otf,
@@ -3840,7 +4116,7 @@ impl super::Evaluator {
                             if let OwnedValue::Str(tag) = &elements[0] {
                                 let style = if let OwnedValue::Array { elements, .. } = &elements[1] { elements.as_slice() } else { &[] };
                                 let kids = if let OwnedValue::Array { elements, .. } = &elements[2] { elements.as_slice() } else { &[] };
-                                prim_render(tag.as_str(), style, kids, 0, 0, w, sheet_ref, svgs_ref, &ctx, 0, &mut fonts, &mut st, &mut regions);
+                                prim_render(tag.as_str(), style, kids, 0, 0, w, sheet_ref, svgs_ref, &ctx, 0, 0, 0, 0, w, h, &mut fonts, &mut st, &mut regions);
                             }
                         }
                     }
