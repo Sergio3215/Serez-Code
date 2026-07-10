@@ -473,7 +473,10 @@ impl Evaluator {
                     let owned = self.extract(r);
                     let gref = self.plant_global(owned);
                     if rebind_outer {
-                        self.scopes.rebind(&name, gref);
+                        // TODOS los alias del ref viejo (this en cada frame de la
+                        // cadena de métodos anidados + la variable original), no solo
+                        // el binding más interno: rebindear uno solo bifurca el objeto.
+                        self.scopes.rebind_ref(r, gref);
                     }
                     gref
                 }
@@ -515,9 +518,14 @@ impl Evaluator {
                 RegionId::Scoped => {
                     let owned = self.extract(r);
                     let gref = self.plant_global(owned);
-                    // Alias the enclosing binding to the promoted cell so a
-                    // mutation inside the closure is seen by the outer scope.
-                    self.scopes.rebind(&name, gref);
+                    // Alias de TODOS los bindings que apuntan al ref viejo (this en
+                    // cada frame de la cadena de métodos + la variable original) a la
+                    // celda promovida: una mutación dentro del closure la ve el scope
+                    // exterior y viceversa. Rebindear solo el frame más interno
+                    // BIFURCABA el objeto: las mutaciones hechas en el método después
+                    // de crear una lambda iban a la celda nueva y se "perdían" al
+                    // retornar (los frames exteriores seguían leyendo el scoped viejo).
+                    self.scopes.rebind_ref(r, gref);
                     gref
                 }
             };

@@ -8,7 +8,7 @@ pub enum RegionId {
     Scoped,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ObjectRef {
     pub region: RegionId,
     pub index: usize,

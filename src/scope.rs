@@ -101,6 +101,24 @@ impl ScopeStack {
         }
     }
 
+    /// Re-apunta TODOS los bindings (cualquier nombre, cualquier frame) que apunten a
+    /// `old_ref` hacia `new_ref`. Necesario al promover un objeto Scoped a celda global
+    /// (captura de closures): el mismo objeto puede estar ligado como `this` en CADA
+    /// frame de una cadena de métodos anidados Y como la variable original en el frame
+    /// que lo declaró — rebindear solo el frame más interno bifurca la identidad del
+    /// objeto (las mutaciones posteriores van a la celda nueva y los frames exteriores
+    /// siguen leyendo el scoped viejo). Comparar por REF es seguro: dos variables solo
+    /// comparten ObjectRef si son alias del mismo objeto (la asignación copia).
+    pub fn rebind_ref(&mut self, old_ref: ObjectRef, new_ref: ObjectRef) {
+        for frame in self.frames.iter_mut() {
+            for r in frame.bindings.values_mut() {
+                if *r == old_ref {
+                    *r = new_ref;
+                }
+            }
+        }
+    }
+
     /// Todas las apariciones de `name` en la cadena (inner → outer), incluidas
     /// las sombreadas. Para fallbacks que necesitan un binding más externo
     /// cuando el más interno no sirve (p.ej. llamar una función sombreada por
