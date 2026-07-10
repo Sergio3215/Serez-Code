@@ -5,6 +5,74 @@ Order: most recent to oldest.
 
 ---
 
+## [9.2.1] — 2026-07-10
+
+### Motor de primitivos: adopción en apps reales (serez-strike)
+
+- **`img` acepta una RUTA de imagen raster**: si `src` no es un handle numérico de
+  `Gui.loadSvg`, se trata como ruta a PNG/JPG — se lee del disco, se decodifica
+  (crate `image`), se escala (preservando aspecto si solo se da una dimensión) y
+  se cachea por ruta+dimensiones. Comportamiento web-like de `<img src="…">`.
+- **`textbox` a 16px por defecto** (`font-scale: 2`, como el camino interpretado
+  de serez-ui); la hoja puede sobreescribirlo. Antes caía a 8px y los Input
+  nativos salían con texto chico.
+
+## [9.2.0] — 2026-07-10 (trabajo del 2026-07-07 al 2026-07-10)
+
+### Motor de primitivos de render nativo: layout + CSS + paint en el core
+
+El cuello de las UIs grandes no era rasterizar píxeles (~1 ms) sino el walk de
+layout + match de CSS corriendo interpretado (51–103 ms/frame en un árbol de app
+real). El core gana un motor estilo navegador: recibe un árbol de primitivos
+genéricos tipo HTML + una hoja CSS, resuelve estilos, maqueta y emite la escena
+en Rust. Medido: **~0.04–0.08 ms/frame** de layout+CSS+emit (~1000× vs
+interpretado); frame completo ≈ 3.6 ms. El core queda genérico (no conoce los
+widgets de serez-ui): el framework hace *lowering* de sus componentes a estos
+primitivos.
+
+- **API nueva**: `Gui.loadStylesheet(src) -> handle` (hoja `.szs`),
+  `Gui.loadSvg(srcOrPath) -> handle`, y
+  `Gui.renderTree(root, sheet, w, h[, ctx]) -> regions`. El árbol es un array
+  anidado `[tag, [[prop, val]…], [hijo|texto…]]`; `renderTree` reconstruye la
+  escena retained y `Gui.renderScene(bg)` la rasteriza (dirty-skip intacto).
+- **Primitivos**: `div`, `row`, `p`, `h1`–`h6`, `span`, `b`/`strong`, `i`/`em`,
+  `hr`, `img`, `svg`, `circle`, `line`, `polyline`, `polygon` y `textbox`
+  editable (caret + selección pintados por el core; virtualización — solo
+  maqueta las líneas visibles, un texto de 10 KB deja de costar).
+- **CSS web-like**: selectores por `tag`, `*`, `.clase`, `#id` y compuestos
+  (`tag.clase#id`) + condiciones reactivas `(var op val)` evaluadas contra el
+  `ctx`; resolución "última gana". Box model completo (padding/margin por lado
+  + shorthands de 1–4 valores), `border` (incl. shorthand `1px solid #333`) y
+  `border-radius`, `width`/`height` en px/`%`/`auto`, `display:none`,
+  `text-align`, `line-height`, `letter-spacing`, `font-weight` numérico,
+  `text-decoration` (underline/line-through), `font-family`/`font-scale` por
+  nodo.
+- **Flexbox**: `row`/`display:flex` (+ `flex-direction:column`), pesos `flex`,
+  `justify-content` (los 6 modos), `align-items`, `gap`; los hijos
+  `position:absolute` quedan fuera del flujo.
+- **Overlays**: `position:absolute` con `left`/`top`/`bottom`/`right` (containing
+  block = ancestro posicionado) y `z-index` — base de Dropdown/Modal/Tooltip/
+  Toast.
+- **Texto proporcional real**: medición por advance de glifo (bold/italic
+  aware), word-wrap de verdad (rompe en espacios), scroll con clip por-nodo
+  (los fondos scrolleados se recortan limpio).
+- **SVG vectorial**: parser propio de un subset de SVG (paths
+  M/L/H/V/C/S/Q/T/A/Z abs+rel, shapes, `<g transform>`, herencia fill/stroke,
+  `viewBox`, colores) rasterizado con **tiny-skia** (antialiasing), con caché
+  por handle+dimensiones. Nueva dependencia de core: `tiny-skia`.
+- **Hit-testing**: las regions vuelven en PRE-orden como
+  `[tag, x, y, w, h, onClick|null]`; el valor de función embebido en `onClick`
+  sobrevive el round-trip y `.sz` enruta el click con `region[5]()`.
+- **fix(evaluator)**: al promover un objeto capturado por un closure
+  (Scoped→Global) ahora se rebindean TODOS los alias del scope, no solo el frame
+  más interno — antes el objeto se bifurcaba y las mutaciones posteriores a
+  crear una lambda se perdían.
+- Tests: `tests/unit_gui_primitives.sz` (checks headless del motor); el render
+  real se verifica con demos + screenshots. Suite **399/0**.
+- **Adopción**: serez-ui baja sus componentes a estos primitivos tras el flag
+  `useNativeRenderer` (Fase 3 completa: todos los widgets verificados nativos)
+  y serez-strike corre sobre el renderer nativo.
+
 ## [Unreleased] — 2026-07-03
 
 ### Tanda "deuda técnica": parser estricto, semántica de closures, multi-ventana, retained-mode, audio

@@ -2571,6 +2571,73 @@ while (Gui.isOpen()) {
 Gui.close()
 ```
 
+#### Primitives engine (HTML/CSS-like)
+
+Instead of drawing rectangles yourself, hand the core a **tree of HTML-like
+primitives plus a CSS stylesheet** and let it do style resolution, layout and
+painting natively — the browser model. One call lays out the tree and rebuilds
+the retained scene; `Gui.renderScene(bg)` paints it. Layout + CSS for a real
+app-sized tree runs in ~0.05 ms, roughly **1000× faster** than doing the same
+walk in interpreted code. This is the engine behind `serez-ui`'s native
+renderer, and it is generic: the core knows tags, not widgets.
+
+| Function | Description |
+|---|---|
+| `Gui.loadStylesheet(src)` | Parses CSS text; returns an `int` handle. |
+| `Gui.loadSvg(srcOrPath)` | Parses SVG markup (or reads an `.svg` file); returns an `int` handle usable as `src` of `svg`/`img` nodes. |
+| `Gui.renderTree(root, sheet, w, h[, ctx])` | Resolves CSS, lays out, rebuilds the scene and returns the clickable **regions** `[[tag, x, y, w, h, onClick], …]` in pre-order. `ctx` is a dict evaluated by reactive CSS conditions. |
+
+Nodes are plain arrays — `[tag, [[prop, value], …], [children…]]` where children
+are nodes or plain strings. Supported tags: `div`, `row`, `p`, `h1`–`h6`,
+`span`, `b`, `i`, `hr`, `img`, `svg`, `circle`, `line`, `polyline`, `polygon`
+and `textbox` (editable: caret, selection and line virtualization handled
+natively). The CSS covers the familiar web subset: full box model (per-side
+padding/margin and 1–4 value shorthands), `border` / `border-radius`, flexbox
+(`justify-content`, `align-items`, `gap`, `flex` weights,
+`flex-direction: column`), `position: absolute` (+ `left`/`top`/`bottom`/`right`
+and `z-index` for overlays), `width`/`height` in px / `%` / `auto`,
+`overflow: scroll`, `text-align`, `line-height`, `letter-spacing`,
+`font-weight`, `text-decoration`, `font-family`, `display: none`. Selectors:
+`tag`, `*`, `.class`, `#id`, compounds (`tag.class#id`) and reactive conditions
+evaluated against `ctx` — last match wins. `img` takes a PNG/JPG **file path**
+(auto-sized, aspect-preserving, cached) or a `Gui.loadSvg` handle.
+
+```serez
+use permissions { Gui }
+
+Gui.open("Primitives", 480, 220)
+// Raw string (r"…") because CSS braces would otherwise trigger string interpolation
+let sheet = Gui.loadStylesheet(r".card { background: #1e293b; padding: 14; border-radius: 10 } h2 { color: #f1c40f } .btn { background: #3b82f6; color: #ffffff; padding: 10; border-radius: 6; width: 130 }")
+
+let clicks = 0
+fn void onBtn() { clicks = clicks + 1 }
+
+while (Gui.isOpen()) {
+    let tree = ["div", [["class", "card"]], [
+        ["h2", [], ["Native engine"]],
+        ["p", [], ["Clicks: {clicks}"]],
+        ["div", [["class", "btn"], ["onClick", onBtn]], ["Click me"]]
+    ]]
+    let regions = Gui.renderTree(tree, sheet, 480, 220)
+    Gui.renderScene(0x0f172a)
+
+    // Hit-test: route the click to the region under the mouse
+    if (Gui.mousePressed()) {
+        let m = Gui.mouse()
+        let i = 0
+        while (i < regions.length()) {
+            let r = regions[i]
+            if (r[5] != null && m[0] >= r[1] && m[0] <= r[1] + r[3] && m[1] >= r[2] && m[1] <= r[2] + r[4]) {
+                r[5]()
+            }
+            i = i + 1
+        }
+    }
+    Gui.idleWait(16)
+}
+Gui.close()
+```
+
 ---
 
 ### Media
