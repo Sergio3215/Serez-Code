@@ -551,7 +551,43 @@ fn prim_is_text_tag(tag: &str) -> bool {
         | "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
 }
 fn prim_default_scale(tag: &str) -> i32 {
-    match tag { "h1" => 3, "h2" => 2, "h3" => 2, _ => 1 }
+    // textbox (Input/Textarea) por defecto a 16px como el camino interpretado; el
+    // resto del texto a 8px salvo títulos. La hoja puede sobreescribir con font-scale.
+    match tag { "h1" => 3, "h2" => 2, "h3" => 2, "textbox" => 2, _ => 1 }
+}
+/// Carga una imagen raster (png/jpg/…) desde `path` y la registra en el store (con caché
+/// por ruta+dims). `req_w`/`req_h` ≤ 0 = auto: se toma el tamaño natural; si solo uno es
+/// >0, el otro se deriva por aspecto. Devuelve (handle, w_usado, h_usado), o None si la
+/// ruta no existe o no decodifica. Reusa la infra de `loadImageBytes` (crate `image`).
+fn prim_load_raster(st: &mut GuiState, path: &str, req_w: i32, req_h: i32) -> Option<(i64, i32, i32)> {
+    let bytes = std::fs::read(path).ok()?;
+    let decoded = image::load_from_memory(&bytes).ok()?;
+    let (nw, nh) = (decoded.width() as i32, decoded.height() as i32);
+    if nw <= 0 || nh <= 0 { return None; }
+    // Dimensiones objetivo: explícitas, derivadas por aspecto, o naturales.
+    let (tw, th) = match (req_w > 0, req_h > 0) {
+        (true, true)   => (req_w, req_h),
+        (true, false)  => (req_w, (req_w * nh / nw).max(1)),
+        (false, true)  => ((req_h * nw / nh).max(1), req_h),
+        (false, false) => (nw, nh),
+    };
+    let key = (path.to_string(), tw, th);
+    if let Some(&ih) = st.raster_cache.get(&key) { return Some((ih, tw, th)); }
+    let scaled = if tw == nw && th == nh {
+        decoded.to_rgba8()
+    } else {
+        decoded.resize_exact(tw as u32, th as u32, image::imageops::FilterType::Triangle).to_rgba8()
+    };
+    let mut px = Vec::with_capacity((tw * th) as usize);
+    for p in scaled.pixels() {
+        let [r, g, b, a] = p.0;
+        px.push(((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
+    }
+    let ih = st.next_image;
+    st.next_image += 1;
+    st.images.insert(ih, ImageData { w: tw as usize, h: th as usize, px });
+    st.raster_cache.insert(key, ih);
+    Some((ih, tw, th))
 }
 
 fn prim_eff_style(sheet: Option<&NativeStylesheet>, ctx: &[(String, String)], tag: &str,
@@ -1080,12 +1116,16 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
         st.prim_clip = saved_clip;
         total_h = box_h;
     } else if tag == "svg" || tag == "img" {
-        let w = snum(&style, "width", 48).min(avail_w);
-        let hh = snum(&style, "height", 48);
-        // `src` = handle de Gui.loadSvg → rasterizar (con caché) y bli­tear el vector.
-        let handle = prim_attr(style_inline, "src").and_then(|s| s.trim().parse::<i64>().ok());
+        let src = prim_attr(style_inline, "src");
+        // `src` numérico = handle de Gui.loadSvg → rasterizar el vector (con caché).
+        let svg_handle = src.as_deref().and_then(|s| s.trim().parse::<i64>().ok());
+        let has_w = sget(&style, "width").is_some();
+        let has_h = sget(&style, "height").is_some();
         let mut drawn = false;
-        if let Some(h) = handle {
+        let mut drawn_h = snum(&style, "height", 48);
+        if let Some(h) = svg_handle {
+            let w = snum(&style, "width", 48).min(avail_w);
+            let hh = snum(&style, "height", 48);
             if h >= 1 && (h as usize) <= svgs.len() && w > 0 && hh > 0 {
                 let key = (h, w, hh);
                 let img_handle = if let Some(&ih) = st.svg_cache.get(&key) {
@@ -1101,12 +1141,27 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i
                 if let Some(c) = bg { prim_push_bg(st, x, y, w, hh, c, bgz, radius, bwid, bcol); }
                 prim_push_image(st, x, y, img_handle, z_off);
                 drawn = true;
+                drawn_h = hh;
+            }
+        } else if let Some(path) = src.as_deref() {
+            // `src` = RUTA a una imagen raster (png/jpg/…): cargar+escalar+cachear (web-like
+            // <img src="…">). Dimensiones auto = tamaño natural (con aspecto si solo una).
+            let req_w = if has_w { snum(&style, "width", 0).min(avail_w) } else { 0 };
+            let req_h = if has_h { snum(&style, "height", 0) } else { 0 };
+            if let Some((img_handle, iw, ih)) = prim_load_raster(st, path, req_w, req_h) {
+                if let Some(c) = bg { prim_push_bg(st, x, y, iw, ih, c, bgz, radius, bwid, bcol); }
+                prim_push_image(st, x, y, img_handle, z_off);
+                drawn = true;
+                drawn_h = ih;
             }
         }
         if !drawn {
+            let w = snum(&style, "width", 48).min(avail_w);
+            let hh = snum(&style, "height", 48);
             prim_push_bg(st, x, y, w, hh, bg.unwrap_or(0x334155), bgz, radius, bwid, bcol);
+            drawn_h = hh;
         }
-        total_h = hh;
+        total_h = drawn_h;
     } else {
         // contenedor (div/row/section/main…)
         // flex-row: tag `row`, direction:row, o display:flex SIN flex-direction:column
@@ -1544,6 +1599,9 @@ pub struct GuiState {
     // Caché de SVGs rasterizados: (handle_svg, w, h) → handle de imagen en `images`.
     // Evita re-rasterizar con tiny-skia cada frame; solo al cambiar de tamaño/handle.
     svg_cache: HashMap<(i64, i32, i32), i64>,
+    // Caché de imágenes RASTER (png/jpg…) cargadas por RUTA desde el primitivo `img`:
+    // (ruta, w, h) → handle en `images`. Evita releer+decodificar+escalar cada frame.
+    raster_cache: HashMap<(String, i32, i32), i64>,
 }
 
 impl GuiState {
@@ -1575,6 +1633,7 @@ impl GuiState {
             scene_dirty: true,
             prim_clip: None,
             svg_cache: HashMap::new(),
+            raster_cache: HashMap::new(),
         }
     }
 
