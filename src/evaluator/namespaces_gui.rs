@@ -660,7 +660,11 @@ fn sget<'a>(st: &'a [(String, String)], name: &str) -> Option<&'a str> {
     st.iter().find(|(p, _)| p == name).map(|(_, v)| v.as_str())
 }
 fn snum(st: &[(String, String)], name: &str, d: i32) -> i32 {
-    sget(st, name).and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(d)
+    // Acepta el sufijo `px` (`gap: 10px`, `border-radius: 4px`) y lo ignora,
+    // igual que prim_dim y prim_box_sides: todo el motor trabaja en px enteros.
+    sget(st, name)
+        .and_then(|v| v.trim().trim_end_matches("px").trim().parse::<i32>().ok())
+        .unwrap_or(d)
 }
 /// Shorthand CSS de 1–4 valores (`padding: 8 14`) → (top, right, bottom, left),
 /// como en la web: 1=todos, 2=vert/horiz, 3=top/horiz/bottom, 4=t r b l.
@@ -968,376 +972,679 @@ fn prim_border_shorthand(s: Option<&str>) -> (i32, Option<u32>) {
     }
 }
 
-/// Layout + emit de un nodo. Devuelve el alto vertical consumido (incl. márgenes).
-fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], x: i32, y: i32, avail_w: i32,
-    sheet: Option<&NativeStylesheet>, svgs: &[svg::ParsedSvg], ctx: &[(String, String)], depth: i32, z_off: i32, pos_ox: i32, pos_oy: i32, pos_ow: i32, pos_oh: i32, fonts: &mut Option<GuiFonts>, st: &mut GuiState, regions: &mut Vec<PrimRegion>) -> i32 {
-    let class_str = prim_attr(style_inline, "class").unwrap_or_default();
-    let classes: Vec<&str> = class_str.split_whitespace().collect();
-    let id_str = prim_attr(style_inline, "id");
-    let style = prim_eff_style(sheet, ctx, tag, &classes, id_str.as_deref(), style_inline);
-    // display:none → no se dibuja ni ocupa flujo (como en la web).
-    if sget(&style, "display") == Some("none") { return 0; }
-    let scale = snum(&style, "font-scale", prim_default_scale(tag));
-    let text_col = scol(&style, "color").unwrap_or(0xffffff);
-    let bg = scol(&style, "background-color").or_else(|| scol(&style, "background"));
-    // Borde: props sueltas o shorthand `border: 1px solid #333`.
-    let (bsh_w, bsh_c) = prim_border_shorthand(sget(&style, "border"));
-    let bwid = snum(&style, "border-width", bsh_w);
-    let bcol = scol(&style, "border-color").or(bsh_c);
-    let radius = snum(&style, "border-radius", 0);
-    let gap = snum(&style, "gap", 0);
-    // Box model: shorthand de 1–4 valores + override por lado (como en la web).
-    let (pad_t, pad_r, pad_b, pad_l) = prim_box_sides(&style, "padding");
-    let (mt, mr, mb, ml) = prim_box_sides(&style, "margin");
-    // Familia de fuente por nodo (sin comillas). "" = usa la familia activa/rejilla.
-    let font_fam = sget(&style, "font-family")
-        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-        .unwrap_or_default();
-    let talign: u8 = match sget(&style, "text-align") { Some("center") => 1, Some("right") | Some("end") => 2, _ => 0 };
-    let tspacing = snum(&style, "letter-spacing", 0);
-    // width % (del disponible) / auto; height % (de la ventana) / auto / px.
-    let ex_w = prim_dim(&style, "width", avail_w);
-    let hgt = prim_dim(&style, "height", st.win_h as i32);
-    // z-index acumula una BANDA de overlay: el subárbol se pinta por encima de lo normal.
-    let z_off = z_off + snum(&style, "z-index", 0);
-    // position:absolute → posicionado respecto al ANCESTRO posicionado más cercano
-    // (containing block: `pos_ox`/`pos_oy`), como en CSS; NO consume flujo (devuelve 0).
-    // El root usa (0,0) = ventana.
-    let pos = sget(&style, "position");
-    let absolute = pos == Some("absolute");
-    let positioned = absolute || pos == Some("relative");
-    // left/top admiten `%` (del contenedor): el `avail_w` ENTRANTE (antes de que el
-    // width propio lo sobreescriba) es el ancho del bloque contenedor; win_h para top%.
-    // Sin left, `right` posiciona desde el borde derecho del containing block (requiere
-    // width explícito propio); sin top, `bottom` desde el inferior (requiere height
-    // explícito propio y del containing block — one-pass: el alto auto no se conoce).
-    let abs_x = if sget(&style, "left").is_some() {
-        pos_ox + prim_dim(&style, "left", avail_w).max(0)
-    } else if sget(&style, "right").is_some() && ex_w >= 0 && pos_ow >= 0 {
-        pos_ox + pos_ow - prim_dim(&style, "right", pos_ow).max(0) - ex_w
-    } else { pos_ox };
-    let abs_y = if sget(&style, "top").is_some() {
-        pos_oy + prim_dim(&style, "top", st.win_h as i32).max(0)
-    } else if sget(&style, "bottom").is_some() && hgt >= 0 && pos_oh >= 0 {
-        pos_oy + pos_oh - prim_dim(&style, "bottom", pos_oh).max(0) - hgt
-    } else { pos_oy };
-    let (x, y) = if absolute { (abs_x, abs_y) } else { (x + ml, y + mt) };
-    // Origen de posicionamiento para los hijos: este elemento si está posicionado.
-    let (cox, coy) = if positioned { (x, y) } else { (pos_ox, pos_oy) };
-    // Ancho de caja: explícito (compacto, acotado) o el disponible menos márgenes.
-    let avail_w = if ex_w >= 0 {
-        if absolute { ex_w } else { ex_w.min(avail_w) }
+// ═══ Recorrido del árbol de primitivos ════════════════════════════════════════
+//
+// `Gui.renderTree` recorre el árbol [tag, [[prop,val]…], [hijos…]] en UNA pasada:
+// cada nodo resuelve su estilo, calcula su caja, emite sus nodos de escena y
+// devuelve el alto que consumió en el flujo. No hay segunda pasada de layout
+// (por eso align-items se corrige con un post-pase sobre lo ya emitido).
+//
+// Mapa del código (para tocar una pieza sin releer el resto):
+//   PrimCtx        — referencias compartidas del recorrido (escena, fuentes, CSS, regions)
+//   PrimFrame      — lo que el padre le da al hijo: posición, ancho disponible,
+//                    profundidad/z y el containing block (para absolute)
+//   PrimStyle      — estilo efectivo del nodo ya resuelto a valores tipados
+//   PrimBox        — la caja final del nodo (posición, ancho, interior, z)
+//   prim_render    — UN nodo: caja + region + dispatch por tag
+//   prim_draw_*    — hojas: texto, hr, formas vectoriales, textbox, img/svg
+//   prim_layout_*  — contenedores: fila flex, caja con scroll, bloque vertical
+//   prim_flex_plan — reparto de anchos de la fila flex (crece/fijo/contenido)
+
+/// Referencias compartidas por todo el recorrido. Agrupadas para no arrastrar
+/// seis parámetros por cada llamada recursiva.
+struct PrimCtx<'a> {
+    sheet: Option<&'a NativeStylesheet>,
+    svgs: &'a [svg::ParsedSvg],
+    ctx: &'a [(String, String)],
+    fonts: &'a mut Option<GuiFonts>,
+    st: &'a mut GuiState,
+    regions: &'a mut Vec<PrimRegion>,
+}
+
+/// Lo que el PADRE le entrega a un nodo: dónde ubicarlo, cuánto ancho tiene,
+/// a qué profundidad/banda z está, y el containing block del ancestro
+/// posicionado más cercano (destino de los hijos `position:absolute`).
+#[derive(Clone, Copy)]
+struct PrimFrame {
+    x: i32,
+    y: i32,
+    avail_w: i32,
+    depth: i32, // profundidad en el árbol: ordena fondos (ancestro detrás de hijo)
+    z_off: i32, // banda de overlay acumulada por los z-index de los ancestros
+    cb_x: i32,  // containing block (ancestro posicionado): origen…
+    cb_y: i32,
+    cb_w: i32,  // …y dimensiones (-1 = alto desconocido, layout de una pasada)
+    cb_h: i32,
+}
+
+/// La caja YA resuelta de un nodo: posición final, ancho, interior (sin padding)
+/// y las z que le tocan a su contenido y a su fondo.
+#[derive(Clone, Copy)]
+struct PrimBox {
+    x: i32,
+    y: i32,
+    w: i32,
+    content_x: i32, // x + padding-left
+    content_w: i32, // w - padding horizontal
+    z: i32,         // z del contenido (texto/formas)
+    bg_z: i32,      // z de los fondos: banda + profundidad - 100 (siempre detrás)
+}
+
+/// Estilo efectivo del nodo resuelto a valores tipados. `props` conserva el
+/// prop-list completo (hoja + inline) para los atributos que solo usa un tag
+/// concreto (rows/caret/src/points/…) vía `get`/`num`/`col`.
+struct PrimStyle {
+    props: Vec<(String, String)>,
+    scale: i32,                        // font-scale (glifo base = 8*scale px)
+    text_col: u32,
+    bg: Option<u32>,
+    border_w: i32,
+    border_col: Option<u32>,
+    radius: i32,
+    gap: i32,
+    pad: (i32, i32, i32, i32),         // top, right, bottom, left
+    mar: (i32, i32, i32, i32),
+    font_fam: String,                  // "" = familia activa (Gui.setFont)
+    talign: u8,                        // 0 izq, 1 centro, 2 der
+    tspacing: i32,                     // letter-spacing
+    tstyle: u8,                        // bits: bold/italic/subrayado/tachado
+    ex_w: i32,                         // width propio (px resueltos) o -1 = auto
+    hgt: i32,                          // height propio o -1 = auto
+    absolute: bool,
+    relative: bool,
+}
+
+impl PrimStyle {
+    /// Resuelve el estilo EFECTIVO: reglas de la hoja que matchean el nodo
+    /// (tag/.clase/#id + condición reactiva, "última gana") pisadas por el
+    /// estilo inline, y de ahí los valores tipados que consume el layout.
+    /// `width` se resuelve contra el ancho disponible; `height` contra la
+    /// ventana (gap conocido: % de height vs padre no está soportado).
+    fn resolve(tag: &str, style_inline: &[OwnedValue], avail_w: i32, win_h: i32,
+               sheet: Option<&NativeStylesheet>, ctx: &[(String, String)]) -> PrimStyle {
+        let class_str = prim_attr(style_inline, "class").unwrap_or_default();
+        let classes: Vec<&str> = class_str.split_whitespace().collect();
+        let id_str = prim_attr(style_inline, "id");
+        let props = prim_eff_style(sheet, ctx, tag, &classes, id_str.as_deref(), style_inline);
+
+        // Borde: props sueltas o shorthand `border: 1px solid #333`.
+        let (bsh_w, bsh_c) = prim_border_shorthand(sget(&props, "border"));
+        let pos = sget(&props, "position");
+        let absolute = pos == Some("absolute");
+        let relative = pos == Some("relative");
+        PrimStyle {
+            scale: snum(&props, "font-scale", prim_default_scale(tag)),
+            text_col: scol(&props, "color").unwrap_or(0xffffff),
+            bg: scol(&props, "background-color").or_else(|| scol(&props, "background")),
+            border_w: snum(&props, "border-width", bsh_w),
+            border_col: scol(&props, "border-color").or(bsh_c),
+            radius: snum(&props, "border-radius", 0),
+            gap: snum(&props, "gap", 0),
+            pad: prim_box_sides(&props, "padding"),
+            mar: prim_box_sides(&props, "margin"),
+            font_fam: sget(&props, "font-family")
+                .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                .unwrap_or_default(),
+            talign: match sget(&props, "text-align") {
+                Some("center") => 1,
+                Some("right") | Some("end") => 2,
+                _ => 0,
+            },
+            tspacing: snum(&props, "letter-spacing", 0),
+            tstyle: prim_text_style(tag, &props),
+            ex_w: prim_dim(&props, "width", avail_w),
+            hgt: prim_dim(&props, "height", win_h),
+            absolute,
+            relative,
+            props,
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<&str> { sget(&self.props, name) }
+    fn num(&self, name: &str, d: i32) -> i32 { snum(&self.props, name, d) }
+    fn col(&self, name: &str) -> Option<u32> { scol(&self.props, name) }
+}
+
+/// Concatena los hijos string directos: el texto plano del nodo.
+fn prim_join_text(kids: &[OwnedValue]) -> String {
+    let mut t = String::new();
+    for k in kids {
+        if let OwnedValue::Str(s) = k { t.push_str(s); }
+    }
+    t
+}
+
+/// Posición de un nodo `absolute` contra su containing block: `left`/`top`
+/// mandan; sin ellos, `right`/`bottom` posicionan desde el borde opuesto
+/// (necesitan width/height explícitos: el layout es de una pasada y el tamaño
+/// auto no se conoce todavía). Sin nada: el origen del containing block.
+fn prim_abs_pos(sty: &PrimStyle, f: &PrimFrame, win_h: i32) -> (i32, i32) {
+    let x = if sty.get("left").is_some() {
+        f.cb_x + prim_dim(&sty.props, "left", f.avail_w).max(0)
+    } else if sty.get("right").is_some() && sty.ex_w >= 0 && f.cb_w >= 0 {
+        f.cb_x + f.cb_w - prim_dim(&sty.props, "right", f.cb_w).max(0) - sty.ex_w
     } else {
-        (avail_w - ml - mr).max(1)
+        f.cb_x
     };
-    // Dimensiones del containing block para los hijos (right/bottom): el ancho resuelto
-    // y el alto explícito de este elemento si está posicionado (auto = -1, no se conoce).
-    let (cow, coh) = if positioned { (avail_w, hgt) } else { (pos_ow, pos_oh) };
-    // Region en PRE-ORDEN (padre antes que hijos, mismo orden en que un framework
-    // recorre/baja su árbol): placeholder ahora, el alto se completa al final.
-    let region_idx = regions.len();
-    regions.push(PrimRegion {
+    let y = if sty.get("top").is_some() {
+        f.cb_y + prim_dim(&sty.props, "top", win_h).max(0)
+    } else if sty.get("bottom").is_some() && sty.hgt >= 0 && f.cb_h >= 0 {
+        f.cb_y + f.cb_h - prim_dim(&sty.props, "bottom", f.cb_h).max(0) - sty.hgt
+    } else {
+        f.cb_y
+    };
+    (x, y)
+}
+
+/// Desplazamiento visual de `position:relative` (como en la web): `left`/`top`
+/// corren el DIBUJO del nodo; el flujo de los hermanos no se entera. `right`/
+/// `bottom` equivalen al lado opuesto en negativo.
+fn prim_rel_offset(sty: &PrimStyle, avail_w: i32, win_h: i32) -> (i32, i32) {
+    let dx = if sty.get("left").is_some() {
+        prim_dim(&sty.props, "left", avail_w)
+    } else if sty.get("right").is_some() {
+        -prim_dim(&sty.props, "right", avail_w)
+    } else { 0 };
+    let dy = if sty.get("top").is_some() {
+        prim_dim(&sty.props, "top", win_h)
+    } else if sty.get("bottom").is_some() {
+        -prim_dim(&sty.props, "bottom", win_h)
+    } else { 0 };
+    (dx, dy)
+}
+
+/// Layout + emit de UN nodo del árbol. Devuelve el alto que consumió en el
+/// flujo vertical (márgenes incluidos); `position:absolute` devuelve 0 (fuera
+/// de flujo). Pasos: estilo → caja → region (pre-orden) → dispatch por tag.
+fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: PrimFrame, cx: &mut PrimCtx) -> i32 {
+    let win_h = cx.st.win_h as i32;
+    let sty = PrimStyle::resolve(tag, style_inline, f.avail_w, win_h, cx.sheet, cx.ctx);
+    // display:none → no se dibuja ni ocupa flujo (como en la web).
+    if sty.get("display") == Some("none") { return 0; }
+    let (mt, mr, mb, ml) = sty.mar;
+
+    // ── 1. Posición de la caja ──────────────────────────────────────────────
+    // absolute → contra el containing block; relative → corrimiento visual;
+    // normal → donde lo puso el padre, corrido por el margen.
+    let (x, y) = if sty.absolute {
+        prim_abs_pos(&sty, &f, win_h)
+    } else if sty.relative {
+        let (dx, dy) = prim_rel_offset(&sty, f.avail_w, win_h);
+        (f.x + ml + dx, f.y + mt + dy)
+    } else {
+        (f.x + ml, f.y + mt)
+    };
+    // width explícito = caja compacta (acotada al disponible, salvo absolute);
+    // sin width = todo el disponible menos márgenes.
+    let box_w = if sty.ex_w >= 0 {
+        if sty.absolute { sty.ex_w } else { sty.ex_w.min(f.avail_w) }
+    } else {
+        (f.avail_w - ml - mr).max(1)
+    };
+
+    // ── 2. Caja resuelta + z ────────────────────────────────────────────────
+    // z-index abre una BANDA de overlay para todo el subárbol; los fondos van
+    // debajo del contenido y los ancestros detrás de los descendientes.
+    let z_off = f.z_off + sty.num("z-index", 0);
+    let b = PrimBox {
+        x,
+        y,
+        w: box_w,
+        content_x: x + sty.pad.3,
+        content_w: (box_w - sty.pad.3 - sty.pad.1).max(1),
+        z: z_off,
+        bg_z: z_off + f.depth - 100,
+    };
+    // Marco de los hijos: si este nodo está posicionado, pasa a ser el
+    // containing block de sus descendientes absolute.
+    let positioned = sty.absolute || sty.relative;
+    let kf = PrimFrame {
+        x: b.content_x,
+        y: b.y + sty.pad.0,
+        avail_w: b.content_w,
+        depth: f.depth + 1,
+        z_off,
+        cb_x: if positioned { x } else { f.cb_x },
+        cb_y: if positioned { y } else { f.cb_y },
+        cb_w: if positioned { box_w } else { f.cb_w },
+        cb_h: if positioned { sty.hgt } else { f.cb_h },
+    };
+
+    // ── 3. Region en PRE-ORDEN ──────────────────────────────────────────────
+    // (padre antes que hijos = el orden en que un framework recorre su árbol);
+    // el alto se completa al final, cuando ya se midió el contenido.
+    let region_idx = cx.regions.len();
+    cx.regions.push(PrimRegion {
         tag: tag.to_string(),
-        x, y, w: avail_w, h: 0,
+        x, y, w: box_w, h: 0,
         onclick: prim_find_onclick(style_inline),
     });
-    let content_x = x + pad_l;
-    let content_w = (avail_w - pad_l - pad_r).max(1);
-    // z de fondos: banda de overlay (z_off) + PROFUNDIDAD (ancestro detrás de
-    // descendiente). Contenido (texto/formas) a z = z_off; fondos por debajo.
-    let bgz = z_off + depth - 100;
 
-    let tstyle = prim_text_style(tag, &style);
-    let mut total_h: i32;
-    if prim_is_text_tag(tag) {
-        let mut text = String::new();
-        for k in kids { if let OwnedValue::Str(s) = k { text.push_str(s); } }
-        let line_h = snum(&style, "line-height", 8 * scale + 4);
-        let h = prim_emit_text(st, fonts, &text, content_x, y + pad_t, content_w, scale, line_h, text_col, tstyle, i32::MAX, font_fam.as_str(), z_off, talign, tspacing);
-        total_h = if hgt >= 0 { hgt } else { h + pad_t + pad_b };
-        if let Some(c) = bg { prim_push_bg(st, x, y, avail_w, total_h, c, bgz, radius, bwid, bcol); }
+    // ── 4. Dispatch por tag ─────────────────────────────────────────────────
+    let total_h = if prim_is_text_tag(tag) {
+        prim_draw_text_tag(kids, &sty, b, cx)
     } else if tag == "hr" {
-        let col = scol(&style, "color").unwrap_or(0x334155);
-        prim_push_rect(st, x, y + pad_t, avail_w, 2, col, z_off);
-        total_h = 2 + pad_t + pad_b;
+        prim_draw_hr(&sty, b, cx)
     } else if tag == "circle" || tag == "line" || tag == "polyline" || tag == "polygon" {
-        // Primitivas vectoriales (para knobs, dots, gráficos). Coords relativas a (x,y).
-        if tag == "circle" {
-            let r = snum(&style, "r", (avail_w / 2).max(1));
-            let col = scol(&style, "color").or(bg).unwrap_or(0xffffff);
-            prim_push_circle(st, x + r, y + r, r, col, z_off);
-            total_h = if hgt >= 0 { hgt } else { 2 * r };
-        } else if tag == "line" {
-            let col = scol(&style, "color").unwrap_or(0xffffff);
-            let (x1, y1) = (snum(&style, "x1", 0), snum(&style, "y1", 0));
-            let (x2, y2) = (snum(&style, "x2", 0), snum(&style, "y2", 0));
-            prim_push_line(st, x + x1, y + y1, x + x2, y + y2, col, z_off);
-            total_h = if hgt >= 0 { hgt } else { y1.max(y2) };
-        } else {
-            let col = scol(&style, "color").or(bg).unwrap_or(0xffffff);
-            let pts = prim_attr(style_inline, "points").map(|s| prim_parse_points(&s, x, y)).unwrap_or_default();
-            let sw = snum(&style, "stroke-width", 2);
-            prim_push_poly(st, pts, col, z_off, tag == "polygon", sw);
-            total_h = if hgt >= 0 { hgt } else { 0 };
-        }
+        prim_draw_shape(tag, &sty, b, cx)
     } else if tag == "textbox" {
-        let rows = snum(&style, "rows", 6);
-        let mut text = String::new();
-        for k in kids { if let OwnedValue::Str(s) = k { text.push_str(s); } }
-        let line_h = 12 * scale + 6;
-        let box_pad = 6;
-        let box_h = rows * line_h + 2 * box_pad;
-        prim_push_bg(st, x, y, avail_w, box_h, bg.unwrap_or(0x1e293b), bgz, radius, bwid, bcol);
-        // VIRTUALIZACIÓN + CLIP: solo las primeras `rows` líneas visibles, recortadas a
-        // la caja con clip-por-nodo (independiente del z-order).
-        let saved_clip = st.prim_clip;
-        st.prim_clip = Some(prim_clip_intersect(saved_clip, x, y, x + avail_w, y + box_h));
-        prim_emit_text(st, fonts, &text, content_x + box_pad, y + box_pad, (content_w - 2 * box_pad).max(1), scale, line_h, text_col, tstyle, rows, font_fam.as_str(), z_off, 0, tspacing);
-        // Caret + selección (edición): el .sz pasa `caret`/`sel-start`/`sel-end`/`focused`
-        // como atributos y el core los PINTA (modelo §5.1: estado de edición como props).
-        // Asume 1 línea (el caso Input); multi-línea es aproximado.
-        let fline = text.split('\n').next().unwrap_or("");
-        let caret = snum(&style, "caret", -1);
-        let sel_a = snum(&style, "sel-start", -1);
-        let sel_b = snum(&style, "sel-end", -1);
-        let focused = sget(&style, "focused") == Some("true");
-        let tx0 = content_x + box_pad;
-        let ty0 = y + box_pad;
-        if sel_a >= 0 && sel_b >= 0 && sel_a != sel_b {
-            let (a, b) = if sel_a < sel_b { (sel_a, sel_b) } else { (sel_b, sel_a) };
-            let ax = tx0 + prim_prefix_px(fonts, fline, a as usize, scale, tstyle, font_fam.as_str());
-            let bx = tx0 + prim_prefix_px(fonts, fline, b as usize, scale, tstyle, font_fam.as_str());
-            prim_push_rect(st, ax, ty0, (bx - ax).max(1), line_h, 0x2563eb, z_off + depth - 50);
-        }
-        if focused && caret >= 0 {
-            let cxp = tx0 + prim_prefix_px(fonts, fline, caret as usize, scale, tstyle, font_fam.as_str());
-            prim_push_rect(st, cxp, ty0, 2, line_h, text_col, z_off);
-        }
-        st.prim_clip = saved_clip;
-        total_h = box_h;
+        prim_draw_textbox(kids, &sty, b, cx)
     } else if tag == "svg" || tag == "img" {
-        let src = prim_attr(style_inline, "src");
-        // `src` numérico = handle de Gui.loadSvg → rasterizar el vector (con caché).
-        let svg_handle = src.as_deref().and_then(|s| s.trim().parse::<i64>().ok());
-        let has_w = sget(&style, "width").is_some();
-        let has_h = sget(&style, "height").is_some();
-        let mut drawn = false;
-        let mut drawn_h = snum(&style, "height", 48);
-        if let Some(h) = svg_handle {
-            let w = snum(&style, "width", 48).min(avail_w);
-            let hh = snum(&style, "height", 48);
-            if h >= 1 && (h as usize) <= svgs.len() && w > 0 && hh > 0 {
-                let key = (h, w, hh);
-                let img_handle = if let Some(&ih) = st.svg_cache.get(&key) {
-                    ih
-                } else {
-                    let px = svg::rasterize(&svgs[(h - 1) as usize], w as u32, hh as u32);
-                    let ih = st.next_image;
-                    st.next_image += 1;
-                    st.images.insert(ih, ImageData { w: w as usize, h: hh as usize, px });
-                    st.svg_cache.insert(key, ih);
-                    ih
-                };
-                if let Some(c) = bg { prim_push_bg(st, x, y, w, hh, c, bgz, radius, bwid, bcol); }
-                prim_push_image(st, x, y, img_handle, z_off);
-                drawn = true;
-                drawn_h = hh;
+        prim_draw_media(&sty, b, cx)
+    } else {
+        prim_layout_container(tag, kids, &sty, b, kf, cx)
+    };
+
+    cx.regions[region_idx].h = total_h;
+    if sty.absolute { 0 } else { mt + total_h + mb }
+}
+
+// ── Hojas (nodos que dibujan contenido propio) ─────────────────────────────────
+
+/// Texto (p/span/h1…/label): word-wrap dentro de la caja + fondo opcional.
+fn prim_draw_text_tag(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, cx: &mut PrimCtx) -> i32 {
+    let text = prim_join_text(kids);
+    let line_h = sty.num("line-height", 8 * sty.scale + 4);
+    let h = prim_emit_text(cx.st, cx.fonts, &text, b.content_x, b.y + sty.pad.0, b.content_w,
+        sty.scale, line_h, sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing);
+    let total = if sty.hgt >= 0 { sty.hgt } else { h + sty.pad.0 + sty.pad.2 };
+    if let Some(c) = sty.bg {
+        prim_push_bg(cx.st, b.x, b.y, b.w, total, c, b.bg_z, sty.radius, sty.border_w, sty.border_col);
+    }
+    total
+}
+
+/// Separador horizontal: línea de 2px del ancho de la caja.
+fn prim_draw_hr(sty: &PrimStyle, b: PrimBox, cx: &mut PrimCtx) -> i32 {
+    let col = sty.col("color").unwrap_or(0x334155);
+    prim_push_rect(cx.st, b.x, b.y + sty.pad.0, b.w, 2, col, b.z);
+    2 + sty.pad.0 + sty.pad.2
+}
+
+/// Primitivas vectoriales (knobs, dots, gráficos): circle / line / polyline /
+/// polygon. Las coordenadas (`x1..y2`, `points`) son relativas a la caja.
+/// OJO: polyline/polygon no consumen alto de flujo salvo `height` explícito.
+fn prim_draw_shape(tag: &str, sty: &PrimStyle, b: PrimBox, cx: &mut PrimCtx) -> i32 {
+    if tag == "circle" {
+        let r = sty.num("r", (b.w / 2).max(1));
+        let col = sty.col("color").or(sty.bg).unwrap_or(0xffffff);
+        prim_push_circle(cx.st, b.x + r, b.y + r, r, col, b.z);
+        if sty.hgt >= 0 { sty.hgt } else { 2 * r }
+    } else if tag == "line" {
+        let col = sty.col("color").unwrap_or(0xffffff);
+        let (x1, y1) = (sty.num("x1", 0), sty.num("y1", 0));
+        let (x2, y2) = (sty.num("x2", 0), sty.num("y2", 0));
+        prim_push_line(cx.st, b.x + x1, b.y + y1, b.x + x2, b.y + y2, col, b.z);
+        if sty.hgt >= 0 { sty.hgt } else { y1.max(y2) }
+    } else {
+        let col = sty.col("color").or(sty.bg).unwrap_or(0xffffff);
+        let pts = sty.get("points").map(|s| prim_parse_points(s, b.x, b.y)).unwrap_or_default();
+        let sw = sty.num("stroke-width", 2);
+        prim_push_poly(cx.st, pts, col, b.z, tag == "polygon", sw);
+        if sty.hgt >= 0 { sty.hgt } else { 0 }
+    }
+}
+
+/// Caja de texto EDITABLE (Input/Textarea bajan acá). El `.sz` pasa el estado
+/// de edición como props (`caret`/`sel-start`/`sel-end`/`focused`) y el core lo
+/// PINTA (modelo §5.1). Virtualiza: solo maqueta las `rows` líneas visibles,
+/// recortadas a la caja con clip-por-nodo.
+fn prim_draw_textbox(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, cx: &mut PrimCtx) -> i32 {
+    let rows = sty.num("rows", 6);
+    let text = prim_join_text(kids);
+    // line-height de TEXTO real (como los tags de texto), no la rejilla vieja
+    // 12*scale+6 que inflaba la caja y derramaba caret/selección.
+    let line_h = sty.num("line-height", 8 * sty.scale + 4);
+    let box_pad = 6;
+    // `height` explícito manda (permite alinear Input=34px con los demás
+    // controles de una fila); sin él, alto derivado de las filas.
+    let box_h = if sty.hgt >= 0 { sty.hgt } else { rows * line_h + 2 * box_pad };
+    // Padding vertical real: centra el bloque de filas en el alto de la caja.
+    let pad_y = ((box_h - rows * line_h) / 2).max(0);
+    prim_push_bg(cx.st, b.x, b.y, b.w, box_h, sty.bg.unwrap_or(0x1e293b), b.bg_z, sty.radius, sty.border_w, sty.border_col);
+    let saved_clip = cx.st.prim_clip;
+    cx.st.prim_clip = Some(prim_clip_intersect(saved_clip, b.x, b.y, b.x + b.w, b.y + box_h));
+    prim_emit_text(cx.st, cx.fonts, &text, b.content_x + box_pad, b.y + pad_y, (b.content_w - 2 * box_pad).max(1),
+        sty.scale, line_h, sty.text_col, sty.tstyle, rows, sty.font_fam.as_str(), b.z, 0, sty.tspacing);
+    // Caret + selección: asume 1 línea (el caso Input); multi-línea es
+    // aproximado. El alto de las marcas es el del GLIFO (8*scale)+2, no line-height.
+    let fline = text.split('\n').next().unwrap_or("");
+    let caret = sty.num("caret", -1);
+    let sel_a = sty.num("sel-start", -1);
+    let sel_b = sty.num("sel-end", -1);
+    let focused = sty.get("focused") == Some("true");
+    let tx0 = b.content_x + box_pad;
+    let ty0 = b.y + pad_y;
+    let mark_h = 8 * sty.scale + 2;
+    if sel_a >= 0 && sel_b >= 0 && sel_a != sel_b {
+        let (a, bb) = if sel_a < sel_b { (sel_a, sel_b) } else { (sel_b, sel_a) };
+        let ax = tx0 + prim_prefix_px(cx.fonts, fline, a as usize, sty.scale, sty.tstyle, sty.font_fam.as_str());
+        let bx = tx0 + prim_prefix_px(cx.fonts, fline, bb as usize, sty.scale, sty.tstyle, sty.font_fam.as_str());
+        // El highlight va ENTRE el fondo (bg_z) y el texto (z): bg_z + 50.
+        prim_push_rect(cx.st, ax, ty0, (bx - ax).max(1), mark_h, 0x2563eb, b.bg_z + 50);
+    }
+    if focused && caret >= 0 {
+        let cxp = tx0 + prim_prefix_px(cx.fonts, fline, caret as usize, sty.scale, sty.tstyle, sty.font_fam.as_str());
+        prim_push_rect(cx.st, cxp, ty0, 2, mark_h, sty.text_col, b.z);
+    }
+    cx.st.prim_clip = saved_clip;
+    box_h
+}
+
+/// `svg`/`img`. `src` numérico = handle de `Gui.loadSvg` (se rasteriza a la caja,
+/// con caché por handle+dims); `src` string = RUTA a imagen raster (png/jpg…,
+/// con caché; auto-size = tamaño natural). Sin src o si falla: placeholder.
+fn prim_draw_media(sty: &PrimStyle, b: PrimBox, cx: &mut PrimCtx) -> i32 {
+    let src = sty.get("src").map(|s| s.to_string());
+    let svg_handle = src.as_deref().and_then(|s| s.trim().parse::<i64>().ok());
+    let has_w = sty.get("width").is_some();
+    let has_h = sty.get("height").is_some();
+    let mut drawn = false;
+    let mut drawn_h = sty.num("height", 48);
+    if let Some(hnd) = svg_handle {
+        let w = sty.num("width", 48).min(b.w);
+        let hh = sty.num("height", 48);
+        if hnd >= 1 && (hnd as usize) <= cx.svgs.len() && w > 0 && hh > 0 {
+            let key = (hnd, w, hh);
+            let img_handle = if let Some(&ih) = cx.st.svg_cache.get(&key) {
+                ih
+            } else {
+                let px = svg::rasterize(&cx.svgs[(hnd - 1) as usize], w as u32, hh as u32);
+                let ih = cx.st.next_image;
+                cx.st.next_image += 1;
+                cx.st.images.insert(ih, ImageData { w: w as usize, h: hh as usize, px });
+                cx.st.svg_cache.insert(key, ih);
+                ih
+            };
+            if let Some(c) = sty.bg {
+                prim_push_bg(cx.st, b.x, b.y, w, hh, c, b.bg_z, sty.radius, sty.border_w, sty.border_col);
             }
-        } else if let Some(path) = src.as_deref() {
-            // `src` = RUTA a una imagen raster (png/jpg/…): cargar+escalar+cachear (web-like
-            // <img src="…">). Dimensiones auto = tamaño natural (con aspecto si solo una).
-            let req_w = if has_w { snum(&style, "width", 0).min(avail_w) } else { 0 };
-            let req_h = if has_h { snum(&style, "height", 0) } else { 0 };
-            if let Some((img_handle, iw, ih)) = prim_load_raster(st, path, req_w, req_h) {
-                if let Some(c) = bg { prim_push_bg(st, x, y, iw, ih, c, bgz, radius, bwid, bcol); }
-                prim_push_image(st, x, y, img_handle, z_off);
-                drawn = true;
-                drawn_h = ih;
-            }
-        }
-        if !drawn {
-            let w = snum(&style, "width", 48).min(avail_w);
-            let hh = snum(&style, "height", 48);
-            prim_push_bg(st, x, y, w, hh, bg.unwrap_or(0x334155), bgz, radius, bwid, bcol);
+            prim_push_image(cx.st, b.x, b.y, img_handle, b.z);
+            drawn = true;
             drawn_h = hh;
         }
-        total_h = drawn_h;
-    } else {
-        // contenedor (div/row/section/main…)
-        // flex-row: tag `row`, direction:row, o display:flex SIN flex-direction:column
-        // (column cae al layout de bloque vertical, como en la web).
-        let is_flex = sget(&style, "display") == Some("flex");
-        let col_dir = sget(&style, "flex-direction") == Some("column") || sget(&style, "direction") == Some("column");
-        let dir_row = (tag == "row" || sget(&style, "direction") == Some("row") || (is_flex && !col_dir)) && !col_dir;
-        let overflow_scroll = sget(&style, "overflow") == Some("scroll");
-        let fixed_h = hgt;   // alto explícito (px o %), del box model
-        if dir_row {
-            // Flexbox en el eje principal (horizontal). Cada hijo puede CRECER (flex≥1) o
-            // ser de ancho FIJO (`width` sin `flex`); sin flex ni width crece y llena
-            // (default, compat con lo anterior). `flex`/`width` se leen del estilo efectivo
-            // del hijo (inline o CSS por clase). justify-content reparte el espacio libre
-            // SOLO cuando nadie crece (todos fijos); align-items alinea en el eje cruzado.
-            struct FlexKid { grow: i32, base: i32, abs: bool }
-            let mut kinfo: Vec<FlexKid> = Vec::with_capacity(kids.len());
-            for k in kids {
-                let (grow, base, abs) = if let Some((ct, cs, _)) = prim_node_parts(k) {
-                    let cclass = prim_attr(cs, "class").unwrap_or_default();
-                    let cclasses: Vec<&str> = cclass.split_whitespace().collect();
-                    let cid = prim_attr(cs, "id");
-                    let cstyle = prim_eff_style(sheet, ctx, ct, &cclasses, cid.as_deref(), cs);
-                    // position:absolute = fuera de flujo (como en CSS): no participa del
-                    // reparto flex ni consume gap; se posiciona por left/top/right/bottom.
-                    if sget(&cstyle, "position") == Some("absolute") {
-                        (0, 0, true)
-                    } else {
-                        let flex = sget(&cstyle, "flex").and_then(|s| s.trim().parse::<i32>().ok());
-                        let width = sget(&cstyle, "width").and_then(|s| s.trim().parse::<i32>().ok());
-                        let grow = match (flex, width) {
-                            (Some(f), _) => f.max(0),   // flex explícito manda (0 = no crece)
-                            (None, Some(_)) => 0,       // width sin flex ⇒ ancho fijo
-                            (None, None) => 1,          // default: crece y llena
-                        };
-                        (grow, width.unwrap_or(0).max(0), false)
-                    }
-                } else {
-                    (1, 0, false) // texto suelto: crece
-                };
-                kinfo.push(FlexKid { grow, base, abs });
+    } else if let Some(path) = src.as_deref() {
+        // Dimensiones auto = tamaño natural (aspecto conservado si solo hay una).
+        let req_w = if has_w { sty.num("width", 0).min(b.w) } else { 0 };
+        let req_h = if has_h { sty.num("height", 0) } else { 0 };
+        if let Some((img_handle, iw, ih)) = prim_load_raster(cx.st, path, req_w, req_h) {
+            if let Some(c) = sty.bg {
+                prim_push_bg(cx.st, b.x, b.y, iw, ih, c, b.bg_z, sty.radius, sty.border_w, sty.border_col);
             }
-            let ncols = (kinfo.iter().filter(|k| !k.abs).count().max(1)) as i32;
-            let total_gap = gap * (ncols - 1).max(0);
-            let total_grow: i32 = kinfo.iter().map(|k| k.grow).sum();
-            let sum_base: i32 = kinfo.iter().map(|k| k.base).sum();
-
-            let mut widths: Vec<i32> = Vec::with_capacity(kinfo.len());
-            let start_off;
-            let extra_between;
-            if total_grow > 0 {
-                // Hay quien crece: los growers reparten el sobrante; sin espacio libre.
-                let free_for_grow = (content_w - sum_base - total_gap).max(0);
-                for k in &kinfo {
-                    let w = if k.abs { 0 }
-                        else if k.grow > 0 { (k.base + free_for_grow * k.grow / total_grow).max(1) }
-                        else { k.base.max(1) };
-                    widths.push(w);
-                }
-                start_off = 0;
-                extra_between = 0;
-            } else {
-                // Todos fijos: justify-content reparte el espacio libre.
-                for k in &kinfo { widths.push(if k.abs { 0 } else { k.base.max(1) }); }
-                let used: i32 = widths.iter().sum::<i32>() + total_gap;
-                let free = (content_w - used).max(0);
-                let justify = sget(&style, "justify-content").or_else(|| sget(&style, "justify")).unwrap_or("flex-start");
-                let (s, e) = prim_justify(justify, free, ncols);
-                start_off = s;
-                extra_between = e;
-            }
-
-            let align = sget(&style, "align-items").or_else(|| sget(&style, "align")).unwrap_or("").to_string();
-            let want_align = align == "center" || align == "flex-end" || align == "end";
-
-            let mut cx = content_x + start_off;
-            let mut max_h = 0;
-            // Rango de nodos/regions por hijo para alinearlo en vertical tras conocer max_h.
-            let mut ranges: Vec<(usize, usize, usize, usize, i32)> = Vec::new();
-            for (i, k) in kids.iter().enumerate() {
-                // Fuera de flujo: se renderiza con el ancho del contenedor (para %/left)
-                // sin ocupar columna ni gap, y no participa de align-items.
-                if kinfo.get(i).map(|ki| ki.abs).unwrap_or(false) {
-                    if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                        prim_render(ct, cs, ck, cx, y + pad_t, content_w, sheet, svgs, ctx, depth + 1, z_off, cox, coy, cow, coh, fonts, st, regions);
-                    }
-                    continue;
-                }
-                let each = widths.get(i).copied().unwrap_or(1);
-                let sc0 = st.scene.len();
-                let rg0 = regions.len();
-                let h = if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    prim_render(ct, cs, ck, cx, y + pad_t, each, sheet, svgs, ctx, depth + 1, z_off, cox, coy, cow, coh, fonts, st, regions)
-                } else if let OwnedValue::Str(s) = k {
-                    prim_emit_text(st, fonts, s, cx, y + pad_t, each, scale, 8 * scale + 4, text_col, tstyle, i32::MAX, font_fam.as_str(), z_off, talign, tspacing)
-                } else { 0 };
-                if h > max_h { max_h = h; }
-                if want_align { ranges.push((sc0, st.scene.len(), rg0, regions.len(), h)); }
-                cx += each + gap + extra_between;
-            }
-            // align-items: desplaza en vertical cada hijo dentro de la banda de cruce.
-            // La banda es el alto EXPLÍCITO del contenedor (menos padding) si lo hay —
-            // p. ej. un backdrop full-height centrando una caja — o el hijo más alto.
-            // (post-pase: prim_render mide+emite en una sola pasada, así que el alto de
-            //  cada hijo se conoce recién después de dibujarlo.)
-            if want_align {
-                let band = if fixed_h > 0 { (fixed_h - pad_t - pad_b).max(max_h) } else { max_h };
-                for (sc0, sc1, rg0, rg1, h) in ranges {
-                    let off = if align == "center" { (band - h) / 2 } else { band - h };
-                    if off > 0 {
-                        for n in st.scene[sc0..sc1].iter_mut() { n.y += off; }
-                        for r in regions[rg0..rg1].iter_mut() { r.y += off; }
-                    }
-                }
-            }
-            total_h = max_h + pad_t + pad_b;
-        } else if overflow_scroll && fixed_h > 0 {
-            // Contenedor con scroll: alto fijo, hijos desplazados por `scrollY` y recortados.
-            let box_h = fixed_h;
-            if let Some(c) = bg { prim_push_bg(st, x, y, avail_w, box_h, c, bgz, radius, bwid, bcol); }
-            let scroll_y = snum(&style, "scrollY", 0).max(0);
-            // CLIP por-nodo: recorta los hijos scrolleados (incluidos sus fondos a z<0)
-            // a la caja, sin depender del stack ClipPush/Pop (que el sort por (z,id) no
-            // respetaría: los fondos a z<0 se dibujarían antes del ClipPush a z=0).
-            let saved_clip = st.prim_clip;
-            st.prim_clip = Some(prim_clip_intersect(saved_clip, x, y, x + avail_w, y + box_h));
-            let mut cy = y + pad_t - scroll_y;
-            for k in kids {
-                if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, svgs, ctx, depth + 1, z_off, cox, coy, cow, coh, fonts, st, regions);
-                    cy += h + gap;
-                } else if let OwnedValue::Str(s) = k {
-                    let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX, font_fam.as_str(), z_off, talign, tspacing);
-                    cy += h + gap;
-                }
-            }
-            st.prim_clip = saved_clip;
-            total_h = box_h;
-        } else {
-            let mut cy = y + pad_t;
-            for k in kids {
-                if let Some((ct, cs, ck)) = prim_node_parts(k) {
-                    let h = prim_render(ct, cs, ck, content_x, cy, content_w, sheet, svgs, ctx, depth + 1, z_off, cox, coy, cow, coh, fonts, st, regions);
-                    cy += h + gap;
-                } else if let OwnedValue::Str(s) = k {
-                    let h = prim_emit_text(st, fonts, s, content_x, cy, content_w, scale, 8 * scale + 4, text_col, tstyle, i32::MAX, font_fam.as_str(), z_off, talign, tspacing);
-                    cy += h + gap;
-                }
-            }
-            total_h = (cy - (y + pad_t)).max(0) + pad_t + pad_b;
+            prim_push_image(cx.st, b.x, b.y, img_handle, b.z);
+            drawn = true;
+            drawn_h = ih;
         }
-        // Alto explícito del contenedor (caja de alto fijo; el contenido puede sobrar).
-        // El caso scroll ya usó fixed_h como box_h; no lo re-pisamos.
-        if fixed_h > 0 && !(overflow_scroll && fixed_h > 0) { total_h = fixed_h; }
-        if let Some(c) = bg {
-            // el bg del scroll ya se emitió arriba; evitá duplicar
-            if !(overflow_scroll && fixed_h > 0) {
-                if let Some(opacity_str) = sget(&style, "opacity") {
-                    if let Ok(op) = opacity_str.trim().parse::<f32>() {
-                        let alpha = (op.clamp(0.0, 1.0) * 255.0) as u32;
-                        let id = st.scene_add(SceneNodeKind::RectAlpha { w: avail_w, h: total_h, alpha }, x, y, c);
-                        if let Some(node) = st.scene.iter_mut().find(|n| n.id == id) {
-                            node.z = bgz;
-                            node.clip = st.prim_clip;
-                        }
-                    } else {
-                        prim_push_bg(st, x, y, avail_w, total_h, c, bgz, radius, bwid, bcol);
-                    }
-                } else {
-                    prim_push_bg(st, x, y, avail_w, total_h, c, bgz, radius, bwid, bcol);
+    }
+    if !drawn {
+        let w = sty.num("width", 48).min(b.w);
+        let hh = sty.num("height", 48);
+        prim_push_bg(cx.st, b.x, b.y, w, hh, sty.bg.unwrap_or(0x334155), b.bg_z, sty.radius, sty.border_w, sty.border_col);
+        drawn_h = hh;
+    }
+    drawn_h
+}
+
+// ── Contenedores ───────────────────────────────────────────────────────────────
+
+/// Contenedor (div/row/section/main…): elige el layout (fila flex, scroll o
+/// bloque vertical), aplica el alto explícito y pinta el fondo.
+fn prim_layout_container(tag: &str, kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimFrame, cx: &mut PrimCtx) -> i32 {
+    // flex-row: tag `row`, direction:row, o display:flex SIN flex-direction:column
+    // (column cae al layout de bloque vertical, como en la web).
+    let is_flex = sty.get("display") == Some("flex");
+    let col_dir = sty.get("flex-direction") == Some("column") || sty.get("direction") == Some("column");
+    let dir_row = (tag == "row" || sty.get("direction") == Some("row") || (is_flex && !col_dir)) && !col_dir;
+    let scroll = sty.get("overflow") == Some("scroll") && sty.hgt > 0;
+
+    let mut total_h = if dir_row {
+        prim_layout_row(kids, sty, b, kf, cx)
+    } else if scroll {
+        prim_layout_scroll(kids, sty, b, kf, cx) // emite su fondo antes de recortar
+    } else {
+        prim_layout_block(kids, sty, b, kf, cx)
+    };
+    // Alto explícito manda (caja de alto fijo; el contenido puede sobrar, sin clip).
+    if sty.hgt > 0 { total_h = sty.hgt; }
+    // Fondo (el del scroll ya se emitió arriba, no duplicar).
+    if !scroll {
+        if let Some(c) = sty.bg { prim_container_bg(sty, b, total_h, c, cx); }
+    }
+    total_h
+}
+
+/// Fondo del contenedor. Con `opacity` (0..1) pinta un RectAlpha translúcido
+/// (la primitiva alpha es rectangular: pierde radius/borde — caso backdrop);
+/// sin opacity, el fondo normal con borde/radius.
+fn prim_container_bg(sty: &PrimStyle, b: PrimBox, h: i32, color: u32, cx: &mut PrimCtx) {
+    if let Some(op_s) = sty.get("opacity") {
+        if let Ok(op) = op_s.trim().parse::<f32>() {
+            let alpha = (op.clamp(0.0, 1.0) * 255.0) as u32;
+            let clip = cx.st.prim_clip;
+            let id = cx.st.scene_add(SceneNodeKind::RectAlpha { w: b.w, h, alpha }, b.x, b.y, color);
+            if let Some(node) = cx.st.scene.iter_mut().find(|n| n.id == id) {
+                node.z = b.bg_z;
+                node.clip = clip;
+            }
+            return;
+        }
+    }
+    prim_push_bg(cx.st, b.x, b.y, b.w, h, color, b.bg_z, sty.radius, sty.border_w, sty.border_col);
+}
+
+/// Renderiza un hijo de flujo vertical (nodo, o texto suelto con el estilo del
+/// contenedor) y devuelve el alto que consumió.
+fn prim_flow_child(k: &OwnedValue, kf: PrimFrame, sty: &PrimStyle, b: PrimBox, cx: &mut PrimCtx) -> i32 {
+    if let Some((ct, cs, ck)) = prim_node_parts(k) {
+        prim_render(ct, cs, ck, kf, cx)
+    } else if let OwnedValue::Str(s) = k {
+        prim_emit_text(cx.st, cx.fonts, s, kf.x, kf.y, kf.avail_w, sty.scale, 8 * sty.scale + 4,
+            sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing)
+    } else {
+        0
+    }
+}
+
+/// Bloque vertical (el layout por defecto): apila los hijos hacia abajo.
+/// `gap` se aplica solo ENTRE hijos (como en la web, no después del último).
+fn prim_layout_block(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimFrame, cx: &mut PrimCtx) -> i32 {
+    let mut cy = kf.y;
+    let mut first = true;
+    for k in kids {
+        if !first { cy += sty.gap; }
+        first = false;
+        cy += prim_flow_child(k, PrimFrame { y: cy, ..kf }, sty, b, cx);
+    }
+    (cy - kf.y).max(0) + sty.pad.0 + sty.pad.2
+}
+
+/// Caja con scroll: alto fijo, hijos desplazados por `scrollY` y RECORTADOS a
+/// la caja con clip-por-nodo (independiente del z-order: también recorta los
+/// fondos de los hijos, que van a z<0).
+fn prim_layout_scroll(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimFrame, cx: &mut PrimCtx) -> i32 {
+    let box_h = sty.hgt;
+    if let Some(c) = sty.bg {
+        prim_push_bg(cx.st, b.x, b.y, b.w, box_h, c, b.bg_z, sty.radius, sty.border_w, sty.border_col);
+    }
+    let scroll_y = sty.num("scrollY", 0).max(0);
+    let saved_clip = cx.st.prim_clip;
+    cx.st.prim_clip = Some(prim_clip_intersect(saved_clip, b.x, b.y, b.x + b.w, b.y + box_h));
+    let mut cy = kf.y - scroll_y;
+    let mut first = true;
+    for k in kids {
+        if !first { cy += sty.gap; }
+        first = false;
+        cy += prim_flow_child(k, PrimFrame { y: cy, ..kf }, sty, b, cx);
+    }
+    cx.st.prim_clip = saved_clip;
+    box_h
+}
+
+// ── Fila flex ──────────────────────────────────────────────────────────────────
+
+/// Un hijo en el plan de reparto de la fila flex.
+struct FlexKid {
+    grow: i32,        // peso de crecimiento (`flex`); 0 = no crece
+    base: i32,        // ancho base en px (width fijo o contenido medido)
+    abs: bool,        // position:absolute = fuera de flujo (no ocupa columna ni gap)
+    from_width: bool, // el base salió del `width` del hijo: al renderizarlo se le
+                      // pasa el ancho del CONTENEDOR para que un `%` no se
+                      // re-aplique sobre el slot (50% de 300 = 150, no 50% de 150)
+}
+
+/// Estilo efectivo de un HIJO (hoja + inline), para leer flex/width/position
+/// ANTES de renderizarlo: el plan de la fila se decide primero.
+fn prim_child_style(cx: &PrimCtx, tag: &str, inline: &[OwnedValue]) -> Vec<(String, String)> {
+    let cclass = prim_attr(inline, "class").unwrap_or_default();
+    let cclasses: Vec<&str> = cclass.split_whitespace().collect();
+    let cid = prim_attr(inline, "id");
+    prim_eff_style(cx.sheet, cx.ctx, tag, &cclasses, cid.as_deref(), inline)
+}
+
+/// Ancho de CONTENIDO de un hijo de texto para el plan flex (shrink-to-fit):
+/// su texto medido con su fuente/escala + su padding y margen horizontales,
+/// acotado al ancho del contenedor. El base incluye los márgenes (es el slot
+/// completo): prim_render les resta ml/mr al ancho útil después.
+fn prim_text_fit(tag: &str, cstyle: &[(String, String)], kids: &[OwnedValue], cap_w: i32, fonts: &mut Option<GuiFonts>) -> i32 {
+    let scale = snum(cstyle, "font-scale", prim_default_scale(tag));
+    let ts = prim_text_style(tag, cstyle);
+    let fam = sget(cstyle, "font-family")
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+        .unwrap_or_default();
+    let (_, pr, _, pl) = prim_box_sides(cstyle, "padding");
+    let (_, mr, _, ml) = prim_box_sides(cstyle, "margin");
+    let txt = prim_join_text(kids);
+    let tw = prim_prefix_px(fonts, &txt, txt.chars().count(), scale, ts, fam.as_str());
+    (tw + pl + pr + ml + mr).min(cap_w).max(1)
+}
+
+/// Arma el plan de la fila: qué hijo crece, cuál es fijo y cuál se encoge a su
+/// contenido. Reglas (web-like, adaptadas al motor):
+///   `flex: N`             → crece con peso N (0 = fijo a su base)
+///   `width: px/%`         → ancho fijo (el % es del ancho del contenedor)
+///   texto sin flex/width  → SHRINK-TO-FIT: se mide su contenido, no crece —
+///                           así justify-content tiene espacio libre que repartir
+///                           (la flecha del Dropdown pegada al borde derecho)
+///   div sin flex/width    → crece y llena (default histórico del motor)
+fn prim_flex_plan(kids: &[OwnedValue], sty: &PrimStyle, content_w: i32, cx: &mut PrimCtx) -> Vec<FlexKid> {
+    let mut plan: Vec<FlexKid> = Vec::with_capacity(kids.len());
+    for k in kids {
+        let fk = if let Some((ct, cs, ck)) = prim_node_parts(k) {
+            let cstyle = prim_child_style(cx, ct, cs);
+            if sget(&cstyle, "position") == Some("absolute") {
+                // Fuera de flujo (como en CSS): no participa del reparto ni del gap.
+                FlexKid { grow: 0, base: 0, abs: true, from_width: false }
+            } else {
+                let flex = sget(&cstyle, "flex").and_then(|s| s.trim().parse::<i32>().ok());
+                // width admite px (con o sin sufijo) y `%` del ancho del contenedor.
+                let width = match prim_dim(&cstyle, "width", content_w) {
+                    w if w >= 0 => Some(w),
+                    _ => None,
+                };
+                match (flex, width) {
+                    (Some(fx), w) => FlexKid { grow: fx.max(0), base: w.unwrap_or(0).max(0), abs: false, from_width: false },
+                    (None, Some(w)) => FlexKid { grow: 0, base: w.max(0), abs: false, from_width: true },
+                    (None, None) if prim_is_text_tag(ct) =>
+                        FlexKid { grow: 0, base: prim_text_fit(ct, &cstyle, ck, content_w, cx.fonts), abs: false, from_width: false },
+                    (None, None) => FlexKid { grow: 1, base: 0, abs: false, from_width: false },
                 }
+            }
+        } else if let OwnedValue::Str(s) = k {
+            // Texto suelto: misma regla shrink-to-fit que un span (se dibuja con
+            // la fuente/escala del contenedor).
+            let tw = prim_prefix_px(cx.fonts, s, s.chars().count(), sty.scale, sty.tstyle, sty.font_fam.as_str());
+            FlexKid { grow: 0, base: tw.min(content_w).max(1), abs: false, from_width: false }
+        } else {
+            FlexKid { grow: 1, base: 0, abs: false, from_width: false }
+        };
+        plan.push(fk);
+    }
+    plan
+}
+
+/// Fila flex (eje principal horizontal). Reparte anchos según el plan, aplica
+/// justify-content cuando nadie crece (espacio libre = todos fijos) y alinea en
+/// el eje cruzado con un post-pase (el alto de cada hijo se conoce al dibujarlo).
+fn prim_layout_row(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimFrame, cx: &mut PrimCtx) -> i32 {
+    let plan = prim_flex_plan(kids, sty, b.content_w, cx);
+    let ncols = (plan.iter().filter(|k| !k.abs).count().max(1)) as i32;
+    let total_gap = sty.gap * (ncols - 1).max(0);
+    let total_grow: i32 = plan.iter().map(|k| k.grow).sum();
+    let sum_base: i32 = plan.iter().map(|k| k.base).sum();
+
+    // Anchos finales + hueco inicial/extra según justify-content.
+    let mut widths: Vec<i32> = Vec::with_capacity(plan.len());
+    let start_off;
+    let extra_between;
+    if total_grow > 0 {
+        // Alguien crece: los growers absorben el sobrante; no queda espacio libre.
+        let free_for_grow = (b.content_w - sum_base - total_gap).max(0);
+        for k in &plan {
+            let w = if k.abs { 0 }
+                else if k.grow > 0 { (k.base + free_for_grow * k.grow / total_grow).max(1) }
+                else { k.base.max(1) };
+            widths.push(w);
+        }
+        start_off = 0;
+        extra_between = 0;
+    } else {
+        // Todos fijos: justify-content reparte el espacio libre.
+        for k in &plan { widths.push(if k.abs { 0 } else { k.base.max(1) }); }
+        let used: i32 = widths.iter().sum::<i32>() + total_gap;
+        let free = (b.content_w - used).max(0);
+        let justify = sty.get("justify-content").or_else(|| sty.get("justify")).unwrap_or("flex-start");
+        let (s, e) = prim_justify(justify, free, ncols);
+        start_off = s;
+        extra_between = e;
+    }
+
+    let align = sty.get("align-items").or_else(|| sty.get("align")).unwrap_or("").to_string();
+    let want_align = align == "center" || align == "flex-end" || align == "end";
+
+    let mut cxr = b.content_x + start_off;
+    let mut max_h = 0;
+    // Rango de nodos/regions por hijo, para alinear en vertical tras conocer max_h.
+    let mut ranges: Vec<(usize, usize, usize, usize, i32)> = Vec::new();
+    for (i, k) in kids.iter().enumerate() {
+        // Fuera de flujo: se renderiza con el ancho del contenedor (para %/left)
+        // sin ocupar columna ni gap, y no participa de align-items.
+        if plan.get(i).map(|p| p.abs).unwrap_or(false) {
+            if let Some((ct, cs, ck)) = prim_node_parts(k) {
+                prim_render(ct, cs, ck, PrimFrame { x: cxr, avail_w: b.content_w, ..kf }, cx);
+            }
+            continue;
+        }
+        let each = widths.get(i).copied().unwrap_or(1);
+        let sc0 = cx.st.scene.len();
+        let rg0 = cx.regions.len();
+        let h = if let Some((ct, cs, ck)) = prim_node_parts(k) {
+            // Si el slot salió del `width` del hijo, se le pasa el ancho del
+            // CONTENEDOR: así su `width: 50%` se resuelve otra vez contra lo
+            // mismo que usó el plan (y no contra el slot, que lo achicaría).
+            let child_avail = if plan.get(i).map(|p| p.from_width).unwrap_or(false) { b.content_w } else { each };
+            prim_render(ct, cs, ck, PrimFrame { x: cxr, avail_w: child_avail, ..kf }, cx)
+        } else if let OwnedValue::Str(s) = k {
+            prim_emit_text(cx.st, cx.fonts, s, cxr, kf.y, each, sty.scale, 8 * sty.scale + 4,
+                sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing)
+        } else { 0 };
+        if h > max_h { max_h = h; }
+        if want_align { ranges.push((sc0, cx.st.scene.len(), rg0, cx.regions.len(), h)); }
+        cxr += each + sty.gap + extra_between;
+    }
+    // align-items (post-pase): desplaza cada hijo dentro de la banda de cruce.
+    // La banda es el alto EXPLÍCITO del contenedor (menos padding) si lo hay —
+    // p. ej. un backdrop full-height centrando una caja — o el hijo más alto.
+    if want_align {
+        let band = if sty.hgt > 0 { (sty.hgt - sty.pad.0 - sty.pad.2).max(max_h) } else { max_h };
+        for (sc0, sc1, rg0, rg1, h) in ranges {
+            let off = if align == "center" { (band - h) / 2 } else { band - h };
+            if off > 0 {
+                for n in cx.st.scene[sc0..sc1].iter_mut() { n.y += off; }
+                for r in cx.regions[rg0..rg1].iter_mut() { r.y += off; }
             }
         }
     }
-    regions[region_idx].h = total_h;
-    if absolute { 0 } else { mt + total_h + mb }
+    max_h + sty.pad.0 + sty.pad.2
 }
 
 /// Tipografía a nivel intérprete (independiente de la ventana): carga de .ttf/.otf,
@@ -4175,7 +4482,23 @@ impl super::Evaluator {
                             if let OwnedValue::Str(tag) = &elements[0] {
                                 let style = if let OwnedValue::Array { elements, .. } = &elements[1] { elements.as_slice() } else { &[] };
                                 let kids = if let OwnedValue::Array { elements, .. } = &elements[2] { elements.as_slice() } else { &[] };
-                                prim_render(tag.as_str(), style, kids, 0, 0, w, sheet_ref, svgs_ref, &ctx, 0, 0, 0, 0, w, h, &mut fonts, &mut st, &mut regions);
+                                // Marco raíz: toda la ventana; el containing block
+                                // inicial (para absolute sin ancestro posicionado)
+                                // es la ventana misma.
+                                let root = PrimFrame {
+                                    x: 0, y: 0, avail_w: w,
+                                    depth: 0, z_off: 0,
+                                    cb_x: 0, cb_y: 0, cb_w: w, cb_h: h,
+                                };
+                                let mut pcx = PrimCtx {
+                                    sheet: sheet_ref,
+                                    svgs: svgs_ref,
+                                    ctx: &ctx,
+                                    fonts: &mut fonts,
+                                    st: &mut st,
+                                    regions: &mut regions,
+                                };
+                                prim_render(tag.as_str(), style, kids, root, &mut pcx);
                             }
                         }
                     }
