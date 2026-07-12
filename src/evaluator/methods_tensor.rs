@@ -2158,7 +2158,6 @@ impl super::Evaluator {
         init: f64,
     ) -> (Vec<usize>, Vec<f64>) {
         let ndim = shape.len();
-        let axis_size = shape[axis];
         // Output shape: remove or keep-dim the axis
         let mut out_shape: Vec<usize> = shape.iter().cloned().enumerate()
             .filter_map(|(i, d)| if i == axis { if keepdim { Some(1) } else { None } } else { Some(d) })

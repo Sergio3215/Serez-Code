@@ -678,7 +678,7 @@ impl<'a> NumScanner<'a> {
             let c = self.b[self.i];
             if c.is_ascii_digit() { self.i += 1; }
             else if c == b'.' && !seen_dot { seen_dot = true; self.i += 1; }
-            else if (c == b'e' || c == b'E') {
+            else if c == b'e' || c == b'E' {
                 self.i += 1;
                 if self.i < self.b.len() && (self.b[self.i] == b'-' || self.b[self.i] == b'+') { self.i += 1; }
             } else { break; }

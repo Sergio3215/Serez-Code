@@ -7,6 +7,10 @@ license = "MIT"
 repository = "https://github.com/Sergio3215/serez-code"
 homepage = "https://github.com/Sergio3215/serez-code"
 authors = ["SerezDev"]
+
+# `publisher` no es una clave estándar de [package]; va en metadata (custom) para
+# no disparar el warning "unused manifest key" y quedar disponible para tooling.
+[package.metadata]
 publisher = "SerezDev"
 
 [package.metadata.wix]

@@ -867,7 +867,7 @@ impl super::Evaluator {
                 }
                 let pred_ref = match self.eval_expression(&dot_call.arguments[0]) { EvalResult::Value(r) => r, other => return other };
                 let tgt_ref  = match self.eval_expression(&dot_call.arguments[1]) { EvalResult::Value(r) => r, other => return other };
-                let (pred_data, pred_shape, pred_tid) = match self.resolve(pred_ref).cloned() {
+                let (pred_data, _pred_shape, pred_tid) = match self.resolve(pred_ref).cloned() {
                     Some(ObjectData::Tensor { data, shape, tid }) => (data, shape, tid),
                     _ => { return self.rt_err_kind("TypeError", "Autodiff.mseLoss pred must be a Tensor"); }
                 };
@@ -1603,7 +1603,6 @@ impl super::Evaluator {
     /// Write tensors to a .szw binary file.
     /// Format: magic(4) + version(1) + count(u32 LE) + [ndim(u8) + shape(u64 LE × ndim) + len(u64 LE) + data(f64 LE × len)]*
     fn write_weights_file(path: &str, tensors: &[(Vec<usize>, Vec<f64>)]) -> Result<(), String> {
-        use std::io::Write;
         let mut buf: Vec<u8> = Vec::new();
         // Magic + version
         buf.extend_from_slice(b"SZWT");

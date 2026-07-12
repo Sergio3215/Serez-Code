@@ -5,7 +5,7 @@
 // (RustCrypto/dalek) — NUNCA reimplementar firmas o CSPRNG a mano.
 
 use crate::ast;
-use crate::region::{ObjectData, ObjectRef, OwnedValue};
+use crate::region::{ObjectData, OwnedValue};
 use super::EvalResult;
 
 impl super::Evaluator {

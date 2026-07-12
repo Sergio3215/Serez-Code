@@ -15,7 +15,7 @@
 // Binary.concat(a, b)          → [int]   concatenate two byte arrays
 
 use crate::ast;
-use crate::region::{ObjectData, ObjectRef, OwnedValue};
+use crate::region::{ObjectData, OwnedValue};
 use super::EvalResult;
 
 impl super::Evaluator {
