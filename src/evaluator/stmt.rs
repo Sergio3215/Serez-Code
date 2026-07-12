@@ -1180,11 +1180,18 @@ impl super::Evaluator {
 
         // Try each candidate directory. For each base, also try <base>/<pkg>/index.sz
         // so that `import "pkg-name"` resolves to `<packages>/pkg-name/index.sz`.
+        // Each name is tried as `.sz` first, then `.szx` (serez-ui JSX): plain source
+        // wins over JSX in the same spot, and `.szx` is purely additive — an import
+        // can now pull in a JSX component file, not just plain `.sz`.
+        let stem = path.trim_end_matches(".sz").trim_end_matches(".szx");
         let canonical = search_dirs.iter()
             .flat_map(|base| {
-                let direct  = base.join(&path_with_ext);
-                let pkg_dir = base.join(path.trim_end_matches(".sz")).join("index.sz");
-                vec![direct, pkg_dir]
+                vec![
+                    base.join(&path_with_ext),                 // <base>/<path>.sz
+                    base.join(format!("{}.szx", stem)),        // <base>/<path>.szx
+                    base.join(stem).join("index.sz"),          // <base>/<path>/index.sz
+                    base.join(stem).join("index.szx"),         // <base>/<path>/index.szx
+                ]
             })
             .find_map(|p| if p.exists() { p.canonicalize().ok() } else { None });
 
@@ -1203,11 +1210,28 @@ impl super::Evaluator {
         }
         self.imported_files.insert(canonical.clone());
 
-        let source = match std::fs::read_to_string(&canonical) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("❌ ERROR: Cannot read module '{}': {}", canonical.display(), e);
-                return EvalResult::Error;
+        // A `.szx` module is JSX — translate it to `.sz` source before parsing (the
+        // interpreter only understands `.sz`). Its relative imports are preserved
+        // verbatim and resolve against the `.szx`'s own directory (current_dir below).
+        let is_szx = canonical.extension().map(|e| e == "szx").unwrap_or(false);
+        let source = if is_szx {
+            match crate::translate_szx_to_string(&canonical) {
+                Some(s) => s,
+                None => {
+                    eprintln!(
+                        "❌ ERROR: could not translate JSX module '{}' (is serez-ui's translator present?)",
+                        canonical.display()
+                    );
+                    return EvalResult::Error;
+                }
+            }
+        } else {
+            match std::fs::read_to_string(&canonical) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("❌ ERROR: Cannot read module '{}': {}", canonical.display(), e);
+                    return EvalResult::Error;
+                }
             }
         };
 

@@ -94,7 +94,7 @@ fn run_file(file_path: &str, is_check: bool) -> i32 {
 /// Locate serez-ui's `.szx → .sz` translator (`tools/translate.sz`), searching
 /// the local project packages, the source file's packages, the global store, and
 /// the executable's directory (for packaged apps that bundle serez-ui).
-fn find_szx_translator(szx: &std::path::Path) -> Option<std::path::PathBuf> {
+pub fn find_szx_translator(szx: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd.join("packages"));
@@ -171,6 +171,39 @@ fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
     let code = run_file(out_sz.to_string_lossy().as_ref(), is_check);
     let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
     code
+}
+
+/// Translate a `.szx` (serez-ui JSX) module to `.sz` source and return the
+/// translated text. Used by the import resolver so `import "src/components"` can
+/// pull in a `.szx` file (JSX components split into their own files), not just
+/// plain `.sz`. Translates into a throwaway temp file (the caller controls the
+/// module's directory for relative imports, so the temp's location is irrelevant),
+/// reads it back, and deletes it. Returns None if serez-ui's translator isn't
+/// found or the translation fails.
+pub fn translate_szx_to_string(szx: &std::path::Path) -> Option<String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let translator = find_szx_translator(szx)?;
+    let sz_exe = std::env::current_exe().ok()?;
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let out_sz = std::env::temp_dir().join(format!("szimport_{}_{}.sz", std::process::id(), n));
+
+    let mut cmd = std::process::Command::new(&sz_exe);
+    cmd.arg(&translator)
+        .arg(szx)
+        .arg(&out_sz)
+        .stdout(std::process::Stdio::null()); // hide the translator's own chatter
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let ok = matches!(cmd.status(), Ok(ref s) if s.success()) && out_sz.exists();
+    let translated = if ok { std::fs::read_to_string(&out_sz).ok() } else { None };
+    let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
+    translated
 }
 
 /// Print a subcommand error (if any) and map it to a process exit code.
