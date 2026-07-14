@@ -1,18 +1,40 @@
 // namespaces_gui/css.rs — motor CSS nativo del engine de primitivos (port de css.sz).
 //
 // Autocontenido (solo `std`): parsea la hoja `.szs` a reglas y resuelve las props
-// aplicables a un nodo. Selectores por tag / `.clase` / `#id` / universal `*`, con
-// condición reactiva `(var op val)` evaluada contra un ctx [(nombre, valor)]; la
-// última regla que matchea gana. Lo consume el motor de primitivos (render.rs) vía
-// `NativeStylesheet::props_for_node` y `Gui.loadStylesheet` vía `parse_css`.
+// aplicables a un nodo. Selectores simples por tag / `.clase`(s) / `#id` / `:pseudo` /
+// universal `*`, encadenables por ESPACIO (combinador descendiente; `>` se trata como
+// descendiente), con condición reactiva `(var op val)` evaluada contra un ctx
+// [(nombre, valor)]; la última regla que matchea gana. Lo consume el motor de
+// primitivos (render.rs) vía `NativeStylesheet::props_for_node` y `Gui.loadStylesheet`
+// vía `parse_css`.
 
-/// Selector simple: tag y/o `.clase` y/o `#id` (o universal `*`). Un nodo casa si
-/// TODAS las partes presentes casan (habilita el lowering widget→div/span).
-struct Selector {
+/// Identidad CSS de un nodo para el matching: tag, clases, id y pseudo-estados
+/// activos. Los estados salen de los ATTRS del nodo (focused/hover/active/disabled
+/// = "true") — el motor es stateless por frame, así que `:focus` matchea lo que el
+/// framework marque en el árbol, igual que la convención `.focused` previa.
+pub(crate) struct NodeKey {
+    pub(crate) tag: String,
+    pub(crate) classes: Vec<String>,
+    pub(crate) id: Option<String>,
+    pub(crate) states: Vec<String>,
+}
+
+/// Selector simple: tag y/o `.clase`(s) y/o `#id` y/o `:pseudo`(s), o universal `*`.
+/// Un nodo casa si TODAS las partes presentes casan (habilita el lowering
+/// widget→div/span y compuestos `.a.b` / `tag.a:focus`).
+struct SimpleSel {
     universal: bool,
     tag: Option<String>,
-    class: Option<String>,
+    classes: Vec<String>,
     id: Option<String>,
+    pseudos: Vec<String>,
+}
+
+/// Selector completo: cadena de selectores simples (descendiente). El ÚLTIMO es el
+/// sujeto (el nodo que recibe las props); los anteriores deben casar ancestros en
+/// orden (de afuera hacia adentro), como en la web.
+struct Selector {
+    parts: Vec<SimpleSel>,
 }
 
 /// Una regla CSS: selector + condición opcional (var op val) + decls.
@@ -22,51 +44,89 @@ struct CssRule {
     decls: Vec<(String, String)>,
 }
 
-/// Hoja de estilo nativa (port de css.sz). Match por tag/clase/id/`*` + condición reactiva.
+/// Hoja de estilo nativa (port de css.sz). Match por tag/clase/id/pseudo/`*` con
+/// combinador descendiente + condición reactiva.
 pub(crate) struct NativeStylesheet {
     rules: Vec<CssRule>,
 }
 
-fn parse_selector(s: &str) -> Selector {
-    let s = s.trim();
-    if s == "*" {
-        return Selector { universal: true, tag: None, class: None, id: None };
-    }
+fn parse_simple(s: &str) -> SimpleSel {
+    let mut sel = SimpleSel { universal: false, tag: None, classes: Vec::new(), id: None, pseudos: Vec::new() };
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
-    let mut tag = None;
-    let mut class = None;
-    let mut id = None;
-    if i < chars.len() && chars[i] != '.' && chars[i] != '#' {
+    if i < chars.len() && chars[i] == '*' {
+        sel.universal = true;
+        i += 1;
+    }
+    if !sel.universal && i < chars.len() && chars[i] != '.' && chars[i] != '#' && chars[i] != ':' {
         let mut t = String::new();
-        while i < chars.len() && chars[i] != '.' && chars[i] != '#' { t.push(chars[i]); i += 1; }
-        if !t.is_empty() { tag = Some(t); }
+        while i < chars.len() && chars[i] != '.' && chars[i] != '#' && chars[i] != ':' { t.push(chars[i]); i += 1; }
+        if !t.is_empty() { sel.tag = Some(t); }
     }
     while i < chars.len() {
         let kind = chars[i];
         i += 1;
         let mut name = String::new();
-        while i < chars.len() && chars[i] != '.' && chars[i] != '#' { name.push(chars[i]); i += 1; }
-        if kind == '.' && !name.is_empty() { class = Some(name); }
-        else if kind == '#' && !name.is_empty() { id = Some(name); }
+        while i < chars.len() && chars[i] != '.' && chars[i] != '#' && chars[i] != ':' { name.push(chars[i]); i += 1; }
+        if name.is_empty() { continue; }
+        match kind {
+            '.' => sel.classes.push(name),
+            '#' => sel.id = Some(name),
+            ':' => sel.pseudos.push(name),
+            _ => {}
+        }
     }
-    Selector { universal: false, tag, class, id }
+    sel
 }
 
-fn selector_matches(sel: &Selector, tag: &str, classes: &[&str], id: Option<&str>) -> bool {
-    if sel.universal { return true; }
-    if let Some(t) = &sel.tag { if t != tag { return false; } }
-    if let Some(c) = &sel.class { if !classes.iter().any(|x| x == c) { return false; } }
-    if let Some(i) = &sel.id { if id != Some(i.as_str()) { return false; } }
-    sel.tag.is_some() || sel.class.is_some() || sel.id.is_some()
+fn parse_selector(s: &str) -> Selector {
+    Selector {
+        parts: s.split_whitespace()
+            .filter(|t| *t != ">") // combinador hijo: se degrada a descendiente
+            .map(parse_simple)
+            .collect(),
+    }
+}
+
+/// ¿El selector simple casa este nodo? Todas las partes presentes deben casar,
+/// y debe haber al menos una parte (o `*`) para que la regla tenga sujeto.
+fn simple_matches(sel: &SimpleSel, k: &NodeKey) -> bool {
+    if let Some(t) = &sel.tag { if t != &k.tag { return false; } }
+    for c in &sel.classes { if !k.classes.iter().any(|x| x == c) { return false; } }
+    if let Some(i) = &sel.id { if k.id.as_deref() != Some(i.as_str()) { return false; } }
+    for p in &sel.pseudos { if !k.states.iter().any(|x| x == p) { return false; } }
+    sel.universal || sel.tag.is_some() || !sel.classes.is_empty() || sel.id.is_some() || !sel.pseudos.is_empty()
+}
+
+/// Match del selector completo: el último simple casa el SUJETO; los anteriores
+/// deben casar ancestros en orden (semántica descendiente: se busca de la hoja
+/// hacia la raíz, cada parte consume el primer ancestro que la satisface).
+fn selector_matches(sel: &Selector, subject: &NodeKey, ancestors: &[NodeKey]) -> bool {
+    let parts = &sel.parts;
+    let Some(last) = parts.last() else { return false; };
+    if !simple_matches(last, subject) { return false; }
+    let mut pi = parts.len() as i32 - 2;
+    let mut ai = ancestors.len() as i32 - 1; // el ancestro más cercano va al final
+    while pi >= 0 {
+        let mut found = false;
+        while ai >= 0 {
+            let a = &ancestors[ai as usize];
+            ai -= 1;
+            if simple_matches(&parts[pi as usize], a) { found = true; break; }
+        }
+        if !found { return false; }
+        pi -= 1;
+    }
+    true
 }
 
 impl NativeStylesheet {
-    /// Props aplicables al nodo (tag+clases+id), última gana, dado el ctx [(nombre,valor)].
-    pub(crate) fn props_for_node(&self, tag: &str, classes: &[&str], id: Option<&str>, ctx: &[(String, String)]) -> Vec<(String, String)> {
+    /// Props aplicables al nodo (sujeto + cadena de ancestros), última gana,
+    /// dado el ctx [(nombre,valor)]. `ancestors` va de la raíz al padre directo.
+    pub(crate) fn props_for_node(&self, subject: &NodeKey, ancestors: &[NodeKey], ctx: &[(String, String)]) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
         for r in &self.rules {
-            if !selector_matches(&r.sel, tag, classes, id) {
+            if !selector_matches(&r.sel, subject, ancestors) {
                 continue;
             }
             if let Some((v, op, val)) = &r.cond {
@@ -189,8 +249,8 @@ fn parse_cond(sraw: &str) -> (String, String, String) {
     (sraw.trim().to_string(), String::new(), String::new())
 }
 
-/// Parser CSS (port de parseCss): selectores tag/"*" + (cond) + { decls }. Salta
-/// comentarios y bloques :import/:font.
+/// Parser CSS (port de parseCss): selectores (con descendientes/pseudos) + (cond) +
+/// { decls }. Salta comentarios y bloques :import/:font.
 pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
     let s: Vec<char> = src.chars().collect();
     let n = s.len();
@@ -230,8 +290,11 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
             }
             continue;
         }
+        // Selector: todo hasta `(` (condición) o `{` (decls). Admite espacios
+        // (descendientes), `.` `#` `:` y `>` — parse_selector lo trocea.
         let mut sel = String::new();
-        while i < n && (css_is_name_char(s[i]) || s[i] == '.' || s[i] == '#') { sel.push(s[i]); i += 1; }
+        while i < n && s[i] != '{' && s[i] != '(' && s[i] != '}' { sel.push(s[i]); i += 1; }
+        let sel = sel.trim().to_string();
         if sel.is_empty() { i += 1; continue; }
         i = skip(&s, i);
         let mut cond = None;
@@ -266,7 +329,12 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
             }
             if i < n && s[i] == '}' { i += 1; }
         }
-        rules.push(CssRule { sel: parse_selector(&sel), cond, decls });
+        // Grupo `h1, h2 { … }` → una regla por selector (mismas decls/cond).
+        for part in sel.split(',') {
+            let part = part.trim();
+            if part.is_empty() { continue; }
+            rules.push(CssRule { sel: parse_selector(part), cond: cond.clone(), decls: decls.clone() });
+        }
     }
     NativeStylesheet { rules }
 }

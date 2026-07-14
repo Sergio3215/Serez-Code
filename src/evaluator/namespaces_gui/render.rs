@@ -8,7 +8,7 @@
 
 use crate::region::{ObjectData, OwnedValue};
 use super::{GuiState, GuiFonts, SceneNode, SceneNodeKind, ImageData, NativeStylesheet};
-use super::css::css_color;
+use super::css::{css_color, NodeKey};
 use super::svg;
 
 /// Punto de entrada del motor: baja el árbol de primitivos a la escena de `st`,
@@ -29,12 +29,13 @@ pub(crate) fn render_tree(
     regions: &mut Vec<PrimRegion>,
 ) {
     let root = PrimFrame {
-        x: 0, y: 0, avail_w: w,
+        x: 0, y: 0, avail_w: w, avail_h: h,
         depth: 0, z_off: 0,
         cb_x: 0, cb_y: 0, cb_w: w, cb_h: h,
         inh_color: 0xffffff, // color raíz por defecto (blanco); se hereda hacia abajo
+        opacity: 1.0,
     };
-    let mut pcx = PrimCtx { sheet, svgs, ctx, fonts, st, regions };
+    let mut pcx = PrimCtx { sheet, svgs, ctx, fonts, st, regions, path: Vec::new() };
     prim_render(tag, style, kids, root, &mut pcx);
 }
 
@@ -84,9 +85,28 @@ fn prim_load_raster(st: &mut GuiState, path: &str, req_w: i32, req_h: i32) -> Op
     Some((ih, tw, th))
 }
 
-fn prim_eff_style(sheet: Option<&NativeStylesheet>, ctx: &[(String, String)], tag: &str,
-    classes: &[&str], id: Option<&str>, inline: &[OwnedValue]) -> Vec<(String, String)> {
-    let mut out = sheet.map(|s| s.props_for_node(tag, classes, id, ctx)).unwrap_or_default();
+/// Identidad CSS del nodo (tag/clases/id + pseudo-estados desde sus attrs) para
+/// el matching de selectores, incluidos descendientes y `:focus`/`:hover`/…
+fn prim_node_key(tag: &str, inline: &[OwnedValue]) -> NodeKey {
+    let class_str = prim_attr(inline, "class").unwrap_or_default();
+    let classes: Vec<String> = class_str.split_whitespace().map(|s| s.to_string()).collect();
+    let id = prim_attr(inline, "id");
+    // Pseudo-estados: attrs booleanos que el framework marca en el árbol
+    // (mismo contrato que la clase `.focused` previa, pero web-like).
+    let mut states: Vec<String> = Vec::new();
+    if prim_attr(inline, "focused").as_deref() == Some("true") { states.push("focus".to_string()); }
+    if prim_attr(inline, "hover").as_deref() == Some("true") { states.push("hover".to_string()); }
+    if prim_attr(inline, "active").as_deref() == Some("true") { states.push("active".to_string()); }
+    match prim_attr(inline, "disabled").as_deref() {
+        Some("true") | Some("disabled") => states.push("disabled".to_string()),
+        _ => {}
+    }
+    NodeKey { tag: tag.to_string(), classes, id, states }
+}
+
+fn prim_eff_style(sheet: Option<&NativeStylesheet>, ctx: &[(String, String)], key: &NodeKey,
+    ancestors: &[NodeKey], inline: &[OwnedValue]) -> Vec<(String, String)> {
+    let mut out = sheet.map(|s| s.props_for_node(key, ancestors, ctx)).unwrap_or_default();
     for pair in inline {
         if let OwnedValue::Array { elements, .. } = pair {
             if elements.len() >= 2 {
@@ -221,13 +241,24 @@ fn prim_push_bg(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, color: u32, z
     }
     prim_push_fill(st, x, y, w, h, color, z, radius);
 }
-fn prim_push_text(st: &mut GuiState, x: i32, y: i32, text: &str, scale: i32, color: u32, style: u8, font: &str, z: i32, spacing: i32) {
+fn prim_push_text(st: &mut GuiState, x: i32, y: i32, text: &str, scale: i32, color: u32, style: u8, font: &str, z: i32, spacing: i32, alpha: u32) {
     if text.is_empty() { return; }
     let id = st.next_node;
     st.next_node += 1;
     let clip = st.prim_clip;
     st.scene.push(SceneNode {
-        id, kind: SceneNodeKind::Text { text: text.to_string(), scale, font: font.to_string(), style, spacing },
+        id, kind: SceneNodeKind::Text { text: text.to_string(), scale, font: font.to_string(), style, spacing, alpha: alpha.min(255) },
+        x, y, color, z, visible: true, clip,
+    });
+}
+/// Emite una sombra difusa rectangular detrás de una caja (box-shadow).
+fn prim_push_shadow(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, blur: i32, color: u32, alpha: u32, z: i32) {
+    if w <= 0 || h <= 0 { return; }
+    let id = st.next_node;
+    st.next_node += 1;
+    let clip = st.prim_clip;
+    st.scene.push(SceneNode {
+        id, kind: SceneNodeKind::Shadow { w, h, blur: blur.clamp(0, 64), alpha: alpha.min(255) },
         x, y, color, z, visible: true, clip,
     });
 }
@@ -366,7 +397,7 @@ fn prim_wrap_lines(fonts: &mut Option<GuiFonts>, text: &str, avail: i32, scale: 
 /// Ajusta (word-wrap) y emite texto en `avail_w`, hasta `cap` líneas (virtualización).
 /// Devuelve el alto consumido. `style`: bit0=bold, bit1=italic. Mide proporcional si
 /// hay una familia de fuente custom activa (si no, rejilla monospace 8*scale).
-fn prim_emit_text(st: &mut GuiState, fonts: &mut Option<GuiFonts>, text: &str, x: i32, y: i32, avail_w: i32, scale: i32, line_h: i32, color: u32, style: u8, cap: i32, font: &str, z: i32, align: u8, spacing: i32) -> i32 {
+fn prim_emit_text(st: &mut GuiState, fonts: &mut Option<GuiFonts>, text: &str, x: i32, y: i32, avail_w: i32, scale: i32, line_h: i32, color: u32, style: u8, cap: i32, font: &str, z: i32, align: u8, spacing: i32, alpha: u32) -> i32 {
     // Familia por nodo: mide+dibuja con `font` (restaura la familia previa al salir).
     let prev = if !font.is_empty() {
         fonts.as_mut().map(|f| { let p = f.current; f.set_family(font); p })
@@ -384,7 +415,7 @@ fn prim_emit_text(st: &mut GuiState, fonts: &mut Option<GuiFonts>, text: &str, x
                 let free = (avail_w - lw).max(0);
                 if align == 1 { x + free / 2 } else { x + free }
             };
-            prim_push_text(st, lx, y + line * line_h, seg, scale, color, style, font, z, spacing);
+            prim_push_text(st, lx, y + line * line_h, seg, scale, color, style, font, z, spacing, alpha);
         }
         line += 1;
     }
@@ -452,6 +483,113 @@ fn prim_dim(st: &[(String, String)], name: &str, base: i32) -> i32 {
         None => -1,
     }
 }
+/// `linear-gradient(dir?, c1, c2)` → (c1, c2, vertical). Dir: `to right/left/
+/// top/bottom` o `Ndeg` (0=arriba, 90=derecha, 180=abajo = default web). Colores
+/// hex o nombre (rgb()/hsl() no: sus comas chocan con el split de stops).
+/// `to left`/`to top` invierten el par. Más de 2 stops: se usan el 1º y el último.
+fn prim_parse_gradient(v: &str) -> Option<(u32, u32, bool)> {
+    let lower = v.trim().to_ascii_lowercase();
+    let inner = lower.strip_prefix("linear-gradient(")?.strip_suffix(')')?;
+    let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
+    if parts.is_empty() { return None; }
+    let mut vertical = true;
+    let mut flip = false;
+    let mut ci = 0usize;
+    let first = parts[0];
+    if first.starts_with("to ") || first.ends_with("deg") {
+        ci = 1;
+        if first.contains("right") { vertical = false; }
+        else if first.contains("left") { vertical = false; flip = true; }
+        else if first.contains("top") { flip = true; }
+        else if let Some(d) = first.strip_suffix("deg").and_then(|d| d.trim().parse::<f32>().ok()) {
+            let d = d.rem_euclid(360.0);
+            if (45.0..135.0).contains(&d) { vertical = false; }          // ~90° = a la derecha
+            else if (225.0..315.0).contains(&d) { vertical = false; flip = true; } // ~270° = a la izquierda
+            else if !(135.0..225.0).contains(&d) { flip = true; }        // ~0° = hacia arriba
+        }
+    }
+    if parts.len() < ci + 2 { return None; }
+    let c1 = css_color(parts[ci])?;
+    let c2 = css_color(parts[parts.len() - 1])?;
+    Some(if flip { (c2, c1, vertical) } else { (c1, c2, vertical) })
+}
+
+/// `box-shadow: [ox oy [blur [spread]]] color` → (ox, oy, blur, color, alpha).
+/// El color acepta hex/nombre o rgba()/hsla() (el 4º componente es el alpha de
+/// la sombra; sin él, alpha por defecto 96). `inset` y el spread se ignoran.
+fn prim_parse_shadow(v: &str) -> Option<(i32, i32, i32, u32, u32)> {
+    let lower = v.trim().to_ascii_lowercase();
+    if lower.is_empty() || lower == "none" { return None; }
+    let mut color: Option<u32> = None;
+    let mut alpha = 96u32;
+    let mut rest = lower.clone();
+    // Función de color (rgba/hsla llevan comas y espacios: se extrae ANTES de
+    // tokenizar por whitespace).
+    let fpos = ["rgba(", "rgb(", "hsla(", "hsl("].iter().find_map(|p| lower.find(p));
+    if let Some(p) = fpos {
+        if let Some(endr) = lower[p..].find(')') {
+            let func = lower[p..p + endr + 1].to_string();
+            color = css_color(&func);
+            if let Some(op) = func.find('(') {
+                let comps: Vec<&str> = func[op + 1..func.len() - 1].split(',').collect();
+                if comps.len() >= 4 {
+                    if let Ok(a) = comps[3].trim().parse::<f32>() {
+                        alpha = (a.clamp(0.0, 1.0) * 255.0) as u32;
+                    }
+                }
+            }
+            rest.replace_range(p..p + endr + 1, " ");
+        }
+    }
+    let mut nums: Vec<i32> = Vec::new();
+    for tok in rest.split_whitespace() {
+        if tok == "inset" { continue; }
+        if let Ok(npx) = tok.trim_end_matches("px").parse::<i32>() { nums.push(npx); }
+        else if color.is_none() { color = css_color(tok); }
+    }
+    let c = color?;
+    let (ox, oy, blur) = match nums.len() {
+        0 => (0, 0, 8),
+        1 => (nums[0], nums[0], 8),
+        2 => (nums[0], nums[1], 8),
+        _ => (nums[0], nums[1], nums[2].max(0)), // el 4º (spread) se ignora
+    };
+    Some((ox, oy, blur, c, alpha.min(255)))
+}
+
+/// `transform: translate(x[,y]) / translateX(n) / translateY(n)` → corrimiento
+/// VISUAL en px (el flujo de los hermanos no cambia, como position:relative).
+/// scale/rotate no están soportados (exigen re-rasterizar el subárbol).
+fn prim_transform_offset(props: &[(String, String)]) -> (i32, i32) {
+    let Some(v) = sget(props, "transform") else { return (0, 0); };
+    let lower = v.trim().to_ascii_lowercase();
+    let mut dx = 0i32;
+    let mut dy = 0i32;
+    let mut rest = lower.as_str();
+    while let Some(p) = rest.find("translate") {
+        let after = &rest[p + "translate".len()..];
+        let (axis, skip) = if after.starts_with('x') { ('x', 1) }
+            else if after.starts_with('y') { ('y', 1) }
+            else { ('b', 0) };
+        let Some(op) = after[skip..].find('(') else { break; };
+        let inner_start = skip + op + 1;
+        let Some(cl) = after[inner_start..].find(')') else { break; };
+        let nums: Vec<i32> = after[inner_start..inner_start + cl].split(',')
+            .filter_map(|t| t.trim().trim_end_matches("px").trim().parse::<f32>().ok().map(|f| f as i32))
+            .collect();
+        match axis {
+            'x' => { if let Some(n) = nums.first() { dx += n; } }
+            'y' => { if let Some(n) = nums.first() { dy += n; } }
+            _ => {
+                if let Some(n) = nums.first() { dx += n; }
+                if nums.len() > 1 { dy += nums[1]; }
+            }
+        }
+        rest = &after[inner_start + cl + 1..];
+    }
+    (dx, dy)
+}
+
 /// `border: 1px solid #333` → (ancho, color). Ignora el estilo (solid/…).
 fn prim_border_shorthand(s: Option<&str>) -> (i32, Option<u32>) {
     match s {
@@ -495,6 +633,9 @@ struct PrimCtx<'a> {
     fonts: &'a mut Option<GuiFonts>,
     st: &'a mut GuiState,
     regions: &'a mut Vec<PrimRegion>,
+    // Cadena de ancestros del nodo en curso (raíz → padre directo), para los
+    // selectores descendientes (`.a .b`). prim_render la balancea (push/pop).
+    path: Vec<NodeKey>,
 }
 
 /// Lo que el PADRE le entrega a un nodo: dónde ubicarlo, cuánto ancho tiene,
@@ -505,6 +646,9 @@ struct PrimFrame {
     x: i32,
     y: i32,
     avail_w: i32,
+    avail_h: i32, // alto de contenido del ancestro con height EXPLÍCITO más cercano
+                  // (para resolver `height: %` contra el padre; -1 = desconocido →
+                  // cae a la ventana, el comportamiento histórico del motor)
     depth: i32, // profundidad en el árbol: ordena fondos (ancestro detrás de hijo)
     z_off: i32, // banda de overlay acumulada por los z-index de los ancestros
     cb_x: i32,  // containing block (ancestro posicionado): origen…
@@ -513,6 +657,8 @@ struct PrimFrame {
     cb_h: i32,
     inh_color: u32, // `color` heredado del ancestro (como en CSS): un hijo sin
                     // `color` propio lo toma del padre en vez de blanco por defecto.
+    opacity: f32,   // opacidad acumulada del subárbol (opacity de los ancestros ×
+                    // propia); aplica a textos y fondos de los descendientes.
 }
 
 /// La caja YA resuelta de un nodo: posición final, ancho, interior (sin padding)
@@ -526,6 +672,7 @@ struct PrimBox {
     content_w: i32, // w - padding horizontal
     z: i32,         // z del contenido (texto/formas)
     bg_z: i32,      // z de los fondos: banda + profundidad - 100 (siempre detrás)
+    alpha: u32,     // opacidad efectiva del nodo (0–255): subárbol × propia
 }
 
 /// Estilo efectivo del nodo resuelto a valores tipados. `props` conserva el
@@ -550,20 +697,21 @@ struct PrimStyle {
     hgt: i32,                          // height propio o -1 = auto
     absolute: bool,
     relative: bool,
+    bg_grad: Option<(u32, u32, bool)>, // linear-gradient: (c1, c2, vertical)
+    shadow: Option<(i32, i32, i32, u32, u32)>, // box-shadow: (ox, oy, blur, color, alpha)
 }
 
 impl PrimStyle {
     /// Resuelve el estilo EFECTIVO: reglas de la hoja que matchean el nodo
-    /// (tag/.clase/#id + condición reactiva, "última gana") pisadas por el
-    /// estilo inline, y de ahí los valores tipados que consume el layout.
-    /// `width` se resuelve contra el ancho disponible; `height` contra la
-    /// ventana (gap conocido: % de height vs padre no está soportado).
-    fn resolve(tag: &str, style_inline: &[OwnedValue], avail_w: i32, win_h: i32,
-               sheet: Option<&NativeStylesheet>, ctx: &[(String, String)], inh_color: u32) -> PrimStyle {
-        let class_str = prim_attr(style_inline, "class").unwrap_or_default();
-        let classes: Vec<&str> = class_str.split_whitespace().collect();
-        let id_str = prim_attr(style_inline, "id");
-        let props = prim_eff_style(sheet, ctx, tag, &classes, id_str.as_deref(), style_inline);
+    /// (selectores con descendientes/pseudos + condición reactiva, "última
+    /// gana") pisadas por el estilo inline, y de ahí los valores tipados que
+    /// consume el layout. `width` se resuelve contra el ancho disponible;
+    /// `height: %` contra el alto del ancestro con height explícito más
+    /// cercano (`avail_h`), o la ventana si no hay ninguno (compat).
+    fn resolve(tag: &str, style_inline: &[OwnedValue], avail_w: i32, avail_h: i32, win_h: i32,
+               sheet: Option<&NativeStylesheet>, ctx: &[(String, String)],
+               key: &NodeKey, ancestors: &[NodeKey], inh_color: u32) -> PrimStyle {
+        let props = prim_eff_style(sheet, ctx, key, ancestors, style_inline);
 
         // Borde: props sueltas o shorthand `border: 1px solid #333`.
         let (bsh_w, bsh_c) = prim_border_shorthand(sget(&props, "border"));
@@ -600,9 +748,12 @@ impl PrimStyle {
             tspacing: snum(&props, "letter-spacing", 0),
             tstyle: prim_text_style(tag, &props),
             ex_w: prim_dim(&props, "width", avail_w),
-            hgt: prim_dim(&props, "height", win_h),
+            hgt: prim_dim(&props, "height", if avail_h >= 0 { avail_h } else { win_h }),
             absolute,
             relative,
+            bg_grad: sget(&props, "background-image").and_then(prim_parse_gradient)
+                .or_else(|| sget(&props, "background").and_then(prim_parse_gradient)),
+            shadow: sget(&props, "box-shadow").and_then(prim_parse_shadow),
             props,
         }
     }
@@ -665,14 +816,17 @@ fn prim_rel_offset(sty: &PrimStyle, avail_w: i32, win_h: i32) -> (i32, i32) {
 /// de flujo). Pasos: estilo → caja → region (pre-orden) → dispatch por tag.
 fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: PrimFrame, cx: &mut PrimCtx) -> i32 {
     let win_h = cx.st.win_h as i32;
-    let sty = PrimStyle::resolve(tag, style_inline, f.avail_w, win_h, cx.sheet, cx.ctx, f.inh_color);
+    let key = prim_node_key(tag, style_inline);
+    let sty = PrimStyle::resolve(tag, style_inline, f.avail_w, f.avail_h, win_h,
+        cx.sheet, cx.ctx, &key, &cx.path, f.inh_color);
     // display:none → no se dibuja ni ocupa flujo (como en la web).
     if sty.get("display") == Some("none") { return 0; }
     let (mt, mr, mb, ml) = sty.mar;
 
     // ── 1. Posición de la caja ──────────────────────────────────────────────
     // absolute → contra el containing block; relative → corrimiento visual;
-    // normal → donde lo puso el padre, corrido por el margen.
+    // normal → donde lo puso el padre, corrido por el margen. `transform:
+    // translate` corre el DIBUJO además (el flujo no se entera, como relative).
     let (x, y) = if sty.absolute {
         prim_abs_pos(&sty, &f, win_h)
     } else if sty.relative {
@@ -681,6 +835,8 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
     } else {
         (f.x + ml, f.y + mt)
     };
+    let (tdx, tdy) = prim_transform_offset(&sty.props);
+    let (x, y) = (x + tdx, y + tdy);
     // width explícito = caja compacta (acotada al disponible, salvo absolute);
     // sin width = todo el disponible menos márgenes.
     let box_w = if sty.ex_w >= 0 {
@@ -698,7 +854,14 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
     // grosor del borde. Con padding >= borde (el caso normal) esto es idéntico al
     // padding puro, así que no cambia el layout existente.
     let bw = sty.border_w.max(0);
-    let (ipl, ipr, ipt) = (sty.pad.3.max(bw), sty.pad.1.max(bw), sty.pad.0.max(bw));
+    let (ipl, ipr, ipt, ipb) = (sty.pad.3.max(bw), sty.pad.1.max(bw), sty.pad.0.max(bw), sty.pad.2.max(bw));
+    // Opacidad efectiva del subárbol: la de los ancestros × la propia. Aplica a
+    // textos y fondos de este nodo y de todos sus descendientes.
+    let own_op = sty.get("opacity")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    let eff_op = (f.opacity * own_op).clamp(0.0, 1.0);
     let b = PrimBox {
         x,
         y,
@@ -707,6 +870,7 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
         content_w: (box_w - ipl - ipr).max(1),
         z: z_off,
         bg_z: z_off + f.depth - 100,
+        alpha: (eff_op * 255.0).round() as u32,
     };
     // Marco de los hijos: si este nodo está posicionado, pasa a ser el
     // containing block de sus descendientes absolute.
@@ -715,6 +879,9 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
         x: b.content_x,
         y: b.y + ipt,
         avail_w: b.content_w,
+        // Con height explícito, este nodo pasa a ser la base de los `height: %`
+        // de sus descendientes; sin él, se conserva la del ancestro.
+        avail_h: if sty.hgt >= 0 { (sty.hgt - ipt - ipb).max(0) } else { f.avail_h },
         depth: f.depth + 1,
         z_off,
         cb_x: if positioned { x } else { f.cb_x },
@@ -722,6 +889,7 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
         cb_w: if positioned { box_w } else { f.cb_w },
         cb_h: if positioned { sty.hgt } else { f.cb_h },
         inh_color: sty.text_col, // los hijos heredan el color resuelto de este nodo
+        opacity: eff_op,
     };
 
     // ── 3. Region en PRE-ORDEN ──────────────────────────────────────────────
@@ -735,6 +903,9 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
     });
 
     // ── 4. Dispatch por tag ─────────────────────────────────────────────────
+    // El nodo entra a la cadena de ancestros mientras se renderizan sus hijos
+    // (selectores descendientes); se saca al salir.
+    cx.path.push(key);
     let total_h = if prim_is_text_tag(tag) {
         prim_draw_text_tag(kids, &sty, b, cx)
     } else if tag == "hr" {
@@ -748,6 +919,7 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
     } else {
         prim_layout_container(tag, kids, &sty, b, kf, cx)
     };
+    cx.path.pop();
 
     cx.regions[region_idx].h = total_h;
     if sty.absolute { 0 } else { mt + total_h + mb }
@@ -760,11 +932,9 @@ fn prim_draw_text_tag(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, cx: &mut
     let text = prim_join_text(kids);
     let line_h = sty.num("line-height", 8 * sty.scale + 4);
     let h = prim_emit_text(cx.st, cx.fonts, &text, b.content_x, b.y + sty.pad.0, b.content_w,
-        sty.scale, line_h, sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing);
+        sty.scale, line_h, sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing, b.alpha);
     let total = if sty.hgt >= 0 { sty.hgt } else { h + sty.pad.0 + sty.pad.2 };
-    if let Some(c) = sty.bg {
-        prim_push_bg(cx.st, b.x, b.y, b.w, total, c, b.bg_z, sty.radius, sty.border_w, sty.border_col);
-    }
+    prim_push_bg_styled(cx.st, sty, b.x, b.y, b.w, total, b.bg_z, b.alpha, None);
     total
 }
 
@@ -815,11 +985,11 @@ fn prim_draw_textbox(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, cx: &mut 
     let box_h = if sty.hgt >= 0 { sty.hgt } else { rows * line_h + 2 * box_pad };
     // Padding vertical real: centra el bloque de filas en el alto de la caja.
     let pad_y = ((box_h - rows * line_h) / 2).max(0);
-    prim_push_bg(cx.st, b.x, b.y, b.w, box_h, sty.bg.unwrap_or(0x1e293b), b.bg_z, sty.radius, sty.border_w, sty.border_col);
+    prim_push_bg_styled(cx.st, sty, b.x, b.y, b.w, box_h, b.bg_z, b.alpha, Some(0x1e293b));
     let saved_clip = cx.st.prim_clip;
     cx.st.prim_clip = Some(prim_clip_intersect(saved_clip, b.x, b.y, b.x + b.w, b.y + box_h));
     prim_emit_text(cx.st, cx.fonts, &text, b.content_x + box_pad, b.y + pad_y, (b.content_w - 2 * box_pad).max(1),
-        sty.scale, line_h, sty.text_col, sty.tstyle, rows, sty.font_fam.as_str(), b.z, 0, sty.tspacing);
+        sty.scale, line_h, sty.text_col, sty.tstyle, rows, sty.font_fam.as_str(), b.z, 0, sty.tspacing, b.alpha);
     // Caret + selección: asume 1 línea (el caso Input); multi-línea es
     // aproximado. El alto de las marcas es el del GLIFO (8*scale)+2, no line-height.
     let fline = text.split('\n').next().unwrap_or("");
@@ -901,17 +1071,20 @@ fn prim_draw_media(sty: &PrimStyle, b: PrimBox, cx: &mut PrimCtx) -> i32 {
 
 // ── Contenedores ───────────────────────────────────────────────────────────────
 
-/// Contenedor (div/row/section/main…): elige el layout (fila flex, scroll o
-/// bloque vertical), aplica el alto explícito y pinta el fondo.
+/// Contenedor (div/row/section/main…): elige el layout (fila flex, grid, scroll
+/// o bloque vertical), aplica el alto explícito y pinta el fondo.
 fn prim_layout_container(tag: &str, kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimFrame, cx: &mut PrimCtx) -> i32 {
     // flex-row: tag `row`, direction:row, o display:flex SIN flex-direction:column
     // (column cae al layout de bloque vertical, como en la web).
+    let is_grid = sty.get("display") == Some("grid");
     let is_flex = sty.get("display") == Some("flex");
     let col_dir = sty.get("flex-direction") == Some("column") || sty.get("direction") == Some("column");
     let dir_row = (tag == "row" || sty.get("direction") == Some("row") || (is_flex && !col_dir)) && !col_dir;
     let scroll = sty.get("overflow") == Some("scroll") && sty.hgt > 0;
 
-    let mut total_h = if dir_row {
+    let mut total_h = if is_grid {
+        prim_layout_grid(kids, sty, b, kf, cx)
+    } else if dir_row {
         prim_layout_row(kids, sty, b, kf, cx)
     } else if scroll {
         prim_layout_scroll(kids, sty, b, kf, cx) // emite su fondo antes de recortar
@@ -922,28 +1095,47 @@ fn prim_layout_container(tag: &str, kids: &[OwnedValue], sty: &PrimStyle, b: Pri
     if sty.hgt > 0 { total_h = sty.hgt; }
     // Fondo (el del scroll ya se emitió arriba, no duplicar).
     if !scroll {
-        if let Some(c) = sty.bg { prim_container_bg(sty, b, total_h, c, cx); }
+        prim_push_bg_styled(cx.st, sty, b.x, b.y, b.w, total_h, b.bg_z, b.alpha, None);
     }
     total_h
 }
 
-/// Fondo del contenedor. Con `opacity` (0..1) pinta un RectAlpha translúcido
-/// (la primitiva alpha es rectangular: pierde radius/borde — caso backdrop);
-/// sin opacity, el fondo normal con borde/radius.
-fn prim_container_bg(sty: &PrimStyle, b: PrimBox, h: i32, color: u32, cx: &mut PrimCtx) {
-    if let Some(op_s) = sty.get("opacity") {
-        if let Ok(op) = op_s.trim().parse::<f32>() {
-            let alpha = (op.clamp(0.0, 1.0) * 255.0) as u32;
-            let clip = cx.st.prim_clip;
-            let id = cx.st.scene_add(SceneNodeKind::RectAlpha { w: b.w, h, alpha }, b.x, b.y, color);
-            if let Some(node) = cx.st.scene.iter_mut().find(|n| n.id == id) {
-                node.z = b.bg_z;
-                node.clip = clip;
-            }
-            return;
-        }
+/// Fondo COMPLETO de una caja según su estilo, en orden de pintado:
+/// 1. `box-shadow` (detrás de todo, corrida por su offset);
+/// 2. `linear-gradient` (con marco de borde inset; el radius no aplica al
+///    gradiente, es rectangular), o
+/// 3. color sólido — translúcido vía RectAlpha si la opacidad efectiva del
+///    subárbol (`alpha`) < 255 (rectangular: pierde radius/borde — caso
+///    backdrop), u opaco con borde/radius.
+/// `fallback` = color a usar si el estilo no trae bg (p. ej. el gris del textbox).
+fn prim_push_bg_styled(st: &mut GuiState, sty: &PrimStyle, x: i32, y: i32, w: i32, h: i32, z: i32, alpha: u32, fallback: Option<u32>) {
+    if w <= 0 || h <= 0 { return; }
+    if let Some((ox, oy, blur, scol, salpha)) = sty.shadow {
+        prim_push_shadow(st, x + ox, y + oy, w, h, blur, scol, salpha, z);
     }
-    prim_push_bg(cx.st, b.x, b.y, b.w, h, color, b.bg_z, sty.radius, sty.border_w, sty.border_col);
+    if let Some((c1, c2, vertical)) = sty.bg_grad {
+        let bw = if sty.border_col.is_some() { sty.border_w.max(0) } else { 0 };
+        if bw > 0 {
+            prim_push_fill(st, x, y, w, h, sty.border_col.unwrap_or(0), z, sty.radius);
+        }
+        let id = st.next_node;
+        st.next_node += 1;
+        let clip = st.prim_clip;
+        st.scene.push(SceneNode {
+            id, kind: SceneNodeKind::GradientRect { w: (w - 2 * bw).max(1), h: (h - 2 * bw).max(1), c2, vertical },
+            x: x + bw, y: y + bw, color: c1, z, visible: true, clip,
+        });
+        return;
+    }
+    let Some(c) = sty.bg.or(fallback) else { return; };
+    if alpha < 255 {
+        let id = st.next_node;
+        st.next_node += 1;
+        let clip = st.prim_clip;
+        st.scene.push(SceneNode { id, kind: SceneNodeKind::RectAlpha { w, h, alpha }, x, y, color: c, z, visible: true, clip });
+        return;
+    }
+    prim_push_bg(st, x, y, w, h, c, z, sty.radius, sty.border_w, sty.border_col);
 }
 
 /// Renderiza un hijo de flujo vertical (nodo, o texto suelto con el estilo del
@@ -953,7 +1145,7 @@ fn prim_flow_child(k: &OwnedValue, kf: PrimFrame, sty: &PrimStyle, b: PrimBox, c
         prim_render(ct, cs, ck, kf, cx)
     } else if let OwnedValue::Str(s) = k {
         prim_emit_text(cx.st, cx.fonts, s, kf.x, kf.y, kf.avail_w, sty.scale, 8 * sty.scale + 4,
-            sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing)
+            sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing, b.alpha)
     } else {
         0
     }
@@ -977,9 +1169,7 @@ fn prim_layout_block(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimF
 /// fondos de los hijos, que van a z<0).
 fn prim_layout_scroll(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimFrame, cx: &mut PrimCtx) -> i32 {
     let box_h = sty.hgt;
-    if let Some(c) = sty.bg {
-        prim_push_bg(cx.st, b.x, b.y, b.w, box_h, c, b.bg_z, sty.radius, sty.border_w, sty.border_col);
-    }
+    prim_push_bg_styled(cx.st, sty, b.x, b.y, b.w, box_h, b.bg_z, b.alpha, None);
     let scroll_y = sty.num("scrollY", 0).max(0);
     let saved_clip = cx.st.prim_clip;
     cx.st.prim_clip = Some(prim_clip_intersect(saved_clip, b.x, b.y, b.x + b.w, b.y + box_h));
@@ -1009,10 +1199,10 @@ struct FlexKid {
 /// Estilo efectivo de un HIJO (hoja + inline), para leer flex/width/position
 /// ANTES de renderizarlo: el plan de la fila se decide primero.
 fn prim_child_style(cx: &PrimCtx, tag: &str, inline: &[OwnedValue]) -> Vec<(String, String)> {
-    let cclass = prim_attr(inline, "class").unwrap_or_default();
-    let cclasses: Vec<&str> = cclass.split_whitespace().collect();
-    let cid = prim_attr(inline, "id");
-    prim_eff_style(cx.sheet, cx.ctx, tag, &cclasses, cid.as_deref(), inline)
+    // En este punto el contenedor ya está en cx.path (prim_render lo empujó
+    // antes del dispatch), así que los descendientes matchean bien.
+    let key = prim_node_key(tag, inline);
+    prim_eff_style(cx.sheet, cx.ctx, &key, &cx.path, inline)
 }
 
 /// Ancho de CONTENIDO de un hijo de texto para el plan flex (shrink-to-fit):
@@ -1151,7 +1341,7 @@ fn prim_layout_row(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimFra
             prim_render(ct, cs, ck, PrimFrame { x: cxr, avail_w: child_avail, ..kf }, cx)
         } else if let OwnedValue::Str(s) = k {
             prim_emit_text(cx.st, cx.fonts, s, cxr, kf.y, each, sty.scale, 8 * sty.scale + 4,
-                sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing)
+                sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing, b.alpha)
         } else { 0 };
         if h > max_h { max_h = h; }
         if want_align { ranges.push((sc0, cx.st.scene.len(), rg0, cx.regions.len(), h)); }
@@ -1171,5 +1361,99 @@ fn prim_layout_row(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimFra
         }
     }
     max_h + sty.pad.0 + sty.pad.2
+}
+
+// ── Grid ───────────────────────────────────────────────────────────────────────
+
+/// Anchos de columna de `grid-template-columns`: px / `%` (del contenedor) /
+/// `fr` (reparten lo libre tras fijos y gaps) / `repeat(n, spec)`. Tokens no
+/// reconocidos (`auto`, `min-content`, …) cuentan como `1fr`. Sin template:
+/// una sola columna al ancho del contenedor.
+fn prim_grid_cols(spec: Option<&str>, content_w: i32, col_gap: i32) -> Vec<i32> {
+    let mut toks: Vec<String> = Vec::new();
+    if let Some(raw) = spec {
+        let mut s = raw.trim().to_ascii_lowercase();
+        // Expande repeat(n, spec) in-place (admite varios repeat).
+        while let Some(p) = s.find("repeat(") {
+            let Some(endr) = s[p..].find(')') else { break; };
+            let inner = s[p + 7..p + endr].to_string();
+            let mut expanded = String::new();
+            if let Some((n_s, unit)) = inner.split_once(',') {
+                if let Ok(cnt) = n_s.trim().parse::<usize>() {
+                    let unit = unit.trim();
+                    for _ in 0..cnt.min(64) {
+                        expanded.push_str(unit);
+                        expanded.push(' ');
+                    }
+                }
+            }
+            s.replace_range(p..p + endr + 1, &expanded);
+        }
+        for t in s.split_whitespace() { toks.push(t.to_string()); }
+    }
+    if toks.is_empty() { return vec![content_w.max(1)]; }
+    let mut widths = vec![0i32; toks.len()];
+    let mut frs = vec![0f32; toks.len()];
+    let mut fixed_sum = 0i32;
+    let mut total_fr = 0f32;
+    for (i, t) in toks.iter().enumerate() {
+        if let Some(fr) = t.strip_suffix("fr").and_then(|x| x.trim().parse::<f32>().ok()) {
+            frs[i] = fr.max(0.0);
+            total_fr += frs[i];
+        } else if let Some(pc) = t.strip_suffix('%').and_then(|x| x.trim().parse::<f32>().ok()) {
+            widths[i] = (content_w as f32 * pc / 100.0) as i32;
+            fixed_sum += widths[i];
+        } else if let Ok(px) = t.trim_end_matches("px").parse::<i32>() {
+            widths[i] = px.max(0);
+            fixed_sum += widths[i];
+        } else {
+            frs[i] = 1.0;
+            total_fr += 1.0;
+        }
+    }
+    let gaps = col_gap * (toks.len() as i32 - 1).max(0);
+    let free = (content_w - fixed_sum - gaps).max(0);
+    for i in 0..toks.len() {
+        if frs[i] > 0.0 && total_fr > 0.0 {
+            widths[i] = ((free as f32) * frs[i] / total_fr) as i32;
+        }
+        if widths[i] < 1 { widths[i] = 1; }
+    }
+    widths
+}
+
+/// CSS grid básico: `display:grid` + `grid-template-columns`. Los hijos llenan
+/// las celdas en orden (fila por fila, row-major); el alto de cada fila es el
+/// del hijo más alto. `column-gap`/`row-gap` mandan sobre `gap`. Sin áreas,
+/// spans ni grid-template-rows (el alto de fila es por contenido).
+fn prim_layout_grid(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, kf: PrimFrame, cx: &mut PrimCtx) -> i32 {
+    let col_gap = sty.num("column-gap", sty.gap);
+    let row_gap = sty.num("row-gap", sty.gap);
+    let cols = prim_grid_cols(sty.get("grid-template-columns"), b.content_w, col_gap);
+    let ncols = cols.len().max(1);
+    let mut cy = kf.y;
+    let mut col = 0usize;
+    let mut cxr = b.content_x;
+    let mut row_h = 0i32;
+    let mut first_row = true;
+    for k in kids {
+        if col == 0 {
+            if !first_row { cy += row_gap; }
+            first_row = false;
+            cxr = b.content_x;
+            row_h = 0;
+        }
+        let w = cols[col.min(cols.len() - 1)];
+        let h = prim_flow_child(k, PrimFrame { x: cxr, y: cy, avail_w: w, ..kf }, sty, b, cx);
+        if h > row_h { row_h = h; }
+        cxr += w + col_gap;
+        col += 1;
+        if col >= ncols {
+            col = 0;
+            cy += row_h;
+        }
+    }
+    if col != 0 { cy += row_h; }
+    (cy - kf.y).max(0) + sty.pad.0 + sty.pad.2
 }
 

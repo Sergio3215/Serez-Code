@@ -293,7 +293,13 @@ enum SceneNodeKind {
     Line { x2: i32, y2: i32 },
     Polygon { points: Vec<i32> },
     Polyline { points: Vec<i32>, width: i32 },
-    Text { text: String, scale: i32, font: String, style: u8, spacing: i32 },
+    // `alpha` (0–255): opacidad del texto (el motor de primitivos propaga la
+    // `opacity` del subárbol); 255 = opaco (la API manual siempre emite 255).
+    Text { text: String, scale: i32, font: String, style: u8, spacing: i32, alpha: u32 },
+    // Gradiente lineal c1 (color del nodo) → c2; vertical o horizontal.
+    GradientRect { w: i32, h: i32, c2: u32, vertical: bool },
+    // Sombra difusa rectangular (box-shadow): núcleo translúcido + anillos.
+    Shadow { w: i32, h: i32, blur: i32, alpha: u32 },
     Image { handle: i64 },
     // Marcadores de clipping: se ejecutan en orden de dibujo (z, id), igual
     // que pushClip/popClip en modo inmediato.
@@ -711,16 +717,22 @@ impl GuiState {
                         i += 2;
                     }
                 }
-                SceneNodeKind::Text { text, scale, font, style, spacing } => {
+                SceneNodeKind::Text { text, scale, font, style, spacing, alpha } => {
                     if font.is_empty() {
-                        self.draw_text(fonts, n.x, n.y, text, *scale, n.color, *style, *spacing);
+                        self.draw_text_alpha(fonts, n.x, n.y, text, *scale, n.color, *style, *spacing, *alpha);
                     } else {
                         // Fuente por nodo: fijar y restaurar la familia actual.
                         let prev = fonts.current;
                         fonts.set_family(font);
-                        self.draw_text(fonts, n.x, n.y, text, *scale, n.color, *style, *spacing);
+                        self.draw_text_alpha(fonts, n.x, n.y, text, *scale, n.color, *style, *spacing, *alpha);
                         fonts.current = prev;
                     }
+                }
+                SceneNodeKind::GradientRect { w, h, c2, vertical } => {
+                    self.fill_gradient(n.x, n.y, *w, *h, n.color, *c2, *vertical);
+                }
+                SceneNodeKind::Shadow { w, h, blur, alpha } => {
+                    self.fill_shadow(n.x, n.y, *w, *h, *blur, n.color, *alpha);
                 }
                 SceneNodeKind::Image { handle } => self.draw_image(n.x, n.y, *handle),
                 SceneNodeKind::ClipPush { w, h } => {
@@ -973,6 +985,14 @@ impl GuiState {
     /// bit3=tachado (decoraciones: líneas dibujadas sobre el ancho del texto, NO afectan
     /// la forma del glifo ni la caché). `letter_spacing` = px extra entre caracteres.
     fn draw_text(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, scale: i32, rgb: u32, style: u8, letter_spacing: i32) {
+        self.draw_text_alpha(fonts, x, y, text, scale, rgb, style, letter_spacing, 255);
+    }
+
+    /// draw_text con opacidad (0–255): multiplica la cobertura de cada glifo.
+    /// Lo usa el motor de primitivos para propagar `opacity` al texto.
+    fn draw_text_alpha(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, scale: i32, rgb: u32, style: u8, letter_spacing: i32, alpha: u32) {
+        let alpha = alpha.min(255);
+        if alpha == 0 { return; }
         let scale = scale.max(1);
         let r = ((rgb >> 16) & 0xff) as u8;
         let g = ((rgb >> 8) & 0xff) as u8;
@@ -1004,7 +1024,7 @@ impl GuiState {
                 if ch != ' ' {
                     let cells = gl.cells.clone();
                     for (gx, gy, a) in cells {
-                        self.blend(pen + gx, y + gy, r, g, b, a as u32);
+                        self.blend(pen + gx, y + gy, r, g, b, a as u32 * alpha / 255);
                     }
                 }
                 pen += advance;
@@ -1016,12 +1036,47 @@ impl GuiState {
         if (underline || strike) && pen > x {
             let size = 8 * scale;
             let thick = scale.max(1);
-            if underline {
-                self.fill_rect(x, y + size - thick, pen - x, thick, rgb); // bajo la línea base
+            if alpha >= 255 {
+                if underline {
+                    self.fill_rect(x, y + size - thick, pen - x, thick, rgb); // bajo la línea base
+                }
+                if strike {
+                    self.fill_rect(x, y + size / 2 - thick / 2, pen - x, thick, rgb); // a media altura
+                }
+            } else {
+                if underline {
+                    self.blend_rect(x, y + size - thick, pen - x, thick, r, g, b, alpha);
+                }
+                if strike {
+                    self.blend_rect(x, y + size / 2 - thick / 2, pen - x, thick, r, g, b, alpha);
+                }
             }
-            if strike {
-                self.fill_rect(x, y + size / 2 - thick / 2, pen - x, thick, rgb); // a media altura
+        }
+    }
+
+    /// Sombra difusa rectangular (box-shadow): núcleo translúcido + anillos de
+    /// 1px hacia afuera con alpha decreciente (falloff cuadrático — aproximación
+    /// razonable del blur gaussiano, sin costo de convolución).
+    fn fill_shadow(&mut self, x: i32, y: i32, w: i32, h: i32, blur: i32, color: u32, alpha: u32) {
+        if w <= 0 || h <= 0 { return; }
+        let r = ((color >> 16) & 0xff) as u8;
+        let g = ((color >> 8) & 0xff) as u8;
+        let b = (color & 0xff) as u8;
+        let a = alpha.min(255);
+        self.blend_rect(x, y, w, h, r, g, b, a);
+        let blur = blur.clamp(0, 64);
+        let mut i = 1;
+        while i <= blur {
+            let t = (blur + 1 - i) as u32;
+            let ring_a = a * t * t / (((blur + 1) * (blur + 1)) as u32);
+            if ring_a > 0 {
+                let (rx, ry, rw, rh) = (x - i, y - i, w + 2 * i, h + 2 * i);
+                self.blend_rect(rx, ry, rw, 1, r, g, b, ring_a);
+                self.blend_rect(rx, ry + rh - 1, rw, 1, r, g, b, ring_a);
+                self.blend_rect(rx, ry + 1, 1, rh - 2, r, g, b, ring_a);
+                self.blend_rect(rx + rw - 1, ry + 1, 1, rh - 2, r, g, b, ring_a);
             }
+            i += 1;
         }
     }
 
@@ -2638,6 +2693,7 @@ impl super::Evaluator {
                                     font: String::new(),
                                     style: 0,
                                     spacing: 0,
+                                    alpha: 255,
                                 }, x as i32, y as i32, (c as u32) & 0xFF_FFFF)),
                             _ => None,
                         }
