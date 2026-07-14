@@ -699,6 +699,30 @@ struct PrimStyle {
     relative: bool,
     bg_grad: Option<(u32, u32, bool)>, // linear-gradient: (c1, c2, vertical)
     shadow: Option<(i32, i32, i32, u32, u32)>, // box-shadow: (ox, oy, blur, color, alpha)
+    bg_alpha: u32,                     // alpha del FONDO (4º componente de rgba/hsla en
+                                       // background, 0–255): translucidez SOLO del fondo,
+                                       // sin propagar a los hijos (a diferencia de opacity)
+}
+
+/// Alpha del color de fondo: 4º componente de `rgba(...)`/`hsla(...)` (0..1 → 0–255);
+/// hex/nombres/rgb/hsl = opaco. Permite backdrops web-like (`rgba(0,0,0,0.6)`) sin
+/// atenuar el subárbol como hace `opacity`.
+fn prim_bg_alpha(props: &[(String, String)]) -> u32 {
+    let raw = match sget(props, "background-color").or_else(|| sget(props, "background")) {
+        Some(v) => v.trim().to_ascii_lowercase(),
+        None => return 255,
+    };
+    let inner = match raw.strip_prefix("rgba(").or_else(|| raw.strip_prefix("hsla(")) {
+        Some(i) => i.trim_end_matches(')'),
+        None => return 255,
+    };
+    let comps: Vec<&str> = inner.split(',').collect();
+    if comps.len() >= 4 {
+        if let Ok(a) = comps[3].trim().parse::<f32>() {
+            return (a.clamp(0.0, 1.0) * 255.0).round() as u32;
+        }
+    }
+    255
 }
 
 impl PrimStyle {
@@ -754,6 +778,7 @@ impl PrimStyle {
             bg_grad: sget(&props, "background-image").and_then(prim_parse_gradient)
                 .or_else(|| sget(&props, "background").and_then(prim_parse_gradient)),
             shadow: sget(&props, "box-shadow").and_then(prim_parse_shadow),
+            bg_alpha: prim_bg_alpha(&props),
             props,
         }
     }
@@ -1128,11 +1153,14 @@ fn prim_push_bg_styled(st: &mut GuiState, sty: &PrimStyle, x: i32, y: i32, w: i3
         return;
     }
     let Some(c) = sty.bg.or(fallback) else { return; };
-    if alpha < 255 {
+    // Alpha total del fondo: opacidad del subárbol × alpha propio del color
+    // (rgba/hsla). Translúcido → RectAlpha (rectangular, pierde radius/borde).
+    let a = alpha * sty.bg_alpha / 255;
+    if a < 255 {
         let id = st.next_node;
         st.next_node += 1;
         let clip = st.prim_clip;
-        st.scene.push(SceneNode { id, kind: SceneNodeKind::RectAlpha { w, h, alpha }, x, y, color: c, z, visible: true, clip });
+        st.scene.push(SceneNode { id, kind: SceneNodeKind::RectAlpha { w, h, alpha: a }, x, y, color: c, z, visible: true, clip });
         return;
     }
     prim_push_bg(st, x, y, w, h, c, z, sty.radius, sty.border_w, sty.border_col);
