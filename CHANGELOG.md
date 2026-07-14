@@ -5,6 +5,88 @@ Order: most recent to oldest.
 
 ---
 
+## [9.2.6] — 2026-07-14
+
+### Motor de primitivos: translucidez real del fondo (rgba/hsla)
+
+- **`background`/`background-color` con `rgba()`/`hsla()` respeta el canal
+  alfa**: la translucidez aplica SOLO al fondo del nodo (y se multiplica con la
+  `opacity` acumulada del subárbol) en vez de ignorarse. Corrige el backdrop
+  del Modal: `.modal-backdrop { opacity: 0.6 }` lavaba también la caja hija;
+  con `background-color: rgba(0,0,0,0.6)` (hoja UA de serez-ui ≥ 4.3.6) el
+  velo es translúcido y el modal queda opaco.
+
+## [9.2.5] — 2026-07-14
+
+### Motor de primitivos: gaps CSS estructurales
+
+- **Selectores descendientes `.a .b`** (el último simple es el sujeto, los
+  anteriores matchean ancestros; `>` se trata como descendiente), **clases
+  compuestas `.a.b`** (antes solo se retenía la última) y **grupos
+  `h1, h2 { }`** (una regla por selector). Los anillos de foco tipo
+  `Switch.focused .switch-track` dejan de ser inertes.
+- **Pseudo-clases `:focus`/`:hover`/`:active`/`:disabled`**: matchean
+  atributos de estado del nodo (el motor es stateless; el framework marca el
+  estado en el árbol, mismo contrato que `.focused`).
+- **`height` en `%` resuelve contra el PADRE** (el ancestro con height
+  explícito más cercano; sin él cae a la ventana, compat con lo anterior).
+- **`opacity` se propaga al subárbol completo, incluido el texto** (alpha
+  acumulado ancestros × propio; los glifos multiplican su cobertura).
+- **`linear-gradient(...)`** en `background`/`background-image`
+  (`to right/left/top/bottom` y `Ndeg`; con borde pinta marco inset).
+- **`box-shadow`** `[ox oy [blur [spread]]] color` con falloff suave
+  (inset/spread se ignoran).
+- **`transform: translate/translateX/translateY`** (px): corrimiento visual
+  sin tocar el flujo (como relative).
+- **`display: grid` básico**: `grid-template-columns` con px/%/fr/repeat(),
+  `gap`/`column-gap`/`row-gap`, hijos row-major.
+- Adopción serez-ui (4.3.5): **drag continuo del Slider** con el mouse
+  (antes solo click-to-set + teclado).
+
+## [9.2.4] — 2026-07-12
+
+### Import de módulos `.szx` + refactor modular del motor de primitivos + más CSS
+
+- **`sz app.szx` corre directo** y **`import "x"` resuelve módulos `.szx`**
+  (JSX) con traducción on-the-fly, delegada al translator de serez-ui
+  (`tools/translate.sz`; requiere serez-ui instalado). Si `.sz` y `.szx`
+  coexisten gana `.sz`. Reemplaza los wrappers szx.ps1/szx.sh.
+- **Refactor modular**: el motor de primitivos salió de `namespaces_gui.rs`
+  (5290 → 4037 líneas) a los submódulos `namespaces_gui/css.rs` (selectores +
+  resolución de props) y `namespaces_gui/render.rs` (layout + emit de escena),
+  sin exponer internos (submódulo hijo ve los privados del padre).
+- **CSS**: colores `rgb()/rgba()/hsl()/hsla()` y más nombres CSS; `font-size`
+  en px (prioridad sobre font-scale); el **`border` desplaza el contenido**
+  (content arranca en `max(padding, border)`); **herencia de `color`** de
+  ancestro a hijos; **`flex-shrink`** (una fila de fijos que no caben encoge
+  proporcionalmente en vez de desbordar).
+- **Build sin warnings propios** (limpieza de unused/deprecated en crypto,
+  autodiff, svg y Cargo.toml).
+
+## [9.2.2] — 2026-07-11
+
+### Motor de primitivos: flex web-like + refactor legible + fixes de texto
+
+- **Shrink-to-fit del texto en flex row**: spans/labels sin `flex` ni `width`
+  miden su contenido en vez de crecer y llenar — `justify-content` por fin
+  actúa en filas de texto (arregla la flecha del Dropdown pegada al borde,
+  `.modal-header` y los centrados de checkbox/fileinput). Los strings sueltos
+  en una fila miden igual que un span.
+- **Tanda quirúrgica CSS**: `width` px/`%` en hijos flex (el `%` es del
+  contenedor, no se re-aplica sobre el slot), valores con sufijo `px` en
+  props numéricas, `gap` solo ENTRE hijos (no después del último),
+  `position:relative` con left/top (right/bottom = negativos) sin alterar el
+  flujo.
+- **textbox**: `line-height` real, un `height` explícito manda sobre el
+  calculado, y caret/selección con alto de glifo.
+- **Refactor legible del motor** (para poder modificarlo a mano):
+  `prim_render` monolítico (~400 líneas) → dispatcher de ~70 líneas + piezas
+  tipadas `PrimCtx`/`PrimFrame`/`PrimStyle`/`PrimBox`, hojas (`prim_draw_*`)
+  y contenedores (`prim_layout_*`), comentado en español con un mapa del
+  código al tope.
+- Adopción serez-ui: **caret proporcional al click** en Input/Textarea
+  (`Gui.textAdvances`, límite de carácter más cercano) con drag-selección.
+
 ## [9.2.1] — 2026-07-10
 
 ### Motor de primitivos: adopción en apps reales (serez-strike)
@@ -73,7 +155,7 @@ primitivos.
   `useNativeRenderer` (Fase 3 completa: todos los widgets verificados nativos)
   y serez-strike corre sobre el renderer nativo.
 
-## [Unreleased] — 2026-07-03
+## [8.2.0] — 2026-07-03 (trabajo del 2026-07-02 al 2026-07-03)
 
 ### Tanda "deuda técnica": parser estricto, semántica de closures, multi-ventana, retained-mode, audio
 
@@ -155,10 +237,6 @@ primitivos.
 - **serez-pack**: compatible verificado end-to-end (app con permiso `Media`
   empaquetada y ejecutada); ahora valida al empaquetar que el `serez.json`
   tenga `"version"` (sin él, la app instalada correría sin permisos).
-
----
-
-## [Unreleased] — 2026-07-02
 
 ### New: `sz-lsp` — Language Server Protocol for editor support
 
