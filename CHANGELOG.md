@@ -5,6 +5,29 @@ Order: most recent to oldest.
 
 ---
 
+## [Unreleased] — 2026-07-14
+
+### Fixes de propagación de `throw` + errores de traducción `.szx` visibles
+
+- **`throw` en `out f()` conserva el mensaje**: el rewind del scratch-mark del
+  statement `out` liberaba el payload lanzado ANTES de renderizarlo — el uncaught
+  mostraba "Referencia inválida" en vez del mensaje real. Ahora se renderiza
+  primero y se rebobina después.
+- **`throw` al evaluar un argumento anidado ya no muere en silencio**: en
+  `f(g())` con `g` lanzando (también spread `f(...g())`), el throw degradaba a
+  un Error pelado — exit 1 sin ningún mensaje y sin posibilidad de `catch`.
+  Ahora se propaga como Throw re-plantando el payload a través del frame de la
+  llamada (capturable con try/catch, y visible como UNCAUGHT si nadie lo agarra).
+- **Los errores del traductor `.szx` llegan a la consola**: el proceso hijo del
+  traductor corre con `CREATE_NO_WINDOW` y su stderr se perdía; ahora
+  `sz app.szx` y el `import` de módulos `.szx` lo capturan y lo reimprimen como
+  `TRANSLATE ERROR` antes del mensaje genérico. (Complementa la validación nueva
+  del traductor de serez-ui: dos raíces JSX adyacentes en un `return()` abortan
+  con la línea real del `.szx` y la sugerencia del fragmento `<>…</>`.)
+- Tests: `unit_throw_propagation` (3 casos capturables), `err_throw_out_stmt`,
+  `err_throw_nested_arg` + 2 tests CLI que verifican el contenido exacto del
+  mensaje en stderr.
+
 ## [9.2.6] — 2026-07-14
 
 ### Motor de primitivos: translucidez real del fondo (rgba/hsla)

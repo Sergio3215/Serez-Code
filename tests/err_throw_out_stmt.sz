@@ -1,0 +1,10 @@
+// Regresión 2026-07-14: `out f()` top-level con f lanzando debe abortar mostrando
+// el MENSAJE real. El rewind del scratch-mark de Out liberaba el payload antes de
+// renderizarlo y se imprimía "Referencia inválida". El test CLI del runner además
+// verifica el contenido exacto del mensaje en stderr.
+fn string boom(string x) {
+    let n = 7
+    throw "boom out con local {n}"
+    return x
+}
+out boom("p")

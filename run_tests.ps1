@@ -238,6 +238,8 @@
 #   err_return_toplevel    return en nivel superior (fuera de función)
 #   err_return_type_mismatch Función declarada int devuelve string
 #   err_sort_mixed         sort sobre array con tipos mezclados (int y string)
+#   err_throw_nested_arg   throw al evaluar argumento anidado f(g()) NO muere en silencio
+#   err_throw_out_stmt     throw en `out f()` conserva el mensaje (no "Referencia inválida")
 #   err_type_param         Parámetro tipado recibe tipo incorrecto
 #   err_typed_push         push de tipo incorrecto en array tipado [int]
 #   err_undeclared         Leer variable no declarada
@@ -523,6 +525,14 @@ if ($runAll -or $cli) {
     $noSz = "`"$(Join-Path $testsDir 'this_file_does_not_exist.sz')`""
     Run-CLI-Test "cli: missing .sz file reports error" @($noSz) `
                  -expectErr "ERROR reading file"
+    # Regresión throw 2026-07-14: el mensaje debe llegar ÍNTEGRO a stderr
+    # (antes: "Referencia inválida" en `out f()`, y silencio total en f(g())).
+    $thrOut = "`"$(Join-Path $testsDir 'err_throw_out_stmt.sz')`""
+    Run-CLI-Test "cli: uncaught throw en out f() conserva el mensaje" @($thrOut) `
+                 -expectErr "boom out con local 7"
+    $thrArg = "`"$(Join-Path $testsDir 'err_throw_nested_arg.sz')`""
+    Run-CLI-Test "cli: throw en argumento anidado no muere en silencio" @($thrArg) `
+                 -expectErr "desde inner"
 }
 
 # ── REPL Tests ────────────────────────────────────────────────────────────────

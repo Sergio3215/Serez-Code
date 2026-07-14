@@ -1,0 +1,13 @@
+// Regresión 2026-07-14: un throw al evaluar un argumento anidado (f(g()) con g
+// lanzando) degradaba a Error SILENCIOSO — exit 1 sin ningún mensaje en stderr.
+// Este test exige que haya al menos un ❌ (el runner err_ falla si no hay salida);
+// el test CLI del runner además verifica el contenido del mensaje.
+fn string inner(string s) {
+    throw "desde inner"
+    return s
+}
+fn string outer(string s) {
+    return s
+}
+let r = outer(inner("x"))
+out r

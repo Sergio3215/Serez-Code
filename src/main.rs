@@ -158,10 +158,21 @@ fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW); // never pop a console for the translate step
     }
-    let status = cmd.status();
-    let ok = matches!(status, Ok(ref s) if s.success()) && out_sz.exists();
+    // Capture stderr: the child runs detached from the console (CREATE_NO_WINDOW),
+    // so the translator's own error (e.g. invalid JSX + how to fix it) would be
+    // lost unless we pipe it and re-print it here.
+    cmd.stderr(std::process::Stdio::piped());
+    let output = cmd.output();
+    let ok = matches!(output, Ok(ref o) if o.status.success()) && out_sz.exists();
     if !ok {
         let _ = std::fs::remove_file(&out_sz);
+        if let Ok(ref o) = output {
+            let msg = String::from_utf8_lossy(&o.stderr);
+            let msg = msg.trim();
+            if !msg.is_empty() {
+                eprintln!("{}", msg.replace("UNCAUGHT EXCEPTION:", "TRANSLATE ERROR:"));
+            }
+        }
         eprintln!(
             "❌ ERROR: could not translate '{}' (is it valid .szx, and is serez-ui's translator present?)",
             szx_path
@@ -200,7 +211,20 @@ pub fn translate_szx_to_string(szx: &std::path::Path) -> Option<String> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let ok = matches!(cmd.status(), Ok(ref s) if s.success()) && out_sz.exists();
+    // Piped stderr for the same reason as run_szx_file: surface the translator's
+    // error (lost to CREATE_NO_WINDOW) before the import-level message.
+    cmd.stderr(std::process::Stdio::piped());
+    let output = cmd.output();
+    let ok = matches!(output, Ok(ref o) if o.status.success()) && out_sz.exists();
+    if !ok {
+        if let Ok(ref o) = output {
+            let msg = String::from_utf8_lossy(&o.stderr);
+            let msg = msg.trim();
+            if !msg.is_empty() {
+                eprintln!("{}", msg.replace("UNCAUGHT EXCEPTION:", "TRANSLATE ERROR:"));
+            }
+        }
+    }
     let translated = if ok { std::fs::read_to_string(&out_sz).ok() } else { None };
     let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
     translated

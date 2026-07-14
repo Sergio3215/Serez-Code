@@ -195,6 +195,11 @@ impl super::Evaluator {
                     if let Expression::Spread(inner) = arg {
                         let spread_ref = match self.eval_expression(inner) {
                             EvalResult::Value(r) => r,
+                            EvalResult::Throw(v) => {
+                                let owned = self.extract(v);
+                                self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
+                                return EvalResult::Throw(self.plant(owned));
+                            }
                             _ => { self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop(); return EvalResult::Error; }
                         };
                         match self.resolve(spread_ref).cloned() {
@@ -214,6 +219,16 @@ impl super::Evaluator {
                     }
                     match self.eval_expression(arg) {
                         EvalResult::Value(r) => arg_refs.push(r),
+                        // A throw inside an argument (g() in f(g())) must unwind as a
+                        // THROW, not degrade to a silent Error. Re-plant the payload
+                        // across the pop so it survives this frame's teardown.
+                        EvalResult::Throw(v) => {
+                            let owned = self.extract(v);
+                            self.scopes.pop();
+                            self.call_depth -= 1;
+                            self.call_stack.pop();
+                            return EvalResult::Throw(self.plant(owned));
+                        }
                         _ => {
                             self.scopes.pop();
                             self.call_depth -= 1;

@@ -881,8 +881,11 @@ impl Evaluator {
                     return None;
                 }
                 EvalResult::Throw(r) => {
-                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
+                    // Render the thrown value BEFORE rewinding the scratch mark:
+                    // for `out f()` the payload lives above the watermark and the
+                    // reset would free it (the message became "Referencia inválida").
                     let msg = self.display(r);
+                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
                     eprintln!("❌ UNCAUGHT EXCEPTION: {msg}");
                     return None;
                 }

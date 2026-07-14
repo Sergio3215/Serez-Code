@@ -1,0 +1,52 @@
+// ── Regresión: propagación de throw a través de límites de llamada (2026-07-14) ──
+// Bug #1: en `out f()` top-level, el rewind del scratch-mark liberaba el payload
+//         lanzado antes de renderizarlo ("Referencia inválida" en vez del mensaje).
+// Bug #2: un throw al evaluar un ARGUMENTO anidado f(g()) degradaba a Error
+//         silencioso: ni mensaje, ni catch posible. (Idem spread f(...g()).)
+// Los casos uncaught/top-level se cubren en err_throw_* + tests CLI del runner;
+// acá va la semántica capturable.
+
+fn string lanzaConLocal(string x) {
+    let linea = 7
+    throw "boom con local {linea} y arg {x}"
+    return x
+}
+
+fn string identidad(string s) {
+    return s
+}
+
+fn string sumaTodo(...partes) {
+    let acc = ""
+    let i = 0
+    while (i < partes.length()) {
+        acc = acc + partes[i]
+        i = i + 1
+    }
+    return acc
+}
+
+fn any explotaArray() {
+    throw "boom en spread"
+    return []
+}
+
+test("throw con mensaje derivado de locales se captura intacto", () => {
+    let msg = ""
+    try { let r = lanzaConLocal("p") } catch (e) { msg = e }
+    assert(msg == "boom con local 7 y arg p", "mensaje fue: " + msg)
+});
+
+test("throw dentro de argumento anidado f(g()) es capturable", () => {
+    let msg = ""
+    try { let r = identidad(lanzaConLocal("q")) } catch (e) { msg = e }
+    assert(msg == "boom con local 7 y arg q", "mensaje fue: " + msg)
+});
+
+test("throw dentro de spread f(...g()) es capturable", () => {
+    let msg = ""
+    try { let r = sumaTodo(...explotaArray()) } catch (e) { msg = e }
+    assert(msg == "boom en spread", "mensaje fue: " + msg)
+});
+
+summary();
