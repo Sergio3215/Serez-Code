@@ -19,7 +19,14 @@ Syntax highlighting, formatter, **language server client** and a dedicated **col
   - `.szx` — everything in `.sz` **plus JSX** (tags, components, attributes, `{…}` embedded expressions)
   - `.szs` — CSS styling **plus** Serez extras: `:import` block and reactive conditions `selector (count == 0) { … }`
 - **Serez Dark color theme** — a built-in theme matching the Serez palette (deep violet + cyan on near-black). Pick it from *Preferences → Color Theme → Serez Dark*.
-- **Auto-formatter** on save for `.sz` (brace-based indenter; configurable via `editor.formatOnSave`)
+- **Auto-formatter** on save for the three languages (configurable via `editor.formatOnSave`):
+  - `.sz` — brace-based indenter
+  - `.szx` (desde 1.9.0) — braces **plus JSX tag depth**: children indent under their tag,
+    fragments `<>…</>`, self-closing `<Tag/>` and multi-line attribute lists
+    (`/>` aligned with its `<Tag`) are all understood; comparisons (`a < b`) and dict
+    annotations (`<string, any>`) are left alone
+  - `.szs` (desde 1.9.0) — block indenter aware of `/* */` comments; one-line rules
+    (`sel { prop: v; }`) are preserved verbatim
 - Keywords: `import`, `export`, `use` / `permissions`, `fn`, `let`, `const`, `class`, `interface`, `enum`, `if`, `while`, `for`, `switch`, `match`, `try`, `throw`, `is`, `unsafe`, `yield`, …
 - Types: `int`, `decimal`, `dec` (exact decimal), `string`, `bool`, `any`, `void`
 - String interpolation: `"Hola, {name}!"` · raw strings: `r"C:\path\no\escapes"`
@@ -30,7 +37,7 @@ Syntax highlighting, formatter, **language server client** and a dedicated **col
 
 ## Usage
 
-Files with `.sz`, `.szx` or `.szs` are detected automatically. `.sz` files are formatted on save.
+Files with `.sz`, `.szx` or `.szs` are detected automatically and formatted on save.
 
 ## Installation
 
@@ -39,13 +46,13 @@ Files with `.sz`, `.szx` or `.szs` are detected automatically. `.sz` files are f
 Search for **Serez-Code Formatter** in the Extensions marketplace, or install a `.vsix` manually:
 
 ```bash
-antigravity-ide.cmd --install-extension serez-code-formatter-1.6.0.vsix
+antigravity-ide.cmd --install-extension serez-code-formatter-1.9.0.vsix
 ```
 
 ### VS Code
 
 ```bash
-code --install-extension serez-code-formatter-1.6.0.vsix
+code --install-extension serez-code-formatter-1.9.0.vsix
 ```
 
 ## Language

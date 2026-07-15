@@ -2,7 +2,7 @@
   "name": "serez-code-formatter",
   "displayName": "Serez-Code Formatter",
   "description": "Syntax highlighting, formatter, color theme and language server (diagnostics, completion, hover, go-to-definition) for Serez-Code — .sz, .szx (JSX) and .szs (styles)",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "icon": "icon.png",
   "license": "MIT",
   "publisher": "sd-tools",
@@ -122,10 +122,14 @@
         "editor.insertSpaces": true
       },
       "[serez-code-jsx]": {
+        "editor.defaultFormatter": "sd-tools.serez-code-formatter",
+        "editor.formatOnSave": true,
         "editor.tabSize": 4,
         "editor.insertSpaces": true
       },
       "[serez-style]": {
+        "editor.defaultFormatter": "sd-tools.serez-code-formatter",
+        "editor.formatOnSave": true,
         "editor.tabSize": 4,
         "editor.insertSpaces": true
       }
