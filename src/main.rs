@@ -300,6 +300,13 @@ fn run() -> i32 {
             return 1;
         }
 
+        // ── `sz logout` subcommand ────────────────────────────────────────────
+        // Removes the stored registry credential; the next `sz publish` asks
+        // for username/password again (lets you switch accounts).
+        if args[1] == "logout" {
+            return subcommand_code(package_manager::logout());
+        }
+
         // ── `sz info <pkg>` subcommand ────────────────────────────────────────
         if args[1] == "info" {
             if args.len() >= 3 {

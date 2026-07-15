@@ -907,6 +907,27 @@ fn delete_credentials() {
     let _ = std::fs::remove_file(credentials_path());
 }
 
+/// `sz logout`: remove the stored registry credential. The next
+/// `sz publish` / `sz unpublish` will ask for username/password again.
+pub fn logout() -> Result<(), String> {
+    let path = credentials_path();
+    if !path.exists() {
+        println!("No registry session — nothing to log out.");
+        return Ok(());
+    }
+    let username = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("username").and_then(|u| u.as_str()).map(String::from));
+    std::fs::remove_file(&path)
+        .map_err(|e| format!("Cannot remove {}: {}", path.display(), e))?;
+    match username {
+        Some(u) => println!("✅ Logged out {} (removed {})", u, path.display()),
+        None => println!("✅ Logged out (removed {})", path.display()),
+    }
+    Ok(())
+}
+
 fn prompt_line(prompt: &str) -> Result<String, String> {
     use std::io::Write;
     print!("{}", prompt);

@@ -27,6 +27,9 @@ Order: most recent to oldest.
 - Lado servidor: el registry vive ahora en el repo separado `serez-registry`
   (cuentas, propiedad de paquetes — el primer publish de un nombre lo reclama —
   y rol admin).
+- **`sz logout` nuevo**: borra la credencial guardada; el próximo `sz publish`
+  vuelve a pedir usuario/contraseña (sirve para cambiar de cuenta). Sin sesión
+  activa avisa y sale con éxito.
 
 ## [9.2.7] — 2026-07-14
 
