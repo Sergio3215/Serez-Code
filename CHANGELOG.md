@@ -5,7 +5,7 @@ Order: most recent to oldest.
 
 ---
 
-## [Unreleased] — 2026-07-14
+## [9.2.7] — 2026-07-14
 
 ### Fixes de propagación de `throw` + errores de traducción `.szx` visibles
 

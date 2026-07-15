@@ -135,6 +135,20 @@ sz script.sz > output.txt    # captures only out statements
 sz script.sz 2> errors.txt   # captures only runtime errors
 ```
 
+### Run a JSX component file (`.szx`)
+
+`.szx` files (the JSX dialect used by [serez-ui](https://github.com/Sergio3215/serez-ui)) run directly — the runtime translates them to `.sz` on the fly and executes the result:
+
+```bash
+sz app.szx
+```
+
+`import "component.szx";` works the same way inside `.sz` and `.szx` modules (translation is transparent and cached per run). Requirements and behavior:
+
+- The translator ships with serez-ui (`tools/translate.sz`); install it with `sz install serez-ui`. Without it, `sz app.szx` fails with an explicit message.
+- Translation errors are printed to the console as `TRANSLATE ERROR:` with the real `.szx` line — e.g. two adjacent JSX roots in a `return ()` suggest wrapping them in a fragment `<>…</>`.
+- `sz --check app.szx` analyzes the translated output.
+
 ### Start the REPL
 
 ```bash
