@@ -854,22 +854,193 @@ fn download_package(pkg_name: &str, version: &str, global: bool) -> Result<(), S
     Ok(())
 }
 
+// ── Registry credentials ──────────────────────────────────────────────────────
+//
+// `sz publish` / `sz unpublish` authenticate with a per-user token. The first
+// time, the CLI asks for the username/password of an account created on the
+// registry website, exchanges them for a long-lived token via POST /api/login,
+// and stores it in ~/.serez/credentials.json — after that it's just `sz publish`.
+// The legacy SEREZ_API_KEY env var still works (sent as x-api-key) while the
+// registry keeps accepting it.
+
+enum RegistryAuth {
+    /// Legacy shared key (SEREZ_API_KEY env var), sent as `x-api-key`.
+    LegacyKey(String),
+    /// Per-user token, sent as `Authorization: Bearer …`.
+    Bearer(String),
+}
+
+fn credentials_path() -> PathBuf {
+    if let Some(home) = home_dir() {
+        return home.join(".serez").join("credentials.json");
+    }
+    PathBuf::from(".serez/credentials.json")
+}
+
+/// Load the stored token, but only if it was issued by the current registry
+/// (SEREZ_REGISTRY_URL may point elsewhere, e.g. a local dev registry).
+fn load_credentials() -> Option<String> {
+    let raw = std::fs::read_to_string(credentials_path()).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    if v.get("registry")?.as_str()? != registry_url() {
+        return None;
+    }
+    Some(v.get("token")?.as_str()?.to_string())
+}
+
+fn save_credentials(username: &str, token: &str) -> Result<(), String> {
+    let path = credentials_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("Cannot create {}: {}", dir.display(), e))?;
+    }
+    let json = serde_json::json!({
+        "registry": registry_url(),
+        "username": username,
+        "token": token,
+    });
+    std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
+        .map_err(|e| format!("Cannot write {}: {}", path.display(), e))
+}
+
+fn delete_credentials() {
+    let _ = std::fs::remove_file(credentials_path());
+}
+
+fn prompt_line(prompt: &str) -> Result<String, String> {
+    use std::io::Write;
+    print!("{}", prompt);
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| format!("Cannot read input: {}", e))?;
+    Ok(line.trim().to_string())
+}
+
+/// Read a password without echoing it (raw mode via crossterm). Falls back to
+/// a plain visible read when stdin is not a terminal (e.g. piped input).
+fn prompt_password(prompt: &str) -> Result<String, String> {
+    use std::io::Write;
+    print!("{}", prompt);
+    std::io::stdout().flush().ok();
+
+    // With piped stdin (tests, scripts) the console isn't where the input is:
+    // read the pipe plainly. Raw-mode masking only makes sense on a real TTY.
+    let is_tty = {
+        use std::io::IsTerminal;
+        std::io::stdin().is_terminal()
+    };
+    if !is_tty || crossterm::terminal::enable_raw_mode().is_err() {
+        let mut line = String::new();
+        std::io::stdin()
+            .read_line(&mut line)
+            .map_err(|e| format!("Cannot read input: {}", e))?;
+        return Ok(line.trim_end_matches(['\r', '\n']).to_string());
+    }
+
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, read};
+    let mut pw = String::new();
+    let result = loop {
+        match read() {
+            Ok(Event::Key(k)) => {
+                if k.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match k.code {
+                    KeyCode::Enter => break Ok(pw.clone()),
+                    KeyCode::Backspace => {
+                        pw.pop();
+                    }
+                    KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        break Err("Login cancelled".to_string());
+                    }
+                    KeyCode::Char(c) => pw.push(c),
+                    _ => {}
+                }
+            }
+            Ok(_) => {}
+            Err(e) => break Err(format!("Cannot read input: {}", e)),
+        }
+    };
+    let _ = crossterm::terminal::disable_raw_mode();
+    println!();
+    result
+}
+
+/// Interactive login: asks for username/password, exchanges them for a token
+/// at POST /api/login and stores it in ~/.serez/credentials.json.
+fn interactive_login() -> Result<String, String> {
+    println!(
+        "Log in with your registry account (create one at {}/register).",
+        registry_url()
+    );
+    let username = prompt_line("Username: ")?;
+    if username.is_empty() {
+        return Err("Username cannot be empty".to_string());
+    }
+    let password = prompt_password("Password: ")?;
+
+    let body = serde_json::json!({ "username": username, "password": password });
+    let resp = ureq::post(&format!("{}/api/login", registry_url()))
+        .set("Content-Type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => "Invalid username or password".to_string(),
+            other => format!("Login failed: {}", other),
+        })?;
+
+    let text = resp
+        .into_string()
+        .map_err(|e| format!("Invalid response from registry: {}", e))?;
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("Invalid response from registry: {}", e))?;
+    let token = v
+        .get("token")
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| "Registry response did not include a token".to_string())?;
+
+    save_credentials(&username, token)?;
+    println!(
+        "✅ Logged in as {} (credential stored in {})",
+        username,
+        credentials_path().display()
+    );
+    Ok(token.to_string())
+}
+
+/// Resolve how to authenticate against the registry, in order:
+/// SEREZ_API_KEY (legacy) → stored credential → interactive login.
+/// The bool is true when the auth came from the stored credential, so callers
+/// can retry with a fresh login if the token turns out to be revoked.
+fn registry_auth() -> Result<(RegistryAuth, bool), String> {
+    if let Ok(k) = std::env::var("SEREZ_API_KEY") {
+        return Ok((RegistryAuth::LegacyKey(k), false));
+    }
+    if let Some(token) = load_credentials() {
+        return Ok((RegistryAuth::Bearer(token), true));
+    }
+    Ok((RegistryAuth::Bearer(interactive_login()?), false))
+}
+
+fn with_auth(req: ureq::Request, auth: &RegistryAuth) -> ureq::Request {
+    match auth {
+        RegistryAuth::LegacyKey(k) => req.set("x-api-key", k),
+        RegistryAuth::Bearer(t) => req.set("Authorization", &format!("Bearer {}", t)),
+    }
+}
+
+/// Pull the `error` field out of a JSON error body; falls back to the raw text.
+fn extract_api_error(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+        .unwrap_or_else(|| body.trim().to_string())
+}
+
 // ── Publish / Unpublish / Info ────────────────────────────────────────────────
 
-/// Publish the package in the current directory to the registry.
-/// Reads serez.json, zips the package directory recursively (honoring .szignore),
-/// and POSTs to /api/publish.
-pub fn publish_package() -> Result<(), String> {
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Cannot get current directory: {}", e))?;
-    let manifest = SerezManifest::load(&cwd)?;
-
-    let api_key = std::env::var("SEREZ_API_KEY")
-        .map_err(|_| "SEREZ_API_KEY environment variable not set.\nSet it with: export SEREZ_API_KEY=<your-key>".to_string())?;
-
-    println!("Publishing {}@{} ...", manifest.name, manifest.version);
-
-    let zip_bytes = create_package_zip(&cwd)?;
+fn build_publish_body(manifest: &SerezManifest, zip_bytes: &[u8]) -> (Vec<u8>, String) {
     let boundary = "SerezPkgBoundary7MA4YWxkTrZu0gW";
     let mut body: Vec<u8> = Vec::new();
 
@@ -895,26 +1066,91 @@ pub fn publish_package() -> Result<(), String> {
         )
         .as_bytes(),
     );
-    body.extend_from_slice(&zip_bytes);
+    body.extend_from_slice(zip_bytes);
     body.extend_from_slice(b"\r\n");
     body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
 
-    let url = format!("{}/api/publish", registry_url());
-    let ct  = format!("multipart/form-data; boundary={}", boundary);
+    (body, format!("multipart/form-data; boundary={}", boundary))
+}
 
-    ureq::post(&url)
-        .set("x-api-key", &api_key)
-        .set("Content-Type", &ct)
-        .send_bytes(&body)
+/// POST the publish body. On HTTP errors returns (status, server message);
+/// transport errors use status 0.
+fn send_publish(body: &[u8], content_type: &str, auth: &RegistryAuth) -> Result<(), (u16, String)> {
+    let url = format!("{}/api/publish", registry_url());
+    with_auth(ureq::post(&url), auth)
+        .set("Content-Type", content_type)
+        .send_bytes(body)
+        .map(|_| ())
         .map_err(|e| match e {
-            ureq::Error::Status(401, _) => "Unauthorized — check your SEREZ_API_KEY".to_string(),
-            ureq::Error::Status(409, _) => format!("Version {} already exists in the registry", manifest.version),
-            ureq::Error::Status(400, r) => format!("Bad request: {}", r.into_string().unwrap_or_default()),
-            other => format!("Publish failed: {}", other),
-        })?;
+            ureq::Error::Status(code, r) => (code, extract_api_error(&r.into_string().unwrap_or_default())),
+            other => (0, format!("{}", other)),
+        })
+}
+
+fn publish_error_message(code: u16, msg: String, version: &str) -> String {
+    match code {
+        401 => "Unauthorized — log in again (delete ~/.serez/credentials.json or check SEREZ_API_KEY)".to_string(),
+        403 if msg.is_empty() => "This package belongs to another user".to_string(),
+        403 => msg,
+        409 => format!("Version {} already exists in the registry", version),
+        400 => format!("Bad request: {}", msg),
+        0 => format!("Publish failed: {}", msg),
+        _ => format!("Publish failed ({}): {}", code, msg),
+    }
+}
+
+/// Publish the package in the current directory to the registry.
+/// Reads serez.json, zips the package directory recursively (honoring .szignore),
+/// and POSTs to /api/publish. Logs in interactively the first time and reuses
+/// the stored credential afterwards.
+pub fn publish_package() -> Result<(), String> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let manifest = SerezManifest::load(&cwd)?;
+
+    let (auth, from_store) = registry_auth()?;
+
+    println!("Publishing {}@{} ...", manifest.name, manifest.version);
+    let zip_bytes = create_package_zip(&cwd)?;
+    let (body, ct) = build_publish_body(&manifest, &zip_bytes);
+
+    match send_publish(&body, &ct, &auth) {
+        Ok(()) => {}
+        // The stored token was revoked server-side: re-login once and retry.
+        Err((401, _)) if from_store => {
+            println!("Stored credential is no longer valid — please log in again.");
+            delete_credentials();
+            let token = interactive_login()?;
+            send_publish(&body, &ct, &RegistryAuth::Bearer(token))
+                .map_err(|(code, msg)| publish_error_message(code, msg, &manifest.version))?;
+        }
+        Err((code, msg)) => return Err(publish_error_message(code, msg, &manifest.version)),
+    }
 
     println!("✅ Published {}@{}", manifest.name, manifest.version);
     Ok(())
+}
+
+fn send_unpublish(pkg_name: &str, version: &str, auth: &RegistryAuth) -> Result<(), (u16, String)> {
+    let url = format!("{}/api/unpublish/{}/{}", registry_url(), pkg_name, version);
+    with_auth(ureq::delete(&url), auth)
+        .call()
+        .map(|_| ())
+        .map_err(|e| match e {
+            ureq::Error::Status(code, r) => (code, extract_api_error(&r.into_string().unwrap_or_default())),
+            other => (0, format!("{}", other)),
+        })
+}
+
+fn unpublish_error_message(code: u16, msg: String, pkg_name: &str, version: &str) -> String {
+    match code {
+        401 => "Unauthorized — log in again (delete ~/.serez/credentials.json or check SEREZ_API_KEY)".to_string(),
+        403 if msg.is_empty() => "This package belongs to another user".to_string(),
+        403 => msg,
+        404 => format!("{}@{} not found in registry", pkg_name, version),
+        0 => format!("Unpublish failed: {}", msg),
+        _ => format!("Unpublish failed ({}): {}", code, msg),
+    }
 }
 
 /// Remove a published version from the registry (yank).
@@ -923,19 +1159,19 @@ pub fn unpublish_package_remote(pkg_spec: &str) -> Result<(), String> {
     let (pkg_name, version) = parse_pkg_spec(pkg_spec);
     let version = version.ok_or_else(|| "Usage: sz unpublish <package>@<version>".to_string())?;
 
-    let api_key = std::env::var("SEREZ_API_KEY")
-        .map_err(|_| "SEREZ_API_KEY environment variable not set".to_string())?;
+    let (auth, from_store) = registry_auth()?;
 
-    let url = format!("{}/api/unpublish/{}/{}", registry_url(), pkg_name, version);
-
-    ureq::delete(&url)
-        .set("x-api-key", &api_key)
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(401, _) => "Unauthorized — check your SEREZ_API_KEY".to_string(),
-            ureq::Error::Status(404, _) => format!("{}@{} not found in registry", pkg_name, version),
-            other => format!("Unpublish failed: {}", other),
-        })?;
+    match send_unpublish(&pkg_name, &version, &auth) {
+        Ok(()) => {}
+        Err((401, _)) if from_store => {
+            println!("Stored credential is no longer valid — please log in again.");
+            delete_credentials();
+            let token = interactive_login()?;
+            send_unpublish(&pkg_name, &version, &RegistryAuth::Bearer(token))
+                .map_err(|(code, msg)| unpublish_error_message(code, msg, &pkg_name, &version))?;
+        }
+        Err((code, msg)) => return Err(unpublish_error_message(code, msg, &pkg_name, &version)),
+    }
 
     println!("✅ Unpublished {}@{}", pkg_name, version);
     Ok(())

@@ -5,6 +5,29 @@ Order: most recent to oldest.
 
 ---
 
+## [Unreleased]
+
+### `sz publish` multi-usuario: login con cuenta del registry, sin tokens a mano
+
+- **`sz publish` / `sz unpublish` ya no exigen `SEREZ_API_KEY`**: la primera vez
+  piden usuario y contraseña de una cuenta del registry (se crea en
+  `packages.serezcode.org/register`), canjean las credenciales por un token de
+  larga vida vía `POST /api/login` y lo guardan en `~/.serez/credentials.json`.
+  De ahí en adelante es solo `sz publish`.
+- La contraseña se lee sin eco (raw mode por crossterm) en TTY real; con stdin
+  piped (scripts/tests) cae a lectura plana.
+- Si el token guardado fue revocado (401), se borra la credencial, se pide
+  login de nuevo y se reintenta una vez automáticamente.
+- Errores 403 del registry (paquete de otro usuario) llegan con el mensaje del
+  servidor; 409 sigue reportando "version already exists".
+- **Compat**: si `SEREZ_API_KEY` está seteada se usa como antes (header
+  `x-api-key` legacy) y no se pide login. `SEREZ_REGISTRY_URL` sigue
+  funcionando para apuntar a un registry propio; la credencial guardada es por
+  registry (si cambia la URL, pide login de nuevo).
+- Lado servidor: el registry vive ahora en el repo separado `serez-registry`
+  (cuentas, propiedad de paquetes — el primer publish de un nombre lo reclama —
+  y rol admin).
+
 ## [9.2.7] — 2026-07-14
 
 ### Fixes de propagación de `throw` + errores de traducción `.szx` visibles
