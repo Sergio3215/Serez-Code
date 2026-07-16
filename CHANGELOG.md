@@ -761,7 +761,7 @@ primitivos.
 
 ### Docs
 
-- Documented the `fetch` HTTP client (signature, default headers incl. the new `User-Agent`, options dict, `full`/`binary` modes, throw-on-4xx/5xx) and `JSON.pretty` in `README.md` and the serez-code-page builtins page.
+- Documented the `fetch` HTTP client (signature, default headers incl. the new `User-Agent`, options dict, `full`/`binary` modes, throw-on-4xx/5xx) and `JSON.pretty` in `README.md`.
 
 ### Fixes
 
