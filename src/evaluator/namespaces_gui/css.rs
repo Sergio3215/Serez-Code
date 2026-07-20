@@ -48,6 +48,12 @@ struct CssRule {
 /// combinador descendiente + condición reactiva.
 pub(crate) struct NativeStylesheet {
     rules: Vec<CssRule>,
+    /// Bloques `:font { alias: ruta.ttf; }` de la hoja: (alias, ruta).
+    pub(crate) font_decls: Vec<(String, String)>,
+    /// alias → familia REAL ya cargada en el font store (lo llena Gui.loadStylesheet
+    /// al cargar cada `font_decls`); `resolve_font_alias` lo consulta al resolver
+    /// `font-family` por nodo.
+    pub(crate) font_alias: Vec<(String, String)>,
 }
 
 fn parse_simple(s: &str) -> SimpleSel {
@@ -72,7 +78,9 @@ fn parse_simple(s: &str) -> SimpleSel {
         match kind {
             '.' => sel.classes.push(name),
             '#' => sel.id = Some(name),
-            ':' => sel.pseudos.push(name),
+            // `:active-focus` es el alias documentado de `:focus` (opt-in de la
+            // marca de foco); se normaliza acá para que matchee el estado "focus".
+            ':' => sel.pseudos.push(if name == "active-focus" { "focus".to_string() } else { name }),
             _ => {}
         }
     }
@@ -121,6 +129,34 @@ fn selector_matches(sel: &Selector, subject: &NodeKey, ancestors: &[NodeKey]) ->
 }
 
 impl NativeStylesheet {
+    /// Familia real de un alias declarado en `:font` (o `name` tal cual si no es alias).
+    pub(crate) fn resolve_font_alias<'a>(&'a self, name: &'a str) -> &'a str {
+        self.font_alias.iter()
+            .find(|(a, _)| a == name)
+            .map(|(_, fam)| fam.as_str())
+            .unwrap_or(name)
+    }
+
+    /// `font-family` de la regla `body` (con su condición evaluada contra `ctx`),
+    /// última gana. Es el fallback de familia para nodos sin `font-family` propio —
+    /// la misma semántica que `famFor` del camino interpretado (tag → body → default).
+    pub(crate) fn body_font_family(&self, ctx: &[(String, String)]) -> Option<String> {
+        let mut found = None;
+        for r in &self.rules {
+            let is_body = r.sel.parts.len() == 1
+                && r.sel.parts[0].tag.as_deref() == Some("body")
+                && r.sel.parts[0].classes.is_empty();
+            if !is_body { continue; }
+            if let Some((v, op, val)) = &r.cond {
+                if !css_cond_eval(v, op, val, ctx) { continue; }
+            }
+            if let Some((_, v)) = r.decls.iter().rev().find(|(p, _)| p == "font-family") {
+                found = Some(v.trim().trim_matches(|c| c == '\'' || c == '"').to_string());
+            }
+        }
+        found
+    }
+
     /// Props aplicables al nodo (sujeto + cadena de ancestros), última gana,
     /// dado el ctx [(nombre,valor)]. `ancestors` va de la raíz al padre directo.
     pub(crate) fn props_for_node(&self, subject: &NodeKey, ancestors: &[NodeKey], ctx: &[(String, String)]) -> Vec<(String, String)> {
@@ -155,6 +191,12 @@ fn css_cond_eval(var: &str, op: &str, val: &str, ctx: &[(String, String)]) -> bo
         Some((_, v)) => v,
         None => return false,
     };
+    // Condición sin operador: `body (flag) { … }` — truthy del valor del ctx
+    // ("false", "0", "" y "null" son falsos; cualquier otro valor pasa).
+    if op.is_empty() {
+        let t = lv.trim();
+        return !(t.is_empty() || t == "false" || t == "0" || t == "null");
+    }
     if let (Ok(l), Ok(r)) = (lv.trim().parse::<f64>(), val.trim().parse::<f64>()) {
         return match op {
             "==" => l == r, "!=" => l != r, "<" => l < r,
@@ -277,16 +319,69 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
         i
     }
 
+    // Lee `prop: valor;` hasta '}' (i apunta TRAS '{'); devuelve (decls, nuevo_i).
+    fn parse_decls(s: &[char], mut i: usize) -> (Vec<(String, String)>, usize) {
+        let n = s.len();
+        let mut decls: Vec<(String, String)> = Vec::new();
+        while i < n && s[i] != '}' {
+            loop {
+                let mut adv = false;
+                while i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') { i += 1; adv = true; }
+                if i + 1 < n && s[i] == '/' && s[i + 1] == '*' {
+                    i += 2;
+                    while i + 1 < n && !(s[i] == '*' && s[i + 1] == '/') { i += 1; }
+                    i = (i + 2).min(n);
+                    adv = true;
+                }
+                if i + 1 < n && s[i] == '/' && s[i + 1] == '/' {
+                    i += 2;
+                    while i < n && s[i] != '\n' { i += 1; }
+                    adv = true;
+                }
+                if !adv { break; }
+            }
+            if i >= n || s[i] == '}' { break; }
+            let mut prop = String::new();
+            while i < n && s[i] != ':' && s[i] != '}' && s[i] != ';' { prop.push(s[i]); i += 1; }
+            if i < n && s[i] == ':' {
+                i += 1;
+                let mut val = String::new();
+                while i < n && s[i] != ';' && s[i] != '}' { val.push(s[i]); i += 1; }
+                if i < n && s[i] == ';' { i += 1; }
+                let pn = prop.trim();
+                if !pn.is_empty() { decls.push((pn.to_string(), val.trim().to_string())); }
+            } else if i < n && s[i] == ';' {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i < n && s[i] == '}' { i += 1; }
+        (decls, i)
+    }
+
+    let mut font_decls: Vec<(String, String)> = Vec::new();
     while i < n {
         i = skip(&s, i);
         if i >= n { break; }
         if s[i] == ':' {
+            // Bloques :import (doc, se salta) y :font (declara fuentes: alias → ruta).
             let mut j = i + 1;
-            while j < n && css_is_name_char(s[j]) { j += 1; }
+            let mut kw = String::new();
+            while j < n && css_is_name_char(s[j]) { kw.push(s[j]); j += 1; }
             i = skip(&s, j);
             if i < n && s[i] == '{' {
-                while i < n && s[i] != '}' { i += 1; }
-                if i < n { i += 1; }
+                if kw == "font" {
+                    let (decls, ni) = parse_decls(&s, i + 1);
+                    for (alias, path) in decls {
+                        let path = path.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
+                        font_decls.push((alias, path));
+                    }
+                    i = ni;
+                } else {
+                    while i < n && s[i] != '}' { i += 1; }
+                    if i < n { i += 1; }
+                }
             }
             continue;
         }
@@ -308,26 +403,9 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
         i = skip(&s, i);
         let mut decls: Vec<(String, String)> = Vec::new();
         if i < n && s[i] == '{' {
-            i += 1;
-            while i < n && s[i] != '}' {
-                i = skip(&s, i);
-                if i >= n || s[i] == '}' { break; }
-                let mut prop = String::new();
-                while i < n && s[i] != ':' && s[i] != '}' && s[i] != ';' { prop.push(s[i]); i += 1; }
-                if i < n && s[i] == ':' {
-                    i += 1;
-                    let mut val = String::new();
-                    while i < n && s[i] != ';' && s[i] != '}' { val.push(s[i]); i += 1; }
-                    if i < n && s[i] == ';' { i += 1; }
-                    let pn = prop.trim();
-                    if !pn.is_empty() { decls.push((pn.to_string(), val.trim().to_string())); }
-                } else if i < n && s[i] == ';' {
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-            if i < n && s[i] == '}' { i += 1; }
+            let (d, ni) = parse_decls(&s, i + 1);
+            decls = d;
+            i = ni;
         }
         // Grupo `h1, h2 { … }` → una regla por selector (mismas decls/cond).
         for part in sel.split(',') {
@@ -336,5 +414,5 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
             rules.push(CssRule { sel: parse_selector(part), cond: cond.clone(), decls: decls.clone() });
         }
     }
-    NativeStylesheet { rules }
+    NativeStylesheet { rules, font_decls, font_alias: Vec::new() }
 }

@@ -33,6 +33,7 @@ pub(crate) fn render_tree(
         depth: 0, z_off: 0,
         cb_x: 0, cb_y: 0, cb_w: w, cb_h: h,
         inh_color: 0xffffff, // color raíz por defecto (blanco); se hereda hacia abajo
+        inh_scale: 2,        // escala raíz = 16px (paridad con el texto del intérprete)
         opacity: 1.0,
     };
     let mut pcx = PrimCtx { sheet, svgs, ctx, fonts, st, regions, path: Vec::new() };
@@ -45,10 +46,11 @@ fn prim_is_text_tag(tag: &str) -> bool {
     matches!(tag, "p" | "span" | "label" | "b" | "i" | "strong" | "em"
         | "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
 }
-fn prim_default_scale(tag: &str) -> i32 {
-    // textbox (Input/Textarea) por defecto a 16px como el camino interpretado; el
-    // resto del texto a 8px salvo títulos. La hoja puede sobreescribir con font-scale.
-    match tag { "h1" => 3, "h2" => 2, "h3" => 2, "textbox" => 2, _ => 1 }
+fn prim_default_scale(tag: &str) -> Option<i32> {
+    // Defaults "user-agent" por tag (títulos y textbox); None = el nodo HEREDA la
+    // escala del ancestro (como font-size en CSS) — así el texto suelto dentro de
+    // un div sale al tamaño del contexto y no al glifo mínimo de 8px.
+    match tag { "h1" => Some(3), "h2" | "h3" | "textbox" => Some(2), _ => None }
 }
 /// Carga una imagen raster (png/jpg/…) desde `path` y la registra en el store (con caché
 /// por ruta+dims). `req_w`/`req_h` ≤ 0 = auto: se toma el tamaño natural; si solo uno es
@@ -657,6 +659,8 @@ struct PrimFrame {
     cb_h: i32,
     inh_color: u32, // `color` heredado del ancestro (como en CSS): un hijo sin
                     // `color` propio lo toma del padre en vez de blanco por defecto.
+    inh_scale: i32, // font-scale heredado (como font-size en CSS): un nodo sin
+                    // font-size/font-scale propio ni default de tag lo toma del padre.
     opacity: f32,   // opacidad acumulada del subárbol (opacity de los ancestros ×
                     // propia); aplica a textos y fondos de los descendientes.
 }
@@ -734,7 +738,7 @@ impl PrimStyle {
     /// cercano (`avail_h`), o la ventana si no hay ninguno (compat).
     fn resolve(tag: &str, style_inline: &[OwnedValue], avail_w: i32, avail_h: i32, win_h: i32,
                sheet: Option<&NativeStylesheet>, ctx: &[(String, String)],
-               key: &NodeKey, ancestors: &[NodeKey], inh_color: u32) -> PrimStyle {
+               key: &NodeKey, ancestors: &[NodeKey], inh_color: u32, inh_scale: i32) -> PrimStyle {
         let props = prim_eff_style(sheet, ctx, key, ancestors, style_inline);
 
         // Borde: props sueltas o shorthand `border: 1px solid #333`.
@@ -751,7 +755,7 @@ impl PrimStyle {
                     let px = fs.trim().trim_end_matches("px").trim().parse::<f32>().unwrap_or(8.0);
                     ((px / 8.0).round() as i32).max(1)
                 }
-                None => snum(&props, "font-scale", prim_default_scale(tag)),
+                None => snum(&props, "font-scale", prim_default_scale(tag).unwrap_or(inh_scale)),
             },
             text_col: scol(&props, "color").unwrap_or(inh_color),
             bg: scol(&props, "background-color").or_else(|| scol(&props, "background")),
@@ -761,9 +765,21 @@ impl PrimStyle {
             gap: snum(&props, "gap", 0),
             pad: prim_box_sides(&props, "padding"),
             mar: prim_box_sides(&props, "margin"),
-            font_fam: sget(&props, "font-family")
-                .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-                .unwrap_or_default(),
+            // Familia: la propia, o la de `body` como fallback (misma cadena que el
+            // camino interpretado: tag → body → familia activa). Los alias de `:font`
+            // se resuelven a la familia real cargada por Gui.loadStylesheet.
+            font_fam: {
+                let mut fam = sget(&props, "font-family")
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .unwrap_or_default();
+                if fam.is_empty() {
+                    if let Some(sh) = sheet { fam = sh.body_font_family(ctx).unwrap_or_default(); }
+                }
+                if !fam.is_empty() {
+                    if let Some(sh) = sheet { fam = sh.resolve_font_alias(&fam).to_string(); }
+                }
+                fam
+            },
             talign: match sget(&props, "text-align") {
                 Some("center") => 1,
                 Some("right") | Some("end") => 2,
@@ -801,11 +817,13 @@ fn prim_join_text(kids: &[OwnedValue]) -> String {
 /// mandan; sin ellos, `right`/`bottom` posicionan desde el borde opuesto
 /// (necesitan width/height explícitos: el layout es de una pasada y el tamaño
 /// auto no se conoce todavía). Sin nada: el origen del containing block.
-fn prim_abs_pos(sty: &PrimStyle, f: &PrimFrame, win_h: i32) -> (i32, i32) {
+fn prim_abs_pos(sty: &PrimStyle, f: &PrimFrame, win_h: i32, box_w: i32) -> (i32, i32) {
     let x = if sty.get("left").is_some() {
         f.cb_x + prim_dim(&sty.props, "left", f.avail_w).max(0)
-    } else if sty.get("right").is_some() && sty.ex_w >= 0 && f.cb_w >= 0 {
-        f.cb_x + f.cb_w - prim_dim(&sty.props, "right", f.cb_w).max(0) - sty.ex_w
+    } else if sty.get("right").is_some() && f.cb_w >= 0 {
+        // box_w ya viene resuelto (explícito o shrink-wrap) → right funciona
+        // también sin width declarado.
+        f.cb_x + f.cb_w - prim_dim(&sty.props, "right", f.cb_w).max(0) - box_w
     } else {
         f.cb_x
     };
@@ -843,7 +861,7 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
     let win_h = cx.st.win_h as i32;
     let key = prim_node_key(tag, style_inline);
     let sty = PrimStyle::resolve(tag, style_inline, f.avail_w, f.avail_h, win_h,
-        cx.sheet, cx.ctx, &key, &cx.path, f.inh_color);
+        cx.sheet, cx.ctx, &key, &cx.path, f.inh_color, f.inh_scale);
     // display:none → no se dibuja ni ocupa flujo (como en la web).
     if sty.get("display") == Some("none") { return 0; }
     let (mt, mr, mb, ml) = sty.mar;
@@ -852,8 +870,29 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
     // absolute → contra el containing block; relative → corrimiento visual;
     // normal → donde lo puso el padre, corrido por el margen. `transform:
     // translate` corre el DIBUJO además (el flujo no se entera, como relative).
+    // width explícito = caja compacta (acotada al disponible, salvo absolute);
+    // sin width = todo el disponible menos márgenes. Un ABSOLUTE sin width hace
+    // shrink-wrap al texto (como CSS): un badge `.flag { position:absolute;
+    // right: 8 }` medía todo el containing block y tapaba la card. Solo aplica
+    // con contenido de texto plano; con hijos elemento conserva el disponible
+    // (los overlays existentes fijan width explícito).
+    let box_w = if sty.ex_w >= 0 {
+        if sty.absolute { sty.ex_w } else { sty.ex_w.min(f.avail_w) }
+    } else if sty.absolute {
+        let txt = prim_join_text(kids);
+        if txt.is_empty() {
+            (f.avail_w - ml - mr).max(1)
+        } else {
+            let bw0 = sty.border_w.max(0);
+            let (pl0, pr0) = (sty.pad.3.max(bw0), sty.pad.1.max(bw0));
+            let tw = prim_prefix_px(cx.fonts, &txt, txt.chars().count(), sty.scale, sty.tstyle, sty.font_fam.as_str());
+            (tw + pl0 + pr0).clamp(1, f.avail_w)
+        }
+    } else {
+        (f.avail_w - ml - mr).max(1)
+    };
     let (x, y) = if sty.absolute {
-        prim_abs_pos(&sty, &f, win_h)
+        prim_abs_pos(&sty, &f, win_h, box_w)
     } else if sty.relative {
         let (dx, dy) = prim_rel_offset(&sty, f.avail_w, win_h);
         (f.x + ml + dx, f.y + mt + dy)
@@ -862,13 +901,6 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
     };
     let (tdx, tdy) = prim_transform_offset(&sty.props);
     let (x, y) = (x + tdx, y + tdy);
-    // width explícito = caja compacta (acotada al disponible, salvo absolute);
-    // sin width = todo el disponible menos márgenes.
-    let box_w = if sty.ex_w >= 0 {
-        if sty.absolute { sty.ex_w } else { sty.ex_w.min(f.avail_w) }
-    } else {
-        (f.avail_w - ml - mr).max(1)
-    };
 
     // ── 2. Caja resuelta + z ────────────────────────────────────────────────
     // z-index abre una BANDA de overlay para todo el subárbol; los fondos van
@@ -914,6 +946,7 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
         cb_w: if positioned { box_w } else { f.cb_w },
         cb_h: if positioned { sty.hgt } else { f.cb_h },
         inh_color: sty.text_col, // los hijos heredan el color resuelto de este nodo
+        inh_scale: sty.scale,    // …y su escala de fuente (como font-size en CSS)
         opacity: eff_op,
     };
 
@@ -956,8 +989,13 @@ fn prim_render(tag: &str, style_inline: &[OwnedValue], kids: &[OwnedValue], f: P
 fn prim_draw_text_tag(kids: &[OwnedValue], sty: &PrimStyle, b: PrimBox, cx: &mut PrimCtx) -> i32 {
     let text = prim_join_text(kids);
     let line_h = sty.num("line-height", 8 * sty.scale + 4);
-    let h = prim_emit_text(cx.st, cx.fonts, &text, b.content_x, b.y + sty.pad.0, b.content_w,
-        sty.scale, line_h, sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing, b.alpha);
+    // white-space: nowrap → sin word-wrap (una línea por \n explícito; puede
+    // desbordar y recortarse, como el opt-out del intérprete). El align se fuerza
+    // a izquierda: alinear contra un ancho "infinito" mandaría la línea fuera de caja.
+    let nowrap = sty.get("white-space") == Some("nowrap");
+    let (wrap_w, talign) = if nowrap { (i32::MAX, 0) } else { (b.content_w, sty.talign) };
+    let h = prim_emit_text(cx.st, cx.fonts, &text, b.content_x, b.y + sty.pad.0, wrap_w,
+        sty.scale, line_h, sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, talign, sty.tspacing, b.alpha);
     let total = if sty.hgt >= 0 { sty.hgt } else { h + sty.pad.0 + sty.pad.2 };
     prim_push_bg_styled(cx.st, sty, b.x, b.y, b.w, total, b.bg_z, b.alpha, None);
     total
@@ -1172,8 +1210,12 @@ fn prim_flow_child(k: &OwnedValue, kf: PrimFrame, sty: &PrimStyle, b: PrimBox, c
     if let Some((ct, cs, ck)) = prim_node_parts(k) {
         prim_render(ct, cs, ck, kf, cx)
     } else if let OwnedValue::Str(s) = k {
-        prim_emit_text(cx.st, cx.fonts, s, kf.x, kf.y, kf.avail_w, sty.scale, 8 * sty.scale + 4,
-            sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, sty.talign, sty.tspacing, b.alpha)
+        // El texto suelto respeta el white-space del CONTENEDOR (nowrap = sin
+        // word-wrap, align a izquierda — ver prim_draw_text_tag).
+        let nowrap = sty.get("white-space") == Some("nowrap");
+        let (wrap_w, talign) = if nowrap { (i32::MAX, 0) } else { (kf.avail_w, sty.talign) };
+        prim_emit_text(cx.st, cx.fonts, s, kf.x, kf.y, wrap_w, sty.scale, 8 * sty.scale + 4,
+            sty.text_col, sty.tstyle, i32::MAX, sty.font_fam.as_str(), b.z, talign, sty.tspacing, b.alpha)
     } else {
         0
     }
@@ -1237,8 +1279,8 @@ fn prim_child_style(cx: &PrimCtx, tag: &str, inline: &[OwnedValue]) -> Vec<(Stri
 /// su texto medido con su fuente/escala + su padding y margen horizontales,
 /// acotado al ancho del contenedor. El base incluye los márgenes (es el slot
 /// completo): prim_render les resta ml/mr al ancho útil después.
-fn prim_text_fit(tag: &str, cstyle: &[(String, String)], kids: &[OwnedValue], cap_w: i32, fonts: &mut Option<GuiFonts>) -> i32 {
-    let scale = snum(cstyle, "font-scale", prim_default_scale(tag));
+fn prim_text_fit(tag: &str, cstyle: &[(String, String)], kids: &[OwnedValue], cap_w: i32, fonts: &mut Option<GuiFonts>, inh_scale: i32) -> i32 {
+    let scale = snum(cstyle, "font-scale", prim_default_scale(tag).unwrap_or(inh_scale));
     let ts = prim_text_style(tag, cstyle);
     let fam = sget(cstyle, "font-family")
         .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
@@ -1277,7 +1319,7 @@ fn prim_flex_plan(kids: &[OwnedValue], sty: &PrimStyle, content_w: i32, cx: &mut
                     (Some(fx), w) => FlexKid { grow: fx.max(0), base: w.unwrap_or(0).max(0), abs: false, from_width: false },
                     (None, Some(w)) => FlexKid { grow: 0, base: w.max(0), abs: false, from_width: true },
                     (None, None) if prim_is_text_tag(ct) =>
-                        FlexKid { grow: 0, base: prim_text_fit(ct, &cstyle, ck, content_w, cx.fonts), abs: false, from_width: false },
+                        FlexKid { grow: 0, base: prim_text_fit(ct, &cstyle, ck, content_w, cx.fonts, sty.scale), abs: false, from_width: false },
                     (None, None) => FlexKid { grow: 1, base: 0, abs: false, from_width: false },
                 }
             }

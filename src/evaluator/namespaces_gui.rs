@@ -2868,6 +2868,8 @@ impl super::Evaluator {
                     | ("h", V::I(v), SceneNodeKind::ClipPush { h, .. }) => { *h = *v as i32; true }
                     ("radius", V::I(v), SceneNodeKind::RoundRect { radius, .. }) => { *radius = *v as i32; true }
                     ("alpha", V::I(v), SceneNodeKind::RectAlpha { alpha, .. }) => { *alpha = (*v).clamp(0, 255) as u32; true }
+                    // Texto translúcido (opacity heredada del camino interpretado).
+                    ("alpha", V::I(v), SceneNodeKind::Text { alpha, .. }) => { *alpha = (*v).clamp(0, 255) as u32; true }
                     ("r", V::I(v), SceneNodeKind::Circle { r }) => { *r = *v as i32; true }
                     ("x2", V::I(v), SceneNodeKind::Line { x2, .. }) => { *x2 = *v as i32; true }
                     ("y2", V::I(v), SceneNodeKind::Line { y2, .. }) => { *y2 = *v as i32; true }
@@ -3160,7 +3162,18 @@ impl super::Evaluator {
                     Some(s) => s,
                     None => { return self.rt_err_kind("TypeError", "Gui.loadStylesheet src must be a string"); }
                 };
-                self.gui_stylesheets.push(parse_css(&src));
+                let mut sheet = parse_css(&src);
+                // Bloques `:font { alias: ruta.ttf; }`: se cargan acá (una vez por hoja)
+                // y el render resuelve `font-family: alias` → familia real por nodo.
+                // Una ruta que no carga no es fatal: el alias queda sin mapear y el
+                // texto sale con la familia activa (mismo fallback que el intérprete).
+                for (alias, path) in sheet.font_decls.clone() {
+                    if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
+                    if let Some(family) = self.gui_fonts.as_mut().unwrap().load_font_file(&path) {
+                        sheet.font_alias.push((alias, family));
+                    }
+                }
+                self.gui_stylesheets.push(sheet);
                 let handle = self.gui_stylesheets.len() as i64; // 1-based
                 EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
             }
