@@ -1,6 +1,6 @@
 [package]
 name = "serez-code"
-version = "9.2.7"
+version = "9.3.8"
 edition = "2024"
 description = "Serez Code - The programming language for AI, UI, systems, and GPU in a single runtime"
 license = "MIT"
