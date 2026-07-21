@@ -84,6 +84,7 @@ impl super::Evaluator {
                     body: Rc::new(func_decl.function.body.clone()),
                     captured: Rc::new(captured),
                     is_generator: func_decl.function.is_generator,
+                    bound_class: None,
                 };
                 let func_ref = self.alloc(func_data);
 

@@ -1,0 +1,104 @@
+// unit_method_ref.sz — `obj.metodo` SIN paréntesis vale la función ligada al objeto,
+// no su ejecución. Antes caía al despacho de métodos y lo invocaba con cero argumentos:
+// pasar un handler como dato (`onClick={this.handler}`) lo ejecutaba en cada lectura y
+// guardaba su valor de retorno en lugar de la función. Caso real: en serez-ui un
+// componente hijo que recibía un handler del padre lo disparaba en CADA render (un
+// booleano de estado se daba vuelta solo cada frame) y, si el handler tenía parámetros,
+// la app moría al montar con "expects 1 argument(s), got 0".
+
+class Contador {
+    public Contador() {
+        this.n = 0;
+        this.flag = false;
+    }
+    public void incr() { this.n = this.n + 1; }
+    public void sumar(int cuanto) { this.n = this.n + cuanto; }
+    public void alternar() { this.flag = !this.flag; }
+    public int leer() { return this.n; }
+
+    private int secreto() { return 42; }
+    // Un método ligado debe conservar el contexto de su clase: desde adentro
+    // sigue viendo los miembros privados propios.
+    public int viaPrivado() { return this.secreto(); }
+}
+
+// Recibe una referencia a método y la invoca: si el mero pasaje la disparara,
+// el conteo final no cerraría.
+fn void aplicarDosVeces(any f) {
+    f();
+    f();
+}
+
+test("leer un método NO lo ejecuta", () => {
+    let c = new Contador();
+    let ref = c.incr;
+    assert(c.n == 0, "leer c.incr no debe correr el cuerpo");
+});
+
+test("la referencia leída es invocable y muta el objeto original", () => {
+    let c = new Contador();
+    let ref = c.incr;
+    ref();
+    ref();
+    assert(c.n == 2, "invocar la referencia muta el objeto ligado");
+});
+
+test("type_of de una referencia a método es function", () => {
+    let c = new Contador();
+    let ref = c.leer;
+    assert(type_of(ref) == "function", "type_of debe decir function");
+});
+
+test("una referencia a método con parámetros no se auto-invoca", () => {
+    let c = new Contador();
+    let ref = c.sumar;       // antes: "Method 'sumar' expects 1 argument(s), got 0"
+    ref(5);
+    assert(c.n == 5, "los argumentos llegan al método ligado");
+});
+
+test("el valor de retorno sigue disponible al invocar", () => {
+    let c = new Contador();
+    c.sumar(7);
+    let ref = c.leer;
+    assert(ref() == 7, "la referencia devuelve lo que devuelve el método");
+});
+
+test("un booleano de estado no se da vuelta al leer el handler", () => {
+    let c = new Contador();
+    let h = c.alternar;
+    let h2 = c.alternar;
+    let h3 = c.alternar;
+    assert(c.flag == false, "tres lecturas no deben tocar el estado");
+    h();
+    assert(c.flag == true, "una invocación sí lo alterna");
+});
+
+test("la referencia se puede pasar como dato y llamar después", () => {
+    let c = new Contador();
+    let props = [c.incr, c.sumar];
+    assert(c.n == 0, "guardar los handlers en un array no los ejecuta");
+    props[0]();
+    props[1](10);
+    assert(c.n == 11, "ambos handlers operan sobre el mismo objeto");
+});
+
+test("una referencia pasada como argumento no se dispara al pasarla", () => {
+    let c = new Contador();
+    aplicarDosVeces(c.incr);
+    assert(c.n == 2, "la función receptora la invoca, y solo ella");
+});
+
+test("un método ligado conserva el acceso a lo privado de su clase", () => {
+    let c = new Contador();
+    let ref = c.viaPrivado;
+    assert(ref() == 42, "el cuerpo ligado sigue viendo this.secreto()");
+});
+
+test("los getters explícitos siguen ejecutándose al leerlos", () => {
+    // El arreglo NO debe tocar el mecanismo de `get prop()`.
+    let c = new Contador();
+    c.sumar(3);
+    assert(c.leer() == 3, "llamar con paréntesis sigue funcionando igual");
+});
+
+summary();

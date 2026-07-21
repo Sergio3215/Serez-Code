@@ -7,6 +7,33 @@ Order: most recent to oldest.
 
 ## [Unreleased]
 
+### BUG: `obj.metodo` sin paréntesis ejecutaba el método en vez de referenciarlo
+
+- **Leer un método ahora vale la función ligada al objeto, no su ejecución.**
+  `let ref = obj.metodo` (sin paréntesis, sin argumentos) devuelve una función
+  invocable después; antes caía al despacho de métodos y lo corría con cero
+  argumentos, devolviendo su valor de retorno.
+- Esto rompía el patrón de **pasar un handler como dato** (`onClick={this.handler}`,
+  handlers en arrays/dicts, callbacks entre componentes): el método se disparaba
+  en CADA lectura, así que un método que muta estado lo hacía en cada render
+  (un booleano se daba vuelta solo, frame a frame), y lo que quedaba guardado era
+  su retorno — `null` en un `void` — de modo que el callback nunca se ejecutaba
+  al invocarlo ("Attempt to call a non-function").
+- Si el método declaraba parámetros, la auto-invocación con cero argumentos
+  mataba el programa en el acto: `Method 'pick' expects 1 argument(s), got 0`.
+- La referencia ligada **conserva el contexto de su clase**: su cuerpo sigue
+  viendo los miembros privados propios, y referenciar un método privado desde
+  afuera se rechaza igual que llamarlo.
+- **No cambia** el mecanismo de `get prop()`: los getters explícitos se siguen
+  ejecutando al leerlos, y `obj.campo` sigue siendo lectura de campo. La
+  resolución es campo → getter → referencia a método.
+- **Breaking**: código que escribiera `obj.metodoSinArgs` esperando que se
+  ejecutara ahora obtiene la función sin llamarla. Barrido del ecosistema
+  (`Serez-code`, `serez-ui`, `serez-http`, `serez-ai`, `serez-graph`,
+  `serez-pack`, `serez-dotenv`, `serez-cobol`, `serez-strike`, `serez-apipack`):
+  cero ocurrencias de esa forma.
+- Regresión cubierta por `tests/unit_method_ref.sz` (10 casos).
+
 ### `sz publish` multi-usuario: login con cuenta del registry, sin tokens a mano
 
 - **`sz publish` / `sz unpublish` ya no exigen `SEREZ_API_KEY`**: la primera vez

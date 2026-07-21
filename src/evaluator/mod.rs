@@ -662,12 +662,14 @@ impl Evaluator {
                 body,
                 captured,
                 is_generator,
+                bound_class,
             }) => OwnedValue::Function {
                 return_type: return_type.clone(),
                 parameters: parameters.clone(),
                 body: body.clone(),
                 captured: captured.clone(),
                 is_generator: *is_generator,
+                bound_class: bound_class.clone(),
             },
             Some(ObjectData::Instance { class_name, fields }) => OwnedValue::Instance {
                 class_name: class_name.clone(),
@@ -715,12 +717,14 @@ impl Evaluator {
                 body,
                 captured,
                 is_generator,
+                bound_class,
             } => self.alloc(ObjectData::Function {
                 return_type,
                 parameters,
                 body,
                 captured,
                 is_generator,
+                bound_class,
             }),
             OwnedValue::Instance { class_name, fields } => {
                 self.alloc(ObjectData::Instance { class_name, fields })
@@ -791,13 +795,14 @@ impl Evaluator {
                 });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
-            OwnedValue::Function { return_type, parameters, body, captured, is_generator } => {
+            OwnedValue::Function { return_type, parameters, body, captured, is_generator, bound_class } => {
                 let idx = self.global_arena.alloc(ObjectData::Function {
                     return_type,
                     parameters,
                     body,
                     captured,
                     is_generator,
+                    bound_class,
                 });
                 ObjectRef { region: RegionId::Global, index: idx }
             }
@@ -1046,7 +1051,7 @@ impl Evaluator {
         }
         let func_data = self.resolve(func_ref).cloned();
         match func_data {
-            Some(ObjectData::Function { parameters, body, captured, .. }) => {
+            Some(ObjectData::Function { parameters, body, captured, bound_class, .. }) => {
                 let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
                 let required = parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
                 let max_pos  = if has_rest { usize::MAX } else { parameters.len() };
@@ -1059,6 +1064,11 @@ impl Evaluator {
                 }
                 self.scopes.push();
                 self.call_depth += 1;
+                // Ver la nota en eval_expression: una referencia a método ligada corre con
+                // el contexto de su clase para no perder los miembros privados propios.
+                let prev_exec_class = bound_class
+                    .as_ref()
+                    .map(|c| self.executing_class.replace(c.clone()));
                 for (name, cap_ref) in captured.iter() {
                     self.scopes.declare(name.clone(), *cap_ref);
                 }
@@ -1094,6 +1104,7 @@ impl Evaluator {
                         EvalResult::Error => {
                             self.call_depth -= 1;
                             self.scopes.pop();
+                            if let Some(prev) = prev_exec_class.clone() { self.executing_class = prev; }
                             return EvalResult::Error;
                         }
                         EvalResult::Break | EvalResult::Continue
@@ -1101,10 +1112,12 @@ impl Evaluator {
                             eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
                             self.call_depth -= 1;
                             self.scopes.pop();
+                            if let Some(prev) = prev_exec_class.clone() { self.executing_class = prev; }
                             return EvalResult::Error;
                         }
                     }
                 }
+                if let Some(prev) = prev_exec_class { self.executing_class = prev; }
                 if let Some(thrown) = fn_throw {
                     let owned = self.extract(thrown);
                     self.call_depth -= 1;

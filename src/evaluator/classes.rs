@@ -459,6 +459,25 @@ impl super::Evaluator {
             if let Some(getter) = self.find_getter(&class_name, method_name) {
                 return self.invoke_method(obj_ref, &class_name, &getter, vec![], dot_call.line, dot_call.column);
             }
+            // Referencia a método: no hay campo ni getter, pero sí un método con ese
+            // nombre → `obj.metodo` VALE la función ligada a obj, no su ejecución.
+            // Antes caía al despacho de abajo y lo invocaba con cero argumentos, así que
+            // pasar un handler como dato (`onClick={this.handler}`) lo ejecutaba en cada
+            // lectura y guardaba su valor de retorno en lugar de la función.
+            if let Some(m) = self.find_method(&class_name, method_name) {
+                if !m.is_public && self.executing_class.as_deref() != Some(class_name.as_str()) {
+                    eprintln!("❌ ERROR: Method '{}' is private and cannot be referenced externally", method_name);
+                    return EvalResult::Error;
+                }
+                return EvalResult::Value(self.alloc(ObjectData::Function {
+                    return_type: m.return_type.clone(),
+                    parameters: Rc::new(m.parameters.clone()),
+                    body: Rc::new(m.body.clone()),
+                    captured: Rc::new(vec![("this".to_string(), obj_ref)]),
+                    is_generator: false,
+                    bound_class: Some(class_name.clone()),
+                }));
+            }
         }
 
         // Method dispatch: walk inheritance chain

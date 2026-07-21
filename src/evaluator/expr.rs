@@ -55,6 +55,7 @@ impl super::Evaluator {
                     body: Rc::new(func_lit.body.clone()),
                     captured: Rc::new(captured),
                     is_generator: func_lit.is_generator,
+                    bound_class: None,
                 };
                 EvalResult::Value(self.alloc(func_data))
             }
@@ -79,6 +80,7 @@ impl super::Evaluator {
                     body: Rc::new(body),
                     captured: Rc::new(captured),
                     is_generator: false,
+                    bound_class: None,
                 }))
             }
 
@@ -169,14 +171,15 @@ impl super::Evaluator {
                         }
                     }
                 }
-                let (return_type, parameters, body, captured, is_generator) = match func_data {
+                let (return_type, parameters, body, captured, is_generator, bound_class) = match func_data {
                     Some(ObjectData::Function {
                         return_type,
                         parameters,
                         body,
                         captured,
                         is_generator,
-                    }) => (return_type, parameters, body, captured, is_generator),
+                        bound_class,
+                    }) => (return_type, parameters, body, captured, is_generator, bound_class),
                     _ => {
                         // Raise BEFORE unwinding so the printed call stack still
                         // shows the failing frame; state is restored either way,
@@ -324,6 +327,13 @@ impl super::Evaluator {
                     None
                 };
 
+                // Referencia a método ligada (`obj.metodo` sin paréntesis): el cuerpo se
+                // ejecuta con el contexto de SU clase, o perdería el acceso a los miembros
+                // privados propios. Se restaura apenas termina el cuerpo.
+                let prev_exec_class = bound_class
+                    .as_ref()
+                    .map(|c| self.executing_class.replace(c.clone()));
+
                 let mut result_ref = self.null_ref;
                 let mut early_throw: Option<OwnedValue> = None;
                 let mut early_error = false;
@@ -347,6 +357,8 @@ impl super::Evaluator {
                         }
                     }
                 }
+
+                if let Some(prev) = prev_exec_class { self.executing_class = prev; }
 
                 // Generator: collect yielded values before popping scope
                 if is_generator {
