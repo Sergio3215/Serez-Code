@@ -7,6 +7,31 @@ Order: most recent to oldest.
 
 ## [Unreleased]
 
+### `.szs`: condiciones compuestas con `and` / `or` / `not`
+
+- La condición de una regla del motor CSS nativo ya no es una sola comparación:
+  admite varias unidas por **`and`** y **`or`**, y negación con **`not`**, al
+  estilo de las media queries de CSS. `&&`, `||` y `!` se aceptan como alias.
+
+  ```css
+  body  (width > 600 and flag == true) { background-color: #c12; }
+  .item (selected or hovered)          { border-color: #3b82f6; }
+  .row  (not hidden)                   { display: flex; }
+  ```
+- Precedencia habitual: `not` liga más que `and`, y `and` más que `or`, así que
+  `a or b and c` es `a or (b and c)`. **No** hay paréntesis de agrupación: el
+  scanner de la hoja cierra la condición en el primer `)`.
+- Los conectores sólo cuentan como palabra completa y respetan las comillas, así
+  que un nombre como `android`/`notify` o un valor `"a or b"` no parten nada.
+- Antes esto fallaba **en silencio**: el parser cortaba en el primer operador de
+  comparación, dejaba una variable inexistente (`width > 600 && flag`) y la regla
+  no aplicaba nunca, sin ningún error.
+- `()` vacío pasó a significar "sin condición" en vez de una condición que nunca
+  pasa.
+- Cubierto por los tests Rust de `namespaces_gui::css` (9 casos), ahora incluidos
+  en `run_tests.ps1`. El motor interpretado de serez-ui recibe la misma gramática
+  para no romper la paridad.
+
 ### BUG: `obj.metodo` sin paréntesis ejecutaba el método en vez de referenciarlo
 
 - **Leer un método ahora vale la función ligada al objeto, no su ejecución.**

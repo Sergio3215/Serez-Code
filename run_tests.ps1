@@ -497,18 +497,23 @@ if ($runAll -or $ai) {
 Write-Host ""
 Write-Host "═══ Rust Unit Tests ══════════════════════════" -ForegroundColor Cyan
 if ($runAll -or $unit) {
-    Push-Location $root
-    $cargoOut = cargo test "package_manager::tests" --quiet 2>&1
-    $cargoOk  = $LASTEXITCODE -eq 0
-    Pop-Location
-    if ($cargoOk) {
-        Write-Host "[PASS] package_manager unit tests" -ForegroundColor Green
-        $script:pass++
-    } else {
-        Write-Host "[FAIL] package_manager unit tests" -ForegroundColor Red
-        $cargoOut | Where-Object { $_ -match "FAILED|panicked|error" } |
-            ForEach-Object { Write-Host "       $_" -ForegroundColor Yellow }
-        $script:fail++
+    foreach ($mod in @(
+        @{ filter = "package_manager::tests";                 label = "package_manager unit tests" },
+        @{ filter = "evaluator::namespaces_gui::css::tests";  label = "css nativo: condiciones and/or/not" }
+    )) {
+        Push-Location $root
+        $cargoOut = cargo test $mod.filter --quiet 2>&1
+        $cargoOk  = $LASTEXITCODE -eq 0
+        Pop-Location
+        if ($cargoOk) {
+            Write-Host "[PASS] $($mod.label)" -ForegroundColor Green
+            $script:pass++
+        } else {
+            Write-Host "[FAIL] $($mod.label)" -ForegroundColor Red
+            $cargoOut | Where-Object { $_ -match "FAILED|panicked|error" } |
+                ForEach-Object { Write-Host "       $_" -ForegroundColor Yellow }
+            $script:fail++
+        }
     }
 }
 

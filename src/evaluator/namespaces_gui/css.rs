@@ -37,10 +37,24 @@ struct Selector {
     parts: Vec<SimpleSel>,
 }
 
-/// Una regla CSS: selector + condición opcional (var op val) + decls.
+/// Una cláusula de la condición de una regla: `[not] var [op val]`, más el
+/// conector que la une a la cláusula anterior (`or_conn=false` ⇒ `and`).
+/// La primera cláusula de una condición ignora su conector.
+#[derive(Clone)]
+struct CondClause {
+    negated: bool,
+    var: String,
+    op: String,
+    val: String,
+    or_conn: bool,
+}
+
+/// Una regla CSS: selector + condición opcional + decls. La condición es una
+/// lista de cláusulas unidas por `and`/`or` (alias `&&`/`||`), con la
+/// precedencia habitual: `not` liga más que `and`, y `and` más que `or`.
 struct CssRule {
     sel: Selector,
-    cond: Option<(String, String, String)>,
+    cond: Option<Vec<CondClause>>,
     decls: Vec<(String, String)>,
 }
 
@@ -147,8 +161,8 @@ impl NativeStylesheet {
                 && r.sel.parts[0].tag.as_deref() == Some("body")
                 && r.sel.parts[0].classes.is_empty();
             if !is_body { continue; }
-            if let Some((v, op, val)) = &r.cond {
-                if !css_cond_eval(v, op, val, ctx) { continue; }
+            if let Some(cs) = &r.cond {
+                if !css_cond_eval_all(cs, ctx) { continue; }
             }
             if let Some((_, v)) = r.decls.iter().rev().find(|(p, _)| p == "font-family") {
                 found = Some(v.trim().trim_matches(|c| c == '\'' || c == '"').to_string());
@@ -165,8 +179,8 @@ impl NativeStylesheet {
             if !selector_matches(&r.sel, subject, ancestors) {
                 continue;
             }
-            if let Some((v, op, val)) = &r.cond {
-                if !css_cond_eval(v, op, val, ctx) {
+            if let Some(cs) = &r.cond {
+                if !css_cond_eval_all(cs, ctx) {
                     continue;
                 }
             }
@@ -184,6 +198,26 @@ impl NativeStylesheet {
 
 fn css_is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '*'
+}
+
+/// Evalúa la condición completa: OR de grupos AND, con `not` ya aplicado por
+/// cláusula. Una lista vacía pasa (regla sin condición no llega acá).
+fn css_cond_eval_all(clauses: &[CondClause], ctx: &[(String, String)]) -> bool {
+    let mut done = false;   // acumulado de los grupos AND ya cerrados
+    let mut group = true;   // grupo AND en curso
+    for (i, c) in clauses.iter().enumerate() {
+        let mut v = css_cond_eval(&c.var, &c.op, &c.val, ctx);
+        if c.negated { v = !v; }
+        if i == 0 {
+            group = v;
+        } else if c.or_conn {
+            done = done || group;   // `or` cierra el grupo AND anterior
+            group = v;
+        } else {
+            group = group && v;
+        }
+    }
+    done || group
 }
 
 fn css_cond_eval(var: &str, op: &str, val: &str, ctx: &[(String, String)]) -> bool {
@@ -280,7 +314,8 @@ fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
     p
 }
 
-fn parse_cond(sraw: &str) -> (String, String, String) {
+/// `var [op val]` de UNA cláusula ya aislada (sin conectores ni `not`).
+fn parse_cmp(sraw: &str) -> (String, String, String) {
     for op in ["==", "!=", "<=", ">="] {
         if let Some(idx) = sraw.find(op) {
             return (sraw[..idx].trim().to_string(), op.to_string(), sraw[idx + 2..].trim().to_string());
@@ -292,6 +327,87 @@ fn parse_cond(sraw: &str) -> (String, String, String) {
         }
     }
     (sraw.trim().to_string(), String::new(), String::new())
+}
+
+/// Una cláusula: `[not|!] var [op val]`. `None` si el segmento está vacío
+/// (condición malformada tipo `a and and b`: se ignora el hueco).
+fn parse_clause(seg: &str, or_conn: bool) -> Option<CondClause> {
+    let mut s = seg.trim();
+    if s.is_empty() { return None; }
+    let mut negated = false;
+    loop {
+        if let Some(rest) = s.strip_prefix('!') {
+            // `!=` es el operador de comparación, no una negación.
+            if rest.starts_with('=') { break; }
+            negated = !negated;
+            s = rest.trim_start();
+            continue;
+        }
+        // `not` sólo cuenta como palabra completa (`notify` es un nombre válido).
+        if s.to_ascii_lowercase().starts_with("not") {
+            let rest = &s[3..];
+            if !rest.starts_with(css_is_name_char) {
+                negated = !negated;
+                s = rest.trim_start();
+                continue;
+            }
+        }
+        break;
+    }
+    let (var, op, val) = parse_cmp(s);
+    Some(CondClause { negated, var, op, val, or_conn })
+}
+
+/// Parte la condición en cláusulas por los conectores de tope: `and`/`or` como
+/// palabra (estilo media query de CSS) y sus alias `&&`/`||`. No hay paréntesis
+/// de agrupación: el scanner de la hoja corta la condición en el primer `)`.
+/// Las comillas se respetan, así que un valor `"and"` no parte nada.
+fn parse_cond(sraw: &str) -> Vec<CondClause> {
+    let chars: Vec<char> = sraw.chars().collect();
+    let n = chars.len();
+    let mut clauses: Vec<CondClause> = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    let mut quote: Option<char> = None;
+    let mut or_conn = false; // conector que precede a la PRÓXIMA cláusula
+    let flush = |clauses: &mut Vec<CondClause>, seg: &[char], or_c: bool| {
+        let s: String = seg.iter().collect();
+        if let Some(c) = parse_clause(&s, or_c) { clauses.push(c); }
+    };
+    while i < n {
+        let c = chars[i];
+        if let Some(q) = quote {
+            if c == q { quote = None; }
+            i += 1;
+            continue;
+        }
+        if c == '\'' || c == '"' { quote = Some(c); i += 1; continue; }
+        if (c == '&' && i + 1 < n && chars[i + 1] == '&')
+            || (c == '|' && i + 1 < n && chars[i + 1] == '|') {
+            flush(&mut clauses, &chars[start..i], or_conn);
+            or_conn = c == '|';
+            i += 2;
+            start = i;
+            continue;
+        }
+        if css_is_name_char(c) {
+            // Sólo el comienzo de una palabra puede ser un conector.
+            if i > 0 && css_is_name_char(chars[i - 1]) { i += 1; continue; }
+            let mut j = i;
+            while j < n && css_is_name_char(chars[j]) { j += 1; }
+            let w: String = chars[i..j].iter().collect::<String>().to_ascii_lowercase();
+            if w == "and" || w == "or" {
+                flush(&mut clauses, &chars[start..i], or_conn);
+                or_conn = w == "or";
+                start = j;
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    flush(&mut clauses, &chars[start..n], or_conn);
+    clauses
 }
 
 /// Parser CSS (port de parseCss): selectores (con descendientes/pseudos) + (cond) +
@@ -401,7 +517,9 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
             let mut cs = String::new();
             while i < n && s[i] != ')' { cs.push(s[i]); i += 1; }
             if i < n { i += 1; }
-            cond = Some(parse_cond(&cs));
+            // `()` vacío = sin condición (no una condición que nunca pasa).
+            let cs = parse_cond(&cs);
+            cond = if cs.is_empty() { None } else { Some(cs) };
         }
         i = skip(&s, i);
         let mut decls: Vec<(String, String)> = Vec::new();
@@ -418,4 +536,87 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
         }
     }
     NativeStylesheet { rules, font_decls, font_alias: Vec::new() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    }
+
+    fn ev(cond: &str, c: &[(&str, &str)]) -> bool {
+        css_cond_eval_all(&parse_cond(cond), &ctx(c))
+    }
+
+    #[test]
+    fn and_exige_ambas() {
+        let base = [("w", "800"), ("flag", "true")];
+        assert!(ev("w > 600 and flag == true", &base));
+        assert!(!ev("w > 600 and flag == true", &[("w", "500"), ("flag", "true")]));
+        assert!(!ev("w > 600 and flag == true", &[("w", "800"), ("flag", "false")]));
+    }
+
+    #[test]
+    fn or_basta_una() {
+        assert!(ev("flag == true or modo == \"x\"", &[("flag", "true"), ("modo", "z")]));
+        assert!(ev("flag == true or modo == \"x\"", &[("flag", "false"), ("modo", "x")]));
+        assert!(!ev("flag == true or modo == \"x\"", &[("flag", "false"), ("modo", "z")]));
+    }
+
+    #[test]
+    fn alias_simbolicos_equivalen() {
+        let c = [("w", "800"), ("flag", "true"), ("modo", "x")];
+        assert_eq!(ev("w > 600 and flag == true", &c), ev("w > 600 && flag == true", &c));
+        assert_eq!(ev("flag == false or modo == \"x\"", &c), ev("flag == false || modo == \"x\"", &c));
+    }
+
+    #[test]
+    fn not_niega_la_clausula() {
+        assert!(ev("not oculto", &[("oculto", "false")]));
+        assert!(!ev("not oculto", &[("oculto", "true")]));
+        assert!(ev("!oculto", &[("oculto", "false")]));
+        // `not` aplica a la comparación entera
+        assert!(ev("not flag == true", &[("flag", "false")]));
+        assert!(!ev("not flag == true", &[("flag", "true")]));
+    }
+
+    #[test]
+    fn and_liga_mas_que_or() {
+        // a or (b and c)
+        let cond = "flag == true or w > 600 and modo == \"x\"";
+        assert!(ev(cond, &[("flag", "true"), ("w", "0"), ("modo", "z")]));
+        assert!(ev(cond, &[("flag", "false"), ("w", "800"), ("modo", "x")]));
+        assert!(!ev(cond, &[("flag", "false"), ("w", "800"), ("modo", "z")]));
+        assert!(!ev(cond, &[("flag", "false"), ("w", "0"), ("modo", "x")]));
+    }
+
+    #[test]
+    fn palabras_que_contienen_conectores_no_parten() {
+        // `notify` no es `not` + `ify`; `android`/`origen` contienen and/or
+        assert!(ev("notify == true", &[("notify", "true")]));
+        assert!(ev("android == true", &[("android", "true")]));
+        assert!(ev("origen == \"a\"", &[("origen", "a")]));
+    }
+
+    #[test]
+    fn valor_entrecomillado_no_parte() {
+        assert!(ev("modo == \"and\"", &[("modo", "and")]));
+        assert!(ev("modo == \"a or b\"", &[("modo", "a or b")]));
+    }
+
+    #[test]
+    fn una_sola_clausula_sigue_igual() {
+        assert!(ev("w > 600", &[("w", "800")]));
+        assert!(!ev("w > 600", &[("w", "100")]));
+        assert!(ev("flag", &[("flag", "true")]));   // truthy sin operador
+        assert!(!ev("flag", &[("flag", "false")]));
+    }
+
+    #[test]
+    fn condicion_vacia_no_deja_regla_muerta() {
+        assert!(parse_cond("").is_empty());
+        assert!(parse_cond("   ").is_empty());
+    }
 }
