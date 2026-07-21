@@ -209,14 +209,17 @@ fn css_cond_eval(var: &str, op: &str, val: &str, ctx: &[(String, String)]) -> bo
 
 pub(crate) fn css_color(raw: &str) -> Option<u32> {
     let s = raw.trim();
-    // #rgb / #rrggbb
-    if let Some(hex) = s.strip_prefix('#') {
-        let hex = if hex.len() == 3 {
+    // #rgb / #rgba / #rrggbb / #rrggbbaa — las formas con alpha las emiten los
+    // color-pickers; acá el alpha se recorta (el color es 0xRRGGBB). Para el
+    // FONDO el alpha del hex sí se honra (prim_bg_alpha → translucidez real).
+    if let Some(hexs) = s.strip_prefix('#') {
+        let mut hex = hexs.to_string();
+        if hex.len() == 4 { hex.truncate(3); }
+        if hex.len() == 8 { hex.truncate(6); }
+        if hex.len() == 3 {
             let b = hex.as_bytes();
-            format!("{0}{0}{1}{1}{2}{2}", b[0] as char, b[1] as char, b[2] as char)
-        } else {
-            hex.to_string()
-        };
+            hex = format!("{0}{0}{1}{1}{2}{2}", b[0] as char, b[1] as char, b[2] as char);
+        }
         if hex.len() != 6 { return None; }
         return u32::from_str_radix(&hex, 16).ok().map(|c| c & 0x00FF_FFFF);
     }

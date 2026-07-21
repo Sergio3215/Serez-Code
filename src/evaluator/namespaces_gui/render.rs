@@ -716,6 +716,17 @@ fn prim_bg_alpha(props: &[(String, String)]) -> u32 {
         Some(v) => v.trim().to_ascii_lowercase(),
         None => return 255,
     };
+    // Hex con alpha (#rrggbbaa / #rgba, lo emiten los color-pickers): el 4º
+    // componente es el alpha del fondo, igual que en rgba().
+    if let Some(h) = raw.strip_prefix('#') {
+        if h.len() == 8 {
+            if let Ok(a) = u8::from_str_radix(&h[6..8], 16) { return a as u32; }
+        }
+        if h.len() == 4 {
+            if let Ok(a) = u8::from_str_radix(&h[3..4], 16) { return (a as u32) * 17; }
+        }
+        return 255;
+    }
     let inner = match raw.strip_prefix("rgba(").or_else(|| raw.strip_prefix("hsla(")) {
         Some(i) => i.trim_end_matches(')'),
         None => return 255,

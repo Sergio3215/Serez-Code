@@ -2609,11 +2609,20 @@ natively). The CSS covers the familiar web subset: full box model (per-side
 padding/margin and 1–4 value shorthands), `border` / `border-radius`, flexbox
 (`justify-content`, `align-items`, `gap`, `flex` weights,
 `flex-direction: column`), `position: absolute` (+ `left`/`top`/`bottom`/`right`
-and `z-index` for overlays), `width`/`height` in px / `%` / `auto`,
-`overflow: scroll`, `text-align`, `line-height`, `letter-spacing`,
-`font-weight`, `text-decoration`, `font-family`, `display: none`. Selectors:
-`tag`, `*`, `.class`, `#id`, compounds (`tag.class#id`) and reactive conditions
-evaluated against `ctx` — last match wins. `img` takes a PNG/JPG **file path**
+and `z-index` for overlays — an absolute node without `width` shrink-wraps to
+its text, so `right:`-anchored badges just work), `width`/`height` in px / `%` /
+`auto`, `overflow: scroll`, `opacity` (multiplicative down the subtree, text
+included), `text-align`, `line-height`, `letter-spacing`,
+`white-space: nowrap`, `font-weight`, `text-decoration`, `font-family` — with
+custom fonts declared in `:font { alias: "path.ttf" }` blocks of the sheet and
+resolved per node — and `display: none`. `color` and `font-size`/`font-scale`
+**inherit** down the tree like on the web. Selectors: `tag`, `*`, `.class`,
+`#id`, compounds (`tag.class#id`), descendant chains (`section span`), groups
+(`h2, h3 { … }`), pseudo-states (`:hover`, `:focus`, `:active`, `:disabled` —
+matched against same-named boolean attrs the framework marks on nodes;
+`:active-focus` is an alias of `:focus`) and reactive conditions evaluated
+against `ctx` (`(var == val)` with `==`/`!=`/`<`/`<=`/`>`/`>=`, or a bare
+`(flag)` for truthiness) — last match wins. `img` takes a PNG/JPG **file path**
 (auto-sized, aspect-preserving, cached) or a `Gui.loadSvg` handle.
 
 ```serez
