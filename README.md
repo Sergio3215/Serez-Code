@@ -3126,6 +3126,49 @@ A property with only a getter and no setter is read-only — assigning to it is 
 
 ---
 
+#### Method references
+
+Writing `obj.method` **without parentheses** yields the method as a value, bound to that object — it does not call it. Invoking it later still mutates the object it came from, so a method can be passed around as data: stored in an array or dictionary, handed to another function, or given to a UI component as a callback prop.
+
+```serez
+public class Counter {
+    public Counter() { this.n = 0; }
+    public void incr() { this.n = this.n + 1; }
+    public void add(int k) { this.n = this.n + k; }
+}
+
+let c = new Counter();
+
+let bump = c.incr;        // no parentheses → a reference, NOT a call
+out c.n;                  // → 0    (nothing ran)
+bump();
+bump();
+out c.n;                  // → 2    (mutates the original object)
+
+let handlers = [c.incr, c.add];
+handlers[1](10);
+out c.n;                  // → 12
+
+out type_of(c.incr);      // → "function"
+```
+
+Resolution for a parenthesis-less `obj.name` is **field → getter → method reference**: a field wins if one exists, then a `get name()` getter (which *does* run on read), and only then the method itself as a value.
+
+A bound reference keeps its class context, so its body still reaches the class's own private members. Referencing a private method from outside is rejected exactly like calling it would be:
+
+```serez
+let f = obj.privateHelper;   // ❌ ERROR: Method 'privateHelper' is private and cannot be referenced externally
+```
+
+This is what makes the parent→child callback pattern work in `serez-ui`: the parent passes the method, the child invokes it.
+
+```serez
+<TaskRow onPick={this.pick} />                    // parent: a reference
+<Button onClick={this.props.onPick}>Pick</Button> // child: invokes it
+```
+
+---
+
 ### Type Conversions
 
 Two global functions convert between `string`, `int`, and `decimal`:
