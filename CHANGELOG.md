@@ -7,6 +7,43 @@ Order: most recent to oldest.
 
 ## [Unreleased]
 
+### `.szs`: bloques `@when` / `@else` — una lógica que agrupa varios elementos
+
+- Nuevo at-rule del motor CSS: **`@when (cond) { … }`** envuelve varias reglas
+  (tags, `.clases`, `#ids`) bajo **una misma condición lógica**, para no repetir la
+  condición selector por selector. La "consulta" no es una media-query: es la misma
+  lógica `.szs` de las reglas (una variable de estado, o `width`/`height`, con
+  `and`/`or`/`not`).
+
+  ```css
+  @when (width < 300 and darkMode) {
+      body   { color: #fff }
+      .card  { padding: 8 }
+      #main  { gap: 4 }
+  }
+  ```
+- **`@else`** es el complemento del `@when` anterior, y **`@else (cond)`** encadena
+  else-if. Las ramas son **mutuamente excluyentes** (se evalúan de arriba hacia
+  abajo, la primera que cumple gana), así que no hay que negar a mano los rangos:
+
+  ```css
+  @when (w < 200) { body { color: #100 } }
+  @else (w < 400) { body { color: #200 } }
+  @else           { body { color: #300 } }
+  ```
+- Se pueden **anidar** (`@when` dentro de `@when`: las condiciones se AND-ean) y una
+  regla de adentro puede tener **su propia** `(cond)`, que se combina con la del
+  bloque. `@else` niega la condición **completa** de la rama previa (`¬(a or b)` es
+  `!eval(a or b)`, sin De Morgan), así que compuestos como `(a or b)` se complementan
+  bien.
+- Las at-rules **desconocidas** (`@media`, …) se **descartan enteras** en vez de
+  ensuciar el parseo.
+- Implementación: la condición de una regla pasó de una sola DNF a un **AND de
+  términos** negables (`CondTerm`); el parser es recursivo por bloque con condición
+  heredada. Cubierto por 9 tests Rust nuevos en `namespaces_gui::css` (18 en total),
+  incl. el caso de negación de condición compuesta. El motor interpretado de serez-ui
+  recibe la misma gramática (nuevo `when_test`, suite 22/22) para no romper la paridad.
+
 ### `.szs`: condiciones compuestas con `and` / `or` / `not`
 
 - La condición de una regla del motor CSS nativo ya no es una sola comparación:

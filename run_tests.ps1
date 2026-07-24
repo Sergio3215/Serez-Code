@@ -499,7 +499,7 @@ Write-Host "═══ Rust Unit Tests ══════════════
 if ($runAll -or $unit) {
     foreach ($mod in @(
         @{ filter = "package_manager::tests";                 label = "package_manager unit tests" },
-        @{ filter = "evaluator::namespaces_gui::css::tests";  label = "css nativo: condiciones and/or/not" }
+        @{ filter = "evaluator::namespaces_gui::css::tests";  label = "css nativo: condiciones and/or/not + bloques @when/@else" }
     )) {
         Push-Location $root
         $cargoOut = cargo test $mod.filter --quiet 2>&1

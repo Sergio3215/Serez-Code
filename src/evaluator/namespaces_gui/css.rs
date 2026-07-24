@@ -49,12 +49,26 @@ struct CondClause {
     or_conn: bool,
 }
 
-/// Una regla CSS: selector + condición opcional + decls. La condición es una
-/// lista de cláusulas unidas por `and`/`or` (alias `&&`/`||`), con la
-/// precedencia habitual: `not` liga más que `and`, y `and` más que `or`.
+/// Un TÉRMINO de la condición de una regla: una condición completa (OR-de-ANDs =
+/// `Vec<CondClause>`) más un flag `negated` que niega su RESULTADO entero. Los
+/// términos de una regla se AND-ean todos. Una regla suelta tiene un único término
+/// sin negar; los bloques `@when`/`@else` apilan términos: `@when (C)` suma `C`, y
+/// un `@else` posterior suma `¬C` (más su propia condición). Negar el resultado del
+/// término —y no cada cláusula— evita tener que aplicar De Morgan a condiciones
+/// compuestas: `¬(a or b)` es simplemente `!eval(a or b)`.
+#[derive(Clone)]
+struct CondTerm {
+    negated: bool,
+    clauses: Vec<CondClause>,
+}
+
+/// Una regla CSS: selector + condición opcional + decls. La condición es un AND de
+/// términos (ver `CondTerm`); cada término es una lista de cláusulas unidas por
+/// `and`/`or` (alias `&&`/`||`), con la precedencia habitual: `not` liga más que
+/// `and`, y `and` más que `or`.
 struct CssRule {
     sel: Selector,
-    cond: Option<Vec<CondClause>>,
+    cond: Option<Vec<CondTerm>>,
     decls: Vec<(String, String)>,
 }
 
@@ -161,8 +175,8 @@ impl NativeStylesheet {
                 && r.sel.parts[0].tag.as_deref() == Some("body")
                 && r.sel.parts[0].classes.is_empty();
             if !is_body { continue; }
-            if let Some(cs) = &r.cond {
-                if !css_cond_eval_all(cs, ctx) { continue; }
+            if let Some(ts) = &r.cond {
+                if !css_terms_eval_all(ts, ctx) { continue; }
             }
             if let Some((_, v)) = r.decls.iter().rev().find(|(p, _)| p == "font-family") {
                 found = Some(v.trim().trim_matches(|c| c == '\'' || c == '"').to_string());
@@ -179,8 +193,8 @@ impl NativeStylesheet {
             if !selector_matches(&r.sel, subject, ancestors) {
                 continue;
             }
-            if let Some(cs) = &r.cond {
-                if !css_cond_eval_all(cs, ctx) {
+            if let Some(ts) = &r.cond {
+                if !css_terms_eval_all(ts, ctx) {
                     continue;
                 }
             }
@@ -198,6 +212,17 @@ impl NativeStylesheet {
 
 fn css_is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '*'
+}
+
+/// Evalúa la condición de una regla: AND de términos, cada uno negable. Todos los
+/// términos deben pasar. Los términos salen de la propia condición de la regla y de
+/// los `@when`/`@else` que la envuelven (esos aportan las negaciones de las ramas
+/// previas). Lista vacía pasa (regla sin condición no llega acá).
+fn css_terms_eval_all(terms: &[CondTerm], ctx: &[(String, String)]) -> bool {
+    terms.iter().all(|t| {
+        let v = css_cond_eval_all(&t.clauses, ctx);
+        if t.negated { !v } else { v }
+    })
 }
 
 /// Evalúa la condición completa: OR de grupos AND, con `not` ya aplicado por
@@ -411,12 +436,13 @@ fn parse_cond(sraw: &str) -> Vec<CondClause> {
 }
 
 /// Parser CSS (port de parseCss): selectores (con descendientes/pseudos) + (cond) +
-/// { decls }. Salta comentarios y bloques :import/:font.
+/// { decls }. Salta comentarios y bloques :import/:font, y descarta at-rules
+/// desconocidas (`@media`, …). Agrupa reglas bajo una condición compartida con
+/// bloques `@when (cond) { … }` / `@else [(cond)] { … }` (ver `parse_rules`).
 pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
     let s: Vec<char> = src.chars().collect();
-    let n = s.len();
-    let mut i = 0usize;
     let mut rules: Vec<CssRule> = Vec::new();
+    let mut font_decls: Vec<(String, String)> = Vec::new();
 
     fn skip(s: &[char], mut i: usize) -> usize {
         loop {
@@ -479,62 +505,152 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
         (decls, i)
     }
 
-    let mut font_decls: Vec<(String, String)> = Vec::new();
-    while i < n {
-        i = skip(&s, i);
-        if i >= n { break; }
-        if s[i] == ':' {
-            // Bloques :import (doc, se salta) y :font (declara fuentes: alias → ruta).
-            let mut j = i + 1;
-            let mut kw = String::new();
-            while j < n && css_is_name_char(s[j]) { kw.push(s[j]); j += 1; }
-            i = skip(&s, j);
-            if i < n && s[i] == '{' {
-                if kw == "font" {
-                    let (decls, ni) = parse_decls(&s, i + 1);
-                    for (alias, path) in decls {
-                        let path = path.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
-                        font_decls.push((alias, path));
-                    }
-                    i = ni;
-                } else {
-                    while i < n && s[i] != '}' { i += 1; }
-                    if i < n { i += 1; }
-                }
-            }
-            continue;
-        }
-        // Selector: todo hasta `(` (condición) o `{` (decls). Admite espacios
-        // (descendientes), `.` `#` `:` y `>` — parse_selector lo trocea.
-        let mut sel = String::new();
-        while i < n && s[i] != '{' && s[i] != '(' && s[i] != '}' { sel.push(s[i]); i += 1; }
-        let sel = sel.trim().to_string();
-        if sel.is_empty() { i += 1; continue; }
-        i = skip(&s, i);
-        let mut cond = None;
-        if i < n && s[i] == '(' {
-            i += 1;
-            let mut cs = String::new();
-            while i < n && s[i] != ')' { cs.push(s[i]); i += 1; }
-            if i < n { i += 1; }
-            // `()` vacío = sin condición (no una condición que nunca pasa).
-            let cs = parse_cond(&cs);
-            cond = if cs.is_empty() { None } else { Some(cs) };
-        }
-        i = skip(&s, i);
-        let mut decls: Vec<(String, String)> = Vec::new();
+    /// Salta una at-rule desconocida (`@media`, …): su bloque `{...}` balanceado
+    /// desde `i` (que apunta a lo que sigue al nombre), o hasta el primer `;` si no
+    /// abre bloque. Devuelve el índice tras el cierre.
+    fn skip_atrule(s: &[char], mut i: usize) -> usize {
+        let n = s.len();
+        while i < n && s[i] != '{' && s[i] != ';' { i += 1; }
+        if i < n && s[i] == ';' { return i + 1; }
         if i < n && s[i] == '{' {
-            let (d, ni) = parse_decls(&s, i + 1);
-            decls = d;
-            i = ni;
+            let mut depth = 0i32;
+            while i < n {
+                if s[i] == '{' { depth += 1; }
+                else if s[i] == '}' { depth -= 1; if depth == 0 { return i + 1; } }
+                i += 1;
+            }
         }
-        // Grupo `h1, h2 { … }` → una regla por selector (mismas decls/cond).
-        for part in sel.split(',') {
-            let part = part.trim();
-            if part.is_empty() { continue; }
-            rules.push(CssRule { sel: parse_selector(part), cond: cond.clone(), decls: decls.clone() });
-        }
+        i
     }
+
+    /// Parsea una secuencia de reglas desde `i` acumulando en `rules`/`font_decls`.
+    /// `ambient` son los términos de condición heredados de los `@when`/`@else` que
+    /// envuelven este bloque (se AND-ean a cada regla de adentro). Con `nested=true`
+    /// el bloque termina —y consume— en su `}` de cierre; en el nivel 0 corre hasta
+    /// EOF. Devuelve el índice tras el bloque.
+    fn parse_rules(
+        s: &[char],
+        mut i: usize,
+        ambient: &[CondTerm],
+        nested: bool,
+        rules: &mut Vec<CssRule>,
+        font_decls: &mut Vec<(String, String)>,
+    ) -> usize {
+        let n = s.len();
+        // Cadena `@when … @else …` en curso: negaciones de las ramas ya vistas que un
+        // `@else` posterior debe AND-ear. Cualquier statement que no sea `@else` la corta.
+        let mut else_neg: Vec<CondTerm> = Vec::new();
+        loop {
+            i = skip(s, i);
+            if i >= n { break; }
+            if nested && s[i] == '}' { i += 1; break; }
+
+            // --- Bloques @when (cond) { … } / @else [(cond)] { … } ---------------
+            if s[i] == '@' {
+                let mut j = i + 1;
+                let mut kw = String::new();
+                while j < n && css_is_name_char(s[j]) { kw.push(s[j]); j += 1; }
+                let kw = kw.to_ascii_lowercase();
+                if kw == "when" || kw == "else" {
+                    i = skip(s, j);
+                    // Condición del bloque: obligatoria en @when, opcional en @else.
+                    let mut term: Option<CondTerm> = None;
+                    if i < n && s[i] == '(' {
+                        i += 1;
+                        let mut cs = String::new();
+                        while i < n && s[i] != ')' { cs.push(s[i]); i += 1; }
+                        if i < n { i += 1; }
+                        let clauses = parse_cond(&cs);
+                        if !clauses.is_empty() { term = Some(CondTerm { negated: false, clauses }); }
+                    }
+                    // Términos activos para el cuerpo de esta rama: los heredados, más
+                    // (si es @else) las negaciones de las ramas previas, más el propio.
+                    let mut branch: Vec<CondTerm> = ambient.to_vec();
+                    if kw == "else" { branch.extend(else_neg.iter().cloned()); }
+                    if let Some(t) = &term { branch.push(t.clone()); }
+                    i = skip(s, i);
+                    if i < n && s[i] == '{' {
+                        i = parse_rules(s, i + 1, &branch, true, rules, font_decls);
+                    }
+                    // `@when` abre una cadena nueva; el término negado alimenta al
+                    // `@else` que pueda seguir. `@else` pelado cierra la cadena.
+                    if kw == "when" { else_neg.clear(); }
+                    match term {
+                        Some(mut t) => { t.negated = true; else_neg.push(t); }
+                        None => else_neg.clear(),
+                    }
+                    continue;
+                }
+                // At-rule desconocida (@media, …): se descarta entera.
+                else_neg.clear();
+                i = skip_atrule(s, i);
+                continue;
+            }
+
+            // Cualquier otro statement (regla o :bloque) corta la cadena if/else.
+            else_neg.clear();
+
+            // --- :import (doc, se salta) y :font (declara fuentes: alias → ruta) ---
+            if s[i] == ':' {
+                let mut j = i + 1;
+                let mut kw = String::new();
+                while j < n && css_is_name_char(s[j]) { kw.push(s[j]); j += 1; }
+                i = skip(s, j);
+                if i < n && s[i] == '{' {
+                    if kw == "font" {
+                        let (decls, ni) = parse_decls(s, i + 1);
+                        for (alias, path) in decls {
+                            let path = path.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
+                            font_decls.push((alias, path));
+                        }
+                        i = ni;
+                    } else {
+                        i = skip_atrule(s, i);
+                    }
+                }
+                continue;
+            }
+
+            // --- Regla normal: selector [ (cond) ] { decls } ---------------------
+            // Selector: todo hasta `(` (condición) o `{` (decls). Admite espacios
+            // (descendientes), `.` `#` `:` y `>` — parse_selector lo trocea.
+            let mut sel = String::new();
+            while i < n && s[i] != '{' && s[i] != '(' && s[i] != '}' { sel.push(s[i]); i += 1; }
+            let sel = sel.trim().to_string();
+            if sel.is_empty() { i += 1; continue; }
+            i = skip(s, i);
+            let mut own: Option<Vec<CondClause>> = None;
+            if i < n && s[i] == '(' {
+                i += 1;
+                let mut cs = String::new();
+                while i < n && s[i] != ')' { cs.push(s[i]); i += 1; }
+                if i < n { i += 1; }
+                // `()` vacío = sin condición (no una condición que nunca pasa).
+                let cs = parse_cond(&cs);
+                own = if cs.is_empty() { None } else { Some(cs) };
+            }
+            i = skip(s, i);
+            let mut decls: Vec<(String, String)> = Vec::new();
+            if i < n && s[i] == '{' {
+                let (d, ni) = parse_decls(s, i + 1);
+                decls = d;
+                i = ni;
+            }
+            // Condición efectiva de la regla = términos heredados (@when/@else) + el propio.
+            let mut terms: Vec<CondTerm> = ambient.to_vec();
+            if let Some(clauses) = own { terms.push(CondTerm { negated: false, clauses }); }
+            let cond = if terms.is_empty() { None } else { Some(terms) };
+            // Grupo `h1, h2 { … }` → una regla por selector (mismas decls/cond).
+            for part in sel.split(',') {
+                let part = part.trim();
+                if part.is_empty() { continue; }
+                rules.push(CssRule { sel: parse_selector(part), cond: cond.clone(), decls: decls.clone() });
+            }
+        }
+        i
+    }
+
+    parse_rules(&s, 0, &[], false, &mut rules, &mut font_decls);
     NativeStylesheet { rules, font_decls, font_alias: Vec::new() }
 }
 
@@ -618,5 +734,96 @@ mod tests {
     fn condicion_vacia_no_deja_regla_muerta() {
         assert!(parse_cond("").is_empty());
         assert!(parse_cond("   ").is_empty());
+    }
+
+    // --- Bloques @when / @else -------------------------------------------------
+
+    fn nk(tag: &str) -> NodeKey {
+        NodeKey { tag: tag.to_string(), classes: Vec::new(), id: None, states: Vec::new() }
+    }
+
+    /// Valor de la prop `p` que el nodo `tag` recibe de la hoja `src` bajo el ctx `c`.
+    fn getp(src: &str, tag: &str, c: &[(&str, &str)], p: &str) -> Option<String> {
+        let sheet = parse_css(src);
+        sheet.props_for_node(&nk(tag), &[], &ctx(c))
+            .iter().find(|(k, _)| k == p).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn when_aplica_solo_si_cumple() {
+        let src = "@when (w > 600) { body { color: #fff } }";
+        assert_eq!(getp(src, "body", &[("w", "800")], "color").as_deref(), Some("#fff"));
+        assert_eq!(getp(src, "body", &[("w", "400")], "color"), None);
+    }
+
+    #[test]
+    fn else_es_el_complemento_del_when() {
+        let src = "@when (dark) { body { color: #fff } } @else { body { color: #000 } }";
+        assert_eq!(getp(src, "body", &[("dark", "true")], "color").as_deref(), Some("#fff"));
+        assert_eq!(getp(src, "body", &[("dark", "false")], "color").as_deref(), Some("#000"));
+    }
+
+    #[test]
+    fn else_if_encadenado_es_mutuamente_excluyente() {
+        let src = "@when (w < 200) { body { color: #100 } } \
+                   @else (w < 400) { body { color: #200 } } \
+                   @else { body { color: #300 } }";
+        assert_eq!(getp(src, "body", &[("w", "100")], "color").as_deref(), Some("#100"));
+        assert_eq!(getp(src, "body", &[("w", "300")], "color").as_deref(), Some("#200"));
+        assert_eq!(getp(src, "body", &[("w", "900")], "color").as_deref(), Some("#300"));
+    }
+
+    #[test]
+    fn else_niega_la_condicion_compuesta_entera() {
+        // El caso clave: `@else` debe negar `(a or b)` como un TODO, no cláusula a
+        // cláusula. Con ambos true, `¬(a or b)` es false → gana el @when, no el @else.
+        let src = "@when (a or b) { body { color: #fff } } @else { body { color: #000 } }";
+        assert_eq!(getp(src, "body", &[("a", "true"), ("b", "false")], "color").as_deref(), Some("#fff"));
+        assert_eq!(getp(src, "body", &[("a", "false"), ("b", "true")], "color").as_deref(), Some("#fff"));
+        assert_eq!(getp(src, "body", &[("a", "true"), ("b", "true")], "color").as_deref(), Some("#fff"));
+        assert_eq!(getp(src, "body", &[("a", "false"), ("b", "false")], "color").as_deref(), Some("#000"));
+    }
+
+    #[test]
+    fn when_and_condicion_propia_de_la_regla_se_and_ean() {
+        let src = "@when (w > 600) { body (dark) { color: #fff } }";
+        assert_eq!(getp(src, "body", &[("w", "800"), ("dark", "true")], "color").as_deref(), Some("#fff"));
+        assert_eq!(getp(src, "body", &[("w", "800"), ("dark", "false")], "color"), None); // falla la propia
+        assert_eq!(getp(src, "body", &[("w", "400"), ("dark", "true")], "color"), None);  // falla el @when
+    }
+
+    #[test]
+    fn when_anidado_acumula_condiciones() {
+        let src = "@when (w > 600) { @when (dark) { body { color: #fff } } }";
+        assert_eq!(getp(src, "body", &[("w", "800"), ("dark", "true")], "color").as_deref(), Some("#fff"));
+        assert_eq!(getp(src, "body", &[("w", "800"), ("dark", "false")], "color"), None);
+        assert_eq!(getp(src, "body", &[("w", "400"), ("dark", "true")], "color"), None);
+    }
+
+    #[test]
+    fn when_agrupa_varios_selectores() {
+        let src = "@when (w < 300) { body { color: #f00 } .card { color: #0f0 } #main { color: #00f } }";
+        assert_eq!(getp(src, "body", &[("w", "100")], "color").as_deref(), Some("#f00"));
+        assert_eq!(getp(src, "body", &[("w", "500")], "color"), None);
+        // .card y #main comparten la misma condición del bloque
+        let sheet = parse_css(src);
+        let card = NodeKey { tag: "div".into(), classes: vec!["card".into()], id: None, states: vec![] };
+        assert_eq!(sheet.props_for_node(&card, &[], &ctx(&[("w", "100")])).iter().find(|(k, _)| k == "color").map(|(_, v)| v.as_str()), Some("#0f0"));
+        assert!(sheet.props_for_node(&card, &[], &ctx(&[("w", "500")])).is_empty());
+    }
+
+    #[test]
+    fn atrule_desconocida_se_descarta() {
+        // @media está "destituido" en .szs: su bloque se ignora entero.
+        let src = "@media (min-width: 600px) { body { color: #f00 } } body { color: #0f0 }";
+        assert_eq!(getp(src, "body", &[], "color").as_deref(), Some("#0f0"));
+    }
+
+    #[test]
+    fn regla_condicional_suelta_sigue_igual() {
+        // Regresión: una regla con su propia (cond), sin @when, sigue funcionando.
+        let src = "body (w > 600) { color: #fff }";
+        assert_eq!(getp(src, "body", &[("w", "800")], "color").as_deref(), Some("#fff"));
+        assert_eq!(getp(src, "body", &[("w", "100")], "color"), None);
     }
 }
