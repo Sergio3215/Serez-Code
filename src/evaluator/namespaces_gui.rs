@@ -289,6 +289,7 @@ enum SceneNodeKind {
     RectAlpha { w: i32, h: i32, alpha: u32 },
     RectOutline { w: i32, h: i32 },
     RoundRect { w: i32, h: i32, radius: i32 },
+    RoundRectOutline { w: i32, h: i32, radius: i32 },
     Circle { r: i32 },
     Line { x2: i32, y2: i32 },
     Polygon { points: Vec<i32> },
@@ -700,6 +701,9 @@ impl GuiState {
                 SceneNodeKind::RectOutline { w, h } => self.draw_rect(n.x, n.y, *w, *h, n.color),
                 SceneNodeKind::RoundRect { w, h, radius } => {
                     self.fill_round_rect(n.x, n.y, *w, *h, *radius, n.color)
+                }
+                SceneNodeKind::RoundRectOutline { w, h, radius } => {
+                    self.draw_round_rect(n.x, n.y, *w, *h, *radius, n.color)
                 }
                 SceneNodeKind::Circle { r } => self.fill_circle(n.x, n.y, *r, n.color),
                 SceneNodeKind::Line { x2, y2 } => self.draw_line(n.x, n.y, *x2, *y2, n.color),
@@ -1124,6 +1128,46 @@ impl GuiState {
         self.fill_rect(x,         y + h - 1, w,     1,     color);
         self.fill_rect(x,         y + 1,     1,     h - 2, color);
         self.fill_rect(x + w - 1, y + 1,     1,     h - 2, color);
+    }
+
+    /// Contorno de rect redondeado (1px, esquinas antialiased). Reusa la distancia AA
+    /// de `fill_round_rect` pero pinta solo la banda del anillo (~1px).
+    fn draw_round_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32) {
+        let r = radius.min(w / 2).min(h / 2).max(0);
+        if r == 0 {
+            self.draw_rect(x, y, w, h, color);
+            return;
+        }
+        // Lados rectos (sin las esquinas).
+        self.fill_rect(x + r,     y,         w - 2 * r, 1,         color);
+        self.fill_rect(x + r,     y + h - 1, w - 2 * r, 1,         color);
+        self.fill_rect(x,         y + r,     1,         h - 2 * r, color);
+        self.fill_rect(x + w - 1, y + r,     1,         h - 2 * r, color);
+        // Esquinas: banda AA de ~1px a distancia `r` del centro del arco.
+        let cr = ((color >> 16) & 0xff) as u8;
+        let cg = ((color >> 8) & 0xff) as u8;
+        let cb = (color & 0xff) as u8;
+        let rf = r as f32;
+        let mut dy = 0;
+        while dy < r {
+            let mut dx = 0;
+            while dx < r {
+                let fx = rf - (dx as f32 + 0.5);
+                let fy = rf - (dy as f32 + 0.5);
+                let dist = (fx * fx + fy * fy).sqrt();
+                let outer = (rf - dist + 0.5).clamp(0.0, 1.0);
+                let inner = (rf - 1.0 - dist + 0.5).clamp(0.0, 1.0);
+                let a = ((outer - inner) * 255.0) as u32;
+                if a > 0 {
+                    self.blend(x + dx,         y + dy,         cr, cg, cb, a);
+                    self.blend(x + w - 1 - dx, y + dy,         cr, cg, cb, a);
+                    self.blend(x + dx,         y + h - 1 - dy, cr, cg, cb, a);
+                    self.blend(x + w - 1 - dx, y + h - 1 - dy, cr, cg, cb, a);
+                }
+                dx += 1;
+            }
+            dy += 1;
+        }
     }
 
     /// Círculo relleno antialiased (scanline + AA en el borde).
@@ -2736,10 +2780,10 @@ impl super::Evaluator {
             // nodeRoundRect(x,y,w,h,radius,color), nodeRectAlpha(x,y,w,h,color,alpha),
             // nodeRectOutline(x,y,w,h,color), nodePolygon(points,color),
             // nodePolyline(points,width,color), nodeClipPush(x,y,w,h), nodeClipPop()
-            "nodeRoundRect" | "nodeRectAlpha" | "nodeRectOutline" | "nodeClipPush" => {
+            "nodeRoundRect" | "nodeRectAlpha" | "nodeRectOutline" | "nodeRoundRectOutline" | "nodeClipPush" => {
                 let method = dot_call.method.as_str();
                 let want = match method {
-                    "nodeRoundRect" | "nodeRectAlpha" => 6,
+                    "nodeRoundRect" | "nodeRectAlpha" | "nodeRoundRectOutline" => 6,
                     "nodeRectOutline" => 5,
                     _ => 4, // nodeClipPush
                 };
@@ -2768,6 +2812,10 @@ impl super::Evaluator {
                     "nodeRectOutline" => (
                         SceneNodeKind::RectOutline { w: vals[2] as i32, h: vals[3] as i32 },
                         (vals[4] as u32) & 0xFF_FFFF,
+                    ),
+                    "nodeRoundRectOutline" => (
+                        SceneNodeKind::RoundRectOutline { w: vals[2] as i32, h: vals[3] as i32, radius: vals[4] as i32 },
+                        (vals[5] as u32) & 0xFF_FFFF,
                     ),
                     _ => (
                         SceneNodeKind::ClipPush { w: vals[2] as i32, h: vals[3] as i32 },

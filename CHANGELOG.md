@@ -7,6 +7,16 @@ Order: most recent to oldest.
 
 ## [Unreleased]
 
+### GUI: `Gui.nodeRoundRectOutline` — contorno redondeado (nodo retained)
+
+- Nuevo primitivo de escena: **`Gui.nodeRoundRectOutline(x, y, w, h, radius, color)`**
+  dibuja el **contorno** (1px, esquinas antialiased) de un rect redondeado. Antes solo
+  había `nodeRoundRect` (relleno) y `nodeRectOutline` (recto), así que un `border` con
+  `border-radius` quedaba con el borde cuadrado. Reusa la distancia AA de
+  `fill_round_rect` pintando solo la banda del anillo.
+- Habilita `border` + `border-radius` juntos en serez-ui: contenedores (`div`/`.card`),
+  Image y Modal dibujan el borde redondeado en vez de cuadrado.
+
 ### GUI: `Gui.nodeImage` escala y aplica alpha (nodo retained)
 
 - El nodo de imagen **retained** (`Gui.nodeImage`) pasa de solo tamaño nativo a
