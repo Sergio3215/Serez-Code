@@ -300,7 +300,7 @@ enum SceneNodeKind {
     GradientRect { w: i32, h: i32, c2: u32, vertical: bool },
     // Sombra difusa rectangular (box-shadow): núcleo translúcido + anillos.
     Shadow { w: i32, h: i32, blur: i32, alpha: u32 },
-    Image { handle: i64 },
+    Image { handle: i64, w: i32, h: i32, alpha: u32 },
     // Marcadores de clipping: se ejecutan en orden de dibujo (z, id), igual
     // que pushClip/popClip en modo inmediato.
     ClipPush { w: i32, h: i32 },
@@ -734,7 +734,10 @@ impl GuiState {
                 SceneNodeKind::Shadow { w, h, blur, alpha } => {
                     self.fill_shadow(n.x, n.y, *w, *h, *blur, n.color, *alpha);
                 }
-                SceneNodeKind::Image { handle } => self.draw_image(n.x, n.y, *handle),
+                SceneNodeKind::Image { handle, w, h, alpha } => {
+                    if *w > 0 && *h > 0 { self.draw_image_scaled(n.x, n.y, *handle, *w, *h, *alpha); }
+                    else { self.draw_image(n.x, n.y, *handle); }
+                }
                 SceneNodeKind::ClipPush { w, h } => {
                     self.clip_stack.push(self.clip);
                     let (cx0, cy0, cx1, cy1) = self.clip;
@@ -2699,15 +2702,24 @@ impl super::Evaluator {
                         }
                     }
                     _ => {
-                        if dot_call.arguments.len() != 3 {
-                            return self.rt_err_kind("TypeError", "Gui.nodeImage(x, y, imageId) requires 3 arguments");
+                        // Aditivo: 3 args = (x,y,imageId) nativo; 5 = (…,w,h) escalado;
+                        //          6 = (…,w,h,alpha) escalado + alpha global 0–255.
+                        let na = dot_call.arguments.len();
+                        if na != 3 && na != 5 && na != 6 {
+                            return self.rt_err_kind("TypeError", "Gui.nodeImage requires (x,y,imageId) | (x,y,imageId,w,h) | (x,y,imageId,w,h,alpha)");
                         }
-                        let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
-                        match (a[0], a[1], a[2]) {
-                            (Some(x), Some(y), Some(h)) =>
-                                Some((SceneNodeKind::Image { handle: h }, x as i32, y as i32, 0)),
-                            _ => None,
+                        let mut a = [0i64; 6];
+                        a[3] = -1; a[4] = -1; a[5] = 255;   // w/h nativos, alpha opaco
+                        let mut ok = true;
+                        for i in 0..na {
+                            match self.gui_int_arg(&dot_call.arguments[i]) {
+                                Some(v) => a[i] = v,
+                                None => { ok = false; }
+                            }
                         }
+                        if ok {
+                            Some((SceneNodeKind::Image { handle: a[2], w: a[3] as i32, h: a[4] as i32, alpha: (a[5].clamp(0, 255)) as u32 }, a[0] as i32, a[1] as i32, 0))
+                        } else { None }
                     }
                 };
                 match node {
@@ -2881,7 +2893,7 @@ impl super::Evaluator {
                     ("font", V::S(v), SceneNodeKind::Text { font, .. }) => { *font = v.clone(); true }
                     ("style", V::I(v), SceneNodeKind::Text { style, .. }) => { *style = (*v).clamp(0, 15) as u8; true }
                     ("spacing", V::I(v), SceneNodeKind::Text { spacing, .. }) => { *spacing = *v as i32; true }
-                    ("image", V::I(v), SceneNodeKind::Image { handle }) => { *handle = *v; true }
+                    ("image", V::I(v), SceneNodeKind::Image { handle, .. }) => { *handle = *v; true }
                     _ => false,
                 };
                 if !ok {

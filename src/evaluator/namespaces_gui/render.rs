@@ -270,7 +270,7 @@ fn prim_push_image(st: &mut GuiState, x: i32, y: i32, handle: i64, z: i32) {
     st.next_node += 1;
     let clip = st.prim_clip;
     st.scene.push(SceneNode {
-        id, kind: SceneNodeKind::Image { handle }, x, y, color: 0, z, visible: true, clip,
+        id, kind: SceneNodeKind::Image { handle, w: -1, h: -1, alpha: 255 }, x, y, color: 0, z, visible: true, clip,
     });
 }
 fn prim_push_circle(st: &mut GuiState, cx: i32, cy: i32, r: i32, color: u32, z: i32) {

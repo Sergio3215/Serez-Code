@@ -7,6 +7,18 @@ Order: most recent to oldest.
 
 ## [Unreleased]
 
+### GUI: `Gui.nodeImage` escala y aplica alpha (nodo retained)
+
+- El nodo de imagen **retained** (`Gui.nodeImage`) pasa de solo tamaño nativo a
+  aceptar, de forma **aditiva**, tamaño y opacidad:
+  `Gui.nodeImage(x, y, imageId)` (nativo), `(x, y, imageId, w, h)` (escalado) y
+  `(x, y, imageId, w, h, alpha)` (escalado + alpha global 0–255). Reusa el mismo
+  `draw_image_scaled` que ya usaba `Gui.drawImage`, pero en la escena (con dirty-skip),
+  así que sirve al renderer **retained** de serez-ui — antes solo el `Gui.drawImage`
+  inmediato escalaba, y `renderScene` lo tapaba.
+- Habilita el CSS de imágenes de serez-ui: `Image { width / height / opacity }` ahora
+  funciona (el escalado por el nodo retained no existía).
+
 ### `.szs`: bloques `@when` / `@else` — una lógica que agrupa varios elementos
 
 - Nuevo at-rule del motor CSS: **`@when (cond) { … }`** envuelve varias reglas
