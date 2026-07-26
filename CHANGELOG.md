@@ -7,6 +7,15 @@ Order: most recent to oldest.
 
 ## [Unreleased]
 
+### GUI: `Gui.nodeImage` con `radius` — clip redondeado de imagen
+
+- `Gui.nodeImage` acepta un 7º argumento opcional `radius`:
+  `(x, y, imageId, w, h, alpha, radius)`. El blit (nativo y escalado) enmascara las
+  esquinas con la cobertura AA del round-rect (nuevo helper `round_cov`, misma
+  distancia que `fill_round_rect`), redondeando los **píxeles** de la imagen. Habilita
+  `Image { border-radius }` de verdad en serez-ui — antes el borde redondeaba pero la
+  imagen adentro quedaba rectangular.
+
 ### GUI: `Gui.nodeRoundRectOutline` — contorno redondeado (nodo retained)
 
 - Nuevo primitivo de escena: **`Gui.nodeRoundRectOutline(x, y, w, h, radius, color)`**

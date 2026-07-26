@@ -301,7 +301,7 @@ enum SceneNodeKind {
     GradientRect { w: i32, h: i32, c2: u32, vertical: bool },
     // Sombra difusa rectangular (box-shadow): núcleo translúcido + anillos.
     Shadow { w: i32, h: i32, blur: i32, alpha: u32 },
-    Image { handle: i64, w: i32, h: i32, alpha: u32 },
+    Image { handle: i64, w: i32, h: i32, alpha: u32, radius: i32 },
     // Marcadores de clipping: se ejecutan en orden de dibujo (z, id), igual
     // que pushClip/popClip en modo inmediato.
     ClipPush { w: i32, h: i32 },
@@ -738,9 +738,9 @@ impl GuiState {
                 SceneNodeKind::Shadow { w, h, blur, alpha } => {
                     self.fill_shadow(n.x, n.y, *w, *h, *blur, n.color, *alpha);
                 }
-                SceneNodeKind::Image { handle, w, h, alpha } => {
-                    if *w > 0 && *h > 0 { self.draw_image_scaled(n.x, n.y, *handle, *w, *h, *alpha); }
-                    else { self.draw_image(n.x, n.y, *handle); }
+                SceneNodeKind::Image { handle, w, h, alpha, radius } => {
+                    if *w > 0 && *h > 0 { self.draw_image_scaled(n.x, n.y, *handle, *w, *h, *alpha, *radius); }
+                    else { self.draw_image(n.x, n.y, *handle, *radius); }
                 }
                 SceneNodeKind::ClipPush { w, h } => {
                     self.clip_stack.push(self.clip);
@@ -1284,7 +1284,23 @@ impl GuiState {
         }
     }
 
-    fn draw_image(&mut self, x: i32, y: i32, handle: i64) {
+    /// Cobertura (0..1) del pixel (px,py) dentro de un rect (w,h) con esquinas de radio
+    /// r: 1 en el interior y los lados rectos, AA en las esquinas, →0 fuera del arco.
+    /// Espeja la distancia AA de `fill_round_rect`. Se usa para redondear imágenes.
+    fn round_cov(&self, px: i32, py: i32, w: i32, h: i32, r: i32) -> f32 {
+        if r <= 0 { return 1.0; }
+        let r = r.min(w / 2).min(h / 2);
+        if r <= 0 { return 1.0; }
+        let cdx = if px < r { px } else if px >= w - r { w - 1 - px } else { return 1.0; };
+        let cdy = if py < r { py } else if py >= h - r { h - 1 - py } else { return 1.0; };
+        let rf = r as f32;
+        let fx = rf - (cdx as f32 + 0.5);
+        let fy = rf - (cdy as f32 + 0.5);
+        let dist = (fx * fx + fy * fy).sqrt();
+        (rf - dist + 0.5).clamp(0.0, 1.0)
+    }
+
+    fn draw_image(&mut self, x: i32, y: i32, handle: i64, rad: i32) {
         let img = match self.images.get(&handle) {
             Some(im) => (im.w, im.h, im.px.clone()),
             None => return,
@@ -1295,7 +1311,8 @@ impl GuiState {
             let mut xx = 0;
             while xx < iw as i32 {
                 let p = px[(yy as usize) * iw + xx as usize];
-                let a = (p >> 24) & 0xff;
+                let mut a = (p >> 24) & 0xff;
+                if rad > 0 { a = (a as f32 * self.round_cov(xx, yy, iw as i32, ih as i32, rad)) as u32; }
                 let r = ((p >> 16) & 0xff) as u8;
                 let g = ((p >> 8) & 0xff) as u8;
                 let b = (p & 0xff) as u8;
@@ -1308,7 +1325,7 @@ impl GuiState {
 
     /// Imagen escalada a (dw, dh) por muestreo de vecino más cercano, con alpha global
     /// extra (0–255) multiplicada sobre el alpha del pixel. dw/dh <= 0 → no dibuja.
-    fn draw_image_scaled(&mut self, x: i32, y: i32, handle: i64, dw: i32, dh: i32, galpha: u32) {
+    fn draw_image_scaled(&mut self, x: i32, y: i32, handle: i64, dw: i32, dh: i32, galpha: u32, rad: i32) {
         let img = match self.images.get(&handle) {
             Some(im) => (im.w, im.h, im.px.clone()),
             None => return,
@@ -1323,7 +1340,8 @@ impl GuiState {
             while dx < dw {
                 let sx = (dx as usize * iw) / dw as usize;
                 let p = px[sy.min(ih - 1) * iw + sx.min(iw - 1)];
-                let a = (((p >> 24) & 0xff) * ga) / 255;
+                let mut a = (((p >> 24) & 0xff) * ga) / 255;
+                if rad > 0 { a = (a as f32 * self.round_cov(dx, dy, dw, dh, rad)) as u32; }
                 let r = ((p >> 16) & 0xff) as u8;
                 let g = ((p >> 8) & 0xff) as u8;
                 let b = (p & 0xff) as u8;
@@ -2749,11 +2767,11 @@ impl super::Evaluator {
                         // Aditivo: 3 args = (x,y,imageId) nativo; 5 = (…,w,h) escalado;
                         //          6 = (…,w,h,alpha) escalado + alpha global 0–255.
                         let na = dot_call.arguments.len();
-                        if na != 3 && na != 5 && na != 6 {
-                            return self.rt_err_kind("TypeError", "Gui.nodeImage requires (x,y,imageId) | (x,y,imageId,w,h) | (x,y,imageId,w,h,alpha)");
+                        if na != 3 && na != 5 && na != 6 && na != 7 {
+                            return self.rt_err_kind("TypeError", "Gui.nodeImage requires (x,y,imageId) | (x,y,imageId,w,h) | (x,y,imageId,w,h,alpha) | (x,y,imageId,w,h,alpha,radius)");
                         }
-                        let mut a = [0i64; 6];
-                        a[3] = -1; a[4] = -1; a[5] = 255;   // w/h nativos, alpha opaco
+                        let mut a = [0i64; 7];
+                        a[3] = -1; a[4] = -1; a[5] = 255; a[6] = 0;   // w/h nativos, alpha opaco, sin radius
                         let mut ok = true;
                         for i in 0..na {
                             match self.gui_int_arg(&dot_call.arguments[i]) {
@@ -2762,7 +2780,7 @@ impl super::Evaluator {
                             }
                         }
                         if ok {
-                            Some((SceneNodeKind::Image { handle: a[2], w: a[3] as i32, h: a[4] as i32, alpha: (a[5].clamp(0, 255)) as u32 }, a[0] as i32, a[1] as i32, 0))
+                            Some((SceneNodeKind::Image { handle: a[2], w: a[3] as i32, h: a[4] as i32, alpha: (a[5].clamp(0, 255)) as u32, radius: a[6] as i32 }, a[0] as i32, a[1] as i32, 0))
                         } else { None }
                     }
                 };
@@ -3872,9 +3890,9 @@ impl super::Evaluator {
                 match self.gui_state.as_mut() {
                     Some(st) => {
                         if n == 3 {
-                            st.draw_image(x, y, hnd);
+                            st.draw_image(x, y, hnd, 0);
                         } else {
-                            st.draw_image_scaled(x, y, hnd, vals[3] as i32, vals[4] as i32, (vals[5].clamp(0, 255)) as u32);
+                            st.draw_image_scaled(x, y, hnd, vals[3] as i32, vals[4] as i32, (vals[5].clamp(0, 255)) as u32, 0);
                         }
                         EvalResult::Value(self.null_ref)
                     }
