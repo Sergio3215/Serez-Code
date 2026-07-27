@@ -249,7 +249,7 @@ fn prim_push_text(st: &mut GuiState, x: i32, y: i32, text: &str, scale: i32, col
     st.next_node += 1;
     let clip = st.prim_clip;
     st.scene.push(SceneNode {
-        id, kind: SceneNodeKind::Text { text: text.to_string(), scale, font: font.to_string(), style, spacing, alpha: alpha.min(255) },
+        id, kind: SceneNodeKind::Text { text: text.to_string(), px: 8 * scale.max(1), font: font.to_string(), style, spacing, alpha: alpha.min(255) },
         x, y, color, z, visible: true, clip,
     });
 }
@@ -326,9 +326,10 @@ fn prim_clip_intersect(prev: Option<(i32, i32, i32, i32)>, x0: i32, y0: i32, x1:
 /// familia de fuente custom activa; rejilla monospace 8*scale si no hay fuentes o
 /// es la familia default (mantiene compat con serez-ui sin `setFont`).
 fn prim_text_px(fonts: &mut Option<GuiFonts>, s: &str, scale: i32, style: u8) -> i32 {
+    let px = 8 * scale.max(1);   // el motor de glifos mide en px (glifo base = 8*scale)
     match fonts.as_mut() {
-        Some(f) => f.text_width(s, scale, style) as i32,
-        None => s.chars().filter(|c| !c.is_control()).count() as i32 * (8 * scale.max(1)),
+        Some(f) => f.text_width(s, px, style) as i32,
+        None => s.chars().filter(|c| !c.is_control()).count() as i32 * px,
     }
 }
 /// Ancho en px de los primeros `n` caracteres de `text` con la familia `font` (para
@@ -341,9 +342,10 @@ fn prim_prefix_px(fonts: &mut Option<GuiFonts>, text: &str, n: usize, scale: i32
     w
 }
 fn prim_char_px(fonts: &mut Option<GuiFonts>, ch: char, scale: i32, style: u8) -> i32 {
+    let px = 8 * scale.max(1);
     match fonts.as_mut() {
-        Some(f) => f.char_width(ch, scale, style) as i32,
-        None => if ch.is_control() { 0 } else { 8 * scale.max(1) },
+        Some(f) => f.char_width(ch, px, style) as i32,
+        None => if ch.is_control() { 0 } else { px },
     }
 }
 

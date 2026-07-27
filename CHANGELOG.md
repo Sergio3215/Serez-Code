@@ -7,6 +7,22 @@ Order: most recent to oldest.
 
 ## [Unreleased]
 
+### GUI: texto por PÍXELES — `Gui.nodeTextPx` / `Gui.measureTextPx` (font-size real)
+
+- El motor de glifos (cosmic-text) ahora rasteriza por **tamaño en píxeles** en vez de
+  por una escala entera de la rejilla 8×8. Internamente `ensure_glyph`/`measure`/
+  `text_width`/`char_width`/`advances`/`draw_text` toman `px` (el tamaño real); la
+  rejilla monoespaciada avanza `px`/carácter en vez de `8*scale`. La cache de glifos
+  se indexa por px.
+- **API scale-based intacta**: `Gui.nodeText`, `Gui.measureText`, `Gui.drawText` y
+  `Gui.textAdvances` mapean `px = 8*scale` en su frontera → **cero cambio de
+  comportamiento** para el código existente (incluido el nodo `Text` de la escena y
+  el renderer nativo de primitivos).
+- Nuevos primitivos: **`Gui.nodeTextPx(x, y, texto, px, color)`** (nodo de escena a
+  tamaño de píxel literal) y **`Gui.measureTextPx(texto, px)`** → `[ancho_px, px]`.
+  Habilitan `font-size: Npx` de verdad en serez-ui (14/20/27/34…px, no solo múltiplos
+  de 8) en el renderer INTERPRETADO. `nodeSet` acepta `"px"` además de `"scale"`.
+
 ### GUI: `Gui.nodeImage` con `radius` — clip redondeado de imagen
 
 - `Gui.nodeImage` acepta un 7º argumento opcional `radius`:

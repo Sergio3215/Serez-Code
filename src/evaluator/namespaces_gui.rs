@@ -296,7 +296,7 @@ enum SceneNodeKind {
     Polyline { points: Vec<i32>, width: i32 },
     // `alpha` (0–255): opacidad del texto (el motor de primitivos propaga la
     // `opacity` del subárbol); 255 = opaco (la API manual siempre emite 255).
-    Text { text: String, scale: i32, font: String, style: u8, spacing: i32, alpha: u32 },
+    Text { text: String, px: i32, font: String, style: u8, spacing: i32, alpha: u32 },
     // Gradiente lineal c1 (color del nodo) → c2; vertical o horizontal.
     GradientRect { w: i32, h: i32, c2: u32, vertical: bool },
     // Sombra difusa rectangular (box-shadow): núcleo translúcido + anillos.
@@ -414,12 +414,16 @@ impl GuiFonts {
             .and_then(|f| f.families.first().map(|(n, _)| n.clone()))
     }
 
-    fn ensure_glyph(&mut self, ch: char, scale: i32, style: u8) {
-        let key = (self.current, ch, scale, style);
+    // `px` = tamaño real de la fuente en píxeles (el glifo se rasteriza a `px` de
+    // alto). El API scale-based pasa `px = 8*scale`; font-size en px pasa el valor
+    // literal → tipografía a cualquier tamaño, no solo múltiplos de 8.
+    fn ensure_glyph(&mut self, ch: char, px: i32, style: u8) {
+        let px = px.max(1);
+        let key = (self.current, ch, px, style);
         if self.glyphs.contains_key(&key) {
             return;
         }
-        let size = (8 * scale).max(8) as f32;
+        let size = (px as f32).max(6.0);
         let metrics = Metrics::new(size, size * 1.25);
         let mut buf = TextBuffer::new(&mut self.font_system, metrics);
         buf.set_size(&mut self.font_system, Some(size * 4.0), Some(size * 2.0));
@@ -442,7 +446,7 @@ impl GuiFonts {
             }
         }
         let advance = if self.current == 0 {
-            8 * scale
+            px
         } else if adv > 0.0 {
             adv.round() as i32
         } else {
@@ -473,18 +477,18 @@ impl GuiFonts {
     }
 
     /// Ancho en px de `text` con la familia actual (proporcional si es custom).
-    fn measure(&mut self, text: &str, scale: i32) -> i64 {
-        let scale = scale.max(1);
+    fn measure(&mut self, text: &str, px: i32) -> i64 {
+        let px = px.max(1);
         if self.current == 0 {
-            return text.chars().count() as i64 * 8 * scale as i64;
+            return text.chars().count() as i64 * px as i64;
         }
         let mut w: i64 = 0;
         for ch in text.chars() {
             if ch.is_control() {
                 continue;
             }
-            self.ensure_glyph(ch, scale, 0);
-            if let Some(gl) = self.glyphs.get(&(self.current, ch, scale, 0)) {
+            self.ensure_glyph(ch, px, 0);
+            if let Some(gl) = self.glyphs.get(&(self.current, ch, px, 0)) {
                 w += gl.advance as i64;
             }
         }
@@ -494,30 +498,30 @@ impl GuiFonts {
     /// Ancho en px de `text` con la familia actual y `style` (bit0=bold, bit1=italic).
     /// Como `measure`, pero considerando el estilo (bold/italic ensanchan el glifo).
     /// Familia default → rejilla 8*scale; familia custom → advance real proporcional.
-    fn text_width(&mut self, text: &str, scale: i32, style: u8) -> i64 {
-        let scale = scale.max(1);
+    fn text_width(&mut self, text: &str, px: i32, style: u8) -> i64 {
+        let px = px.max(1);
         if self.current == 0 {
-            return text.chars().filter(|c| !c.is_control()).count() as i64 * 8 * scale as i64;
+            return text.chars().filter(|c| !c.is_control()).count() as i64 * px as i64;
         }
         let mut w: i64 = 0;
         for ch in text.chars() {
-            w += self.char_width(ch, scale, style);
+            w += self.char_width(ch, px, style);
         }
         w
     }
 
     /// Ancho de avance de un solo carácter con la familia/estilo actuales.
-    fn char_width(&mut self, ch: char, scale: i32, style: u8) -> i64 {
-        let scale = scale.max(1);
+    fn char_width(&mut self, ch: char, px: i32, style: u8) -> i64 {
+        let px = px.max(1);
         if self.current == 0 {
-            return if ch.is_control() { 0 } else { 8 * scale as i64 };
+            return if ch.is_control() { 0 } else { px as i64 };
         }
         if ch.is_control() {
             return 0;
         }
-        self.ensure_glyph(ch, scale, style);
+        self.ensure_glyph(ch, px, style);
         self.glyphs
-            .get(&(self.current, ch, scale, style))
+            .get(&(self.current, ch, px, style))
             .map(|g| g.advance as i64)
             .unwrap_or(0)
     }
@@ -525,21 +529,21 @@ impl GuiFonts {
     /// Posiciones x acumuladas en los límites de carácter (long = nº de chars + 1;
     /// [0] = 0, [i] = x tras i chars). Para situar caret/selección con fuente
     /// proporcional. Coincide con el avance de draw_text/measure.
-    fn advances(&mut self, text: &str, scale: i32) -> Vec<i64> {
-        let scale = scale.max(1);
+    fn advances(&mut self, text: &str, px: i32) -> Vec<i64> {
+        let px = px.max(1);
         let mut out = vec![0i64];
         let mut x = 0i64;
         if self.current == 0 {
             for _ in text.chars() {
-                x += 8 * scale as i64;
+                x += px as i64;
                 out.push(x);
             }
             return out;
         }
         for ch in text.chars() {
             if !ch.is_control() {
-                self.ensure_glyph(ch, scale, 0);
-                if let Some(gl) = self.glyphs.get(&(self.current, ch, scale, 0)) {
+                self.ensure_glyph(ch, px, 0);
+                if let Some(gl) = self.glyphs.get(&(self.current, ch, px, 0)) {
                     x += gl.advance as i64;
                 }
             }
@@ -721,14 +725,14 @@ impl GuiState {
                         i += 2;
                     }
                 }
-                SceneNodeKind::Text { text, scale, font, style, spacing, alpha } => {
+                SceneNodeKind::Text { text, px, font, style, spacing, alpha } => {
                     if font.is_empty() {
-                        self.draw_text_alpha(fonts, n.x, n.y, text, *scale, n.color, *style, *spacing, *alpha);
+                        self.draw_text_alpha(fonts, n.x, n.y, text, *px, n.color, *style, *spacing, *alpha);
                     } else {
                         // Fuente por nodo: fijar y restaurar la familia actual.
                         let prev = fonts.current;
                         fonts.set_family(font);
-                        self.draw_text_alpha(fonts, n.x, n.y, text, *scale, n.color, *style, *spacing, *alpha);
+                        self.draw_text_alpha(fonts, n.x, n.y, text, *px, n.color, *style, *spacing, *alpha);
                         fonts.current = prev;
                     }
                 }
@@ -991,16 +995,17 @@ impl GuiState {
     /// `style` es bitfield: bit0=bold, bit1=italic (afectan al glifo), bit2=subrayado,
     /// bit3=tachado (decoraciones: líneas dibujadas sobre el ancho del texto, NO afectan
     /// la forma del glifo ni la caché). `letter_spacing` = px extra entre caracteres.
-    fn draw_text(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, scale: i32, rgb: u32, style: u8, letter_spacing: i32) {
-        self.draw_text_alpha(fonts, x, y, text, scale, rgb, style, letter_spacing, 255);
+    fn draw_text(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, px: i32, rgb: u32, style: u8, letter_spacing: i32) {
+        self.draw_text_alpha(fonts, x, y, text, px, rgb, style, letter_spacing, 255);
     }
 
     /// draw_text con opacidad (0–255): multiplica la cobertura de cada glifo.
-    /// Lo usa el motor de primitivos para propagar `opacity` al texto.
-    fn draw_text_alpha(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, scale: i32, rgb: u32, style: u8, letter_spacing: i32, alpha: u32) {
+    /// Lo usa el motor de primitivos para propagar `opacity` al texto. `px` = tamaño
+    /// real en píxeles (rejilla monospace = px/char; API scale-based pasa 8*scale).
+    fn draw_text_alpha(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, px: i32, rgb: u32, style: u8, letter_spacing: i32, alpha: u32) {
         let alpha = alpha.min(255);
         if alpha == 0 { return; }
-        let scale = scale.max(1);
+        let px = px.max(1);
         let r = ((rgb >> 16) & 0xff) as u8;
         let g = ((rgb >> 8) & 0xff) as u8;
         let b = (rgb & 0xff) as u8;
@@ -1017,16 +1022,16 @@ impl GuiState {
             first = false;
             if ch.is_control() {
                 if fam == 0 {
-                    pen += 8 * scale; // compat: la rejilla siempre avanza una celda
+                    pen += px; // compat: la rejilla siempre avanza una celda
                 }
                 continue;
             }
             if ch == ' ' && fam == 0 {
-                pen += 8 * scale;
+                pen += px;
                 continue;
             }
-            fonts.ensure_glyph(ch, scale, glyph_style);
-            if let Some(gl) = fonts.glyphs.get(&(fam, ch, scale, glyph_style)) {
+            fonts.ensure_glyph(ch, px, glyph_style);
+            if let Some(gl) = fonts.glyphs.get(&(fam, ch, px, glyph_style)) {
                 let advance = gl.advance;
                 if ch != ' ' {
                     let cells = gl.cells.clone();
@@ -1036,13 +1041,13 @@ impl GuiState {
                 }
                 pen += advance;
             } else if fam == 0 {
-                pen += 8 * scale;
+                pen += px;
             }
         }
         // Decoraciones: líneas horizontales a lo ancho del texto ([x, pen)).
         if (underline || strike) && pen > x {
-            let size = 8 * scale;
-            let thick = scale.max(1);
+            let size = px;
+            let thick = (px / 8).max(1);
             if alpha >= 255 {
                 if underline {
                     self.fill_rect(x, y + size - thick, pen - x, thick, rgb); // bajo la línea base
@@ -2702,7 +2707,7 @@ impl super::Evaluator {
             }
 
             // ── Modo retenido (scene graph) ──────────────────────────────────
-            "nodeRect" | "nodeCircle" | "nodeLine" | "nodeText" | "nodeImage" => {
+            "nodeRect" | "nodeCircle" | "nodeLine" | "nodeText" | "nodeTextPx" | "nodeImage" => {
                 let method = dot_call.method.as_str();
                 if self.gui_state.is_none() {
                     return self.rt_err_kind("GuiError", &format!("Gui.{}: no window open", method));
@@ -2741,9 +2746,13 @@ impl super::Evaluator {
                             _ => None,
                         }
                     }
-                    "nodeText" => {
+                    "nodeText" | "nodeTextPx" => {
+                        // nodeText: 4º arg = scale (rejilla 8*scale px). nodeTextPx: 4º
+                        // arg = tamaño en píxeles literal (font-size real, cualquier px).
+                        let is_px = method == "nodeTextPx";
                         if dot_call.arguments.len() != 5 {
-                            return self.rt_err_kind("TypeError", "Gui.nodeText(x, y, text, scale, color) requires 5 arguments");
+                            let sig = if is_px { "Gui.nodeTextPx(x, y, text, px, color)" } else { "Gui.nodeText(x, y, text, scale, color)" };
+                            return self.rt_err_kind("TypeError", &format!("{} requires 5 arguments", sig));
                         }
                         let x = self.gui_int_arg(&dot_call.arguments[0]);
                         let y = self.gui_int_arg(&dot_call.arguments[1]);
@@ -2751,15 +2760,17 @@ impl super::Evaluator {
                         let s = self.gui_int_arg(&dot_call.arguments[3]);
                         let c = self.gui_int_arg(&dot_call.arguments[4]);
                         match (x, y, t, s, c) {
-                            (Some(x), Some(y), Some(t), Some(s), Some(c)) =>
+                            (Some(x), Some(y), Some(t), Some(s), Some(c)) => {
+                                let px = if is_px { (s.max(1)) as i32 } else { (s.max(1) * 8) as i32 };
                                 Some((SceneNodeKind::Text {
                                     text: t,
-                                    scale: s.max(1) as i32,
+                                    px,
                                     font: String::new(),
                                     style: 0,
                                     spacing: 0,
                                     alpha: 255,
-                                }, x as i32, y as i32, (c as u32) & 0xFF_FFFF)),
+                                }, x as i32, y as i32, (c as u32) & 0xFF_FFFF))
+                            }
                             _ => None,
                         }
                     }
@@ -2955,7 +2966,8 @@ impl super::Evaluator {
                     ("points", V::P(v), SceneNodeKind::Polyline { points, .. }) => { *points = v.clone(); true }
                     ("width", V::I(v), SceneNodeKind::Polyline { width, .. }) => { *width = (*v).max(1) as i32; true }
                     ("text", V::S(v), SceneNodeKind::Text { text, .. }) => { *text = v.clone(); true }
-                    ("scale", V::I(v), SceneNodeKind::Text { scale, .. }) => { *scale = (*v).max(1) as i32; true }
+                    ("scale", V::I(v), SceneNodeKind::Text { px, .. }) => { *px = ((*v).max(1) * 8) as i32; true }
+                    ("px", V::I(v), SceneNodeKind::Text { px, .. }) => { *px = (*v).max(1) as i32; true }
                     ("font", V::S(v), SceneNodeKind::Text { font, .. }) => { *font = v.clone(); true }
                     ("style", V::I(v), SceneNodeKind::Text { style, .. }) => { *style = (*v).clamp(0, 15) as u8; true }
                     ("spacing", V::I(v), SceneNodeKind::Text { spacing, .. }) => { *spacing = *v as i32; true }
@@ -3204,7 +3216,7 @@ impl super::Evaluator {
                 if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
                 let fonts = self.gui_fonts.as_mut().unwrap();
                 let st = self.gui_state.as_mut().unwrap();
-                st.draw_text(fonts, x, y, &text, scale, color, (style.clamp(0, 15)) as u8, spacing as i32);
+                st.draw_text(fonts, x, y, &text, scale * 8, color, (style.clamp(0, 15)) as u8, spacing as i32);
                 EvalResult::Value(self.null_ref)
             }
 
@@ -3221,13 +3233,36 @@ impl super::Evaluator {
                 // Familia default → aritmética de rejilla (sin tocar FontSystem);
                 // familia custom → ancho real por advances (proporcional).
                 let w = match self.gui_fonts.as_mut() {
-                    Some(f) if f.current != 0 => f.measure(&text, scale as i32),
+                    Some(f) if f.current != 0 => f.measure(&text, scale as i32 * 8),
                     _ => text.chars().count() as i64 * 8 * scale,
                 };
                 let h = 8 * scale;
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
+                }))
+            }
+
+            // Como measureText pero el 2º arg es el tamaño EN PÍXELES (font-size real),
+            // no la escala de rejilla. Devuelve [ancho_px, px]; el alto de la caja de
+            // texto (con leading) lo calcula el consumidor (px + interlínea).
+            "measureTextPx" => {
+                if dot_call.arguments.len() != 2 {
+                    return self.rt_err_kind("TypeError", "Gui.measureTextPx(text, px) requires 2 arguments");
+                }
+                let text = self.gui_str_arg(&dot_call.arguments[0]);
+                let px   = self.gui_int_arg(&dot_call.arguments[1]);
+                let (text, px) = match (text, px) {
+                    (Some(t), Some(p)) => (t, p.max(1)),
+                    _ => { return self.rt_err_kind("TypeError", "Gui.measureTextPx requires (string, int)"); }
+                };
+                let w = match self.gui_fonts.as_mut() {
+                    Some(f) if f.current != 0 => f.measure(&text, px as i32),
+                    _ => text.chars().count() as i64 * px,
+                };
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: Some("int".to_string()),
+                    elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(px)],
                 }))
             }
 
@@ -3957,7 +3992,7 @@ impl super::Evaluator {
                     _ => { return self.rt_err_kind("TypeError", "Gui.textAdvances requires (string, int)"); }
                 };
                 let xs = match self.gui_fonts.as_mut() {
-                    Some(f) => f.advances(&text, scale),
+                    Some(f) => f.advances(&text, scale * 8),
                     None => {
                         let mut v = vec![0i64];
                         let mut x = 0i64;
