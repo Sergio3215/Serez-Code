@@ -28,3 +28,5 @@ ANALISIS_MEMORIA_RENDIMIENTO.md
 PROPUESTA_RENDER_PRIMITIVOS_CORE.md
 fuzz_failures/
 vscode-serez/node_modules/
+MEMORIA_SESION_WORKERS.md
+fuzz_parser.py
