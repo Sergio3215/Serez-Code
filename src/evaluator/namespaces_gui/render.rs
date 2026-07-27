@@ -215,14 +215,14 @@ fn prim_push_rect(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, color: u32,
     let id = st.next_node;
     st.next_node += 1;
     let clip = st.prim_clip;
-    st.scene.push(SceneNode { id, kind: SceneNodeKind::Rect { w, h }, x, y, color, z, visible: true, clip });
+    st.scene.push(SceneNode { id, kind: SceneNodeKind::Rect { w, h }, x, y, color, z, visible: true, clip, tr: None });
 }
 fn prim_push_roundrect(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32, z: i32) {
     if w <= 0 || h <= 0 { return; }
     let id = st.next_node;
     st.next_node += 1;
     let clip = st.prim_clip;
-    st.scene.push(SceneNode { id, kind: SceneNodeKind::RoundRect { w, h, radius }, x, y, color, z, visible: true, clip });
+    st.scene.push(SceneNode { id, kind: SceneNodeKind::RoundRect { w, h, radius }, x, y, color, z, visible: true, clip, tr: None });
 }
 /// Rect (redondeado si radius>0). Helper interno sin borde.
 fn prim_push_fill(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, color: u32, z: i32, radius: i32) {
@@ -250,7 +250,7 @@ fn prim_push_text(st: &mut GuiState, x: i32, y: i32, text: &str, scale: i32, col
     let clip = st.prim_clip;
     st.scene.push(SceneNode {
         id, kind: SceneNodeKind::Text { text: text.to_string(), px: 8 * scale.max(1), font: font.to_string(), style, spacing, alpha: alpha.min(255) },
-        x, y, color, z, visible: true, clip,
+        x, y, color, z, visible: true, clip, tr: None,
     });
 }
 /// Emite una sombra difusa rectangular detrás de una caja (box-shadow).
@@ -261,7 +261,7 @@ fn prim_push_shadow(st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, blur: i32
     let clip = st.prim_clip;
     st.scene.push(SceneNode {
         id, kind: SceneNodeKind::Shadow { w, h, blur: blur.clamp(0, 64), alpha: alpha.min(255) },
-        x, y, color, z, visible: true, clip,
+        x, y, color, z, visible: true, clip, tr: None,
     });
 }
 /// Emite un nodo de imagen (reusado para SVG rasterizado): blit con alpha + clip.
@@ -270,7 +270,7 @@ fn prim_push_image(st: &mut GuiState, x: i32, y: i32, handle: i64, z: i32) {
     st.next_node += 1;
     let clip = st.prim_clip;
     st.scene.push(SceneNode {
-        id, kind: SceneNodeKind::Image { handle, w: -1, h: -1, alpha: 255, radius: 0 }, x, y, color: 0, z, visible: true, clip,
+        id, kind: SceneNodeKind::Image { handle, w: -1, h: -1, alpha: 255, radius: 0 }, x, y, color: 0, z, visible: true, clip, tr: None,
     });
 }
 fn prim_push_circle(st: &mut GuiState, cx: i32, cy: i32, r: i32, color: u32, z: i32) {
@@ -278,20 +278,20 @@ fn prim_push_circle(st: &mut GuiState, cx: i32, cy: i32, r: i32, color: u32, z: 
     let id = st.next_node;
     st.next_node += 1;
     let clip = st.prim_clip;
-    st.scene.push(SceneNode { id, kind: SceneNodeKind::Circle { r }, x: cx, y: cy, color, z, visible: true, clip });
+    st.scene.push(SceneNode { id, kind: SceneNodeKind::Circle { r }, x: cx, y: cy, color, z, visible: true, clip, tr: None });
 }
 fn prim_push_line(st: &mut GuiState, x1: i32, y1: i32, x2: i32, y2: i32, color: u32, z: i32) {
     let id = st.next_node;
     st.next_node += 1;
     let clip = st.prim_clip;
-    st.scene.push(SceneNode { id, kind: SceneNodeKind::Line { x2, y2 }, x: x1, y: y1, color, z, visible: true, clip });
+    st.scene.push(SceneNode { id, kind: SceneNodeKind::Line { x2, y2 }, x: x1, y: y1, color, z, visible: true, clip, tr: None });
 }
 fn prim_push_poly(st: &mut GuiState, pts: Vec<i32>, color: u32, z: i32, filled: bool, width: i32) {
     let id = st.next_node;
     st.next_node += 1;
     let clip = st.prim_clip;
     let kind = if filled { SceneNodeKind::Polygon { points: pts } } else { SceneNodeKind::Polyline { points: pts, width: width.max(1) } };
-    st.scene.push(SceneNode { id, kind, x: 0, y: 0, color, z, visible: true, clip });
+    st.scene.push(SceneNode { id, kind, x: 0, y: 0, color, z, visible: true, clip, tr: None });
 }
 /// Parsea "x1,y1 x2,y2 …" (o separado por espacios/comas) desplazado por (ox,oy).
 fn prim_parse_points(s: &str, ox: i32, oy: i32) -> Vec<i32> {
@@ -1199,7 +1199,7 @@ fn prim_push_bg_styled(st: &mut GuiState, sty: &PrimStyle, x: i32, y: i32, w: i3
         let clip = st.prim_clip;
         st.scene.push(SceneNode {
             id, kind: SceneNodeKind::GradientRect { w: (w - 2 * bw).max(1), h: (h - 2 * bw).max(1), c2, vertical },
-            x: x + bw, y: y + bw, color: c1, z, visible: true, clip,
+            x: x + bw, y: y + bw, color: c1, z, visible: true, clip, tr: None,
         });
         return;
     }
@@ -1211,7 +1211,7 @@ fn prim_push_bg_styled(st: &mut GuiState, sty: &PrimStyle, x: i32, y: i32, w: i3
         let id = st.next_node;
         st.next_node += 1;
         let clip = st.prim_clip;
-        st.scene.push(SceneNode { id, kind: SceneNodeKind::RectAlpha { w, h, alpha: a }, x, y, color: c, z, visible: true, clip });
+        st.scene.push(SceneNode { id, kind: SceneNodeKind::RectAlpha { w, h, alpha: a }, x, y, color: c, z, visible: true, clip, tr: None });
         return;
     }
     prim_push_bg(st, x, y, w, h, c, z, sty.radius, sty.border_w, sty.border_col);

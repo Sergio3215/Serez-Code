@@ -7,6 +7,19 @@ Order: most recent to oldest.
 
 ## [Unreleased]
 
+### GUI: transform afín por nodo — `Gui.nodeTransform` (rotate/scale)
+
+- Nuevo primitivo de escena: **`Gui.nodeTransform(id, rotDeg, scaleXmille, scaleYmille, origX, origY)`**
+  asigna un transform afín OPCIONAL al nodo retenido (rotación en grados, escala en
+  milésimas —1000 = 1.0—, origen en px de canvas). Identidad `(0,1000,1000)` lo borra.
+- El pintor (`draw_node_transformed`) rasteriza los nodos con transform por
+  **inverse-mapping** con supersampling 2×2 (AA de bordes): rellenos (Rect/RectAlpha/
+  RoundRect) y **texto** (coverage local de glifos) e **imagen** (muestreo del bitmap)
+  se mapean pixel a pixel; los **contornos/líneas** transforman sus vértices y se
+  dibujan rectos; el círculo escala su radio. `SceneNode` lleva un campo `tr: Option`.
+- Habilita `transform: rotate()/scale()/scaleX/scaleY` en serez-ui (el subárbol del
+  elemento se transforma alrededor de su top-left = `transform-origin: 0 0`).
+
 ### GUI: texto por PÍXELES — `Gui.nodeTextPx` / `Gui.measureTextPx` (font-size real)
 
 - El motor de glifos (cosmic-text) ahora rasteriza por **tamaño en píxeles** en vez de

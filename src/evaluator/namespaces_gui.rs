@@ -316,6 +316,10 @@ struct SceneNode {
     color: u32,
     z: i32,
     visible: bool,
+    // transform: afín opcional (theta_rad, sx, sy, origen_x, origen_y). El pintor
+    // mapea la geometría del nodo por inverse-mapping cuando está presente (rotate/
+    // scale, origen en px de canvas). None = sin transform (el 99% de los nodos).
+    tr: Option<(f32, f32, f32, f32, f32)>,
     // Clip por-nodo (x0,y0,x1,y1 en coords de canvas), independiente del z-order.
     // El motor de primitivos lo usa para recortar subárboles scrolleados: como los
     // fondos van a z<0 y el sort por (z,id) los separa de un ClipPush a z=0, el
@@ -654,9 +658,180 @@ impl GuiState {
     fn scene_add(&mut self, kind: SceneNodeKind, x: i32, y: i32, color: u32) -> i64 {
         let id = self.next_node;
         self.next_node += 1;
-        self.scene.push(SceneNode { id, kind, x, y, color, z: 0, visible: true, clip: None });
+        self.scene.push(SceneNode { id, kind, x, y, color, z: 0, visible: true, clip: None, tr: None });
         self.scene_dirty = true;
         id
+    }
+
+    /// Dibuja un nodo con transform afín (rotate/scale) por inverse-mapping. Los
+    /// rellenos (rect/roundrect/imagen/texto) se muestrean pixel a pixel; los
+    /// contornos/líneas se dibujan transformando sus vértices. Origen y matriz en px.
+    fn draw_node_transformed(&mut self, fonts: &mut GuiFonts, n: &SceneNode, tr: (f32, f32, f32, f32, f32)) {
+        let (theta, sx, sy, ox, oy) = tr;
+        let (co, si) = (theta.cos(), theta.sin());
+        // Forward M = R(theta)·S ; screen = origin + M·(local - origin).
+        let m00 = co * sx; let m01 = -si * sy;
+        let m10 = si * sx; let m11 = co * sy;
+        let det = m00 * m11 - m01 * m10;
+        if det.abs() < 0.000001 { return; }
+        let (i00, i01, i10, i11) = (m11 / det, -m01 / det, -m10 / det, m00 / det);
+
+        // Bounds locales del nodo (x0,y0,x1,y1) y despacho.
+        let nx = n.x as f32; let ny = n.y as f32;
+        // Contornos / líneas / círculo: transformar vértices y dibujar recto.
+        match &n.kind {
+            SceneNodeKind::RectOutline { w, h } | SceneNodeKind::RoundRectOutline { w, h, .. } => {
+                let fx = |lx: f32, ly: f32| ox + m00 * (lx - ox) + m01 * (ly - oy);
+                let fy = |lx: f32, ly: f32| oy + m10 * (lx - ox) + m11 * (ly - oy);
+                let cs = [(nx, ny), (nx + *w as f32, ny), (nx + *w as f32, ny + *h as f32), (nx, ny + *h as f32)];
+                let mut k = 0;
+                while k < 4 {
+                    let a = cs[k]; let b = cs[(k + 1) % 4];
+                    self.draw_line(fx(a.0, a.1) as i32, fy(a.0, a.1) as i32, fx(b.0, b.1) as i32, fy(b.0, b.1) as i32, n.color);
+                    k += 1;
+                }
+                return;
+            }
+            SceneNodeKind::Line { x2, y2 } => {
+                let fx = |lx: f32, ly: f32| ox + m00 * (lx - ox) + m01 * (ly - oy);
+                let fy = |lx: f32, ly: f32| oy + m10 * (lx - ox) + m11 * (ly - oy);
+                self.draw_line(fx(nx, ny) as i32, fy(nx, ny) as i32, fx(*x2 as f32, *y2 as f32) as i32, fy(*x2 as f32, *y2 as f32) as i32, n.color);
+                return;
+            }
+            SceneNodeKind::Circle { r } => {
+                let scl = (sx.abs() + sy.abs()) / 2.0;
+                self.fill_circle((ox + m00 * (nx - ox) + m01 * (ny - oy)) as i32, (oy + m10 * (nx - ox) + m11 * (ny - oy)) as i32, ((*r as f32) * scl) as i32, n.color);
+                return;
+            }
+            _ => {}
+        }
+
+        // Rellenos e imagen y texto: rasterización por inverse-mapping.
+        let (lx0, ly0, lx1, ly1);
+        // Coverage de texto (local, relativo a n.x/n.y) si es Text.
+        let mut tcells: Vec<(i32, i32, u8)> = Vec::new();
+        let mut tw = 0i32;
+        match &n.kind {
+            SceneNodeKind::Rect { w, h } | SceneNodeKind::RectAlpha { w, h, .. }
+            | SceneNodeKind::RoundRect { w, h, .. } => {
+                lx0 = nx; ly0 = ny; lx1 = nx + *w as f32; ly1 = ny + *h as f32;
+            }
+            SceneNodeKind::Image { w, h, .. } => {
+                let (dw, dh) = if *w > 0 && *h > 0 { (*w, *h) } else {
+                    match self.images.get(match &n.kind { SceneNodeKind::Image { handle, .. } => handle, _ => &0 }) {
+                        Some(im) => (im.w as i32, im.h as i32), None => return,
+                    }
+                };
+                lx0 = nx; ly0 = ny; lx1 = nx + dw as f32; ly1 = ny + dh as f32;
+            }
+            SceneNodeKind::Text { text, px, font, style, spacing, .. } => {
+                let prev = fonts.current;
+                if !font.is_empty() { fonts.set_family(font); }
+                let (cells, w) = Self::text_cells(fonts, text, *px, *style, *spacing);
+                fonts.current = prev;
+                tcells = cells; tw = w;
+                lx0 = nx; ly0 = ny; lx1 = nx + tw as f32; ly1 = ny + (*px as f32);
+            }
+            _ => { return; }  // gradient/shadow/polygon transformados: no soportado
+        }
+
+        // BBox destino: transformar las 4 esquinas locales.
+        let fx = |lx: f32, ly: f32| ox + m00 * (lx - ox) + m01 * (ly - oy);
+        let fy = |lx: f32, ly: f32| oy + m10 * (lx - ox) + m11 * (ly - oy);
+        let corners = [(lx0, ly0), (lx1, ly0), (lx1, ly1), (lx0, ly1)];
+        let mut minx = f32::MAX; let mut miny = f32::MAX;
+        let mut maxx = f32::MIN; let mut maxy = f32::MIN;
+        for c in corners.iter() {
+            let (px_, py_) = (fx(c.0, c.1), fy(c.0, c.1));
+            if px_ < minx { minx = px_; } if px_ > maxx { maxx = px_; }
+            if py_ < miny { miny = py_; } if py_ > maxy { maxy = py_; }
+        }
+        let (cx0, cy0, cx1, cy1) = self.clip;
+        let x0 = (minx.floor() as i32).max(cx0).max(0);
+        let y0 = (miny.floor() as i32).max(cy0).max(0);
+        let x1 = (maxx.ceil() as i32).min(cx1).min(self.width as i32);
+        let y1 = (maxy.ceil() as i32).min(cy1).min(self.height as i32);
+
+        // Coverage map de texto para lookup O(1).
+        let mut tcov: HashMap<(i32, i32), u8> = HashMap::new();
+        if !tcells.is_empty() {
+            for (gx, gy, a) in tcells.iter() { tcov.insert((*gx, *gy), *a); }
+        }
+        let radius = match &n.kind { SceneNodeKind::RoundRect { radius, .. } => *radius as f32, _ => 0.0 };
+        let node_alpha = match &n.kind { SceneNodeKind::RectAlpha { alpha, .. } => *alpha, _ => 255 };
+        let is_text = !tcov.is_empty() || matches!(n.kind, SceneNodeKind::Text { .. });
+        let img_handle = match &n.kind { SceneNodeKind::Image { handle, .. } => *handle, _ => -1 };
+        let nr = ((n.color >> 16) & 0xff) as u8;
+        let ng = ((n.color >> 8) & 0xff) as u8;
+        let nb = (n.color & 0xff) as u8;
+
+        let mut yy = y0;
+        while yy < y1 {
+            let mut xx = x0;
+            while xx < x1 {
+                // 2×2 supersampling para AA de bordes.
+                let mut acc_a: u32 = 0; let mut sr: u32 = 0; let mut sg: u32 = 0; let mut sb: u32 = 0; let mut ns: u32 = 0;
+                let subs = [(0.25f32, 0.25f32), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
+                for (dxs, dys) in subs.iter() {
+                    let sxp = xx as f32 + dxs; let syp = yy as f32 + dys;
+                    let lx = ox + i00 * (sxp - ox) + i01 * (syp - oy);
+                    let ly = oy + i10 * (sxp - ox) + i11 * (syp - oy);
+                    if lx < lx0 || lx >= lx1 || ly < ly0 || ly >= ly1 { continue; }
+                    if radius > 0.0 {
+                        // Fuera de las esquinas redondeadas → descartar.
+                        let rx = if lx - lx0 < radius { lx0 + radius } else if lx1 - lx > radius { lx } else { lx1 - radius };
+                        let ry = if ly - ly0 < radius { ly0 + radius } else if ly1 - ly > radius { ly } else { ly1 - radius };
+                        let (ddx, ddy) = (lx - rx, ly - ry);
+                        if ddx * ddx + ddy * ddy > radius * radius { continue; }
+                    }
+                    if img_handle >= 0 {
+                        if let Some(im) = self.images.get(&img_handle) {
+                            let u = ((lx - lx0) / (lx1 - lx0) * im.w as f32) as i32;
+                            let v = ((ly - ly0) / (ly1 - ly0) * im.h as f32) as i32;
+                            if u >= 0 && v >= 0 && (u as usize) < im.w && (v as usize) < im.h {
+                                let p = im.px[(v as usize) * im.w + u as usize];
+                                sr += (p >> 16) & 0xff; sg += (p >> 8) & 0xff; sb += p & 0xff; ns += 1; acc_a += 255;
+                            }
+                        }
+                    } else if is_text {
+                        let key = ((lx - nx).round() as i32, (ly - ny).round() as i32);
+                        if let Some(a) = tcov.get(&key) { sr += nr as u32; sg += ng as u32; sb += nb as u32; ns += 1; acc_a += *a as u32; }
+                    } else {
+                        sr += nr as u32; sg += ng as u32; sb += nb as u32; ns += 1; acc_a += node_alpha;
+                    }
+                }
+                if ns > 0 {
+                    let a = acc_a / 4;   // cobertura media sobre 4 subpíxeles
+                    let (rr, gg, bb) = ((sr / ns) as u8, (sg / ns) as u8, (sb / ns) as u8);
+                    self.blend(xx, yy, rr, gg, bb, a.min(255));
+                }
+                xx += 1;
+            }
+            yy += 1;
+        }
+    }
+
+    /// Celdas de cobertura (x,y,alpha) de `text` relativas al origen (0,0), + ancho.
+    /// Réplica del avance de pen de draw_text_alpha, pero acumulando en vez de pintar.
+    fn text_cells(fonts: &mut GuiFonts, text: &str, px: i32, style: u8, spacing: i32) -> (Vec<(i32, i32, u8)>, i32) {
+        let px = px.max(1);
+        let glyph_style = style & 0b11;
+        let fam = fonts.current;
+        let mut out: Vec<(i32, i32, u8)> = Vec::new();
+        let mut pen = 0i32;
+        let mut first = true;
+        for ch in text.chars() {
+            if !first { pen += spacing; }
+            first = false;
+            if ch.is_control() { if fam == 0 { pen += px; } continue; }
+            if ch == ' ' && fam == 0 { pen += px; continue; }
+            fonts.ensure_glyph(ch, px, glyph_style);
+            if let Some(gl) = fonts.glyphs.get(&(fam, ch, px, glyph_style)) {
+                if ch != ' ' { for (gx, gy, a) in gl.cells.iter() { out.push((pen + *gx, *gy, *a)); } }
+                pen += gl.advance;
+            } else if fam == 0 { pen += px; }
+        }
+        (out, pen)
     }
 
     /// Redibuja la escena en el canvas (orden: z, luego inserción).
@@ -693,6 +868,12 @@ impl GuiState {
                     let ny0 = cy0.max(by0);
                     self.clip = (nx0, ny0, cx1.min(bx1).max(nx0), cy1.min(by1).max(ny0));
                 }
+            }
+            // transform afín (rotate/scale): rasterización dedicada por inverse-mapping.
+            if let Some(tr) = n.tr {
+                self.draw_node_transformed(fonts, n, tr);
+                self.clip = saved_clip;
+                continue;
             }
             match &n.kind {
                 SceneNodeKind::Rect { w, h } => self.fill_rect(n.x, n.y, *w, *h, n.color),
@@ -2976,6 +3157,35 @@ impl super::Evaluator {
                 };
                 if !ok {
                     return self.rt_err_kind("TypeError", &format!("Gui.nodeSet: prop '{}' does not apply to this node", prop));
+                }
+                st.scene_dirty = true;
+                EvalResult::Value(self.null_ref)
+            }
+
+            // Transform afín por nodo: rot en grados, escala en milésimas (1000 = 1.0),
+            // origen en px de canvas. Identidad (0,1000,1000) borra el transform.
+            "nodeTransform" => {
+                if dot_call.arguments.len() != 6 {
+                    return self.rt_err_kind("TypeError", "Gui.nodeTransform(id, rotDeg, scaleXmille, scaleYmille, origX, origY) requires 6 arguments");
+                }
+                let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
+                let (id, rot, sxm, sym, ox, oy) = match (a[0], a[1], a[2], a[3], a[4], a[5]) {
+                    (Some(id), Some(r), Some(sx), Some(sy), Some(ox), Some(oy)) => (id, r, sx, sy, ox, oy),
+                    _ => { return self.rt_err_kind("TypeError", "Gui.nodeTransform requires 6 integers"); }
+                };
+                let st = match self.gui_state.as_mut() {
+                    Some(s) => s,
+                    None => { return self.rt_err_kind("GuiError", "Gui.nodeTransform: no window open"); }
+                };
+                let node = match st.scene.iter_mut().find(|n| n.id == id) {
+                    Some(n) => n,
+                    None => { return self.rt_err_kind("GuiError", &format!("Gui.nodeTransform: unknown node id {}", id)); }
+                };
+                if rot == 0 && sxm == 1000 && sym == 1000 {
+                    node.tr = None;
+                } else {
+                    let theta = (rot as f32) * std::f32::consts::PI / 180.0;
+                    node.tr = Some((theta, (sxm as f32) / 1000.0, (sym as f32) / 1000.0, ox as f32, oy as f32));
                 }
                 st.scene_dirty = true;
                 EvalResult::Value(self.null_ref)
