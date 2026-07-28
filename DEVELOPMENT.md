@@ -260,7 +260,16 @@ Dos cosas distintas que conviene NO mezclar (el README las mezclaba):
   }
   ```
 
-  Las mismas llaves funcionan también en el top level, fuera de toda función.
+  Las mismas llaves funcionan igual fuera de toda función, en el top level del
+  script — la forma es idéntica (declarar antes, computar adentro, usar después):
+
+  ```serez
+  let a = 1;
+  let b = 2;
+  let res = 0;
+  { res = a + b; }
+  out res;           // → 3
+  ```
 
 Esta sección documenta el modelo. El uso del constructo, con ejemplos, está en el
 [README](README.md#flash-scopes).

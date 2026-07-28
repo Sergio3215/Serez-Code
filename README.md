@@ -3503,7 +3503,21 @@ fn int sumar(int a, int b) {
 
 Everything declared between those inner braces is gone at the closing brace. The only way to keep a result is to put it in a variable declared *before* the block, assign into it from inside, and use it *after* the block — exactly like `res` above. The `return` belongs after the Flash Scope, not inside it.
 
-The same braces also work at the top level of a script, outside any function.
+It works the same way outside a function. At the top level of a script the shape is identical — declare before, compute inside, use after:
+
+```serez
+let a   = 1;
+let b   = 2;
+let res = 0;      // declared before the block
+
+{
+    res = a + b;  // computed inside it
+}
+
+out res;          // → 3
+```
+
+So the rule does not depend on being in a function: **what is declared inside the braces is temporary, and what you want to keep is declared outside them.**
 
 ### What Flash Scopes are for
 
