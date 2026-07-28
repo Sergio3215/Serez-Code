@@ -853,20 +853,16 @@ class Counter {
 
 ## 15. Pendiente
 
-### Features del lenguaje
-- [ ] LSP server — diagnósticos en tiempo real en el editor (errores subrayados sin ejecutar)
+**Sin pendientes comprometidos.**
 
-### Tooling
-- [ ] Formatter con espaciado de operadores (requiere tokenizer en el formatter)
-- [ ] `sz --lint` — correr solo parser + type checker sin ejecutar (base para LSP)
+Esta sección listaba siete ítems que nunca se acordaron como trabajo a hacer, y
+que además daban por pendiente cosas ya resueltas (el LSP, el formatter, la
+publicación de la extensión). El resto —`sz --lint`, publicar en crates.io,
+subir el `.vsix` como asset del release, pinear las Actions a SHAs— no forma
+parte del plan del proyecto.
 
-### Release
-- [ ] Publicar extensión VS Code en el marketplace
-- [ ] Publicar `serez-code` en crates.io
-- [ ] Subir `.vsix` como release asset en GitHub junto al `.msi`
-
-### Seguridad del CI
-- [ ] Pinear GitHub Actions a commit SHAs exactos (Dependabot lo hará automáticamente en el primer run semanal)
+Los pendientes reales se acuerdan antes de anotarse acá. Lo que ya está hecho se
+registra en [CHANGELOG.md](CHANGELOG.md) y en el §16.
 
 ---
 
