@@ -88,7 +88,7 @@ Most interpreted languages manage object lifetimes with a garbage collector or w
 | Integer safety | Silent overflow or panic | Checked arithmetic — overflow is a runtime error |
 | Startup | Runtime or VM to install first | A single self-contained binary |
 
-On top of that model sits a feature you drive yourself: a bare `{ ... }` block — a **Flash Scope** — bounds the lifetime of everything declared inside it. Build a large structure in the braces, keep only the part you need in a variable declared outside, and the rest is released at the closing brace. See [Flash Scopes](#flash-scopes).
+On top of that model sits a feature you drive yourself: an inner `{ ... }` block inside a function — a **Flash Scope** — bounds the lifetime of everything declared in it. Build a large structure in the braces, keep only the part you need in a variable declared before them, and the rest is released at the closing brace. See [Flash Scopes](#flash-scopes).
 
 ---
 
@@ -3487,47 +3487,50 @@ return 5;   // ❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a funct
 
 ## Flash Scopes
 
-A **Flash Scope** is a bare `{ ... }` block. You can write one anywhere — inside a function or straight at the top level of a script — and everything declared inside it exists only until the closing brace:
+A **Flash Scope** is an inner `{ ... }` block you write inside a function or method. Not the function's own braces — a block *within* the body, opened by you, on purpose:
 
 ```serez
-let total = 0;
+fn int sumar(int a, int b) {
+    let res = 0;      // declared OUTSIDE the braces — it survives them
 
-{
-    let rows = [10, 20, 30];   // lives only inside the braces
-    total = rows.length;       // total was declared OUTSIDE — it survives
+    {                 // ← this is the Flash Scope
+        res = a + b;
+    }
+
+    return res;       // → 5
 }
-
-out total;    // → 3
-// out rows;  // ❌ ERROR: Variable not found: rows
 ```
 
-That is the whole rule, and it is worth stating plainly: **whatever is declared inside the braces is temporary. The only way to keep something is to put it in a variable declared outside them.**
+Everything declared between those inner braces is gone at the closing brace. The only way to keep a result is to put it in a variable declared *before* the block, assign into it from inside, and use it *after* the block — exactly like `res` above. The `return` belongs after the Flash Scope, not inside it.
+
+The same braces also work at the top level of a script, outside any function.
 
 ### What Flash Scopes are for
 
-They solve a specific problem: work that needs a lot of RAM but produces a small result. Wrap the bulky part in braces, keep the piece you actually need in an outer variable, and everything else is released at `}` — not eventually, not when some collector gets around to it. At the brace.
+They solve a specific problem: a computation that needs a lot of RAM but keeps only a fraction of it. Put the bulky part inside the braces, keep the piece you actually need in the outer variable, and everything else is released at `}` — not eventually, not when some collector gets around to it. At the brace.
 
 ```serez
 use permissions { File }
 
-let top3 = [];
+fn [string] topThree(string path) {
+    let top = [];                                    // the small result
 
-{
-    let raw    = File.read("sales.csv");         // the whole file
-    let rows   = raw.split("\n");                // + one string per row
-    let parsed = rows.map(r => r.split(","));    // + every field of every row
-    top3 = parsed.slice(0, 3);                   // ← only this is worth keeping
+    {
+        let raw    = File.read(path);                // the whole file
+        let rows   = raw.split("\n");                // + one string per row
+        let parsed = rows.map(r => r.split(","));    // + every field of every row
+        top = parsed.slice(0, 3);                    // ← only this is worth keeping
+    }
+
+    return top;
 }
-
-out top3.length;      // → 3
-out top3[0][0];       // → "a"
 ```
 
-Three copies of the dataset existed inside those braces. After the closing brace only `top3` is left; `raw`, `rows` and `parsed` are gone. Without the braces all three would stay alive for as long as the enclosing scope does — which, at the top level of a script, means until the program ends.
+Three copies of the dataset existed inside those braces. At the closing brace `raw`, `rows` and `parsed` are released, and the function returns holding only the three rows it was asked for. Without the inner block all three would stay alive until `topThree` itself returned.
 
-That is the idiom: **build big, keep small, and mark the boundary with braces.** It applies to any structure you only need a slice of — a parsed file, a query result, an intermediate index you throw away after using it once.
+That is the idiom: **build big, keep small, and mark the boundary with braces.** It applies to any structure you only need a slice of — a parsed file, a query result, an intermediate index you use once and discard.
 
-Blocks nest, so you can peel in stages: an inner block releases its own temporaries while the outer one keeps going.
+Blocks nest, so you can peel in stages: an inner block releases its own temporaries while the outer one keeps working.
 
 ### How memory works underneath
 

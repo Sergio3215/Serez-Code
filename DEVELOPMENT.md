@@ -244,12 +244,23 @@ Dos cosas distintas que conviene NO mezclar (el README las mezclaba):
   valores viven en arenas y salir de un ámbito libera la región de ese ámbito de
   una sola vez. No hay GC. Eso es arquitectura: el programador no lo maneja.
 - **El Flash Scope** es la **feature del lenguaje** montada sobre ese modelo: el
-  bloque `{ ... }` suelto que el programador escribe a propósito para acotar la
-  vida de sus temporales. Es la herramienta con la que él decide dónde empieza y
-  termina una región. Su caso de uso es el volumen de RAM: construir una
-  estructura grande dentro de las llaves, quedarse solo con la parte que va a
-  usar —en una variable declarada AFUERA— y soltar todo lo demás en la llave de
-  cierre.
+  bloque `{ ... }` INTERNO que el programador escribe dentro de una función o
+  método —no las llaves del cuerpo de la función, un bloque adentro del cuerpo—
+  para acotar a mano la vida de sus temporales. Es la herramienta con la que él
+  decide dónde empieza y termina una región. Su caso de uso es el volumen de
+  RAM: construir la estructura grande dentro de las llaves, quedarse solo con la
+  parte que va a usar —en una variable declarada ANTES del bloque— y soltar todo
+  lo demás en la llave de cierre. El `return` va DESPUÉS del bloque:
+
+  ```serez
+  fn int sumar(int a, int b) {
+      let res = 0;
+      { res = a + b; }   // ← el flash scope
+      return res;
+  }
+  ```
+
+  Las mismas llaves funcionan también en el top level, fuera de toda función.
 
 Esta sección documenta el modelo. El uso del constructo, con ejemplos, está en el
 [README](README.md#flash-scopes).
