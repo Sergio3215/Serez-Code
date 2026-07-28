@@ -15,7 +15,7 @@ archivo asume que vas a tocar `src/`.
 2. [Estructura del repositorio](#2-estructura-del-repositorio)
 3. [Arquitectura del intérprete](#3-arquitectura-del-intérprete)
 4. [Pipeline de ejecución](#4-pipeline-de-ejecución)
-5. [Modelo de memoria — Flash Scopes](#5-modelo-de-memoria--flash-scopes)
+5. [Modelo de memoria — regiones y arenas](#5-modelo-de-memoria--regiones-y-arenas)
 6. [Evaluador — submódulos](#6-evaluador--submódulos)
 7. [Suite de tests](#7-suite-de-tests)
 8. [Apps demo](#8-apps-demo)
@@ -236,7 +236,23 @@ El REPL reutiliza el mismo pipeline por línea. Mantiene un `Evaluator` persiste
 
 ---
 
-## 5. Modelo de memoria — Flash Scopes
+## 5. Modelo de memoria — regiones y arenas
+
+Dos cosas distintas que conviene NO mezclar (el README las mezclaba):
+
+- **El modelo de memoria** es *region-based memory* con arena allocators. Los
+  valores viven en arenas y salir de un ámbito libera la región de ese ámbito de
+  una sola vez. No hay GC. Eso es arquitectura: el programador no lo maneja.
+- **El Flash Scope** es la **feature del lenguaje** montada sobre ese modelo: el
+  bloque `{ ... }` suelto que el programador escribe a propósito para acotar la
+  vida de sus temporales. Es la herramienta con la que él decide dónde empieza y
+  termina una región. Su caso de uso es el volumen de RAM: construir una
+  estructura grande dentro de las llaves, quedarse solo con la parte que va a
+  usar —en una variable declarada AFUERA— y soltar todo lo demás en la llave de
+  cierre.
+
+Esta sección documenta el modelo. El uso del constructo, con ejemplos, está en el
+[README](README.md#flash-scopes).
 
 ### Dos arenas
 

@@ -66,7 +66,7 @@ out fibonacci(10);   // → 55
    - [Comments](#comments)
 4. [Type System](#type-system)
 5. [Runtime Safety](#runtime-safety)
-6. [Flash Scopes — Memory Model](#flash-scopes--memory-model)
+6. [Flash Scopes](#flash-scopes)
 7. [Static Profiler](#static-profiler-check-mode)
 8. [Error Reference](#error-reference)
 9. [Known Gotchas](#known-gotchas)
@@ -88,7 +88,7 @@ Most interpreted languages manage object lifetimes with a garbage collector or w
 | Integer safety | Silent overflow or panic | Checked arithmetic — overflow is a runtime error |
 | Startup | Runtime or VM to install first | A single self-contained binary |
 
-Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, block-local memory is freed by truncating the scoped arena back to the block's entry watermark — no reference counting, no GC pause. The one exception is a variable captured by a closure: it is promoted to a global-arena cell first, so it can outlive the block. See [Flash Scopes — Memory Model](#flash-scopes--memory-model).
+On top of that model sits a feature you drive yourself: a bare `{ ... }` block — a **Flash Scope** — bounds the lifetime of everything declared inside it. Build a large structure in the braces, keep only the part you need in a variable declared outside, and the rest is released at the closing brace. See [Flash Scopes](#flash-scopes).
 
 ---
 
@@ -1201,7 +1201,7 @@ Combine with `??` to provide a safe fallback for the whole chain.
 
 #### Standalone blocks
 
-Any `{ ... }` creates a new Flash Scope. This is useful to limit the lifetime of temporary variables:
+Any `{ ... }` is a **Flash Scope** — the language's tool for bounding how long temporary data stays in memory. See [Flash Scopes](#flash-scopes) for what it is good for:
 
 ```serez
 let y = 1;
@@ -3485,13 +3485,57 @@ return 5;   // ❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a funct
 
 ---
 
-## Flash Scopes — Memory Model
+## Flash Scopes
 
-Serez-Code has no garbage collector, and you never free anything by hand. Memory follows the shape of your code instead: every `{ ... }` block is a **Flash Scope**, and everything the block allocated is released the moment it closes. Not "eventually", not when a collector decides — at the closing brace, every time. No pauses, nothing to tune.
+A **Flash Scope** is a bare `{ ... }` block. You can write one anywhere — inside a function or straight at the top level of a script — and everything declared inside it exists only until the closing brace:
 
-You do not have to manage any of this. But three consequences are visible from `.sz` code, and knowing them explains behavior that is otherwise surprising.
+```serez
+let total = 0;
 
-### 1. Values are copied, not shared
+{
+    let rows = [10, 20, 30];   // lives only inside the braces
+    total = rows.length;       // total was declared OUTSIDE — it survives
+}
+
+out total;    // → 3
+// out rows;  // ❌ ERROR: Variable not found: rows
+```
+
+That is the whole rule, and it is worth stating plainly: **whatever is declared inside the braces is temporary. The only way to keep something is to put it in a variable declared outside them.**
+
+### What Flash Scopes are for
+
+They solve a specific problem: work that needs a lot of RAM but produces a small result. Wrap the bulky part in braces, keep the piece you actually need in an outer variable, and everything else is released at `}` — not eventually, not when some collector gets around to it. At the brace.
+
+```serez
+use permissions { File }
+
+let top3 = [];
+
+{
+    let raw    = File.read("sales.csv");         // the whole file
+    let rows   = raw.split("\n");                // + one string per row
+    let parsed = rows.map(r => r.split(","));    // + every field of every row
+    top3 = parsed.slice(0, 3);                   // ← only this is worth keeping
+}
+
+out top3.length;      // → 3
+out top3[0][0];       // → "a"
+```
+
+Three copies of the dataset existed inside those braces. After the closing brace only `top3` is left; `raw`, `rows` and `parsed` are gone. Without the braces all three would stay alive for as long as the enclosing scope does — which, at the top level of a script, means until the program ends.
+
+That is the idiom: **build big, keep small, and mark the boundary with braces.** It applies to any structure you only need a slice of — a parsed file, a query result, an intermediate index you throw away after using it once.
+
+Blocks nest, so you can peel in stages: an inner block releases its own temporaries while the outer one keeps going.
+
+### How memory works underneath
+
+Serez-Code has no garbage collector and nothing to free by hand. Memory is **region-based**: values live in arenas, and leaving a scope releases that scope's region in one step. Deterministic, no pauses, nothing to tune. Flash Scopes are the language-level handle on that machinery — the way you decide, in your own code, where a region begins and ends.
+
+Two consequences of the model are visible from `.sz`, and they explain behavior that is otherwise surprising.
+
+### Values are copied, not shared
 
 Reading a variable, passing an argument, returning a value or reading a field gives you a **copy**. Two names never point at the same data, so nothing you hold can be invalidated by a scope you don't control:
 
@@ -3512,13 +3556,13 @@ cfg.retries = 5;
 this.config = cfg;       // ← without this line the change is lost
 ```
 
-### 2. Copying big values costs
+### Copying big values costs
 
 Because copies are real copies, size matters. Returning a 100k-element array out of a function copies 100k elements, and writing a single element of a large array (`a[i] = x`) is proportional to the array's length, not constant time. Building a large array element by element in a loop therefore gets quadratic.
 
 For heavy numeric work reach for `Tensor` (see [Autodiff & Tensors](#autodiff--tensors)) — it stores its numbers flat and is designed for bulk operations.
 
-### 3. Closures are the one exception: they share
+### Closures are the one exception: they share
 
 A variable captured by a closure is *not* copied. The closure and the surrounding code share one cell, so a mutation inside the closure is visible outside, and vice versa:
 
@@ -3537,7 +3581,7 @@ That is what makes counters, accumulators and event handlers work. The cost: a c
 
 Top-level `out` statements are free of charge: whatever they allocate just to print is released as soon as the statement finishes, no matter how many times you call them.
 
-> Want the machinery behind this — arenas, watermarks, the promote-before-pop protocol? It is documented for contributors in [DEVELOPMENT.md](DEVELOPMENT.md).
+> Want the machinery — arenas, watermarks, the promote-before-pop protocol? It is documented for contributors in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ---
 
