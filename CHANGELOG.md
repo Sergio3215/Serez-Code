@@ -5,7 +5,7 @@ Order: most recent to oldest.
 
 ---
 
-## [Unreleased]
+## [9.11.0] — 2026-07-27
 
 ### GUI: transform afín por nodo — `Gui.nodeTransform` (rotate/scale)
 
@@ -19,6 +19,8 @@ Order: most recent to oldest.
   dibujan rectos; el círculo escala su radio. `SceneNode` lleva un campo `tr: Option`.
 - Habilita `transform: rotate()/scale()/scaleX/scaleY` en serez-ui (el subárbol del
   elemento se transforma alrededor de su top-left = `transform-origin: 0 0`).
+
+## [9.10.0] — 2026-07-27
 
 ### GUI: texto por PÍXELES — `Gui.nodeTextPx` / `Gui.measureTextPx` (font-size real)
 
@@ -35,6 +37,8 @@ Order: most recent to oldest.
   tamaño de píxel literal) y **`Gui.measureTextPx(texto, px)`** → `[ancho_px, px]`.
   Habilitan `font-size: Npx` de verdad en serez-ui (14/20/27/34…px, no solo múltiplos
   de 8) en el renderer INTERPRETADO. `nodeSet` acepta `"px"` además de `"scale"`.
+
+## [9.9.0] — 2026-07-26
 
 ### GUI: `Gui.nodeImage` con `radius` — clip redondeado de imagen
 
@@ -55,6 +59,8 @@ Order: most recent to oldest.
 - Habilita `border` + `border-radius` juntos en serez-ui: contenedores (`div`/`.card`),
   Image y Modal dibujan el borde redondeado en vez de cuadrado.
 
+## [9.7.0] — 2026-07-26
+
 ### GUI: `Gui.nodeImage` escala y aplica alpha (nodo retained)
 
 - El nodo de imagen **retained** (`Gui.nodeImage`) pasa de solo tamaño nativo a
@@ -66,6 +72,8 @@ Order: most recent to oldest.
   inmediato escalaba, y `renderScene` lo tapaba.
 - Habilita el CSS de imágenes de serez-ui: `Image { width / height / opacity }` ahora
   funciona (el escalado por el nodo retained no existía).
+
+## [9.6.0] — 2026-07-24
 
 ### `.szs`: bloques `@when` / `@else` — una lógica que agrupa varios elementos
 
@@ -104,6 +112,8 @@ Order: most recent to oldest.
   incl. el caso de negación de condición compuesta. El motor interpretado de serez-ui
   recibe la misma gramática (nuevo `when_test`, suite 22/22) para no romper la paridad.
 
+## [9.5.0] — 2026-07-21
+
 ### `.szs`: condiciones compuestas con `and` / `or` / `not`
 
 - La condición de una regla del motor CSS nativo ya no es una sola comparación:
@@ -128,6 +138,14 @@ Order: most recent to oldest.
 - Cubierto por los tests Rust de `namespaces_gui::css` (9 casos), ahora incluidos
   en `run_tests.ps1`. El motor interpretado de serez-ui recibe la misma gramática
   para no romper la paridad.
+
+## [9.4.0] — 2026-07-21
+
+### GUI: colores tolerantes — hex `#rgba` / `#rrggbbaa` de color-picker
+
+- El parser de color acepta las formas con alpha que emiten los color-pickers
+  (`#rgba`, `#rrggbbaa`): el alpha tiñe el fondo, como `rgba()` en CSS.
+- Documentación del motor de primitivos puesta al día en el README.
 
 ### BUG: `obj.metodo` sin paréntesis ejecutaba el método en vez de referenciarlo
 
@@ -156,6 +174,15 @@ Order: most recent to oldest.
   cero ocurrencias de esa forma.
 - Regresión cubierta por `tests/unit_method_ref.sz` (10 casos).
 
+## [9.3.8] — 2026-07-20
+
+### GUI: paridad del motor nativo con el renderer interpretado
+
+- `:font` reconocido en `loadStylesheet`, condición booleana "a pelo" (sin
+  comparador) en las reglas `.szs`, herencia de `font-scale`, `white-space: nowrap`,
+  shrink-wrap de elementos `absolute` sin `width`, alpha en los nodos de texto y
+  alias `:active-focus`.
+
 ### `sz publish` multi-usuario: login con cuenta del registry, sin tokens a mano
 
 - **`sz publish` / `sz unpublish` ya no exigen `SEREZ_API_KEY`**: la primera vez
@@ -176,6 +203,15 @@ Order: most recent to oldest.
 - **`sz logout` nuevo**: borra la credencial guardada; el próximo `sz publish`
   vuelve a pedir usuario/contraseña (sirve para cambiar de cuenta). Sin sesión
   activa avisa y sale con éxito.
+
+## [9.2.8] — 2026-07-15
+
+### Extensión de editor: formateo de `.szx` y `.szs` (vscode-serez 1.9.0)
+
+- El formatter cubre los tres lenguajes: además de `.sz`, ahora `.szx` (llaves y
+  profundidad del JSX) y `.szs` (bloques y comentarios `/* */`).
+
+---
 
 ## [9.2.7] — 2026-07-14
 

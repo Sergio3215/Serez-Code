@@ -2017,7 +2017,7 @@ try {
 
 ### Socket (TCP & WebSocket)
 
-Raw TCP client/server sockets over `std::net`, plus RFC 6455 WebSocket text frames. These are the low-level networking primitives — for a full HTTP/WebSocket server with routing, use the `serez-http` package. No permission declaration is required.
+Raw TCP client/server sockets over `std::net`, plus RFC 6455 WebSocket text frames. These are the low-level networking primitives — for a full HTTP/WebSocket server with routing, use the `serez-http` package. **Requires `use permissions { Socket }`** (or a project-level `"permissions": ["Socket"]` in `serez.json`).
 
 ```serez
 // TCP client
@@ -2564,8 +2564,12 @@ Instead of clearing and redrawing every frame (immediate mode), declare **persis
 
 | Function | Description |
 |---|---|
-| `Gui.nodeRect(x, y, w, h, color)` | Creates a node; returns its `int` id. Also `nodeRoundRect`, `nodeRectAlpha`, `nodeRectOutline`, `nodeCircle`, `nodeLine`, `nodePolyline`, `nodePolygon`, `nodeText`, `nodeImage`, `nodeClipPush`/`nodeClipPop`. |
-| `Gui.nodeSet(id, prop, value)` | Updates a property: `x, y, w, h, r, x2, y2, color, z, visible, text, scale, font, style, spacing, radius, alpha, width, points`. |
+| `Gui.nodeRect(x, y, w, h, color)` | Creates a node; returns its `int` id. Also `nodeRoundRect`, `nodeRoundRectOutline`, `nodeRectAlpha`, `nodeRectOutline`, `nodeCircle`, `nodeLine`, `nodePolyline`, `nodePolygon`, `nodeText`, `nodeTextPx`, `nodeImage`, `nodeClipPush`/`nodeClipPop`. |
+| `Gui.nodeRoundRectOutline(x, y, w, h, radius, color)` | Outline (1 px, antialiased corners) of a rounded rect — the stroked counterpart of `nodeRoundRect`. |
+| `Gui.nodeImage(x, y, imageId[, w, h[, alpha[, radius]]])` | Image node, additive arities: native size, scaled (`w`/`h`), with global alpha (0–255), and with AA-masked rounded corners (`radius`). |
+| `Gui.nodeTextPx(x, y, text, px, color)` | Text node at a **literal pixel size** (any value, not only multiples of 8). `Gui.measureTextPx(text, px)` returns `[width_px, px]`. |
+| `Gui.nodeTransform(id, rotDeg, scaleXmille, scaleYmille, origX, origY)` | Optional affine transform on a node: rotation in degrees and scale in thousandths (`1000` = 1.0), around an origin in canvas px. Identity `(0, 1000, 1000)` clears it. |
+| `Gui.nodeSet(id, prop, value)` | Updates a property: `x, y, w, h, r, x2, y2, color, z, visible, text, scale, px, font, style, spacing, radius, alpha, width, points`. |
 | `Gui.nodeDelete(id)` / `Gui.sceneClear()` | Remove one node / all nodes. |
 | `Gui.nodeCount()` | Number of active nodes. |
 | `Gui.renderScene(bg)` | Repaints the scene if dirty and presents; returns `bool` (repainted?). |
@@ -2622,7 +2626,30 @@ resolved per node — and `display: none`. `color` and `font-size`/`font-scale`
 matched against same-named boolean attrs the framework marks on nodes;
 `:active-focus` is an alias of `:focus`) and reactive conditions evaluated
 against `ctx` (`(var == val)` with `==`/`!=`/`<`/`<=`/`>`/`>=`, or a bare
-`(flag)` for truthiness) — last match wins. `img` takes a PNG/JPG **file path**
+`(flag)` for truthiness) — last match wins.
+
+Conditions **compose** with `and` / `or` / `not` (aliases `&&`, `||`, `!`).
+Precedence is the usual one — `not` binds tighter than `and`, and `and` tighter
+than `or`, so `a or b and c` reads as `a or (b and c)`; there are no grouping
+parentheses. Connectors only count as whole words, so a name like `android` or a
+quoted `"a or b"` is not split.
+
+To apply **one condition to several rules**, wrap them in a `@when` block instead
+of repeating it per selector. `@else` complements the previous branch and
+`@else (cond)` chains else-if; branches are mutually exclusive (top to bottom,
+first match wins), so ranges need no manual negation. `@when` blocks nest — the
+conditions AND together — and a rule inside may still carry its own `(cond)`.
+Unknown at-rules (`@media`, …) are discarded whole rather than corrupting the parse.
+
+```css
+@when (width < 300 and darkMode) {
+    body  { color: #fff }
+    .card { padding: 8 }
+    #main { gap: 4 }
+}
+@else (width < 600) { body { color: #ccc } }
+@else               { body { color: #333 } }
+``` `img` takes a PNG/JPG **file path**
 (auto-sized, aspect-preserving, cached) or a `Gui.loadSvg` handle.
 
 ```serez
