@@ -2,11 +2,11 @@
 
 # ![](./img/sz-icon.svg) Serez-Code
 
-**A hand-crafted interpreted programming language — written from scratch in Rust.**
+**A hand-crafted interpreted programming language.**
 
-No garbage collector. No heavy dependencies. Instant memory cleanup via **Flash Scopes**.
+No garbage collector. No runtime to install. Instant memory cleanup via **Flash Scopes**.
 
-[![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Release](https://img.shields.io/badge/release-v9.11.0-blue?style=flat-square)](https://github.com/Sergio3215/serez-code/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![No GC](https://img.shields.io/badge/memory-no%20GC-green?style=flat-square)]()
 
@@ -69,28 +69,24 @@ out fibonacci(10);   // → 55
 6. [Flash Scopes — Memory Model](#flash-scopes--memory-model)
 7. [Static Profiler](#static-profiler-check-mode)
 8. [Error Reference](#error-reference)
-9. [Architecture Overview](#architecture-overview)
-10. [Demo Apps](#demo-apps)
-11. [Known Gotchas](#known-gotchas)
-12. [Contributing](#contributing)
-13. [Roadmap](#roadmap)
-14. [License](#license)
-15. [Bugs Fixed List](bugs.md)
+9. [Known Gotchas](#known-gotchas)
+10. [Contributing](#contributing)
+11. [License](#license)
 
 ---
 
 ## Why Serez-Code?
 
-Most interpreted languages manage object lifetimes with a garbage collector or Rust's `Rc<RefCell<T>>`. Serez-Code takes a fundamentally different approach: **region-based arena allocation** with watermark-based cleanup.
+Most interpreted languages manage object lifetimes with a garbage collector or with reference counting. Serez-Code takes a fundamentally different approach: **region-based arena allocation** with watermark-based cleanup.
 
 | Trait | Traditional interpreters | Serez-Code |
 |---|---|---|
 | Memory management | GC pauses / reference counting | Bump allocator + watermark truncation |
-| Scope cleanup | Non-deterministic (GC) or O(n) over the live heap | Deterministic — bounded by the exiting scope's own data |
-| Object references | `Box` / `Rc` / raw pointers | `ObjectRef` — a safe `(RegionId, usize)` index pair |
+| Scope cleanup | Non-deterministic (GC) or proportional to the whole live heap | Deterministic — bounded by the exiting scope's own data |
+| When memory is freed | Whenever the collector decides | At the closing `}`, always |
 | Type safety | Fully dynamic or fully static | Optional annotations, enforced at every call site |
-| Integer safety | Silent overflow or panic | `checked_*` arithmetic — overflow is a runtime error |
-| `unsafe` code | Often required for performance | **Zero `unsafe` blocks** |
+| Integer safety | Silent overflow or panic | Checked arithmetic — overflow is a runtime error |
+| Startup | Runtime or VM to install first | A single self-contained binary |
 
 Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, block-local memory is freed by truncating the scoped arena back to the block's entry watermark — no reference counting, no GC pause. The one exception is a variable captured by a closure: it is promoted to a global-arena cell first, so it can outlive the block. See [Flash Scopes — Memory Model](#flash-scopes--memory-model).
 
@@ -100,27 +96,44 @@ Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, block
 
 ### Install
 
-**Linux / macOS:**
+Current release: **v9.11.0**. Every binary is self-contained — there is nothing else to install and no runtime to set up.
+
+**Linux / macOS** — installs `sz` into `~/.local/bin`:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Sergio3215/serez-code/main/install.sh | sh
 ```
 
-**Windows (PowerShell):**
+**Windows (PowerShell)** — installs `sz.exe` into `%LOCALAPPDATA%\SerezCode\bin` and adds it to your user `PATH`:
 ```powershell
 irm https://raw.githubusercontent.com/Sergio3215/serez-code/main/install.ps1 | iex
 ```
 
-Or download a binary directly from the [GitHub Releases](https://github.com/Sergio3215/serez-code/releases) page.
-
-### Build from source
-
-Requires [Rust](https://rustup.rs/) stable, edition 2024:
+Both scripts resolve the latest published release automatically. Open a new terminal and confirm:
 
 ```bash
-git clone https://github.com/Sergio3215/serez-code
-cd serez-code
-cargo install --path . --force
+sz --version
 ```
+
+#### Direct downloads
+
+Prefer to grab the file yourself? These links always point at the newest release:
+
+| Platform | Asset | Download |
+|---|---|---|
+| Windows x64 | `sz-windows-x64-setup.msi` | [Installer](https://github.com/Sergio3215/serez-code/releases/latest/download/sz-windows-x64-setup.msi) — adds `sz` to `PATH` for you |
+| Windows x64 | `sz-windows-x64.exe` | [Standalone .exe](https://github.com/Sergio3215/serez-code/releases/latest/download/sz-windows-x64.exe) — no installer, put it anywhere |
+| macOS — Apple Silicon | `sz-macos-arm64` | [Download](https://github.com/Sergio3215/serez-code/releases/latest/download/sz-macos-arm64) |
+| macOS — Intel | `sz-macos-x64` | [Download](https://github.com/Sergio3215/serez-code/releases/latest/download/sz-macos-x64) |
+| Linux x64 | `sz-linux-x64` | [Download](https://github.com/Sergio3215/serez-code/releases/latest/download/sz-linux-x64) — static build, runs on any distro |
+
+On macOS and Linux the downloaded file needs the executable bit before first use:
+
+```sh
+chmod +x sz-macos-arm64
+sudo mv sz-macos-arm64 /usr/local/bin/sz
+```
+
+Verify what you downloaded against [`checksums.txt`](https://github.com/Sergio3215/serez-code/releases/latest/download/checksums.txt). Older versions and full release notes live on the [Releases page](https://github.com/Sergio3215/serez-code/releases).
 
 ### Run a script
 
@@ -180,17 +193,9 @@ sz --version
 
 > **Note:** Serez-Code does not auto-print expression results when running files. Use `out` to send values to stdout.
 
-### Pre-built binaries
-
-Pre-built binaries for Windows x64, Linux x64 (static musl), macOS ARM64, and macOS x64 are published automatically on every tagged release via GitHub Actions. No Rust installation required to run them.
-
 ### Editor support (LSP)
 
-`sz-lsp` is a Language Server Protocol implementation for `.sz` files (stdio JSON-RPC, built from the same crate):
-
-```bash
-cargo build --release --bin sz-lsp
-```
+`sz-lsp` is a Language Server Protocol implementation for `.sz` files, so any LSP-capable editor can give you live errors and completion:
 
 Capabilities:
 
@@ -202,14 +207,9 @@ Capabilities:
 | Go to definition | Functions, classes, enums, variables in the file; `import "…" ` lines jump to the imported file |
 | Document symbols | Outline with classes and their nested methods/fields |
 
-The VS Code extension (`vscode-serez/`, ≥ 1.7.0) starts it automatically for `.sz` files: it looks for `sz-lsp` on the `PATH` (or use the `serez.lsp.path` setting; disable with `serez.lsp.enabled: false`). Any other LSP-capable editor (Neovim, Zed, JetBrains, …) can launch `sz-lsp` as a stdio server.
+The VS Code extension (≥ 1.7.0) starts it automatically for `.sz` files: it looks for `sz-lsp` on your `PATH` (point it elsewhere with the `serez.lsp.path` setting, or turn it off with `serez.lsp.enabled: false`). Any other LSP-capable editor — Neovim, Zed, JetBrains — can launch `sz-lsp` as a stdio JSON-RPC server.
 
-Regenerate the namespace/method catalog after adding native methods, and smoke-test the server end-to-end, with:
-
-```bash
-python tools/gen_lsp_builtins.py   # rebuilds src/lsp/builtins_gen.rs
-python tools/lsp_smoke.py          # drives a real LSP session over stdio
-```
+> **Heads-up:** the release assets currently ship `sz` only, so `sz-lsp` still has to be built from source — see [DEVELOPMENT.md](DEVELOPMENT.md). Editing works fine without it; you just lose the live diagnostics.
 
 ---
 
@@ -271,7 +271,7 @@ Serez-Code has five primitive types and three compound types:
 |---|---|---|
 | `int` | `0`, `42`, `-7` | 64-bit signed integer (`i64`) |
 | `decimal` | `3.14`, `0.5`, `2.0` | 64-bit floating-point (`f64`) |
-| `dec` | `12.50m`, `5m`, `1e-7m` | **Exact** base-10 decimal (`rust_decimal`, 28–29 digits) |
+| `dec` | `12.50m`, `5m`, `1e-7m` | **Exact** base-10 decimal, 28–29 significant digits |
 | `bool` | `true`, `false` | Boolean |
 | `string` | `"hello"`, `r"raw {x}"` | UTF-8 string (interpolated, or raw with `r"…"`) |
 | `void` | — | Signals absence of a return value |
@@ -2174,9 +2174,9 @@ GPU.freeBuffer(doubled);
 ### Crypto
 
 Hashing, encodings, a real CSPRNG, and Ed25519 signatures. Pure compute — no
-permission declaration required. Hashes and encodings are implemented in pure
-Rust; the security-critical primitives use vetted crates (`getrandom` for OS
-entropy, `ed25519-dalek` for signatures).
+permission declaration required. Random bytes come from the operating system's
+entropy source, and signatures use a vetted, audited implementation rather than
+a hand-rolled one.
 
 > ⚠️ **`Random.*` is a seedable LCG — predictable.** Fine for games and
 > simulations; never use it for tokens, salts, or keys. Use
@@ -2545,7 +2545,7 @@ while (Gui.isOpen()) {
 Gui.close()
 ```
 
-See `apps/09_gui_window.sz` for a full graphical form (text field + clickable button).
+Putting those pieces together gives you a full graphical form — a text field plus a clickable button — in a single file.
 
 #### Multiple windows
 
@@ -3433,7 +3433,7 @@ Serez-Code enforces several runtime invariants that would otherwise cause panics
 
 ### Integer overflow
 
-All arithmetic operations use Rust's `checked_*` variants. Overflow raises an error instead of wrapping:
+Every arithmetic operation is checked. Overflow raises an error instead of silently wrapping around:
 
 ```serez
 let max = 9223372036854775807;   // i64::MAX
@@ -3487,124 +3487,57 @@ return 5;   // ❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a funct
 
 ## Flash Scopes — Memory Model
 
-Flash Scopes are the core of Serez-Code's runtime. They replace garbage collection with a deterministic, arena-based memory model that is predictable, fast, and requires zero `unsafe` Rust.
+Serez-Code has no garbage collector, and you never free anything by hand. Memory follows the shape of your code instead: every `{ ... }` block is a **Flash Scope**, and everything the block allocated is released the moment it closes. Not "eventually", not when a collector decides — at the closing brace, every time. No pauses, nothing to tune.
 
-### Two memory regions
+You do not have to manage any of this. But three consequences are visible from `.sz` code, and knowing them explains behavior that is otherwise surprising.
 
-The runtime maintains two separate arenas, each one a plain `Vec<ObjectData>`:
+### 1. Values are copied, not shared
 
-```
-┌──────────────────────────────────────────────────┐
-│                  Global Arena                    │
-│  [null | true | false | ints 0..=256 | x=42 |…]  │
-│                                                  │
-│  Seeded at startup with the null/bool singletons │
-│  and the small-integer cache. Then holds         │
-│  top-level variables, function declarations and  │
-│  closure cells for the whole program lifetime.   │
-│  It shrinks in exactly one case: the scratch     │
-│  watermark for top-level 'out' (see below).      │
-└──────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────┐
-│                  Scoped Arena                    │
-│  [...frame0... | ...frame1... | ...frame2... ]   │
-│                ^mark0          ^mark1            │
-│                                                  │
-│  Local variables, function arguments, and        │
-│  block-level temporaries. One shared arena       │
-│  with a stack of watermarks — each scope exit    │
-│  truncates back to its entry mark instantly.     │
-└──────────────────────────────────────────────────┘
-```
-
-Which arena receives a value is decided by nesting depth, not by the value itself: `alloc()` writes to the **scoped** arena whenever at least one block frame is active, and to the **global** arena otherwise. The same literal therefore lands in a different region depending on where it appears.
-
-### ObjectRef — the safe pointer
-
-No raw pointers are used anywhere. Every value reference is an `ObjectRef`:
-
-```
-ObjectRef { region: RegionId, index: usize }
-                │                  │
-                │                  └── slot index within the arena Vec
-                └──── Global or Scoped — determines which arena to read
-```
-
-An `ObjectRef` can never be *memory*-unsafe: it is an integer index into a safe `Vec`, so the worst possible read is out of range and returns `None` — surfacing as the interpreter's `❌ Referencia inválida` fallback — instead of touching freed memory. What an index does **not** give you is stability across a reset — truncating an arena makes those slots available again, and later allocations reuse the very same indices. A reference kept across a scope exit would resolve to a *different, live object*. Safety comes from the protocol below, which never lets a reference outlive its scope; not from indices somehow becoming unreachable.
-
-### How scope entry and exit work
-
-Every `{ ... }` block records a watermark on entry and truncates back to it on exit. On top of that, a block that produces a value for its caller — an `if`/`else` branch, a `match` arm, a `switch` case, `try`/`catch`/`finally`, an `unsafe` block, or a standalone block — follows the full protocol:
-
-```
-1. Record watermark = arena.len()
-2. Execute statements (new allocs append to arena)
-3. Extract the resulting value as an arena-independent OwnedValue (deep clone)
-4. arena.truncate(watermark) — all block-local data is freed
-5. Re-allocate the extracted value in the parent scope (plant)
-```
-
-Steps 3–5 are the **"promote before pop" invariant**. They ensure the value leaving the block is never a dangling reference, even when it is an array whose elements live inside the now-freed scope.
+Reading a variable, passing an argument, returning a value or reading a field gives you a **copy**. Two names never point at the same data, so nothing you hold can be invalidated by a scope you don't control:
 
 ```serez
-fn make_pair(int a, int b) {
-    return [a, b];          // array lives in the function's scoped frame
-}
+let a = [1, 2, 3];
+let b = a;        // b is an independent copy
+b.push(4);
 
-let p = make_pair(10, 20); // extracted before pop, planted in global arena
-out p[0];                  // → 10 — safe, lives in global arena now
-out p[1];                  // → 20
+out a.length;     // → 3 — a is untouched
+out b.length;     // → 4
 ```
 
-Steps 3 and 5 are skipped whenever nothing escapes the block:
+The same rule explains a classic surprise: mutating an object you read out of a field mutates *your copy*, not the field. Write it back if you want the change to stick:
 
-- **`break`, `continue` and errors** carry no payload, so the block is simply popped.
-- **Function and method bodies** promote only the `return` value (or the `throw` payload). The values of the other statements are discarded on the spot.
-- **Loop bodies** — `while`, `do-while`, `for` and `for-in` — are evaluated in *statement* position and no caller ever reads their value, so the interpreter deliberately drops it (`eval_block_discard`); only `return` and `throw` are promoted. Without this, a body whose last statement yields a composite (`arr = arr.map(...)`) planted a **full copy per iteration** into the enclosing frame, freed only when the loop ended — measured at 400 MB over 300 iterations on a 20k-element array.
+```serez
+let cfg = this.config;   // copy
+cfg.retries = 5;
+this.config = cfg;       // ← without this line the change is lost
+```
 
-### Why values are copied
+### 2. Copying big values costs
 
-`extract` is a **deep clone**: it materializes the whole object tree — nested arrays, dict entries, instance fields — into an arena-independent `OwnedValue`. That is where Serez-Code's value semantics come from. Passing an argument, returning a composite or reading a variable copies the data instead of sharing it, so no two scopes can ever alias the same arena slot, and no scope exit can pull the ground from under a value someone else still holds.
+Because copies are real copies, size matters. Returning a 100k-element array out of a function copies 100k elements, and writing a single element of a large array (`a[i] = x`) is proportional to the array's length, not constant time. Building a large array element by element in a loop therefore gets quadratic.
 
-The trade-off is cost. Composites are stored *embedded*: an array occupies **one** arena slot holding a `Vec<OwnedValue>`, not one slot per element. Extracting and planting it is therefore O(total size) — returning a 100k-element array out of a function copies 100k elements, and `a[i] = x` on a large array is O(n), not O(1). For heavy numeric work use a `Tensor`, which is a flat `Vec<f64>` in a single slot.
+For heavy numeric work reach for `Tensor` (see [Autodiff & Tensors](#autodiff--tensors)) — it stores its numbers flat and is designed for bulk operations.
 
-### What scope cleanup actually costs
+### 3. Closures are the one exception: they share
 
-Exiting a scope is `arena.truncate(watermark)`: every slot above the watermark is dropped, in order, and the arena's length returns to the mark. The cost is proportional to the number of **slots freed** (`len - watermark`) plus the cost of dropping what each slot holds — a slot containing a one-million-element array is a one-million-element drop, not a single destructor call.
-
-What the model buys is not a cheaper per-object drop; it is *where* the bound comes from. Cleanup is bounded by the exiting scope's own data and happens at an exact, predictable point in the source. A tracing GC instead walks the entire live heap — `O(n)` over memory the block never touched — at a moment nobody chose.
-
-### The exception: variables captured by closures
-
-A closure body can run long after the block that declared its variables is gone, which the protocol above cannot support on its own. So when a function or lambda value is created, each captured local is **promoted**: extracted from the scoped arena, planted in the global arena, and every binding that pointed at the old scoped slot is re-pointed to the new cell. Three consequences are worth knowing:
-
-1. **A captured variable outlives its block.** It now lives in the global arena, which the scope protocol never truncates.
-2. **A captured variable stops being copied.** The closure and the enclosing scope share one cell, so a mutation inside the closure is visible outside and vice versa — the opposite of the value semantics described above. This is deliberate (cell semantics) and it is the only place in the language where two names share storage.
-3. **It costs permanent memory.** Global-arena slots are never reclaimed, so every capture holds a slot until the program ends. That is why a lambda captures only the names its body actually mentions: capturing every visible local leaked one permanent slot per unused local per lambda creation, which is ruinous for a lambda built per frame or per iteration.
+A variable captured by a closure is *not* copied. The closure and the surrounding code share one cell, so a mutation inside the closure is visible outside, and vice versa:
 
 ```serez
 fn counter() {
-    let n = 0;                    // promoted to a global cell when the lambda below captures it
+    let n = 0;
     return () => { n = n + 1; return n; };
 }
+
 let next = counter();
 out next();   // → 1
-out next();   // → 2 — the cell survived the return
+out next();   // → 2 — n outlived the function that declared it
 ```
 
-### Scratch watermark for top-level temporaries
+That is what makes counters, accumulators and event handlers work. The cost: a captured variable lives until the program ends, so creating closures in a hot loop — one per frame, one per iteration — keeps accumulating memory. Create them once outside the loop when you can.
 
-At the top level, `out` statements create temporary values (e.g., the result of `fibonacci(10)` used only for printing). These are freed immediately after the statement via a scratch watermark on the global arena — they do not accumulate for the lifetime of the script. This is the only case in which the global arena ever shrinks.
+Top-level `out` statements are free of charge: whatever they allocate just to print is released as soon as the statement finishes, no matter how many times you call them.
 
-```serez
-out fibonacci(10);   // temporary result allocated, printed, freed
-out fibonacci(20);   // same — no accumulation between statements
-```
-
-Bare expression statements (e.g., function calls used as statements) are **not** subject to the scratch reset, because they may have persistent side-effects — for example, a function that mutates a global array via index assignment allocates the new element value in the global arena as a side-effect. Resetting the watermark would destroy that allocation.
-
-Global variable bindings from `let` are always kept; only display-only temporaries from `out` are released.
+> Want the machinery behind this — arenas, watermarks, the promote-before-pop protocol? It is documented for contributors in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ---
 
@@ -3698,164 +3631,9 @@ Parser errors always include the expected token or construct, making them action
 
 ---
 
-## Architecture Overview
-
-```
-src/
-├── main.rs           — CLI entry point: file execution, --check mode, REPL
-├── token.rs          — Token enum and keyword-to-token lookup table
-├── lexer.rs          — Hand-rolled character scanner; byte-indexed over the source String
-├── ast.rs            — AST node definitions (Statement, Expression, BlockStatement, …)
-├── parser.rs         — Pratt (TDOP) parser with 8-level precedence + error recovery
-├── type_checker.rs   — Static pre-run type checker with literal and variable inference
-├── region.rs         — Arena allocator (with_capacity), ObjectRef, ObjectData/OwnedValue with Rc<BlockStatement>
-├── scope.rs          — ScopeStack — push/pop/lookup with watermark cleanup and all_bindings dedup
-├── repl.rs           — Read-eval-print loop
-├── compiler/         — Native backend pipeline (2.0.0 — work in progress)
-│   ├── types.rs          — Compile-time type system (SzType) mapping Serez types to LLVM types
-│   ├── hir.rs            — High-level IR: desugared AST nodes (HirStmt, HirExpr, HirBinOp)
-│   ├── hir_lower.rs      — AST → HIR lowering pass (resolves syntax sugar)
-│   ├── mir.rs            — Mid-level IR: three-address code with basic blocks and terminators
-│   ├── mir_lower.rs      — HIR → MIR flattening (SSA-like temporaries, explicit control flow)
-│   ├── llvm_emit.rs      — MIR → LLVM IR text emission
-│   └── mod.rs            — Module glue
-└── evaluator/        — Tree-walking interpreter (split into focused submodules)
-    ├── mod.rs            — Core entry points, Flash Scope protocol, StoredClass dispatch, static profiler
-    ├── stmt.rs           — Statement evaluation (let, assign, for, while, return, …)
-    ├── expr.rs           — Expression evaluation (calls, index, dot, ternary, …)
-    ├── ops.rs            — Infix and prefix operator evaluation
-    ├── check.rs          — Type-check helpers (parameter, return, typed array)
-    ├── builtins.rs       — Global built-in functions (parseInt, parseDecimal, readLine, …)
-    ├── classes.rs        — Class instantiation, method dispatch, inheritance, super
-    ├── methods_array.rs  — Array method dispatch (push, pop, map, filter, reduce, sort, …)
-    ├── methods_string.rs — String method dispatch (split, replace, trim, padStart, …)
-    ├── methods_set.rs    — Set method dispatch (add, has, delete, toArray, union, …)
-    ├── namespaces.rs     — Built-in namespace dispatch (Math, File, JSON)
-    ├── namespaces_os.rs  — OS/hardware namespaces (Terminal, OS, Env, Time, System)
-    └── control.rs        — Control flow helpers (break, continue, labeled loops, do-while)
-```
-
-### Data flow
-
-```
-Source file (.sz) or REPL line
-        │
-        ▼
-    Lexer
-    — Byte-indexed scan over the source String (no intermediate Vec<char> copy)
-    — 1-character lookahead for two-char tokens (==, !=, <=, >=, =>)
-    — Emits a stream of Token { type, literal, line, column }
-        │
-        ▼
-    Parser (Pratt TDOP)
-    — parse_program() → Program { Vec<Statement> }
-    — Prefix handlers: literals, identifiers, if, fn, arrays, entry literals {k,v}, ( )
-    — Infix handlers: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||, f(args), a[i], obj.method(args)
-    — Error recovery: synchronize() skips to ; or } or keyword on failure
-        │
-        ▼
-    TypeChecker (static pass)
-    — Collects all FunctionDeclarations into a name → signature map
-    — Infers types for let-bound variables with literal RHS
-    — Checks call sites against declared parameter and return types
-    — Reports errors to stderr; does not halt execution
-        │
-        ▼
-    Evaluator (tree-walking)
-    — eval_program() iterates top-level statements
-    — eval_statement() dispatches Let, Assign, While, For, Out, Block, …
-    — eval_expression() dispatches Infix, Prefix, Call, If, Index, …
-    — Flash Scope protocol on every { } block: push → eval → extract → pop → plant
-    — Scratch watermark reclaims top-level Out temporaries (Expression excluded — may have persistent side-effects)
-        │
-        ├──► stdout  (out statements, REPL results)
-        └──► stderr  (type errors, runtime errors, parser errors)
-```
-
-### Lexer — byte-indexed scanning
-
-The lexer operates directly on the source `String` using byte offsets (`position`, `read_position`). It does not copy the input into a `Vec<char>`. Multi-byte UTF-8 characters in identifiers are handled correctly because `read_char` advances by `c.len_utf8()` bytes, and string slicing uses `&str[start..end]` which is byte-range indexed.
-
-### Parser — Pratt TDOP
-
-The parser implements Top-Down Operator Precedence (Pratt parsing). Every infix operator must be registered in **two places**:
-
-1. `token_precedence()` — returns the operator's binding power (precedence level)
-2. `is_infix` match in `parse_expression()` — gates entry into the infix loop
-
-Registering in only one place produces subtly wrong behavior: the parser either ignores the operator or silently discards the expression around it.
-
-### Evaluator — Flash Scope protocol
-
-The core memory invariant enforced by the evaluator:
-
-```rust
-// push/pop are paired on EVERY code path, including errors and early exits:
-scopes.push();
-// ... evaluate block statements ...
-let owned = extract(result_ref);   // deep clone before pop — only if a value escapes
-scopes.pop();                      // free all block-local memory
-let promoted = plant(owned);       // re-allocate in parent scope
-```
-
-`extract` materializes the full object tree (including nested arrays) into an arena-independent `OwnedValue`. `plant` re-allocates it wherever `alloc()` currently points — the parent scope or global arena.
-
-The extract/plant pair is skipped when nothing escapes the block: on `break`, `continue`, labeled jumps and `Error` there is no payload to rescue, and `eval_block_discard` (loop bodies) drops the block's value on purpose, promoting only `Return` and `Throw`. See [Flash Scopes — Memory Model](#flash-scopes--memory-model) for why.
-
-### Performance internals
-
-Several optimizations reduce redundant allocations and clones during hot paths.
-
-#### `Rc<BlockStatement>` — O(1) function cloning
-
-Every function value stores its AST body as `Rc<BlockStatement>` rather than an owned `BlockStatement`. Looking up a function from the arena, passing it as a callback, or returning it from `find_method` increments a reference count instead of deep-cloning the body. This applies to both `OwnedValue::Function` and `ObjectData::Function` in `region.rs`.
-
-#### `StoredClass` — O(1) method dispatch
-
-Class methods are stored in `StoredClass` using four separate `HashMap`s: `methods`, `static_methods`, `getters`, and `setters`. Each lookup is O(1) by name. Method values (`StoredMethod`) hold a `body: Rc<BlockStatement>`, so each clone is O(1) regardless of how large the method body is. Previously, every method call cloned the entire `ast::ClassMethod` including its body.
-
-#### Arena pre-sizing and the global seed
-
-| Allocation | Initial capacity |
-|---|---|
-| Both arenas (`Arena::new()`) | 64 objects |
-| Scope frame bindings | 4 entries |
-
-`Arena::new()` is shared by the global and the scoped arena, so both start at 64 slots. The global arena is then seeded at startup with the `null`, `true` and `false` singletons plus the integer cache `0..=256` — about 260 slots — so it grows past its initial capacity before the first statement runs. That seed is what makes small-integer and boolean values free: they are handed out as existing refs instead of being allocated per use.
-
-The remaining evaluator tables (`global_bindings`, the interface / class / enum registries) are plain `HashMap::new()` and grow on demand.
-
-#### `all_bindings()` deduplication
-
-`ScopeStack::all_bindings()` traverses frames inner-to-outer and skips names already seen. When a closure captures its environment, shadowed outer variables are not extracted and re-allocated — each name appears at most once in the captured environment.
-
-#### Structural helpers
-
-| Helper | Replaces |
-|---|---|
-| `print_call_stack()` | 3-line call-chain printer loop — repeated at every error site |
-
-`print_call_stack()` lives in `evaluator/mod.rs` alongside the scope protocol.
-
----
-
-## Demo Apps
-
-The `apps/` directory contains five console programs that together exercise every language feature. Run any of them with `sz apps/<name>.sz`.
-
-| File | What it exercises |
-|---|---|
-| `apps/01_task_manager.sz` | `enum`, class inheritance (`UrgentTask : Task`), static methods with `switch`, HOF (filter/map/reduce), `try/catch/throw` |
-| `apps/02_statistics.sz` | Typed `[decimal]` arrays, `Math` namespace, map/filter/reduce for mean/stddev/median/percentile, histogram, Pearson correlation |
-| `apps/03_text_analyzer.sz` | String methods (split, replace, trim, indexOf, charAt, padEnd, substring), dicts for word frequency, Caesar cipher, `File` I/O |
-| `apps/04_bank_system.sz` | `abstract` class, `sealed` class, `interface`, `const`, getters (`get`), `try/catch/throw`, optional chaining `?.`, null coalescing `??` |
-| `apps/05_data_pipeline.sz` | `JSON` (stringify/parse), `File` (write/read), `Set` (deduplication), bitwise ops (`&`, `\|`, `^`), power ops (`**`, `>>`), HOF pipeline |
-
----
-
 ## Known Gotchas
 
-These behaviors were discovered writing the demo apps. None are bugs — they are correct semantics — but they can surprise first-time users.
+None of these are bugs — they are correct semantics — but they surprise almost everyone the first time.
 
 ### `for-in` loop variable is a copy
 
@@ -3935,9 +3713,8 @@ class TaskItem { … }   // ✅ rename it
 
 The rule exists because otherwise a user class would shadow the native namespace
 of the same name. It arrived with the `Task` namespace in **v7.0.0**, so code
-written before that may need a rename — the bundled demo `apps/01_task_manager.sz`
-renamed its `Task` class to `TaskItem` for exactly this reason. Only the exact
-name collides: `UrgentTask` or `TaskList` are fine.
+written before that may need a rename. Only the exact name collides: `UrgentTask`
+or `TaskList` are fine.
 
 ### `public abstract TYPE method()` is not valid syntax
 
@@ -3958,135 +3735,9 @@ public decimal area() {
 
 ## Contributing
 
-All contributions are welcome — bug fixes, new language features, documentation, or test cases.
+Want to work on the language itself — the interpreter, the standard namespaces, the tooling? That is a different job from writing `.sz` programs, and it has its own guide: **[DEVELOPMENT.md](DEVELOPMENT.md)** covers the repository layout, the interpreter architecture, the test suite and the release pipeline. Issue and pull-request conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-### Build and test
-
-```powershell
-cargo build
-cargo test                         # Rust unit tests (lexer, etc.)
-
-# Windows (PowerShell):
-.\run_tests.ps1                    # full suite (E2E + unit + error + security)
-.\run_tests.ps1 -unit              # unit tests only (framework-based)
-.\run_tests.ps1 -e2e               # E2E golden-file tests + error tests
-.\run_tests.ps1 -security          # security/error tests only
-.\run_tests.ps1 -filter "switch"   # run tests matching a name pattern
-.\run_tests.ps1 -generate          # regenerate .expected files after language changes
-```
-
-```bash
-# Linux / macOS (Bash):
-./run_tests.sh                     # full suite
-./run_tests.sh --unit              # unit tests only
-./run_tests.sh --e2e               # E2E golden-file tests + error tests
-./run_tests.sh --security          # security/error tests only
-./run_tests.sh --filter "switch"   # run tests matching a name pattern
-./run_tests.sh --generate          # regenerate .expected files after language changes
-```
-
-### Project conventions
-
-- **No `unsafe` in the interpreter core** — the arena memory model is intentionally built without Rust unsafe blocks. New language features must maintain this invariant. (`namespaces_os.rs` uses `unsafe` only for platform FFI calls such as `GlobalMemoryStatusEx`.)
-- **Minimal external runtime dependencies** — adding a new crate requires a strong reason. Current runtime deps: `notify`, `ureq`, `zip`, `crossterm`.
-- **Errors go to `stderr`** — use `eprintln!` for all error output; `println!` only for program output (`out` statements) and the REPL.
-- **Flash Scope invariant** — any new block-level construct must call `scopes.push()` before evaluating its body and `scopes.pop()` after, in **all** code paths including error paths. Forgetting a pop on an error path leaks the call stack in the REPL.
-- **All new syntax flows through the full pipeline** — `token.rs` → `lexer.rs` → `ast.rs` → `parser.rs` → `evaluator.rs`. Never add to the evaluator without a corresponding AST node.
-
-### Adding a new infix operator
-
-Infix operators require registration in **two** places in `parser.rs`, or the parser will silently misbehave:
-
-```rust
-// 1. token_precedence() — gives the operator its binding power
-TokenType::MyOp => Precedence::Sum,
-
-// 2. is_infix match — allows parse_expression to enter the infix loop
-TokenType::MyOp => true,
-```
-
-Then add evaluation in `eval_infix()` in `evaluator.rs`.
-
-### Adding a new statement
-
-1. Add a `TokenType` variant in `token.rs`. If keyword-based, wire it in `lookup_ident()`.
-2. Add the AST node(s) in `ast.rs`.
-3. Add a parse handler in `parser.rs` inside `parse_statement()`.
-4. Add an eval handler in `evaluator.rs` inside `eval_statement()`.
-5. Add a test `.sz` file demonstrating the feature.
-
-### Open a PR
-
-- One logical change per commit.
-- Describe **why** a change was made, not just what.
-- PRs that add language features must include at least one `.sz` example file.
-
----
-
-## Roadmap
-
-### Language features
-- [x] `&&` and `||` — logical AND and OR operators with short-circuit evaluation
-- [x] `for` loop — `for (let i = 0; i < n; i++)`, nested loops, 1D/2D array traversal; update accepts `i++`, `i--`, `i += n`
-- [x] Array mutation via index — `arr[i] = expr`, works in loops and from inside functions
-- [x] String interpolation — `"Hello, {name}!"`, supports nested quotes inside `{…}` (e.g. `{dict["key"]}`)
-- [x] Lexical closures — functions that capture variables from their defining scope
-- [x] Native higher-order functions — `map`, `filter`, `reduce` with lambda syntax `x => expr` / `(x, i) => expr`
-- [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.remove`, `.reverse`, `.sort`, `.find`, `.findIndex`, `.indexOf`, `.includes`, `.every`, `.some`, `.slice`, `.flat`, `.join`
-- [x] String methods — `.length`, `.substring`, `.slice`, `.split`, `.replace`, `.includes`, `.indexOf`, `.startsWith`, `.endsWith`, `.charAt`, `.trim`, `.trimStart` / `.trimLeft`, `.trimEnd` / `.trimRight`, `.toUpperCase`, `.toLowerCase`, `.padStart`, `.padEnd`, `.toString()`
-- [x] Dict methods — `.toList()` (keys array), `.toArray()` (2D entries array); missing key returns `null`
-- [x] `decimal` type — f64 literals (`3.14`), mixed arithmetic with `int`
-- [x] Global conversions — `parseInt(val)`, `parseDecimal(val)`
-- [x] Console input — `readLine(prompt?)`
-- [x] Interfaces — typed record schemas: `interface Point { x: decimal, y: decimal }`, `new Point({ x:1.0, y:2.0 })`, field read/write, object patch `p = { x: 5.0 }`
-- [x] Classes — C#-style OOP: `public class Foo`, constructor `public Foo(args)`, `this.field`, `public`/`private` methods, field assignment `obj.field = val`
-- [x] Single inheritance — `public class Bar : Foo`, `super(args)` constructor delegation, `super.method()`, method override, inherited method lookup
-- [x] Static methods — `public static T method(...)` on classes, called as `ClassName.method(args)`
-- [x] Abstract classes — `abstract class Foo` cannot be instantiated; abstract methods have no body
-- [x] Sealed classes — `sealed class Foo` cannot be subclassed
-- [x] Getters / setters — `public get T prop()` / `public set prop(T val)` computed properties on class instances
-- [x] `break` / `continue` — loop control flow inside `while`, `for`, `for-in`, and `do-while`
-- [x] Labeled `break` / `continue` — `label: for ...` with `break label` / `continue label` for nested loop control
-- [x] `do-while` loop — body executes at least once; `break`/`continue` supported
-- [x] `switch` — `switch(expr) { case val: {} case a, b: {} default: {} }` — no fall-through
-- [x] Exceptions — `try {} catch (e) {} finally {}` and `throw expr`; any value can be thrown
-- [x] `const` — immutable variable declarations enforced at runtime
-- [x] `enum` — `enum Color { Red, Green, Blue }` with `Color.Red` variant access
-- [x] `Set` type — `new Set([...])`, methods: `add`, `has`, `delete`, `clear`, `size`, `toArray`, `union`, `intersection`
-- [x] Null coalescing — `a ?? b` returns `a` if non-null, else evaluates `b`
-- [x] Optional chaining — `a?.method()` / `a?.field` returns `null` without error when `a` is `null`; chains with `??`
-- [x] Ternary operator — `cond ? then : else` with lazy evaluation and right-associativity
-- [x] Escape sequences — `\n`, `\t`, `\r`, `\\`, `\"`, `\{` inside string literals
-- [x] Block comments — `/* ... */` multi-line comments
-- [x] Math namespace — `abs`, `sqrt`, `floor`, `ceil`, `round`, `trunc`, `min`, `max`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `clamp`, `sign`, `random`, `PI`, `E`
-- [x] File namespace — `read`, `write`, `create`, `exists`, `read_asBinary`, `write_asBinary`
-- [x] JSON namespace — `stringify`, `parse`, `pretty`
-- [x] Power operator — `**` for integer and decimal exponentiation
-- [x] Bitwise operators — `&`, `|`, `^`, `~`, `<<`, `>>` (64-bit signed integers); binary (`0b`) and hex (`0x`) literals; numeric separators (`1_000_000`)
-- [x] `is` type-check operator — `expr is TypeName` returns `bool` at runtime
-- [x] Default parameters — `fn int f(int x = 10)` with fallback when argument is omitted
-- [x] Security test suite — 17 error tests (`sec_*.sz`) + 6 unit test files (`unit_sec_*.sz`) covering arithmetic, null safety, type safety, error isolation, injection, and resource limits
-- [x] OS/hardware namespaces — `Terminal` (raw mode, keyboard, mouse, cursor), `OS` (platform, pid, exec, kill), `Env` (get, set, args), `Time` (now, sleep), `System` (cpuCount, totalMemory, freeMemory, hostname, uptime)
-- [x] Socket namespace — TCP client/server (`connect`, `send`, `recv`, `listen`, `accept`, `close`) + RFC 6455 WebSocket text frames (`sendWsFrame`, `recvWsFrame`)
-- [x] GPU namespace — CPU-backed compute buffers (`createBuffer`, `createBufferFromArray`, `map`, `reduce`, `dot`, `axpy`, `matmul`, `fill`, `readBuffer`, `freeBuffer`)
-- [x] File extended — `listDir`, `mkdir`, `stat`, `delete`, `rename`
-- [x] Permission system — three-level model: `serez.json` (project-wide) → `use permissions {}` (file-level) → `unsafe {}` (operation-level)
-- [x] `use permissions {}` keyword — grants namespace access at file scope
-
-### Type system
-- [x] Typed arrays — `[int]`, `[string]`, `[decimal]`, `[T?]` with element-level enforcement on `push`, `unshift`, index-assign, and construction
-- [x] Type inference for function call results — `let x = add(1, 2)` infers `x: int` in the static checker
-- [x] Optional / nullable types — `int?`, `string?`, `fn int? search()`, `null` literal, null equality (`== null`, `!= null`)
-
-### Tooling
-- [x] Security test runner — `-security` / `--security` flag on `run_tests.ps1` / `run_tests.sh` runs all security test files
-- [x] Cross-platform test runner — `run_tests.sh` (Bash) mirrors all flags of `run_tests.ps1` (PowerShell)
-- [x] Span-aware error diagnostics — parser and runtime errors show the source line with a `^` caret
-- [x] Watch mode — `sz --watch file.sz` re-runs on every save
-- [x] VS Code extension — syntax highlighting and formatter for `.sz` files (`vscode-serez/`)
-- [x] Demo apps — five `apps/*.sz` programs that exercise every language feature end-to-end
-- [x] `.sz` file formatter — `DocumentFormattingEditProvider` integrado en la extensión VS Code; `formatOnSave` activado automáticamente para `.sz`
-- [x] LSP server for editor support — `sz-lsp` binary (stdio JSON-RPC): live diagnostics (parser + type checker), completion (keywords, native namespaces + their methods, document symbols), hover, go-to-definition and document symbols; wired into the VS Code extension (`serez.lsp.enabled` / `serez.lsp.path`)
+Found a bug in the language while writing your program? Open an issue — a minimal `.sz` file that reproduces it is the most useful thing you can attach.
 
 ---
 
@@ -4098,6 +3749,6 @@ See [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-Built with ❤️ and Rust — no GC required.
+Built with ❤️ — no GC required.
 
 </div>

@@ -1,6 +1,11 @@
 # Serez-Code — Development Reference
 
-Documentación completa del proyecto: arquitectura, decisiones técnicas, tooling, CI/CD, y estado actual.
+**Para quien desarrolla el lenguaje en Rust**: arquitectura del intérprete,
+decisiones técnicas, suite de tests, tooling, CI/CD y estado del proyecto.
+
+Si lo que querés es *programar en* Serez-Code, el documento es el
+[README](README.md): instalación, referencia del lenguaje y semántica. Este
+archivo asume que vas a tocar `src/`.
 
 ---
 
@@ -18,8 +23,10 @@ Documentación completa del proyecto: arquitectura, decisiones técnicas, toolin
 10. [CI/CD — Release pipeline](#10-cicd--release-pipeline)
 11. [Seguridad del repositorio](#11-seguridad-del-repositorio)
 12. [Cómo construir y testear](#12-cómo-construir-y-testear)
-13. [Limitaciones conocidas del lenguaje](#13-limitaciones-conocidas-del-lenguaje)
-14. [Pendiente](#14-pendiente)
+13. [Convenciones para contribuir al core](#13-convenciones-para-contribuir-al-core)
+14. [Limitaciones conocidas del lenguaje](#14-limitaciones-conocidas-del-lenguaje)
+15. [Pendiente](#15-pendiente)
+16. [Apéndice — features implementadas (histórico)](#16-apéndice--features-implementadas-histórico)
 
 ---
 
@@ -27,13 +34,18 @@ Documentación completa del proyecto: arquitectura, decisiones técnicas, toolin
 
 | Métrica | Valor |
 |---|---|
-| Versión | 2.1.0 |
-| Tests pasando | 274 (0 fallando) |
-| Archivos Rust | 28 (`src/`) |
-| Tamaño del parser | ~100 KB |
-| Tamaño del evaluador (total submodulos) | ~320 KB |
-| Extensión VS Code | v0.2.0 |
-| Plataformas de release | Windows (MSI), Linux (shell), macOS (shell/PS) |
+| Versión | 9.11.0 (`Cargo.toml`) |
+| Archivos Rust | 55 (`src/`) |
+| Tamaño del parser | ~136 KB |
+| Tamaño del evaluador (total submódulos) | ~1.2 MB |
+| Archivos de test `.sz` | 402 (`tests/`) |
+| Extensión VS Code | v1.9.0 |
+| Binarios | `sz` (CLI) y `sz-lsp` (Language Server) |
+| Plataformas de release | Windows (MSI + .exe), Linux x64 (estático), macOS ARM64 e Intel |
+
+> El conteo de tests que pasan no se anota acá a propósito: queda desactualizado
+> en cuanto se agrega un test. Corré `.\run_tests.ps1` / `./run_tests.sh` para el
+> número real del momento.
 
 ---
 
@@ -53,7 +65,21 @@ serez-code/
 │   ├── repl.rs                 — Read-eval-print loop
 │   ├── package_manager.rs      — serez.json, install_package, install_all, packages_dir
 │   ├── test_run.rs             — Helper interno para tests
-│   └── evaluator/              — Intérprete tree-walking (18 submódulos)
+│   ├── lsp_main.rs             — Entry point del binario sz-lsp (stdio JSON-RPC)
+│   ├── lsp/                    — Language Server (6 módulos)
+│   │   ├── server.rs               — Loop LSP: initialize, didOpen/didChange, publishDiagnostics
+│   │   ├── analysis.rs             — Símbolos del documento, hover, go-to-definition
+│   │   ├── builtins.rs             — Catálogo de namespaces/métodos para completado
+│   │   ├── builtins_gen.rs         — GENERADO por tools/gen_lsp_builtins.py (no editar a mano)
+│   │   ├── rpc.rs                  — Framing JSON-RPC sobre stdio
+│   │   └── mod.rs
+│   ├── compiler/               — Backend nativo (work in progress)
+│   │   ├── types.rs                — Tipos de compile-time (SzType) → tipos LLVM
+│   │   ├── hir.rs / hir_lower.rs   — HIR: AST desugarizado + pase de lowering
+│   │   ├── mir.rs / mir_lower.rs   — MIR: three-address code con basic blocks
+│   │   ├── llvm_emit.rs            — MIR → texto LLVM IR
+│   │   └── mod.rs
+│   └── evaluator/              — Intérprete tree-walking (28 submódulos)
 │       ├── mod.rs
 │       ├── stmt.rs
 │       ├── expr.rs
@@ -86,6 +112,10 @@ serez-code/
 │
 ├── apps/                       — 5 apps demo (ejercitan todo el lenguaje)
 │
+├── tools/                      — Utilidades de desarrollo (Python)
+│   ├── gen_lsp_builtins.py     — Regenera src/lsp/builtins_gen.rs desde el evaluador
+│   └── lsp_smoke.py            — Smoke test: maneja una sesión LSP real por stdio
+│
 ├── vscode-serez/               — Extensión VS Code
 │   ├── extension.js            — DocumentFormattingEditProvider
 │   ├── package.json            — Manifest v0.2.0
@@ -101,10 +131,10 @@ serez-code/
 ├── run_tests.ps1               — Test runner (Windows/PowerShell)
 ├── run_tests.sh                — Test runner (Linux/macOS/Bash)
 ├── Cargo.toml                  — Metadata del proyecto Rust
-├── README.md                   — Documentación del lenguaje (referencia completa)
-├── CHANGELOG.md                — Historial técnico de cambios por fase
-├── DEVELOPMENT.md              — Este archivo
-└── bugs.md                     — Log de 63 bugs documentados (todos corregidos)
+├── README.md                   — Doc para QUIEN PROGRAMA EN serez-code (referencia del lenguaje)
+├── CHANGELOG.md                — Historial técnico de cambios por versión
+├── DEVELOPMENT.md              — Este archivo: doc para QUIEN DESARROLLA EL LENGUAJE
+└── bugs.md                     — Log de bugs documentados (todos corregidos)
 ```
 
 ---
@@ -139,7 +169,7 @@ TypeChecker (type_checker.rs)
     — Reporta a stderr; NO detiene la ejecución
     │
     ▼
-Evaluator (evaluator/ — 17 módulos)
+Evaluator (evaluator/ — 28 módulos)
     — Tree-walking interpreter
     — Flash Scope protocol en cada bloque { }
     — Scratch watermark para temporales de out en top-level
@@ -158,6 +188,21 @@ Evaluator (evaluator/ — 17 módulos)
 | `StoredClass` con 4 HashMaps | Vec<ClassMethod> lineal | Dispatch O(1): methods, static_methods, getters, setters |
 | Pratt TDOP parser | Recursive descent clásico | Precedencia de operadores fácil de extender |
 | Zero `unsafe` | — | Invariante de seguridad no negociable |
+
+### Lexer — scan byte-indexed
+
+El lexer trabaja directamente sobre la `String` fuente con offsets de bytes
+(`position`, `read_position`); NO copia la entrada a un `Vec<char>`. Los
+caracteres UTF-8 multibyte en identificadores funcionan igual porque `read_char`
+avanza `c.len_utf8()` bytes y el sliceo de strings usa `&str[start..end]`, que es
+indexado por rango de bytes.
+
+### Parser — Pratt TDOP
+
+Top-Down Operator Precedence, 8 niveles. Todo operador infijo debe registrarse en
+**dos lugares** de `parser.rs` (ver §14 para el procedimiento completo); hacerlo
+en uno solo produce comportamiento sutilmente incorrecto: el parser ignora el
+operador o descarta silenciosamente la expresión que lo rodea.
 
 ---
 
@@ -243,6 +288,19 @@ salidas tempranas. El extract/plant solo ocurre si algo escapa del bloque:
 5. plant(owned)                — re-alloca en el scope padre
 ```
 
+El caso canónico que justifica el invariante — el valor que escapa es un array
+cuyos elementos viven en el frame que se está por liberar:
+
+```serez
+fn make_pair(int a, int b) {
+    return [a, b];          // el array vive en el frame scoped de la función
+}
+
+let p = make_pair(10, 20);  // extract antes del pop, plant en la arena global
+out p[0];                   // → 10 — seguro, ahora vive en la global
+out p[1];                   // → 20
+```
+
 Los pasos 3 y 5 se SALTEAN cuando no escapa nada:
 
 | Caso | Qué se promueve |
@@ -301,6 +359,16 @@ interno bifurcaba el objeto). Consecuencias:
    local no usada por creación de lambda (letal en lambdas por frame o por
    iteración).
 
+```serez
+fn counter() {
+    let n = 0;              // promovida a celda global cuando la lambda la captura
+    return () => { n = n + 1; return n; };
+}
+let next = counter();
+out next();   // → 1
+out next();   // → 2 — la celda sobrevivió al return
+```
+
 ### Optimizaciones de arena
 
 | Colección | Capacidad inicial |
@@ -319,7 +387,7 @@ interfaces/clases/enums son `HashMap::new()` y crecen bajo demanda.
 
 ## 6. Evaluador — submódulos
 
-El evaluador original era un solo archivo de 5300+ líneas. Fue dividido en 17 módulos cohesivos:
+El evaluador original era un solo archivo de 5300+ líneas. Hoy son 28 módulos cohesivos; los principales:
 
 | Módulo | Responsabilidad principal |
 |---|---|
@@ -348,6 +416,27 @@ El evaluador original era un solo archivo de 5300+ líneas. Fue dividido en 17 m
 | `print_call_stack()` | Loop de 3 líneas para imprimir la cadena de calls — en cada sitio de error |
 
 Vive en `evaluator/mod.rs`, junto al protocolo de scope.
+
+### Internals de rendimiento
+
+Optimizaciones que evitan clones y allocs redundantes en los caminos calientes.
+
+**`Rc<BlockStatement>` — clonar una función es O(1).** Todo valor función guarda
+su cuerpo AST como `Rc<BlockStatement>` en vez de un `BlockStatement` propio.
+Leer una función de la arena, pasarla como callback o devolverla desde
+`find_method` incrementa un refcount en lugar de deep-clonar el cuerpo. Aplica
+tanto a `OwnedValue::Function` como a `ObjectData::Function` (`region.rs`).
+
+**`StoredClass` — dispatch de métodos O(1).** Los métodos de clase se guardan en
+`StoredClass` con cuatro `HashMap` separados: `methods`, `static_methods`,
+`getters` y `setters`; cada lookup es O(1) por nombre. Los `StoredMethod` llevan
+`body: Rc<BlockStatement>`, así que cada clone es O(1) sin importar el tamaño del
+método. Antes, cada llamada clonaba el `ast::ClassMethod` completo con su cuerpo.
+
+**Dedup en `all_bindings()`.** `ScopeStack::all_bindings()` recorre los frames de
+adentro hacia afuera y saltea los nombres ya vistos. Cuando un closure captura su
+entorno, las variables externas sombreadas no se extraen ni se re-alocan: cada
+nombre aparece a lo sumo una vez en el entorno capturado.
 
 ---
 
@@ -543,11 +632,32 @@ cargo build --release # release (usado por cargo-dist)
 ```powershell
 # Rust unit tests (lexer interno, etc.)
 cargo test
-
-# Suite completa del lenguaje
-.\run_tests.ps1       # Windows
-./run_tests.sh        # Linux/macOS
 ```
+
+Suite completa del lenguaje — Windows (PowerShell):
+
+```powershell
+.\run_tests.ps1                    # suite completa (E2E + unit + error + security)
+.\run_tests.ps1 -unit              # solo unit tests (basados en framework.sz)
+.\run_tests.ps1 -e2e               # E2E con golden files + tests de error
+.\run_tests.ps1 -security          # solo tests de seguridad/error
+.\run_tests.ps1 -filter "switch"   # tests cuyo nombre matchea un patrón
+.\run_tests.ps1 -generate          # regenera los .expected tras cambiar el lenguaje
+```
+
+Linux / macOS (Bash) — mismos flags con doble guion:
+
+```bash
+./run_tests.sh                     # suite completa
+./run_tests.sh --unit
+./run_tests.sh --e2e
+./run_tests.sh --security
+./run_tests.sh --filter "switch"
+./run_tests.sh --generate
+```
+
+⚠️ `-generate` / `--generate` sobrescribe los golden files: correlo solo cuando el
+cambio de salida es intencional, y revisá el diff antes de commitear.
 
 ### Release local
 
@@ -563,7 +673,60 @@ antigravity-ide.cmd --install-extension serez-code-0.2.0.vsix
 
 ---
 
-## 13. Limitaciones conocidas del lenguaje
+## 13. Convenciones para contribuir al core
+
+### Invariantes del proyecto
+
+- **Cero `unsafe` en el core del intérprete** — el modelo de memoria por arenas
+  está construido a propósito sin bloques unsafe. Toda feature nueva mantiene esa
+  invariante. (`namespaces_os.rs` usa `unsafe` solo para llamadas FFI de
+  plataforma, tipo `GlobalMemoryStatusEx`.)
+- **Dependencias de runtime mínimas** — agregar un crate nuevo exige una razón
+  fuerte.
+- **Los errores van a `stderr`** — `eprintln!` para todo error; `println!` solo
+  para salida del programa (`out`) y el REPL.
+- **Invariante de Flash Scope** — todo constructo nuevo a nivel bloque debe
+  llamar `scopes.push()` antes de evaluar su cuerpo y `scopes.pop()` después, en
+  **todos** los code paths incluidos los de error. Olvidar un pop en un camino de
+  error deja el call stack sucio en el REPL.
+- **Toda sintaxis nueva atraviesa el pipeline completo** — `token.rs` →
+  `lexer.rs` → `ast.rs` → `parser.rs` → `evaluator/`. Nunca agregar al evaluador
+  sin el nodo de AST correspondiente.
+
+### Agregar un operador infijo
+
+Requiere registrarlo en **dos** lugares de `parser.rs`, o el parser falla en
+silencio:
+
+```rust
+// 1. token_precedence() — le da su binding power al operador
+TokenType::MyOp => Precedence::Sum,
+
+// 2. match is_infix — habilita a parse_expression a entrar al loop infijo
+TokenType::MyOp => true,
+```
+
+Después, la evaluación va en `eval_infix()` (`evaluator/ops.rs`).
+
+### Agregar un statement
+
+1. Agregar la variante en `TokenType` (`token.rs`). Si es keyword, cablearla en `lookup_ident()`.
+2. Agregar el/los nodo(s) de AST en `ast.rs`.
+3. Agregar el handler de parseo en `parser.rs`, dentro de `parse_statement()`.
+4. Agregar el handler de evaluación en `evaluator/stmt.rs`, dentro de `eval_statement()`.
+5. Agregar un `.sz` de test que demuestre la feature.
+
+### Pull requests
+
+- Un cambio lógico por commit.
+- Describir **por qué** se hizo el cambio, no solo qué cambió.
+- Los PRs que agregan features del lenguaje incluyen al menos un `.sz` de ejemplo.
+
+Las convenciones de issues y PRs están en [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## 14. Limitaciones conocidas del lenguaje
 
 Comportamientos correctos pero que pueden sorprender:
 
@@ -652,7 +815,7 @@ class Counter {
 
 ---
 
-## 14. Pendiente
+## 15. Pendiente
 
 ### Features del lenguaje
 - [ ] LSP server — diagnósticos en tiempo real en el editor (errores subrayados sin ejecutar)
@@ -668,3 +831,76 @@ class Counter {
 
 ### Seguridad del CI
 - [ ] Pinear GitHub Actions a commit SHAs exactos (Dependabot lo hará automáticamente en el primer run semanal)
+
+---
+
+## 16. Apéndice — features implementadas (histórico)
+
+Lista que vivía en el README bajo "Roadmap". Está enteramente en `[x]`: no es un
+plan, es el registro de lo que ya existe, y se conserva acá porque es material de
+contribuidor, no de usuario. El registro canónico y fechado de cambios es
+[CHANGELOG.md](CHANGELOG.md) — ante cualquier discrepancia, manda el CHANGELOG.
+
+
+### Language features
+- [x] `&&` and `||` — logical AND and OR operators with short-circuit evaluation
+- [x] `for` loop — `for (let i = 0; i < n; i++)`, nested loops, 1D/2D array traversal; update accepts `i++`, `i--`, `i += n`
+- [x] Array mutation via index — `arr[i] = expr`, works in loops and from inside functions
+- [x] String interpolation — `"Hello, {name}!"`, supports nested quotes inside `{…}` (e.g. `{dict["key"]}`)
+- [x] Lexical closures — functions that capture variables from their defining scope
+- [x] Native higher-order functions — `map`, `filter`, `reduce` with lambda syntax `x => expr` / `(x, i) => expr`
+- [x] Array methods — `.push`, `.pop`, `.shift`, `.unshift`, `.remove`, `.reverse`, `.sort`, `.find`, `.findIndex`, `.indexOf`, `.includes`, `.every`, `.some`, `.slice`, `.flat`, `.join`
+- [x] String methods — `.length`, `.substring`, `.slice`, `.split`, `.replace`, `.includes`, `.indexOf`, `.startsWith`, `.endsWith`, `.charAt`, `.trim`, `.trimStart` / `.trimLeft`, `.trimEnd` / `.trimRight`, `.toUpperCase`, `.toLowerCase`, `.padStart`, `.padEnd`, `.toString()`
+- [x] Dict methods — `.toList()` (keys array), `.toArray()` (2D entries array); missing key returns `null`
+- [x] `decimal` type — f64 literals (`3.14`), mixed arithmetic with `int`
+- [x] Global conversions — `parseInt(val)`, `parseDecimal(val)`
+- [x] Console input — `readLine(prompt?)`
+- [x] Interfaces — typed record schemas: `interface Point { x: decimal, y: decimal }`, `new Point({ x:1.0, y:2.0 })`, field read/write, object patch `p = { x: 5.0 }`
+- [x] Classes — C#-style OOP: `public class Foo`, constructor `public Foo(args)`, `this.field`, `public`/`private` methods, field assignment `obj.field = val`
+- [x] Single inheritance — `public class Bar : Foo`, `super(args)` constructor delegation, `super.method()`, method override, inherited method lookup
+- [x] Static methods — `public static T method(...)` on classes, called as `ClassName.method(args)`
+- [x] Abstract classes — `abstract class Foo` cannot be instantiated; abstract methods have no body
+- [x] Sealed classes — `sealed class Foo` cannot be subclassed
+- [x] Getters / setters — `public get T prop()` / `public set prop(T val)` computed properties on class instances
+- [x] `break` / `continue` — loop control flow inside `while`, `for`, `for-in`, and `do-while`
+- [x] Labeled `break` / `continue` — `label: for ...` with `break label` / `continue label` for nested loop control
+- [x] `do-while` loop — body executes at least once; `break`/`continue` supported
+- [x] `switch` — `switch(expr) { case val: {} case a, b: {} default: {} }` — no fall-through
+- [x] Exceptions — `try {} catch (e) {} finally {}` and `throw expr`; any value can be thrown
+- [x] `const` — immutable variable declarations enforced at runtime
+- [x] `enum` — `enum Color { Red, Green, Blue }` with `Color.Red` variant access
+- [x] `Set` type — `new Set([...])`, methods: `add`, `has`, `delete`, `clear`, `size`, `toArray`, `union`, `intersection`
+- [x] Null coalescing — `a ?? b` returns `a` if non-null, else evaluates `b`
+- [x] Optional chaining — `a?.method()` / `a?.field` returns `null` without error when `a` is `null`; chains with `??`
+- [x] Ternary operator — `cond ? then : else` with lazy evaluation and right-associativity
+- [x] Escape sequences — `\n`, `\t`, `\r`, `\\`, `\"`, `\{` inside string literals
+- [x] Block comments — `/* ... */` multi-line comments
+- [x] Math namespace — `abs`, `sqrt`, `floor`, `ceil`, `round`, `trunc`, `min`, `max`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `clamp`, `sign`, `random`, `PI`, `E`
+- [x] File namespace — `read`, `write`, `create`, `exists`, `read_asBinary`, `write_asBinary`
+- [x] JSON namespace — `stringify`, `parse`, `pretty`
+- [x] Power operator — `**` for integer and decimal exponentiation
+- [x] Bitwise operators — `&`, `|`, `^`, `~`, `<<`, `>>` (64-bit signed integers); binary (`0b`) and hex (`0x`) literals; numeric separators (`1_000_000`)
+- [x] `is` type-check operator — `expr is TypeName` returns `bool` at runtime
+- [x] Default parameters — `fn int f(int x = 10)` with fallback when argument is omitted
+- [x] Security test suite — 17 error tests (`sec_*.sz`) + 6 unit test files (`unit_sec_*.sz`) covering arithmetic, null safety, type safety, error isolation, injection, and resource limits
+- [x] OS/hardware namespaces — `Terminal` (raw mode, keyboard, mouse, cursor), `OS` (platform, pid, exec, kill), `Env` (get, set, args), `Time` (now, sleep), `System` (cpuCount, totalMemory, freeMemory, hostname, uptime)
+- [x] Socket namespace — TCP client/server (`connect`, `send`, `recv`, `listen`, `accept`, `close`) + RFC 6455 WebSocket text frames (`sendWsFrame`, `recvWsFrame`)
+- [x] GPU namespace — CPU-backed compute buffers (`createBuffer`, `createBufferFromArray`, `map`, `reduce`, `dot`, `axpy`, `matmul`, `fill`, `readBuffer`, `freeBuffer`)
+- [x] File extended — `listDir`, `mkdir`, `stat`, `delete`, `rename`
+- [x] Permission system — three-level model: `serez.json` (project-wide) → `use permissions {}` (file-level) → `unsafe {}` (operation-level)
+- [x] `use permissions {}` keyword — grants namespace access at file scope
+
+### Type system
+- [x] Typed arrays — `[int]`, `[string]`, `[decimal]`, `[T?]` with element-level enforcement on `push`, `unshift`, index-assign, and construction
+- [x] Type inference for function call results — `let x = add(1, 2)` infers `x: int` in the static checker
+- [x] Optional / nullable types — `int?`, `string?`, `fn int? search()`, `null` literal, null equality (`== null`, `!= null`)
+
+### Tooling
+- [x] Security test runner — `-security` / `--security` flag on `run_tests.ps1` / `run_tests.sh` runs all security test files
+- [x] Cross-platform test runner — `run_tests.sh` (Bash) mirrors all flags of `run_tests.ps1` (PowerShell)
+- [x] Span-aware error diagnostics — parser and runtime errors show the source line with a `^` caret
+- [x] Watch mode — `sz --watch file.sz` re-runs on every save
+- [x] VS Code extension — syntax highlighting and formatter for `.sz` files (`vscode-serez/`)
+- [x] Demo apps — five `apps/*.sz` programs that exercise every language feature end-to-end
+- [x] `.sz` file formatter — `DocumentFormattingEditProvider` integrado en la extensión VS Code; `formatOnSave` activado automáticamente para `.sz`
+- [x] LSP server for editor support — `sz-lsp` binary (stdio JSON-RPC): live diagnostics (parser + type checker), completion (keywords, native namespaces + their methods, document symbols), hover, go-to-definition and document symbols; wired into the VS Code extension (`serez.lsp.enabled` / `serez.lsp.path`)
