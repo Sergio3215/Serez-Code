@@ -176,6 +176,14 @@ Order: most recent to oldest.
 
 ## [9.3.8] — 2026-07-20
 
+> Primera versión publicada después de 9.2.7: el tag local `v9.2.8` (bump
+> revertido) no tiene release, así que sus cambios se listan acá.
+
+### Extensión de editor: formateo de `.szx` y `.szs` (vscode-serez 1.9.0)
+
+- El formatter cubre los tres lenguajes: además de `.sz`, ahora `.szx` (llaves y
+  profundidad del JSX) y `.szs` (bloques y comentarios `/* */`).
+
 ### GUI: paridad del motor nativo con el renderer interpretado
 
 - `:font` reconocido en `loadStylesheet`, condición booleana "a pelo" (sin
@@ -203,15 +211,6 @@ Order: most recent to oldest.
 - **`sz logout` nuevo**: borra la credencial guardada; el próximo `sz publish`
   vuelve a pedir usuario/contraseña (sirve para cambiar de cuenta). Sin sesión
   activa avisa y sale con éxito.
-
-## [9.2.8] — 2026-07-15
-
-### Extensión de editor: formateo de `.szx` y `.szs` (vscode-serez 1.9.0)
-
-- El formatter cubre los tres lenguajes: además de `.sz`, ahora `.szx` (llaves y
-  profundidad del JSX) y `.szs` (bloques y comentarios `/* */`).
-
----
 
 ## [9.2.7] — 2026-07-14
 
