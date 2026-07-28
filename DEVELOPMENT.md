@@ -195,17 +195,24 @@ El REPL reutiliza el mismo pipeline por línea. Mantiene un `Evaluator` persiste
 
 ### Dos arenas
 
+Ambas son un `Vec<ObjectData>` plano (`region.rs`).
+
 ```
 Global Arena
-  — Variables top-level, funciones, clases
-  — Persiste toda la vida del programa
-  — Scratch watermark: temporales de `out` liberados después de cada statement
+  — Sembrada al arrancar: singletons null/true/false + cache de ints 0..=256
+  — Variables top-level, funciones, clases y CELDAS de closure
+  — Persiste toda la vida del programa: solo se achica con el scratch
+    watermark de `out` (único caso en todo el runtime)
 
 Scoped Arena
   — Variables locales, argumentos, temporales de bloque
   — Stack de watermarks: una entrada por scope activo
-  — Cleanup: Vec::truncate(watermark) — O(k) drops, sin GC
+  — Cleanup: arena.truncate(watermark) — sin GC
 ```
+
+`alloc()` elige arena por PROFUNDIDAD, no por valor: si hay al menos un frame
+activo alloca en la Scoped; si no, en la Global. El mismo literal cae en una u
+otra según dónde aparezca.
 
 ### ObjectRef
 
@@ -217,11 +224,16 @@ ObjectRef { region: RegionId, index: usize }
 
 - `region`: Global o Scoped — determina qué arena leer
 - `index`: posición dentro del Vec de la arena
-- No puede dangling: al truncar la arena el índice queda inaccesible, no apunta a memoria inválida
+- Nunca es *memory-unsafe*: es un índice a un `Vec` seguro, el peor caso es
+  fuera de rango → `None` (`Referencia inválida`), nunca memoria liberada
+- **Pero el índice NO queda inaccesible al truncar**: los slots se reutilizan y
+  un ref viejo resolvería a OTRO objeto vivo. La garantía real la da el
+  protocolo de abajo (ninguna ref sobrevive a su scope), no el índice
 
 ### Protocolo de scope (invariante "promote before pop")
 
-Todo bloque `{ }` sigue esta secuencia en TODOS los code paths incluyendo errores:
+`push`/`pop` están apareados en TODOS los code paths, incluidos errores y
+salidas tempranas. El extract/plant solo ocurre si algo escapa del bloque:
 
 ```
 1. scopes.push()               — graba watermark
@@ -231,15 +243,77 @@ Todo bloque `{ }` sigue esta secuencia en TODOS los code paths incluyendo errore
 5. plant(owned)                — re-alloca en el scope padre
 ```
 
+Los pasos 3 y 5 se SALTEAN cuando no escapa nada:
+
+| Caso | Qué se promueve |
+|---|---|
+| `if`/`else`, `switch`, `try`/`catch`/`finally`, bloque suelto, `unsafe` (`eval_block`) — y brazos de `match` (push/extract/pop/plant inline) | el valor del bloque, `return` y `throw` |
+| Cuerpo de función/método | solo el `return` (o el payload del `throw`) |
+| Cuerpo de loop — `while`, `do-while`, `for`, `for-in` (`eval_block_discard`) | solo `return`/`throw`; **el valor del bloque se descarta a propósito** |
+| `break`, `continue`, labels, `Error` | nada: no hay payload |
+
+El descarte en cuerpos de loop no es un detalle: sin él, un cuerpo cuyo último
+statement produce un compuesto (`arr = arr.map(...)`) plantaba una COPIA COMPLETA
+por iteración en el frame de arriba, liberada recién al salir del loop —
+400 MB medidos en 300 iteraciones sobre un array de 20k.
+
+### Por qué los valores se copian
+
+`extract` es un **deep clone** del árbol completo (arrays anidados, entradas de
+dict, campos de instancia). De ahí sale la semántica por valor del lenguaje:
+pasar un argumento, retornar un compuesto o leer una variable copia los datos,
+así que dos scopes nunca aliasan el mismo slot.
+
+El costo: los compuestos van EMBEBIDOS — un array ocupa UN slot con un
+`Vec<OwnedValue>` adentro, no un slot por elemento. Extract/plant es
+O(tamaño total) ⇒ retornar un array de 100k copia 100k elementos y `a[i] = x`
+sobre un array grande es O(n). Para números pesados, `Tensor` (un `Vec<f64>`
+plano en un solo slot).
+
+### Costo real del cleanup
+
+`arena.truncate(watermark)` dropea los slots por encima de la marca: es
+proporcional a los slots liberados (`len - watermark`) MÁS el costo de dropear
+lo que cada slot contiene — un slot con un array de 1M es un drop de 1M, no un
+destructor suelto. Lo que gana el modelo no es un drop más barato por objeto,
+sino de dónde sale la cota: está acotado por los datos del propio scope y se
+paga en un punto exacto del código, en vez de recorrer todo el heap vivo cuando
+lo decide un GC.
+
+### Excepción: variables capturadas por closures
+
+Un closure puede correr mucho después de que muera el bloque que declaró sus
+variables. Por eso, al crear una función o lambda, cada local capturada se
+**promueve**: `extract` de la scoped → `plant_global` → `rebind_ref` reapunta
+TODOS los bindings que miraban al slot viejo (la variable original y `this` en
+cada frame de una cadena de métodos anidados; reapuntar solo el frame más
+interno bifurcaba el objeto). Consecuencias:
+
+1. **La variable capturada sobrevive al bloque** — vive en la arena global, que
+   el protocolo de scope nunca trunca.
+2. **Deja de copiarse**: closure y scope exterior comparten UNA celda, así que
+   una mutación adentro se ve afuera y viceversa. Es lo contrario de la
+   semántica por valor, es deliberado (semántica de celda) y es el único lugar
+   del lenguaje donde dos nombres comparten storage.
+3. **Cuesta memoria permanente**: los slots globales no se reclaman nunca. Por
+   eso `capture_lambda_env` captura solo los nombres que el cuerpo menciona de
+   verdad — capturar todas las locales visibles filtraba un slot permanente por
+   local no usada por creación de lambda (letal en lambdas por frame o por
+   iteración).
+
 ### Optimizaciones de arena
 
 | Colección | Capacidad inicial |
 |---|---|
-| Global arena | 256 objetos |
-| Scoped arena | 64 objetos |
+| Ambas arenas (`Arena::new()`) | 64 objetos |
 | Frame de scope | 4 entradas |
-| `global_bindings` | 32 entradas |
-| Registry de interfaces/clases | 8 entradas c/u |
+
+`Arena::new()` es la misma para la global y la scoped: las dos arrancan en 64.
+La global además se siembra con ~260 objetos (null/true/false + ints 0..=256),
+o sea que crece más allá de su capacidad inicial antes del primer statement; a
+cambio, los enteros chicos y los booleanos se entregan como refs existentes en
+vez de alocarse en cada uso. `global_bindings` y los registries de
+interfaces/clases/enums son `HashMap::new()` y crecen bajo demanda.
 
 ---
 
@@ -271,9 +345,9 @@ El evaluador original era un solo archivo de 5300+ líneas. Fue dividido en 17 m
 
 | Helper | Reemplaza |
 |---|---|
-| `leave_call()` | `scopes.pop(); call_depth -= 1; call_stack.pop()` — 11 sitios |
-| `print_call_stack()` | Loop de 3 líneas para imprimir la cadena de calls — 6 sitios |
-| `plant_for_target(value, ref)` | Selección region-aware de arena para dict IndexAssign — 3 sitios |
+| `print_call_stack()` | Loop de 3 líneas para imprimir la cadena de calls — en cada sitio de error |
+
+Vive en `evaluator/mod.rs`, junto al protocolo de scope.
 
 ---
 

@@ -86,13 +86,13 @@ Most interpreted languages manage object lifetimes with a garbage collector or R
 | Trait | Traditional interpreters | Serez-Code |
 |---|---|---|
 | Memory management | GC pauses / reference counting | Bump allocator + watermark truncation |
-| Scope cleanup | Non-deterministic (GC) or O(n) | Deterministic, `O(k)` drops per scope exit |
+| Scope cleanup | Non-deterministic (GC) or O(n) over the live heap | Deterministic — bounded by the exiting scope's own data |
 | Object references | `Box` / `Rc` / raw pointers | `ObjectRef` — a safe `(RegionId, usize)` index pair |
 | Type safety | Fully dynamic or fully static | Optional annotations, enforced at every call site |
 | Integer safety | Silent overflow or panic | `checked_*` arithmetic — overflow is a runtime error |
 | `unsafe` code | Often required for performance | **Zero `unsafe` blocks** |
 
-Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, all block-local memory is freed via a single `Vec::truncate()` call — no reference counting, no GC pause.
+Every `{ ... }` block is a **Flash Scope**. When the interpreter exits it, block-local memory is freed by truncating the scoped arena back to the block's entry watermark — no reference counting, no GC pause. The one exception is a variable captured by a closure: it is promoted to a global-arena cell first, so it can outlive the block. See [Flash Scopes — Memory Model](#flash-scopes--memory-model).
 
 ---
 
@@ -3491,18 +3491,19 @@ Flash Scopes are the core of Serez-Code's runtime. They replace garbage collecti
 
 ### Two memory regions
 
-The runtime maintains two separate arenas:
+The runtime maintains two separate arenas, each one a plain `Vec<ObjectData>`:
 
 ```
 ┌──────────────────────────────────────────────────┐
 │                  Global Arena                    │
-│  [null | x=42 | greet=Fn | result=Array | ...]  │
+│  [null | true | false | ints 0..=256 | x=42 |…]  │
 │                                                  │
-│  Top-level variables and function declarations   │
-│  persist for the entire program lifetime.        │
-│  Temporary allocations from 'out' and bare       │
-│  expression statements are reclaimed immediately │
-│  via a scratch watermark after each statement.   │
+│  Seeded at startup with the null/bool singletons │
+│  and the small-integer cache. Then holds         │
+│  top-level variables, function declarations and  │
+│  closure cells for the whole program lifetime.   │
+│  It shrinks in exactly one case: the scratch     │
+│  watermark for top-level 'out' (see below).      │
 └──────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────┐
@@ -3517,6 +3518,8 @@ The runtime maintains two separate arenas:
 └──────────────────────────────────────────────────┘
 ```
 
+Which arena receives a value is decided by nesting depth, not by the value itself: `alloc()` writes to the **scoped** arena whenever at least one block frame is active, and to the **global** arena otherwise. The same literal therefore lands in a different region depending on where it appears.
+
 ### ObjectRef — the safe pointer
 
 No raw pointers are used anywhere. Every value reference is an `ObjectRef`:
@@ -3528,21 +3531,21 @@ ObjectRef { region: RegionId, index: usize }
                 └──── Global or Scoped — determines which arena to read
 ```
 
-An `ObjectRef` cannot dangle: if the arena is reset, the index becomes unreachable, not invalid memory. The interpreter never hands out refs that cross the reset boundary.
+An `ObjectRef` can never be *memory*-unsafe: it is an integer index into a safe `Vec`, so the worst possible read is out of range and returns `None` — surfacing as the interpreter's `❌ Referencia inválida` fallback — instead of touching freed memory. What an index does **not** give you is stability across a reset — truncating an arena makes those slots available again, and later allocations reuse the very same indices. A reference kept across a scope exit would resolve to a *different, live object*. Safety comes from the protocol below, which never lets a reference outlive its scope; not from indices somehow becoming unreachable.
 
 ### How scope entry and exit work
 
-Every `{ ... }` block — function body, `if` branch, `while` body, or standalone block — follows this protocol:
+Every `{ ... }` block records a watermark on entry and truncates back to it on exit. On top of that, a block that produces a value for its caller — an `if`/`else` branch, a `match` arm, a `switch` case, `try`/`catch`/`finally`, an `unsafe` block, or a standalone block — follows the full protocol:
 
 ```
 1. Record watermark = arena.len()
 2. Execute statements (new allocs append to arena)
-3. Extract the return value as an arena-independent OwnedValue (deep clone)
+3. Extract the resulting value as an arena-independent OwnedValue (deep clone)
 4. arena.truncate(watermark) — all block-local data is freed
 5. Re-allocate the extracted value in the parent scope (plant)
 ```
 
-Step 3–5 is the **"promote before pop" invariant**. It ensures the returned value is never a dangling reference even when it is an array whose elements live inside the now-freed scope.
+Steps 3–5 are the **"promote before pop" invariant**. They ensure the value leaving the block is never a dangling reference, even when it is an array whose elements live inside the now-freed scope.
 
 ```serez
 fn make_pair(int a, int b) {
@@ -3554,15 +3557,45 @@ out p[0];                  // → 10 — safe, lives in global arena now
 out p[1];                  // → 20
 ```
 
-### Why scope cleanup is O(k), not O(n)
+Steps 3 and 5 are skipped whenever nothing escapes the block:
 
-`Vec::truncate(k)` runs the Rust `Drop` implementation for each removed element — that is `O(k)` where `k` is the number of objects in the scope that was exited. A garbage collector would traverse the entire live heap to identify unreachable objects — `O(n)` over the full heap.
+- **`break`, `continue` and errors** carry no payload, so the block is simply popped.
+- **Function and method bodies** promote only the `return` value (or the `throw` payload). The values of the other statements are discarded on the spot.
+- **Loop bodies** — `while`, `do-while`, `for` and `for-in` — are evaluated in *statement* position and no caller ever reads their value, so the interpreter deliberately drops it (`eval_block_discard`); only `return` and `throw` are promoted. Without this, a body whose last statement yields a composite (`arr = arr.map(...)`) planted a **full copy per iteration** into the enclosing frame, freed only when the loop ended — measured at 400 MB over 300 iterations on a 20k-element array.
 
-For a function with 5 local variables, scope cleanup costs exactly 5 destructor calls, regardless of how large the rest of the program's memory is.
+### Why values are copied
+
+`extract` is a **deep clone**: it materializes the whole object tree — nested arrays, dict entries, instance fields — into an arena-independent `OwnedValue`. That is where Serez-Code's value semantics come from. Passing an argument, returning a composite or reading a variable copies the data instead of sharing it, so no two scopes can ever alias the same arena slot, and no scope exit can pull the ground from under a value someone else still holds.
+
+The trade-off is cost. Composites are stored *embedded*: an array occupies **one** arena slot holding a `Vec<OwnedValue>`, not one slot per element. Extracting and planting it is therefore O(total size) — returning a 100k-element array out of a function copies 100k elements, and `a[i] = x` on a large array is O(n), not O(1). For heavy numeric work use a `Tensor`, which is a flat `Vec<f64>` in a single slot.
+
+### What scope cleanup actually costs
+
+Exiting a scope is `arena.truncate(watermark)`: every slot above the watermark is dropped, in order, and the arena's length returns to the mark. The cost is proportional to the number of **slots freed** (`len - watermark`) plus the cost of dropping what each slot holds — a slot containing a one-million-element array is a one-million-element drop, not a single destructor call.
+
+What the model buys is not a cheaper per-object drop; it is *where* the bound comes from. Cleanup is bounded by the exiting scope's own data and happens at an exact, predictable point in the source. A tracing GC instead walks the entire live heap — `O(n)` over memory the block never touched — at a moment nobody chose.
+
+### The exception: variables captured by closures
+
+A closure body can run long after the block that declared its variables is gone, which the protocol above cannot support on its own. So when a function or lambda value is created, each captured local is **promoted**: extracted from the scoped arena, planted in the global arena, and every binding that pointed at the old scoped slot is re-pointed to the new cell. Three consequences are worth knowing:
+
+1. **A captured variable outlives its block.** It now lives in the global arena, which the scope protocol never truncates.
+2. **A captured variable stops being copied.** The closure and the enclosing scope share one cell, so a mutation inside the closure is visible outside and vice versa — the opposite of the value semantics described above. This is deliberate (cell semantics) and it is the only place in the language where two names share storage.
+3. **It costs permanent memory.** Global-arena slots are never reclaimed, so every capture holds a slot until the program ends. That is why a lambda captures only the names its body actually mentions: capturing every visible local leaked one permanent slot per unused local per lambda creation, which is ruinous for a lambda built per frame or per iteration.
+
+```serez
+fn counter() {
+    let n = 0;                    // promoted to a global cell when the lambda below captures it
+    return () => { n = n + 1; return n; };
+}
+let next = counter();
+out next();   // → 1
+out next();   // → 2 — the cell survived the return
+```
 
 ### Scratch watermark for top-level temporaries
 
-At the top level, `out` statements create temporary values (e.g., the result of `fibonacci(10)` used only for printing). These are freed immediately after the statement via a scratch watermark on the global arena — they do not accumulate for the lifetime of the script.
+At the top level, `out` statements create temporary values (e.g., the result of `fibonacci(10)` used only for printing). These are freed immediately after the statement via a scratch watermark on the global arena — they do not accumulate for the lifetime of the script. This is the only case in which the global arena ever shrinks.
 
 ```serez
 out fibonacci(10);   // temporary result allocated, printed, freed
@@ -3757,15 +3790,17 @@ Registering in only one place produces subtly wrong behavior: the parser either 
 The core memory invariant enforced by the evaluator:
 
 ```rust
-// Every block follows this sequence in ALL code paths, including errors:
+// push/pop are paired on EVERY code path, including errors and early exits:
 scopes.push();
 // ... evaluate block statements ...
-let owned = extract(result_ref);   // deep clone before pop
+let owned = extract(result_ref);   // deep clone before pop — only if a value escapes
 scopes.pop();                      // free all block-local memory
 let promoted = plant(owned);       // re-allocate in parent scope
 ```
 
 `extract` materializes the full object tree (including nested arrays) into an arena-independent `OwnedValue`. `plant` re-allocates it wherever `alloc()` currently points — the parent scope or global arena.
+
+The extract/plant pair is skipped when nothing escapes the block: on `break`, `continue`, labeled jumps and `Error` there is no payload to rescue, and `eval_block_discard` (loop bodies) drops the block's value on purpose, promoting only `Return` and `Throw`. See [Flash Scopes — Memory Model](#flash-scopes--memory-model) for why.
 
 ### Performance internals
 
@@ -3779,17 +3814,16 @@ Every function value stores its AST body as `Rc<BlockStatement>` rather than an 
 
 Class methods are stored in `StoredClass` using four separate `HashMap`s: `methods`, `static_methods`, `getters`, and `setters`. Each lookup is O(1) by name. Method values (`StoredMethod`) hold a `body: Rc<BlockStatement>`, so each clone is O(1) regardless of how large the method body is. Previously, every method call cloned the entire `ast::ClassMethod` including its body.
 
-#### Arena and HashMap pre-sizing
-
-Pre-sized collections avoid repeated growth reallocations during typical program execution:
+#### Arena pre-sizing and the global seed
 
 | Allocation | Initial capacity |
 |---|---|
-| Global arena | 256 objects |
-| Scoped arena (`Arena::new()`) | 64 objects |
+| Both arenas (`Arena::new()`) | 64 objects |
 | Scope frame bindings | 4 entries |
-| `global_bindings` | 32 entries |
-| Interface / class registries | 8 entries each |
+
+`Arena::new()` is shared by the global and the scoped arena, so both start at 64 slots. The global arena is then seeded at startup with the `null`, `true` and `false` singletons plus the integer cache `0..=256` — about 260 slots — so it grows past its initial capacity before the first statement runs. That seed is what makes small-integer and boolean values free: they are handed out as existing refs instead of being allocated per use.
+
+The remaining evaluator tables (`global_bindings`, the interface / class / enum registries) are plain `HashMap::new()` and grow on demand.
 
 #### `all_bindings()` deduplication
 
@@ -3797,13 +3831,11 @@ Pre-sized collections avoid repeated growth reallocations during typical program
 
 #### Structural helpers
 
-Three helpers in `evaluator.rs` centralize patterns that previously appeared 6–11 times each:
-
 | Helper | Replaces |
 |---|---|
-| `leave_call()` | `scopes.pop(); call_depth -= 1; call_stack.pop()` — 11 call-exit sites |
-| `print_call_stack()` | 3-line call-chain printer loop — 6 error sites |
-| `plant_for_target(value, ref)` | Region-aware arena selection for dict `IndexAssign` — 3 sites |
+| `print_call_stack()` | 3-line call-chain printer loop — repeated at every error site |
+
+`print_call_stack()` lives in `evaluator/mod.rs` alongside the scope protocol.
 
 ---
 
