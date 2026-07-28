@@ -656,6 +656,74 @@ primitivos.
 
 ---
 
+## [7.2.0] — 2026-06-30
+
+### GUI: dibujo vectorial, entrada completa y control de ventana
+
+- **Primitivas vectoriales**: líneas gruesas, polilíneas, polígonos y círculo
+  antialiased.
+- **Texto**: subrayado / tachado y `letter-spacing` en `drawText`.
+- **Imágenes**: carga desde bytes (además de ruta), clipboard de imágenes
+  (get/set) y cursor del mouse con imagen custom.
+- **Ventana y pantalla**: posición de ventana, enumerar monitores y el resto de
+  las operaciones de ventana.
+- **Entrada**: eventos de `winit` que faltaban — foco, cursor, drop de archivos,
+  preedit de IME y botones laterales del mouse — más touch, hover y pinch.
+- **Scroll horizontal** en el compositing predictivo.
+
+---
+
+## [7.1.0] — 2026-06-29
+
+### GUI: scroll predictivo asíncrono (threaded compositing)
+
+- El compositing del scroll pasa a un hilo aparte y anticipa el desplazamiento,
+  de modo que la ventana no espera al repintado para responder.
+
+---
+
+## [7.0.0] — 2026-06-28
+
+### Namespace `Task` — concurrencia aislada en hilos nativos
+
+- Nuevo namespace **`Task`**: ejecución asíncrona de subprocesos aislados sobre
+  hilos de Rust, *share-nothing* (cada worker con su propia arena, comunicación
+  por JSON). Requiere el permiso `Task`.
+- Cubierto por tests de estrés, workers anidados y protección contra panics
+  dentro de un subproceso.
+
+### BREAKING: los nombres de namespace del sistema son reservados
+
+- **Una clase, interfaz o enum ya no puede llamarse como un namespace del
+  sistema** (`Task`, `File`, `OS`, `Gui`, `Env`, `Time`, `Socket`, …). El parser
+  lo rechaza con un mensaje explícito.
+- Es la contrapartida de agregar `Task`: sin la regla, una `class Task` del
+  usuario ensombrecería el namespace nativo. Código previo que usara uno de esos
+  nombres debe renombrar la clase — como se hizo con el ejemplo
+  `apps/01_task_manager.sz` (`Task` → `TaskItem`).
+
+### OS: `OS.spawn` no bloqueante
+
+- `OS.spawn` deja de bloquear y se cosecha por *polling* con **`OS.tick()`**
+  (sin callbacks: los callbacks abrirían un use-after-free con el modelo de
+  regiones).
+
+### GUI: CPU ~0 en reposo
+
+- El loop pasa a ser *event-driven*: sin actividad, el uso de CPU cae a ~0. Se
+  suman APIs de ventana, diálogo, imagen y texto, y se corrige el reflow al
+  redimensionar.
+
+### Correcciones
+
+- Dos panics del intérprete ante entrada inválida.
+- Desbordamiento en el benchmark de fibonacci iterativo; se agregan benchmarks
+  de concurrencia y de decimales.
+- Extensión de editor: tema Serez Dark y gramática al día (1.6.0), interpolación
+  `"{var}"` coloreada como llaves + variable (1.6.1).
+
+---
+
 ## [6.3.0] — branch `improve` (2026-06-20)
 
 ### New: `DateTime` namespace (calendar date/time)

@@ -9,8 +9,10 @@ enum Status   { Todo, InProgress, Done }
 
 // ── Data model ────────────────────────────────────────────────────────────────
 
-class Task {
-    public Task(int id, string title, string priority) {
+// NOTE: the class is `TaskItem`, not `Task` — `Task` is a reserved system
+// namespace (native workers) since core v7.0.0 and cannot name a class.
+class TaskItem {
+    public TaskItem(int id, string title, string priority) {
         this.id       = id;
         this.title    = title;
         this.priority = priority;
@@ -37,7 +39,7 @@ class Task {
     }
 }
 
-class UrgentTask : Task {
+class UrgentTask : TaskItem {
     public UrgentTask(int id, string title, string deadline) {
         super(id, title, Priority.Critical);
         this.deadline = deadline;
@@ -76,7 +78,7 @@ let seq    = 0;
 
 fn add(string title, priority) {
     seq++;
-    let t = new Task(seq, title, priority);
+    let t = new TaskItem(seq, title, priority);
     tasks.push(t);
     return t;
 }

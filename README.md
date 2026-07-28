@@ -3890,6 +3890,23 @@ fn add(string p) { ... }   // ⚠️ type error when called with Priority.High
 fn add(p) { ... }          // ✅ untyped parameter accepts enum values
 ```
 
+### System namespace names cannot name a class, interface or enum
+
+`Task`, `File`, `OS`, `Gui`, `Env`, `Time`, `Socket`, `System`, `Terminal` … are
+reserved. Declaring a type with one of those names is a **parse error**, not a
+warning:
+
+```serez
+class Task { … }       // ❌ 'Task' is a reserved system namespace
+class TaskItem { … }   // ✅ rename it
+```
+
+The rule exists because otherwise a user class would shadow the native namespace
+of the same name. It arrived with the `Task` namespace in **v7.0.0**, so code
+written before that may need a rename — the bundled demo `apps/01_task_manager.sz`
+renamed its `Task` class to `TaskItem` for exactly this reason. Only the exact
+name collides: `UrgentTask` or `TaskList` are fine.
+
 ### `public abstract TYPE method()` is not valid syntax
 
 Abstract method *declarations* (no body) are not supported. Provide a default throwing body instead:
