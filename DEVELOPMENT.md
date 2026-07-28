@@ -25,8 +25,7 @@ archivo asume que vas a tocar `src/`.
 12. [Cómo construir y testear](#12-cómo-construir-y-testear)
 13. [Convenciones para contribuir al core](#13-convenciones-para-contribuir-al-core)
 14. [Limitaciones conocidas del lenguaje](#14-limitaciones-conocidas-del-lenguaje)
-15. [Pendiente](#15-pendiente)
-16. [Apéndice — features implementadas (histórico)](#16-apéndice--features-implementadas-histórico)
+15. [Apéndice — features implementadas (histórico)](#15-apéndice--features-implementadas-histórico)
 
 ---
 
@@ -200,7 +199,7 @@ indexado por rango de bytes.
 ### Parser — Pratt TDOP
 
 Top-Down Operator Precedence, 8 niveles. Todo operador infijo debe registrarse en
-**dos lugares** de `parser.rs` (ver §14 para el procedimiento completo); hacerlo
+**dos lugares** de `parser.rs` (ver §13 para el procedimiento completo); hacerlo
 en uno solo produce comportamiento sutilmente incorrecto: el parser ignora el
 operador o descarta silenciosamente la expresión que lo rodea.
 
@@ -851,22 +850,7 @@ class Counter {
 
 ---
 
-## 15. Pendiente
-
-**Sin pendientes comprometidos.**
-
-Esta sección listaba siete ítems que nunca se acordaron como trabajo a hacer, y
-que además daban por pendiente cosas ya resueltas (el LSP, el formatter, la
-publicación de la extensión). El resto —`sz --lint`, publicar en crates.io,
-subir el `.vsix` como asset del release, pinear las Actions a SHAs— no forma
-parte del plan del proyecto.
-
-Los pendientes reales se acuerdan antes de anotarse acá. Lo que ya está hecho se
-registra en [CHANGELOG.md](CHANGELOG.md) y en el §16.
-
----
-
-## 16. Apéndice — features implementadas (histórico)
+## 15. Apéndice — features implementadas (histórico)
 
 Lista que vivía en el README bajo "Roadmap". Está enteramente en `[x]`: no es un
 plan, es el registro de lo que ya existe, y se conserva acá porque es material de
