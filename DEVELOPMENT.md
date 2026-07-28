@@ -1,84 +1,84 @@
 # Serez-Code — Development Reference
 
-**Para quien desarrolla el lenguaje en Rust**: arquitectura del intérprete,
-decisiones técnicas, suite de tests, tooling, CI/CD y estado del proyecto.
+**For people who work on the language in Rust**: interpreter architecture,
+technical decisions, test suite, tooling, CI/CD and project status.
 
-Si lo que querés es *programar en* Serez-Code, el documento es el
-[README](README.md): instalación, referencia del lenguaje y semántica. Este
-archivo asume que vas a tocar `src/`.
-
----
-
-## Índice
-
-1. [Estado del proyecto](#1-estado-del-proyecto)
-2. [Estructura del repositorio](#2-estructura-del-repositorio)
-3. [Arquitectura del intérprete](#3-arquitectura-del-intérprete)
-4. [Pipeline de ejecución](#4-pipeline-de-ejecución)
-5. [Modelo de memoria — regiones y arenas](#5-modelo-de-memoria--regiones-y-arenas)
-6. [Evaluador — submódulos](#6-evaluador--submódulos)
-7. [Suite de tests](#7-suite-de-tests)
-8. [Apps demo](#8-apps-demo)
-9. [Extensión VS Code](#9-extensión-vs-code)
-10. [CI/CD — Release pipeline](#10-cicd--release-pipeline)
-11. [Seguridad del repositorio](#11-seguridad-del-repositorio)
-12. [Cómo construir y testear](#12-cómo-construir-y-testear)
-13. [Convenciones para contribuir al core](#13-convenciones-para-contribuir-al-core)
-14. [Limitaciones conocidas del lenguaje](#14-limitaciones-conocidas-del-lenguaje)
-15. [Apéndice — features implementadas (histórico)](#15-apéndice--features-implementadas-histórico)
+If what you want is to *program in* Serez-Code, your document is the
+[README](README.md): installation, language reference and semantics. This file
+assumes you are going to touch `src/`.
 
 ---
 
-## 1. Estado del proyecto
+## Index
 
-| Métrica | Valor |
+1. [Project status](#1-project-status)
+2. [Repository layout](#2-repository-layout)
+3. [Interpreter architecture](#3-interpreter-architecture)
+4. [Execution pipeline](#4-execution-pipeline)
+5. [Memory model — regions and arenas](#5-memory-model--regions-and-arenas)
+6. [Evaluator — submodules](#6-evaluator--submodules)
+7. [Test suite](#7-test-suite)
+8. [Demo apps](#8-demo-apps)
+9. [VS Code extension](#9-vs-code-extension)
+10. [CI/CD — release pipeline](#10-cicd--release-pipeline)
+11. [Repository security](#11-repository-security)
+12. [How to build and test](#12-how-to-build-and-test)
+13. [Conventions for contributing to the core](#13-conventions-for-contributing-to-the-core)
+14. [Known language limitations](#14-known-language-limitations)
+15. [Appendix — implemented features (historical)](#15-appendix--implemented-features-historical)
+
+---
+
+## 1. Project status
+
+| Metric | Value |
 |---|---|
-| Versión | 9.11.0 (`Cargo.toml`) |
-| Archivos Rust | 55 (`src/`) |
-| Tamaño del parser | ~136 KB |
-| Tamaño del evaluador (total submódulos) | ~1.2 MB |
-| Archivos de test `.sz` | 402 (`tests/`) |
-| Extensión VS Code | v1.9.0 |
-| Binarios | `sz` (CLI) y `sz-lsp` (Language Server) |
-| Plataformas de release | Windows (MSI + .exe), Linux x64 (estático), macOS ARM64 e Intel |
+| Version | 9.11.0 (`Cargo.toml`) |
+| Rust files | 55 (`src/`) |
+| Parser size | ~136 KB |
+| Evaluator size (all submodules) | ~1.2 MB |
+| Test files `.sz` | 402 (`tests/`) |
+| VS Code extension | v1.9.0 |
+| Binaries | `sz` (CLI) and `sz-lsp` (Language Server) |
+| Release platforms | Windows (MSI + .exe), Linux x64 (static), macOS ARM64 and Intel |
 
-> El conteo de tests que pasan no se anota acá a propósito: queda desactualizado
-> en cuanto se agrega un test. Corré `.\run_tests.ps1` / `./run_tests.sh` para el
-> número real del momento.
+> The number of passing tests is deliberately not recorded here: it goes stale
+> the moment a test is added. Run `.\run_tests.ps1` / `./run_tests.sh` for the
+> real number at any given time.
 
 ---
 
-## 2. Estructura del repositorio
+## 2. Repository layout
 
 ```
 serez-code/
-├── src/                        — Código fuente Rust
+├── src/                        — Rust source
 │   ├── main.rs                 — CLI: file run, REPL, --check, --watch, --version, install
-│   ├── token.rs                — Enum Token + lookup_ident() para keywords
-│   ├── lexer.rs                — Scanner byte-indexed sobre la String fuente
-│   ├── ast.rs                  — Nodos del AST: Statement, Expression, BlockStatement
-│   ├── parser.rs               — Parser Pratt (TDOP), 8 niveles de precedencia
-│   ├── type_checker.rs         — Checker estático pre-ejecución
+│   ├── token.rs                — Token enum + lookup_ident() for keywords
+│   ├── lexer.rs                — Byte-indexed scanner over the source String
+│   ├── ast.rs                  — AST nodes: Statement, Expression, BlockStatement
+│   ├── parser.rs               — Pratt (TDOP) parser, 8 precedence levels
+│   ├── type_checker.rs         — Static pre-run checker
 │   ├── region.rs               — Arena allocator, ObjectRef, ObjectData, OwnedValue
-│   ├── scope.rs                — ScopeStack: push/pop/lookup con watermarks
+│   ├── scope.rs                — ScopeStack: push/pop/lookup with watermarks
 │   ├── repl.rs                 — Read-eval-print loop
 │   ├── package_manager.rs      — serez.json, install_package, install_all, packages_dir
-│   ├── test_run.rs             — Helper interno para tests
-│   ├── lsp_main.rs             — Entry point del binario sz-lsp (stdio JSON-RPC)
-│   ├── lsp/                    — Language Server (6 módulos)
-│   │   ├── server.rs               — Loop LSP: initialize, didOpen/didChange, publishDiagnostics
-│   │   ├── analysis.rs             — Símbolos del documento, hover, go-to-definition
-│   │   ├── builtins.rs             — Catálogo de namespaces/métodos para completado
-│   │   ├── builtins_gen.rs         — GENERADO por tools/gen_lsp_builtins.py (no editar a mano)
-│   │   ├── rpc.rs                  — Framing JSON-RPC sobre stdio
+│   ├── test_run.rs             — Internal test helper
+│   ├── lsp_main.rs             — Entry point of the sz-lsp binary (stdio JSON-RPC)
+│   ├── lsp/                    — Language Server (6 modules)
+│   │   ├── server.rs               — LSP loop: initialize, didOpen/didChange, publishDiagnostics
+│   │   ├── analysis.rs             — Document symbols, hover, go-to-definition
+│   │   ├── builtins.rs             — Namespace/method catalog for completion
+│   │   ├── builtins_gen.rs         — GENERATED by tools/gen_lsp_builtins.py (do not edit by hand)
+│   │   ├── rpc.rs                  — JSON-RPC framing over stdio
 │   │   └── mod.rs
-│   ├── compiler/               — Backend nativo (work in progress)
-│   │   ├── types.rs                — Tipos de compile-time (SzType) → tipos LLVM
-│   │   ├── hir.rs / hir_lower.rs   — HIR: AST desugarizado + pase de lowering
-│   │   ├── mir.rs / mir_lower.rs   — MIR: three-address code con basic blocks
-│   │   ├── llvm_emit.rs            — MIR → texto LLVM IR
+│   ├── compiler/               — Native backend (work in progress)
+│   │   ├── types.rs                — Compile-time types (SzType) → LLVM types
+│   │   ├── hir.rs / hir_lower.rs   — HIR: desugared AST + lowering pass
+│   │   ├── mir.rs / mir_lower.rs   — MIR: three-address code with basic blocks
+│   │   ├── llvm_emit.rs            — MIR → LLVM IR text
 │   │   └── mod.rs
-│   └── evaluator/              — Intérprete tree-walking (28 submódulos)
+│   └── evaluator/              — Tree-walking interpreter (28 submodules)
 │       ├── mod.rs
 │       ├── stmt.rs
 │       ├── expr.rs
@@ -98,169 +98,169 @@ serez-code/
 │       ├── namespaces_memory.rs    — Memory.sizeof/alloc/free/read/write/copy/fill/offsetOf
 │       └── control.rs
 │
-├── tests/                      — Suite de tests (.sz)
-│   ├── framework.sz            — Framework de unit testing
-│   ├── packages/               — Paquetes locales para tests (SEREZ_PACKAGES)
+├── tests/                      — Test suite (.sz)
+│   ├── framework.sz            — Unit-testing framework
+│   ├── packages/               — Local packages for tests (SEREZ_PACKAGES)
 │   │   ├── math-helpers/index.sz
 │   │   ├── string-tools/index.sz
 │   │   └── serez.json
-│   ├── unit_*.sz               — 105 tests unitarios
-│   ├── sec_*.sz + err_*.sz     — 75 tests de seguridad y error
+│   ├── unit_*.sz               — 105 unit tests
+│   ├── sec_*.sz + err_*.sz     — 75 security and error tests
 │   ├── demo_*.sz               — 3 demos
-│   └── NN_*.sz + *.expected    — 70 tests E2E con golden files
+│   └── NN_*.sz + *.expected    — 70 E2E tests with golden files
 │
-├── apps/                       — 5 apps demo (ejercitan todo el lenguaje)
+├── apps/                       — 5 demo apps (they exercise the whole language)
 │
-├── tools/                      — Utilidades de desarrollo (Python)
-│   ├── gen_lsp_builtins.py     — Regenera src/lsp/builtins_gen.rs desde el evaluador
-│   └── lsp_smoke.py            — Smoke test: maneja una sesión LSP real por stdio
+├── tools/                      — Development utilities (Python)
+│   ├── gen_lsp_builtins.py     — Regenerates src/lsp/builtins_gen.rs from the evaluator
+│   └── lsp_smoke.py            — Smoke test: drives a real LSP session over stdio
 │
-├── vscode-serez/               — Extensión VS Code
+├── vscode-serez/               — VS Code extension
 │   ├── extension.js            — DocumentFormattingEditProvider
 │   ├── package.json            — Manifest v0.2.0
 │   ├── language-configuration.json
 │   └── syntaxes/serez.tmLanguage.json
 │
-├── wix/main.wxs                — Configuración instalador MSI (usado por cargo-dist)
-├── dist-workspace.toml         — Configuración cargo-dist para releases
+├── wix/main.wxs                — MSI installer configuration (used by cargo-dist)
+├── dist-workspace.toml         — cargo-dist configuration for releases
 ├── .github/
-│   ├── workflows/release.yml   — CI/CD pipeline de release
-│   └── dependabot.yml          — Actualizaciones automáticas semanales
+│   ├── workflows/release.yml   — Release CI/CD pipeline
+│   └── dependabot.yml          — Weekly automatic updates
 │
 ├── run_tests.ps1               — Test runner (Windows/PowerShell)
 ├── run_tests.sh                — Test runner (Linux/macOS/Bash)
-├── Cargo.toml                  — Metadata del proyecto Rust
-├── README.md                   — Doc para QUIEN PROGRAMA EN serez-code (referencia del lenguaje)
-├── CHANGELOG.md                — Historial técnico de cambios por versión
-├── DEVELOPMENT.md              — Este archivo: doc para QUIEN DESARROLLA EL LENGUAJE
-└── bugs.md                     — Log de bugs documentados (todos corregidos)
+├── Cargo.toml                  — Rust project metadata
+├── README.md                   — Doc for WHOEVER PROGRAMS IN serez-code (language reference)
+├── CHANGELOG.md                — Technical change history by version
+├── DEVELOPMENT.md              — This file: doc for WHOEVER DEVELOPS THE LANGUAGE
+└── bugs.md                     — Log of documented bugs (all fixed)
 ```
 
 ---
 
-## 3. Arquitectura del intérprete
+## 3. Interpreter architecture
 
-El intérprete sigue el pipeline clásico de 4 etapas sin dependencias externas de runtime:
+The interpreter follows the classic 4-stage pipeline with no external runtime dependencies:
 
 ```
-Fuente .sz
+Source .sz
     │
     ▼
 Lexer (lexer.rs)
-    — Scan byte-indexed sobre &str (sin Vec<char>)
-    — 1-char lookahead para tokens de 2 chars (==, !=, <=, >=, =>)
-    — Emite Token { type, literal, line, column }
+    — Byte-indexed scan over &str (no Vec<char>)
+    — 1-char lookahead for 2-char tokens (==, !=, <=, >=, =>)
+    — Emits Token { type, literal, line, column }
     │
     ▼
 Parser (parser.rs ~100KB)
     — Pratt TDOP: parse_program() → Program { Vec<Statement> }
     — Prefix handlers: literals, identifiers, if, fn, class, enum, arrays, dicts, ( )
-    — Infix handlers: operadores aritméticos, comparación, lógicos, bitwise, power,
+    — Infix handlers: arithmetic, comparison, logical, bitwise, power operators,
       f(args), a[i], obj.method(args), obj?.method(args), a ?? b, a is T
-    — Error recovery: synchronize() salta a ; o } o keyword en caso de error
+    — Error recovery: synchronize() skips to ; or } or a keyword on failure
     │
     ▼
 TypeChecker (type_checker.rs)
-    — Pase estático sobre el AST antes de ejecutar
-    — Recolecta todas las FunctionDeclarations en un mapa nombre → firma
-    — Infiere tipos para variables let con RHS literal o resultado de call
-    — Verifica call sites contra parámetros y tipos de retorno declarados
-    — Reporta a stderr; NO detiene la ejecución
+    — Static pass over the AST before execution
+    — Collects every FunctionDeclaration into a name → signature map
+    — Infers types for let variables with a literal RHS or a call result
+    — Checks call sites against declared parameters and return types
+    — Reports to stderr; does NOT halt execution
     │
     ▼
-Evaluator (evaluator/ — 28 módulos)
+Evaluator (evaluator/ — 28 modules)
     — Tree-walking interpreter
-    — Flash Scope protocol en cada bloque { }
-    — Scratch watermark para temporales de out en top-level
+    — Scope protocol on every { } block
+    — Scratch watermark for top-level out temporaries
     │
     ├── stdout  (out statements, REPL)
-    └── stderr  (errores de parser, type checker, runtime)
+    └── stderr  (parser, type checker and runtime errors)
 ```
 
-### Decisiones de diseño clave
+### Key design decisions
 
-| Decisión | Alternativa descartada | Razón |
+| Decision | Rejected alternative | Reason |
 |---|---|---|
-| Arena allocator + watermarks | GC / Rc<RefCell<T>> | Determinístico, O(k) por scope, zero unsafe |
-| `ObjectRef { region, index }` | Raw pointers / Box | No puede dangling: index inválido ≠ memoria inválida |
-| `Rc<BlockStatement>` para fn bodies | Clone del AST | Clonar una función es O(1) en lugar de O(n) |
-| `StoredClass` con 4 HashMaps | Vec<ClassMethod> lineal | Dispatch O(1): methods, static_methods, getters, setters |
-| Pratt TDOP parser | Recursive descent clásico | Precedencia de operadores fácil de extender |
-| Zero `unsafe` | — | Invariante de seguridad no negociable |
+| Arena allocator + watermarks | GC / Rc<RefCell<T>> | Deterministic, bounded by the scope, zero unsafe |
+| `ObjectRef { region, index }` | Raw pointers / Box | Never memory-unsafe: an invalid index ≠ invalid memory |
+| `Rc<BlockStatement>` for fn bodies | Cloning the AST | Cloning a function is O(1) instead of O(n) |
+| `StoredClass` with 4 HashMaps | Linear Vec<ClassMethod> | O(1) dispatch: methods, static_methods, getters, setters |
+| Pratt TDOP parser | Classic recursive descent | Operator precedence is easy to extend |
+| Zero `unsafe` | — | Non-negotiable safety invariant |
 
-### Lexer — scan byte-indexed
+### Lexer — byte-indexed scan
 
-El lexer trabaja directamente sobre la `String` fuente con offsets de bytes
-(`position`, `read_position`); NO copia la entrada a un `Vec<char>`. Los
-caracteres UTF-8 multibyte en identificadores funcionan igual porque `read_char`
-avanza `c.len_utf8()` bytes y el sliceo de strings usa `&str[start..end]`, que es
-indexado por rango de bytes.
+The lexer works directly on the source `String` using byte offsets (`position`,
+`read_position`); it does NOT copy the input into a `Vec<char>`. Multi-byte UTF-8
+characters in identifiers still work because `read_char` advances `c.len_utf8()`
+bytes and string slicing uses `&str[start..end]`, which is byte-range indexed.
 
 ### Parser — Pratt TDOP
 
-Top-Down Operator Precedence, 8 niveles. Todo operador infijo debe registrarse en
-**dos lugares** de `parser.rs` (ver §13 para el procedimiento completo); hacerlo
-en uno solo produce comportamiento sutilmente incorrecto: el parser ignora el
-operador o descarta silenciosamente la expresión que lo rodea.
+Top-Down Operator Precedence, 8 levels. Every infix operator must be registered
+in **two places** in `parser.rs` (see §13 for the full procedure); doing it in
+only one produces subtly wrong behavior: the parser either ignores the operator
+or silently discards the expression around it.
 
 ---
 
-## 4. Pipeline de ejecución
+## 4. Execution pipeline
 
-### Modos del CLI
+### CLI modes
 
-| Comando | Comportamiento |
+| Command | Behavior |
 |---|---|
-| `sz archivo.sz` | Ejecuta el archivo completo |
-| `sz` | REPL interactivo |
-| `sz --check archivo.sz` | Profiler estático (estimación de bytes por función) |
-| `sz --watch archivo.sz` | Re-ejecuta automáticamente al guardar |
-| `sz --version` | Imprime la versión |
-| `sz install` | Instala dependencias de `serez.json` desde el registry |
-| `sz install pkg@version` | Instala un paquete específico desde el registry |
+| `sz file.sz` | Runs the whole file |
+| `sz` | Interactive REPL |
+| `sz --check file.sz` | Static profiler (per-function byte estimate) |
+| `sz --watch file.sz` | Re-runs automatically on save |
+| `sz --version` | Prints the version |
+| `sz install` | Installs `serez.json` dependencies from the registry |
+| `sz install pkg@version` | Installs a specific package from the registry |
 
-### Flujo de `sz archivo.sz`
+### Flow of `sz file.sz`
 
 ```
-1. Leer fuente del disco
-2. Lexer → Vec<Token> (implícito en el parser)
-3. Parser → Program { statements }   [errores a stderr]
-4. TypeChecker → pase sobre el AST    [errores a stderr]
-5. Evaluator → ejecuta statements     [errores a stderr, out a stdout]
+1. Read the source from disk
+2. Lexer → Vec<Token> (implicit inside the parser)
+3. Parser → Program { statements }   [errors to stderr]
+4. TypeChecker → pass over the AST    [errors to stderr]
+5. Evaluator → runs the statements    [errors to stderr, out to stdout]
 ```
 
 ### REPL
 
-El REPL reutiliza el mismo pipeline por línea. Mantiene un `Evaluator` persistente entre líneas para que las variables declaradas en una línea sean visibles en las siguientes.
+The REPL reuses the same pipeline per line. It keeps a persistent `Evaluator`
+across lines so that variables declared on one line are visible on the next.
 
 ---
 
-## 5. Modelo de memoria — regiones y arenas
+## 5. Memory model — regions and arenas
 
-Dos cosas distintas que conviene NO mezclar (el README las mezclaba):
+Two different things that should NOT be conflated (the README used to conflate them):
 
-- **El modelo de memoria** es *region-based memory* con arena allocators. Los
-  valores viven en arenas y salir de un ámbito libera la región de ese ámbito de
-  una sola vez. No hay GC. Eso es arquitectura: el programador no lo maneja.
-- **El Flash Scope** es la **feature del lenguaje** montada sobre ese modelo: el
-  bloque `{ ... }` INTERNO que el programador escribe dentro de una función o
-  método —no las llaves del cuerpo de la función, un bloque adentro del cuerpo—
-  para acotar a mano la vida de sus temporales. Es la herramienta con la que él
-  decide dónde empieza y termina una región. Su caso de uso es el volumen de
-  RAM: construir la estructura grande dentro de las llaves, quedarse solo con la
-  parte que va a usar —en una variable declarada ANTES del bloque— y soltar todo
-  lo demás en la llave de cierre. El `return` va DESPUÉS del bloque:
+- **The memory model** is *region-based memory* with arena allocators. Values
+  live in arenas, and leaving a scope releases that scope's region in one step.
+  There is no GC. That is architecture: the programmer does not manage it.
+- **The Flash Scope** is the **language feature** built on top of that model: the
+  INNER `{ ... }` block the programmer writes inside a function or method — not
+  the function body's own braces, a block *within* the body — to bound the
+  lifetime of temporaries by hand. It is the tool with which they decide where a
+  region begins and ends. Its use case is RAM volume: build the large structure
+  inside the braces, keep only the part that will actually be used —in a variable
+  declared BEFORE the block— and release everything else at the closing brace.
+  The `return` goes AFTER the block:
 
   ```serez
   fn int sumar(int a, int b) {
       let res = 0;
-      { res = a + b; }   // ← el flash scope
+      { res = a + b; }   // ← the flash scope
       return res;
   }
   ```
 
-  Las mismas llaves funcionan igual fuera de toda función, en el top level del
-  script — la forma es idéntica (declarar antes, computar adentro, usar después):
+  The same braces work identically outside any function, at the top level of a
+  script — the shape is the same (declare before, compute inside, use after):
 
   ```serez
   let a = 1;
@@ -270,241 +270,243 @@ Dos cosas distintas que conviene NO mezclar (el README las mezclaba):
   out res;           // → 3
   ```
 
-Esta sección documenta el modelo. El uso del constructo, con ejemplos, está en el
-[README](README.md#flash-scopes).
+This section documents the model. Usage of the construct, with examples, is in
+the [README](README.md#flash-scopes).
 
-### Dos arenas
+### Two arenas
 
-Ambas son un `Vec<ObjectData>` plano (`region.rs`).
+Both are a flat `Vec<ObjectData>` (`region.rs`).
 
 ```
 Global Arena
-  — Sembrada al arrancar: singletons null/true/false + cache de ints 0..=256
-  — Variables top-level, funciones, clases y CELDAS de closure
-  — Persiste toda la vida del programa: solo se achica con el scratch
-    watermark de `out` (único caso en todo el runtime)
+  — Seeded at startup: null/true/false singletons + int cache 0..=256
+  — Top-level variables, functions, classes and closure CELLS
+  — Lives for the whole program: it only shrinks via the `out`
+    scratch watermark (the single case in the entire runtime)
 
 Scoped Arena
-  — Variables locales, argumentos, temporales de bloque
-  — Stack de watermarks: una entrada por scope activo
-  — Cleanup: arena.truncate(watermark) — sin GC
+  — Local variables, arguments, block temporaries
+  — Watermark stack: one entry per active scope
+  — Cleanup: arena.truncate(watermark) — no GC
 ```
 
-`alloc()` elige arena por PROFUNDIDAD, no por valor: si hay al menos un frame
-activo alloca en la Scoped; si no, en la Global. El mismo literal cae en una u
-otra según dónde aparezca.
+`alloc()` picks the arena by DEPTH, not by value: with at least one active frame
+it allocates in the Scoped arena; with none, in the Global one. The same literal
+lands in one or the other depending on where it appears.
 
 ### ObjectRef
 
-Cada valor en el intérprete es una referencia segura:
+Every value in the interpreter is a safe reference:
 
 ```rust
 ObjectRef { region: RegionId, index: usize }
 ```
 
-- `region`: Global o Scoped — determina qué arena leer
-- `index`: posición dentro del Vec de la arena
-- Nunca es *memory-unsafe*: es un índice a un `Vec` seguro, el peor caso es
-  fuera de rango → `None` (`Referencia inválida`), nunca memoria liberada
-- **Pero el índice NO queda inaccesible al truncar**: los slots se reutilizan y
-  un ref viejo resolvería a OTRO objeto vivo. La garantía real la da el
-  protocolo de abajo (ninguna ref sobrevive a su scope), no el índice
+- `region`: Global or Scoped — determines which arena to read
+- `index`: position within the arena's Vec
+- It is never *memory-unsafe*: it is an index into a safe `Vec`, so the worst
+  case is out of range → `None` (`Referencia inválida`), never freed memory
+- **But the index does NOT become unreachable on truncate**: the slots are reused
+  and an old ref would resolve to a DIFFERENT live object. The real guarantee
+  comes from the protocol below (no ref outlives its scope), not from the index
 
-### Protocolo de scope (invariante "promote before pop")
+### Scope protocol (the "promote before pop" invariant)
 
-`push`/`pop` están apareados en TODOS los code paths, incluidos errores y
-salidas tempranas. El extract/plant solo ocurre si algo escapa del bloque:
+`push`/`pop` are paired on ALL code paths, including errors and early exits. The
+extract/plant pair only happens if something escapes the block:
 
 ```
-1. scopes.push()               — graba watermark
-2. evaluar statements del bloque
-3. extract(result_ref)         — deep clone a OwnedValue (arena-independent)
-4. scopes.pop()                — trunca arena: libera todos los locales
-5. plant(owned)                — re-alloca en el scope padre
+1. scopes.push()               — records the watermark
+2. evaluate the block's statements
+3. extract(result_ref)         — deep clone into an arena-independent OwnedValue
+4. scopes.pop()                — truncates the arena: frees every local
+5. plant(owned)                — re-allocates in the parent scope
 ```
 
-El caso canónico que justifica el invariante — el valor que escapa es un array
-cuyos elementos viven en el frame que se está por liberar:
+The canonical case that justifies the invariant — the escaping value is an array
+whose elements live in the frame about to be freed:
 
 ```serez
 fn make_pair(int a, int b) {
-    return [a, b];          // el array vive en el frame scoped de la función
+    return [a, b];          // the array lives in the function's scoped frame
 }
 
-let p = make_pair(10, 20);  // extract antes del pop, plant en la arena global
-out p[0];                   // → 10 — seguro, ahora vive en la global
+let p = make_pair(10, 20);  // extract before the pop, plant in the global arena
+out p[0];                   // → 10 — safe, it now lives in the global arena
 out p[1];                   // → 20
 ```
 
-Los pasos 3 y 5 se SALTEAN cuando no escapa nada:
+Steps 3 and 5 are SKIPPED when nothing escapes:
 
-| Caso | Qué se promueve |
+| Case | What gets promoted |
 |---|---|
-| `if`/`else`, `switch`, `try`/`catch`/`finally`, bloque suelto, `unsafe` (`eval_block`) — y brazos de `match` (push/extract/pop/plant inline) | el valor del bloque, `return` y `throw` |
-| Cuerpo de función/método | solo el `return` (o el payload del `throw`) |
-| Cuerpo de loop — `while`, `do-while`, `for`, `for-in` (`eval_block_discard`) | solo `return`/`throw`; **el valor del bloque se descarta a propósito** |
-| `break`, `continue`, labels, `Error` | nada: no hay payload |
+| `if`/`else`, `switch`, `try`/`catch`/`finally`, standalone block, `unsafe` (`eval_block`) — and `match` arms (inline push/extract/pop/plant) | the block's value, `return` and `throw` |
+| Function/method body | only the `return` (or the `throw` payload) |
+| Loop body — `while`, `do-while`, `for`, `for-in` (`eval_block_discard`) | only `return`/`throw`; **the block's value is discarded on purpose** |
+| `break`, `continue`, labels, `Error` | nothing: there is no payload |
 
-El descarte en cuerpos de loop no es un detalle: sin él, un cuerpo cuyo último
-statement produce un compuesto (`arr = arr.map(...)`) plantaba una COPIA COMPLETA
-por iteración en el frame de arriba, liberada recién al salir del loop —
-400 MB medidos en 300 iteraciones sobre un array de 20k.
+Discarding in loop bodies is not a detail: without it, a body whose last
+statement produces a composite (`arr = arr.map(...)`) planted a FULL COPY per
+iteration into the enclosing frame, released only when the loop ended —
+400 MB measured over 300 iterations on a 20k-element array.
 
-### Por qué los valores se copian
+### Why values are copied
 
-`extract` es un **deep clone** del árbol completo (arrays anidados, entradas de
-dict, campos de instancia). De ahí sale la semántica por valor del lenguaje:
-pasar un argumento, retornar un compuesto o leer una variable copia los datos,
-así que dos scopes nunca aliasan el mismo slot.
+`extract` is a **deep clone** of the whole tree (nested arrays, dict entries,
+instance fields). That is where the language's value semantics come from: passing
+an argument, returning a composite or reading a variable copies the data, so two
+scopes never alias the same slot.
 
-El costo: los compuestos van EMBEBIDOS — un array ocupa UN slot con un
-`Vec<OwnedValue>` adentro, no un slot por elemento. Extract/plant es
-O(tamaño total) ⇒ retornar un array de 100k copia 100k elementos y `a[i] = x`
-sobre un array grande es O(n). Para números pesados, `Tensor` (un `Vec<f64>`
-plano en un solo slot).
+The cost: composites are stored EMBEDDED — an array occupies ONE slot holding a
+`Vec<OwnedValue>`, not one slot per element. Extract/plant is O(total size) ⇒
+returning a 100k-element array copies 100k elements and `a[i] = x` on a large
+array is O(n). For heavy numeric work, use `Tensor` (a flat `Vec<f64>` in a
+single slot).
 
-### Costo real del cleanup
+### The real cost of cleanup
 
-`arena.truncate(watermark)` dropea los slots por encima de la marca: es
-proporcional a los slots liberados (`len - watermark`) MÁS el costo de dropear
-lo que cada slot contiene — un slot con un array de 1M es un drop de 1M, no un
-destructor suelto. Lo que gana el modelo no es un drop más barato por objeto,
-sino de dónde sale la cota: está acotado por los datos del propio scope y se
-paga en un punto exacto del código, en vez de recorrer todo el heap vivo cuando
-lo decide un GC.
+`arena.truncate(watermark)` drops the slots above the mark: it is proportional to
+the slots freed (`len - watermark`) PLUS the cost of dropping what each slot
+holds — a slot with a 1M-element array is a 1M-element drop, not a single
+destructor call. What the model buys is not a cheaper per-object drop, but where
+the bound comes from: it is bounded by the scope's own data and paid at an exact
+point in the source, instead of walking the entire live heap whenever a GC
+decides to.
 
-### Excepción: variables capturadas por closures
+### Exception: variables captured by closures
 
-Un closure puede correr mucho después de que muera el bloque que declaró sus
-variables. Por eso, al crear una función o lambda, cada local capturada se
-**promueve**: `extract` de la scoped → `plant_global` → `rebind_ref` reapunta
-TODOS los bindings que miraban al slot viejo (la variable original y `this` en
-cada frame de una cadena de métodos anidados; reapuntar solo el frame más
-interno bifurcaba el objeto). Consecuencias:
+A closure can run long after the block that declared its variables is gone. So
+when a function or lambda is created, each captured local is **promoted**:
+`extract` from the scoped arena → `plant_global` → `rebind_ref` re-points EVERY
+binding that referenced the old slot (the original variable and `this` in each
+frame of a nested method chain; re-pointing only the innermost frame used to fork
+the object). Consequences:
 
-1. **La variable capturada sobrevive al bloque** — vive en la arena global, que
-   el protocolo de scope nunca trunca.
-2. **Deja de copiarse**: closure y scope exterior comparten UNA celda, así que
-   una mutación adentro se ve afuera y viceversa. Es lo contrario de la
-   semántica por valor, es deliberado (semántica de celda) y es el único lugar
-   del lenguaje donde dos nombres comparten storage.
-3. **Cuesta memoria permanente**: los slots globales no se reclaman nunca. Por
-   eso `capture_lambda_env` captura solo los nombres que el cuerpo menciona de
-   verdad — capturar todas las locales visibles filtraba un slot permanente por
-   local no usada por creación de lambda (letal en lambdas por frame o por
-   iteración).
+1. **The captured variable outlives the block** — it lives in the global arena,
+   which the scope protocol never truncates.
+2. **It stops being copied**: closure and enclosing scope share ONE cell, so a
+   mutation inside is visible outside and vice versa. This is the opposite of the
+   value semantics, it is deliberate (cell semantics) and it is the only place in
+   the language where two names share storage.
+3. **It costs permanent memory**: global slots are never reclaimed. That is why
+   `capture_lambda_env` captures only the names the body actually mentions —
+   capturing every visible local leaked one permanent slot per unused local per
+   lambda creation (fatal for lambdas built per frame or per iteration).
 
 ```serez
 fn counter() {
-    let n = 0;              // promovida a celda global cuando la lambda la captura
+    let n = 0;              // promoted to a global cell when the lambda captures it
     return () => { n = n + 1; return n; };
 }
 let next = counter();
 out next();   // → 1
-out next();   // → 2 — la celda sobrevivió al return
+out next();   // → 2 — the cell survived the return
 ```
 
-### Optimizaciones de arena
+### Arena pre-sizing
 
-| Colección | Capacidad inicial |
+| Collection | Initial capacity |
 |---|---|
-| Ambas arenas (`Arena::new()`) | 64 objetos |
-| Frame de scope | 4 entradas |
+| Both arenas (`Arena::new()`) | 64 objects |
+| Scope frame | 4 entries |
 
-`Arena::new()` es la misma para la global y la scoped: las dos arrancan en 64.
-La global además se siembra con ~260 objetos (null/true/false + ints 0..=256),
-o sea que crece más allá de su capacidad inicial antes del primer statement; a
-cambio, los enteros chicos y los booleanos se entregan como refs existentes en
-vez de alocarse en cada uso. `global_bindings` y los registries de
-interfaces/clases/enums son `HashMap::new()` y crecen bajo demanda.
+`Arena::new()` is the same for the global and the scoped arena: both start at 64.
+The global one is additionally seeded with ~260 objects (null/true/false + ints
+0..=256), so it grows past its initial capacity before the first statement runs;
+in exchange, small integers and booleans are handed out as existing refs instead
+of being allocated on every use. `global_bindings` and the interface/class/enum
+registries are `HashMap::new()` and grow on demand.
 
 ---
 
-## 6. Evaluador — submódulos
+## 6. Evaluator — submodules
 
-El evaluador original era un solo archivo de 5300+ líneas. Hoy son 28 módulos cohesivos; los principales:
+The original evaluator was a single 5300+ line file. Today there are 28 cohesive
+modules; the main ones:
 
-| Módulo | Responsabilidad principal |
+| Module | Main responsibility |
 |---|---|
-| `mod.rs` | Entrada, Flash Scope protocol, StoredClass (4 HashMaps O(1)), profiler |
-| `expr.rs` | Todas las expresiones: calls, index, dot, ternary, interpolation, namespaces |
-| `stmt.rs` | Todos los statements: let, assign, for, while, if, class, enum, import… |
-| `classes.rs` | Instanciación, dispatch, herencia, super, getters/setters |
-| `methods_array.rs` | 20+ métodos de array |
-| `ops.rs` | Infix (aritmética, bitwise, power, comparación) y prefix |
+| `mod.rs` | Entry points, scope protocol, StoredClass (4 O(1) HashMaps), profiler |
+| `expr.rs` | Every expression: calls, index, dot, ternary, interpolation, namespaces |
+| `stmt.rs` | Every statement: let, assign, for, while, if, class, enum, import… |
+| `classes.rs` | Instantiation, dispatch, inheritance, super, getters/setters |
+| `methods_array.rs` | 20+ array methods |
+| `ops.rs` | Infix (arithmetic, bitwise, power, comparison) and prefix |
 | `namespaces.rs` | Math, File, JSON namespaces |
 | `namespaces_crypto.rs` | Crypto: sha256, md5, hmacSha256, base64, hex |
 | `namespaces_socket.rs` | Socket: connect, send, recv, close, listen, accept |
 | `namespaces_binary.rs` | Binary: fromHex, toHex, fromUtf8, packInt32Le/Be, matmul… |
 | `namespaces_gpu.rs` | GPU: createBuffer, map, reduce, dot, axpy, matmul (CPU-backed) |
-| `builtins.rs` | parseInt, parseDecimal, readLine, y otros globals |
-| `methods_string.rs` | 20+ métodos de string |
+| `builtins.rs` | parseInt, parseDecimal, readLine and other globals |
+| `methods_string.rs` | 20+ string methods |
 | `methods_set.rs` | add, has, delete, clear, toArray, union, intersection |
-| `methods_tensor.rs` | Operaciones tensoriales (Tensor namespace) |
-| `check.rs` | Type-check de parámetros, return, typed arrays |
+| `methods_tensor.rs` | Tensor operations (Tensor namespace) |
+| `check.rs` | Type-checking of parameters, return values, typed arrays |
 | `control.rs` | Break, continue, labeled loops, do-while |
 
-### Helpers estructurales (reducen duplicación)
+### Structural helpers (they reduce duplication)
 
-| Helper | Reemplaza |
+| Helper | Replaces |
 |---|---|
-| `print_call_stack()` | Loop de 3 líneas para imprimir la cadena de calls — en cada sitio de error |
+| `print_call_stack()` | 3-line call-chain printer loop — at every error site |
 
-Vive en `evaluator/mod.rs`, junto al protocolo de scope.
+It lives in `evaluator/mod.rs`, next to the scope protocol.
 
-### Internals de rendimiento
+### Performance internals
 
-Optimizaciones que evitan clones y allocs redundantes en los caminos calientes.
+Optimizations that avoid redundant clones and allocations on hot paths.
 
-**`Rc<BlockStatement>` — clonar una función es O(1).** Todo valor función guarda
-su cuerpo AST como `Rc<BlockStatement>` en vez de un `BlockStatement` propio.
-Leer una función de la arena, pasarla como callback o devolverla desde
-`find_method` incrementa un refcount en lugar de deep-clonar el cuerpo. Aplica
-tanto a `OwnedValue::Function` como a `ObjectData::Function` (`region.rs`).
+**`Rc<BlockStatement>` — cloning a function is O(1).** Every function value
+stores its AST body as `Rc<BlockStatement>` rather than an owned
+`BlockStatement`. Reading a function from the arena, passing it as a callback or
+returning it from `find_method` bumps a refcount instead of deep-cloning the
+body. This applies to both `OwnedValue::Function` and `ObjectData::Function`
+(`region.rs`).
 
-**`StoredClass` — dispatch de métodos O(1).** Los métodos de clase se guardan en
-`StoredClass` con cuatro `HashMap` separados: `methods`, `static_methods`,
-`getters` y `setters`; cada lookup es O(1) por nombre. Los `StoredMethod` llevan
-`body: Rc<BlockStatement>`, así que cada clone es O(1) sin importar el tamaño del
-método. Antes, cada llamada clonaba el `ast::ClassMethod` completo con su cuerpo.
+**`StoredClass` — O(1) method dispatch.** Class methods are stored in
+`StoredClass` across four separate `HashMap`s: `methods`, `static_methods`,
+`getters` and `setters`; each lookup is O(1) by name. `StoredMethod` values carry
+`body: Rc<BlockStatement>`, so every clone is O(1) regardless of the method's
+size. Previously, every call cloned the entire `ast::ClassMethod` including its
+body.
 
-**Dedup en `all_bindings()`.** `ScopeStack::all_bindings()` recorre los frames de
-adentro hacia afuera y saltea los nombres ya vistos. Cuando un closure captura su
-entorno, las variables externas sombreadas no se extraen ni se re-alocan: cada
-nombre aparece a lo sumo una vez en el entorno capturado.
+**Dedup in `all_bindings()`.** `ScopeStack::all_bindings()` walks the frames
+inner-to-outer and skips names already seen. When a closure captures its
+environment, shadowed outer variables are not extracted and re-allocated: each
+name appears at most once in the captured environment.
 
 ---
 
-## 7. Suite de tests
+## 7. Test suite
 
-### Estructura
+### Structure
 
-| Categoría | Cantidad | Descripción |
+| Category | Count | Description |
 |---|---|---|
-| `unit_*.sz` (no sec) | 83 | Tests unitarios usando `framework.sz` (assert, expect) |
-| `NN_*.sz` + `.expected` | 57 | Tests E2E con golden files — diff exacto de stdout |
-| `err_*.sz` | 27 | Verifican que ciertos inputs producen error de runtime |
-| `sec_*.sz` | 41 | Suite de seguridad: overflow, OOB, null safety, stack overflow |
-| `unit_sec_*.sz` | 15 | Tests unitarios de seguridad (con framework.sz) |
-| CLI / REPL / --check | 13 | Tests de modo de ejecución del CLI |
-| `framework.sz` | 1 | Framework compartido por todos los unit tests |
-| **Total** | **274** | **0 fallando** |
+| `unit_*.sz` (non-sec) | 83 | Unit tests using `framework.sz` (assert, expect) |
+| `NN_*.sz` + `.expected` | 57 | E2E tests with golden files — exact stdout diff |
+| `err_*.sz` | 27 | Verify that certain inputs produce a runtime error |
+| `sec_*.sz` | 41 | Security suite: overflow, OOB, null safety, stack overflow |
+| `unit_sec_*.sz` | 15 | Security unit tests (with framework.sz) |
+| CLI / REPL / --check | 13 | CLI execution-mode tests |
+| `framework.sz` | 1 | Framework shared by every unit test |
+| **Total** | **274** | **0 failing** |
 
 ### Test runners
 
 **Windows (PowerShell):**
 ```powershell
-.\run_tests.ps1                    # suite completa
-.\run_tests.ps1 -unit              # solo unit tests
-.\run_tests.ps1 -e2e               # solo E2E + error tests
-.\run_tests.ps1 -security          # solo security tests
-.\run_tests.ps1 -filter "switch"   # filtrar por nombre
-.\run_tests.ps1 -generate          # regenerar .expected
+.\run_tests.ps1                    # full suite
+.\run_tests.ps1 -unit              # unit tests only
+.\run_tests.ps1 -e2e               # E2E + error tests only
+.\run_tests.ps1 -security          # security tests only
+.\run_tests.ps1 -filter "switch"   # filter by name
+.\run_tests.ps1 -generate          # regenerate .expected
 ```
 
 **Linux / macOS (Bash):**
 ```bash
-./run_tests.sh                     # suite completa
+./run_tests.sh                     # full suite
 ./run_tests.sh --unit
 ./run_tests.sh --e2e
 ./run_tests.sh --security
@@ -512,54 +514,55 @@ nombre aparece a lo sumo una vez en el entorno capturado.
 ./run_tests.sh --generate
 ```
 
-### Convenciones de naming
+### Naming conventions
 
-- `unit_<feature>.sz` — test unitario de una feature específica
-- `unit_sec_<tema>.sz` — test unitario de seguridad
-- `sec_<escenario>.sz` — test de error: debe fallar con runtime error
-- `err_<escenario>.sz` — test de error: debe fallar con error
-- `NN_<nombre>.sz` + `NN_<nombre>.expected` — test E2E numerado
-- `tests/_*.sz` — ignorados por git y por los runners (archivos de debugging temporal)
+- `unit_<feature>.sz` — unit test of a specific feature
+- `unit_sec_<topic>.sz` — security unit test
+- `sec_<scenario>.sz` — error test: must fail with a runtime error
+- `err_<scenario>.sz` — error test: must fail with an error
+- `NN_<name>.sz` + `NN_<name>.expected` — numbered E2E test
+- `tests/_*.sz` — ignored by git and by the runners (temporary debugging files)
 
 ---
 
-## 8. Apps demo
+## 8. Demo apps
 
-Cinco programas en `apps/` que ejercitan todas las features del lenguaje en conjunto. Cada uno es autocontenido y ejecutable con `sz apps/<nombre>.sz`.
+Five programs in `apps/` that exercise every language feature together. Each one
+is self-contained and runnable with `sz apps/<name>.sz`.
 
-| App | Features principales |
+| App | Main features |
 |---|---|
-| `01_task_manager.sz` | `enum`, herencia (`UrgentTask : Task`), `static` methods, `switch`, HOF (filter/map/reduce), `try/catch/throw` |
-| `02_statistics.sz` | Typed arrays `[decimal]`, `Math` namespace, map/filter/reduce para estadísticas, histograma, correlación de Pearson |
-| `03_text_analyzer.sz` | String methods (split, replace, trim, indexOf, charAt, padEnd), dicts para frecuencia de palabras, cifrado César, `File` I/O |
+| `01_task_manager.sz` | `enum`, inheritance (`UrgentTask : Task`), `static` methods, `switch`, HOF (filter/map/reduce), `try/catch/throw` |
+| `02_statistics.sz` | Typed arrays `[decimal]`, `Math` namespace, map/filter/reduce for statistics, histogram, Pearson correlation |
+| `03_text_analyzer.sz` | String methods (split, replace, trim, indexOf, charAt, padEnd), dicts for word frequency, Caesar cipher, `File` I/O |
 | `04_bank_system.sz` | `abstract class`, `sealed class`, `interface`, `const`, getters (`get`), `try/catch/throw`, `?.`, `??` |
-| `05_data_pipeline.sz` | `JSON` (stringify/parse), `File` (write/read), `Set` (deduplicación), bitwise (`&`, `\|`, `^`), power (`**`, `>>`), pipeline HOF |
+| `05_data_pipeline.sz` | `JSON` (stringify/parse), `File` (write/read), `Set` (deduplication), bitwise (`&`, `\|`, `^`), power (`**`, `>>`), HOF pipeline |
 
 ---
 
-## 9. Extensión VS Code
+## 9. VS Code extension
 
-### Versión 0.2.0 (`vscode-serez/`)
+### Version 0.2.0 (`vscode-serez/`)
 
-| Archivo | Rol |
+| File | Role |
 |---|---|
-| `extension.js` | Activación + `DocumentFormattingEditProvider` |
-| `package.json` | Manifest: lenguaje serez, gramática, formatter, configDefaults |
+| `extension.js` | Activation + `DocumentFormattingEditProvider` |
+| `package.json` | Manifest: serez language, grammar, formatter, configDefaults |
 | `language-configuration.json` | Brackets, autoclose, indentationRules |
-| `syntaxes/serez.tmLanguage.json` | Gramática TextMate para syntax highlighting |
+| `syntaxes/serez.tmLanguage.json` | TextMate grammar for syntax highlighting |
 
 ### Formatter (`extension.js`)
 
-El formatter implementa `DocumentFormattingEditProvider` con las siguientes reglas:
+The formatter implements `DocumentFormattingEditProvider` with these rules:
 
-- **Indentación**: 4 espacios por nivel, basada en conteo de `{` / `}`
-- **Strings y comentarios**: el conteo de llaves ignora contenido dentro de `"..."` y después de `//`
-- **`} else {`**: dedent antes de imprimir la línea, indent después — manejado correctamente
-- **Líneas en blanco**: máximo una consecutiva
-- **Trailing whitespace**: eliminado en todas las líneas
-- **EOF**: el archivo siempre termina con exactamente un `\n`
+- **Indentation**: 4 spaces per level, based on `{` / `}` counting
+- **Strings and comments**: brace counting ignores content inside `"..."` and after `//`
+- **`} else {`**: dedent before printing the line, indent after — handled correctly
+- **Blank lines**: at most one consecutive
+- **Trailing whitespace**: stripped on every line
+- **EOF**: the file always ends with exactly one `\n`
 
-### Configuración automática para `.sz`
+### Automatic configuration for `.sz`
 
 ```json
 "[serez]": {
@@ -570,120 +573,121 @@ El formatter implementa `DocumentFormattingEditProvider` con las siguientes regl
 }
 ```
 
-### Rebuild del .vsix
+### Rebuilding the .vsix
 
 ```powershell
 cd vscode-serez
-vsce package          # genera serez-code-0.2.0.vsix
+vsce package          # produces serez-code-0.2.0.vsix
 antigravity-ide.cmd --install-extension serez-code-0.2.0.vsix
 ```
 
-El `.vsix` está en `.gitignore` — es un artefacto de build, no código fuente.
+The `.vsix` is in `.gitignore` — it is a build artifact, not source code.
 
 ---
 
-## 10. CI/CD — Release pipeline
+## 10. CI/CD — release pipeline
 
 ### `release.yml` — GitHub Actions
 
-El workflow se activa al hacer push de un tag con formato semver (`1.0.0`, `v0.1.0`, etc.).
+The workflow triggers on pushing a semver-formatted tag (`1.0.0`, `v0.1.0`, …).
 
 **Jobs:**
 
-| Job | Permisos | Función |
+| Job | Permissions | Purpose |
 |---|---|---|
-| `plan` | `contents: read` | Corre `dist plan` para determinar qué builds hacer |
-| `build-local-artifacts` | `contents: read` | Compila binarios para cada plataforma + crea instaladores nativos |
-| `build-global-artifacts` | `contents: read` | Genera checksums y artefactos globales |
-| `host` | `contents: write` | Sube artefactos y crea el GitHub Release |
-| `announce` | `contents: read` | Notificaciones post-release |
+| `plan` | `contents: read` | Runs `dist plan` to determine which builds to make |
+| `build-local-artifacts` | `contents: read` | Compiles binaries per platform + creates native installers |
+| `build-global-artifacts` | `contents: read` | Generates checksums and global artifacts |
+| `host` | `contents: write` | Uploads artifacts and creates the GitHub Release |
+| `announce` | `contents: read` | Post-release notifications |
 
-**Plataformas de release:**
+**Release platforms:**
 
-| Plataforma | Artefacto |
+| Platform | Artifact |
 |---|---|
-| `x86_64-pc-windows-msvc` | `sz.exe` + instalador `.msi` (via WiX) |
+| `x86_64-pc-windows-msvc` | `sz.exe` + `.msi` installer (via WiX) |
 | `x86_64-unknown-linux-gnu` | `sz` + shell installer |
 | `aarch64-unknown-linux-gnu` | `sz` (ARM64 Linux) |
 | `x86_64-apple-darwin` | `sz` (macOS Intel) |
 | `aarch64-apple-darwin` | `sz` (macOS Apple Silicon) |
 
-**Herramienta:** `cargo-dist v0.28.0` — gestiona todo el proceso de empaquetado y release.
+**Tooling:** `cargo-dist v0.28.0` — it manages the whole packaging and release process.
 
-### Seguridad del CI
+### CI security
 
-- Permisos **mínimos por job**: solo `host` tiene `contents: write`
-- El resto de jobs tienen `contents: read` explícito
-- `dependabot.yml` actualiza actions y dependencias Cargo cada lunes
+- **Minimum permissions per job**: only `host` has `contents: write`
+- Every other job has an explicit `contents: read`
+- `dependabot.yml` updates actions and Cargo dependencies every Monday
 
 ### `.github/dependabot.yml`
 
 ```yaml
-# github-actions: pineará @v4 → SHA fijo automáticamente
-# cargo: actualiza Cargo.toml cuando hay nuevas versiones
-schedule: weekly (lunes)
+# github-actions: bumps the action references (tag to tag, e.g. @v4 → @v7)
+# cargo: updates Cargo.toml when new versions are published
+schedule: weekly (Monday)
 ```
 
 ---
 
-## 11. Seguridad del repositorio
+## 11. Repository security
 
 ### `.gitignore`
 
-| Patrón ignorado | Razón |
+| Ignored pattern | Reason |
 |---|---|
-| `*.sz` | Archivos de desarrollo/prueba local |
-| `!tests/*.sz` | Excepción: tests son fuente de verdad |
-| `tests/_*.sz` | Archivos probe/debug temporales |
-| `*.txt`, `*.json`, `*.bin` | Outputs de runtime (análisis, pipeline, binarios) |
-| `*.vsix` | Artefacto de build de la extensión |
-| `/target` | Directorio de build de Cargo |
-| `/.claude/` | Configuración local del editor |
+| `*.sz` | Local development/scratch files |
+| `!tests/*.sz` | Exception: tests are the source of truth |
+| `tests/_*.sz` | Temporary probe/debug files |
+| `*.txt`, `*.json`, `*.bin` | Runtime outputs (analysis, pipeline, binaries) |
+| `*.vsix` | Extension build artifact |
+| `/target` | Cargo build directory |
+| `/.claude/` | Local editor configuration |
 
-### Archivos de documentación ignorados (histórico)
+### Ignored documentation files (historical)
 
-`Serez-Code-Internals.md`, `AUDIT.md`, `implementacion_clases.md` — documentos de diseño interno que no se publican.
+`Serez-Code-Internals.md`, `AUDIT.md`, `implementacion_clases.md` — internal
+design documents that are not published.
 
 ---
 
-## 12. Cómo construir y testear
+## 12. How to build and test
 
-### Requisitos
+### Requirements
 
-- Rust stable (edition 2024 — requiere Rust ≥ 1.85)
-- PowerShell 7+ (para `run_tests.ps1` en Windows)
-- Bash (para `run_tests.sh` en Linux/macOS)
-- `@vscode/vsce` (`npm install -g @vscode/vsce`) para rebuildar la extensión
+- Rust stable (edition 2024 — requires Rust ≥ 1.85)
+- PowerShell 7+ (for `run_tests.ps1` on Windows)
+- Bash (for `run_tests.sh` on Linux/macOS)
+- `@vscode/vsce` (`npm install -g @vscode/vsce`) to rebuild the extension
 
 ### Build
 
 ```powershell
 cargo build           # debug
-cargo build --release # release (usado por cargo-dist)
+cargo build --release # release (used by cargo-dist)
 ```
 
 ### Tests
 
 ```powershell
-# Rust unit tests (lexer interno, etc.)
+# Rust unit tests (internal lexer, etc.)
 cargo test
 ```
 
-Suite completa del lenguaje — Windows (PowerShell):
+Full language suite — Windows (PowerShell):
 
 ```powershell
-.\run_tests.ps1                    # suite completa (E2E + unit + error + security)
-.\run_tests.ps1 -unit              # solo unit tests (basados en framework.sz)
-.\run_tests.ps1 -e2e               # E2E con golden files + tests de error
-.\run_tests.ps1 -security          # solo tests de seguridad/error
-.\run_tests.ps1 -filter "switch"   # tests cuyo nombre matchea un patrón
-.\run_tests.ps1 -generate          # regenera los .expected tras cambiar el lenguaje
+.\run_tests.ps1                    # full suite (E2E + unit + error + security)
+.\run_tests.ps1 -unit              # unit tests only (framework.sz based)
+.\run_tests.ps1 -e2e               # E2E with golden files + error tests
+.\run_tests.ps1 -security          # security/error tests only
+.\run_tests.ps1 -filter "switch"   # tests whose name matches a pattern
+.\run_tests.ps1 -generate          # regenerates the .expected files after a language change
 ```
 
-Linux / macOS (Bash) — mismos flags con doble guion:
+Linux / macOS (Bash) — same flags with double dashes:
 
 ```bash
-./run_tests.sh                     # suite completa
+./run_tests.sh                     # full suite
 ./run_tests.sh --unit
 ./run_tests.sh --e2e
 ./run_tests.sh --security
@@ -691,143 +695,146 @@ Linux / macOS (Bash) — mismos flags con doble guion:
 ./run_tests.sh --generate
 ```
 
-⚠️ `-generate` / `--generate` sobrescribe los golden files: correlo solo cuando el
-cambio de salida es intencional, y revisá el diff antes de commitear.
+⚠️ `-generate` / `--generate` overwrites the golden files: run it only when the
+output change is intentional, and review the diff before committing.
 
-### Release local
+### Local release
 
-Para generar el `.msi` localmente se requiere WiX Toolset v3 + `cargo install cargo-wix`. En la práctica el `.msi` se genera automáticamente vía GitHub Actions al hacer push de un tag.
+Producing the `.msi` locally requires WiX Toolset v3 + `cargo install cargo-wix`.
+In practice the `.msi` is generated automatically via GitHub Actions when a tag
+is pushed.
 
-### Extensión VS Code
+### VS Code extension
 
 ```powershell
 cd vscode-serez
-vsce package                        # genera .vsix
+vsce package                        # produces the .vsix
 antigravity-ide.cmd --install-extension serez-code-0.2.0.vsix
 ```
 
 ---
 
-## 13. Convenciones para contribuir al core
+## 13. Conventions for contributing to the core
 
-### Invariantes del proyecto
+### Project invariants
 
-- **Cero `unsafe` en el core del intérprete** — el modelo de memoria por arenas
-  está construido a propósito sin bloques unsafe. Toda feature nueva mantiene esa
-  invariante. (`namespaces_os.rs` usa `unsafe` solo para llamadas FFI de
-  plataforma, tipo `GlobalMemoryStatusEx`.)
-- **Dependencias de runtime mínimas** — agregar un crate nuevo exige una razón
-  fuerte.
-- **Los errores van a `stderr`** — `eprintln!` para todo error; `println!` solo
-  para salida del programa (`out`) y el REPL.
-- **Invariante de Flash Scope** — todo constructo nuevo a nivel bloque debe
-  llamar `scopes.push()` antes de evaluar su cuerpo y `scopes.pop()` después, en
-  **todos** los code paths incluidos los de error. Olvidar un pop en un camino de
-  error deja el call stack sucio en el REPL.
-- **Toda sintaxis nueva atraviesa el pipeline completo** — `token.rs` →
-  `lexer.rs` → `ast.rs` → `parser.rs` → `evaluator/`. Nunca agregar al evaluador
-  sin el nodo de AST correspondiente.
+- **Zero `unsafe` in the interpreter core** — the arena memory model is
+  deliberately built without unsafe blocks. Every new feature keeps that
+  invariant. (`namespaces_os.rs` uses `unsafe` only for platform FFI calls such
+  as `GlobalMemoryStatusEx`.)
+- **Minimal runtime dependencies** — adding a new crate requires a strong reason.
+- **Errors go to `stderr`** — `eprintln!` for every error; `println!` only for
+  program output (`out`) and the REPL.
+- **Scope invariant** — every new block-level construct must call
+  `scopes.push()` before evaluating its body and `scopes.pop()` after, on **all**
+  code paths including error paths. Forgetting a pop on an error path leaves the
+  call stack dirty in the REPL.
+- **All new syntax flows through the full pipeline** — `token.rs` → `lexer.rs` →
+  `ast.rs` → `parser.rs` → `evaluator/`. Never add to the evaluator without the
+  corresponding AST node.
 
-### Agregar un operador infijo
+### Adding an infix operator
 
-Requiere registrarlo en **dos** lugares de `parser.rs`, o el parser falla en
-silencio:
+It must be registered in **two** places in `parser.rs`, or the parser fails
+silently:
 
 ```rust
-// 1. token_precedence() — le da su binding power al operador
+// 1. token_precedence() — gives the operator its binding power
 TokenType::MyOp => Precedence::Sum,
 
-// 2. match is_infix — habilita a parse_expression a entrar al loop infijo
+// 2. is_infix match — lets parse_expression enter the infix loop
 TokenType::MyOp => true,
 ```
 
-Después, la evaluación va en `eval_infix()` (`evaluator/ops.rs`).
+Evaluation then goes in `eval_infix()` (`evaluator/ops.rs`).
 
-### Agregar un statement
+### Adding a statement
 
-1. Agregar la variante en `TokenType` (`token.rs`). Si es keyword, cablearla en `lookup_ident()`.
-2. Agregar el/los nodo(s) de AST en `ast.rs`.
-3. Agregar el handler de parseo en `parser.rs`, dentro de `parse_statement()`.
-4. Agregar el handler de evaluación en `evaluator/stmt.rs`, dentro de `eval_statement()`.
-5. Agregar un `.sz` de test que demuestre la feature.
+1. Add the variant to `TokenType` (`token.rs`). If it is keyword-based, wire it into `lookup_ident()`.
+2. Add the AST node(s) in `ast.rs`.
+3. Add the parse handler in `parser.rs`, inside `parse_statement()`.
+4. Add the eval handler in `evaluator/stmt.rs`, inside `eval_statement()`.
+5. Add a `.sz` test that demonstrates the feature.
 
 ### Pull requests
 
-- Un cambio lógico por commit.
-- Describir **por qué** se hizo el cambio, no solo qué cambió.
-- Los PRs que agregan features del lenguaje incluyen al menos un `.sz` de ejemplo.
+- One logical change per commit.
+- Describe **why** the change was made, not just what changed.
+- PRs that add language features include at least one `.sz` example.
 
-Las convenciones de issues y PRs están en [CONTRIBUTING.md](CONTRIBUTING.md).
+Issue and PR conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-## 14. Limitaciones conocidas del lenguaje
+## 14. Known language limitations
 
-Comportamientos correctos pero que pueden sorprender:
+Correct behaviors that can nonetheless surprise you:
 
-### `for-in` crea copias
+### `for-in` creates copies
 
 ```sz
 for (let x in arr) {
-    x = x * 10;   // muta la copia — arr no cambia
+    x = x * 10;   // mutates the copy — arr does not change
 }
-// Fix: usar for (let i = 0; i < arr.length; i++) { arr[i] = ...; }
+// Fix: use for (let i = 0; i < arr.length; i++) { arr[i] = ...; }
 ```
 
-### `this.field[i].method()` no persiste
+### `this.field[i].method()` does not persist
 
-Acceder a `this.field` dentro de un método devuelve una copia. Los métodos encadenados sobre esa copia no escriben de vuelta a la instancia.
+Accessing `this.field` inside a method returns a copy. Methods chained on that
+copy do not write back to the instance.
 
 ```sz
-// ✅ Funciona: index-assign directo
+// ✅ Works: direct index-assign
 this.items[0] = newValue;
-// ✅ Funciona: método de mutación sobre this.field
+// ✅ Works: mutating method on this.field
 this.items.push(val);
-// ⚠️ No persiste: método encadenado sobre elemento
+// ⚠️ Does not persist: method chained on an element
 this.items[0].update(99);
 ```
 
-### `{` en strings activa interpolación
+### `{` in strings triggers interpolation
 
 ```sz
 out "empty: \{\}";   // ✅ → empty: {}
-out "block: {";       // ❌ interpolación sin cerrar
+out "block: {";       // ❌ unclosed interpolation
 ```
 
-### `\"` dentro de `{…}` rompe el parser
+### `\"` inside `{…}` breaks the parser
 
 ```sz
-// ❌ Error de parser:
+// ❌ Parser error:
 out "names: {arr.join(\", \")}";
 
-// ✅ Extraer a variable:
+// ✅ Extract to a variable:
 let sep = ", ";
 out "names: {arr.join(sep)}";
 ```
 
-### Parámetros enum no deben anotarse como `string`
+### Enum parameters must not be annotated as `string`
 
 ```sz
-fn add(string priority) { ... }    // ❌ type error con Priority.High
+fn add(string priority) { ... }    // ❌ type error with Priority.High
 fn add(priority) { ... }           // ✅
 ```
 
-### `public abstract TYPE method()` no está soportado
+### `public abstract TYPE method()` is not supported
 
 ```sz
-// ❌ No soportado — error de parser
+// ❌ Not supported — parser error
 public abstract decimal area();
 
-// ✅ Usar implementación por defecto que lanza
+// ✅ Use a default implementation that throws
 public decimal area() {
     throw "area() not implemented in " + this.name;
     return 0.0;
 }
 ```
 
-### Enum.Variant en `match` ✅ (arreglado en v2.1.0)
+### Enum.Variant in `match` ✅ (fixed in v2.1.0)
 
-Antes era necesario capturar el enum en una variable y usar condicionales. Desde la corrección del parser (B-75 antecedente), los patrones `Enum.Variant` funcionan directamente:
+It used to be necessary to capture the enum in a variable and use conditionals.
+Since the parser fix (B-75 antecedent), `Enum.Variant` patterns work directly:
 
 ```sz
 match dir {
@@ -836,26 +843,28 @@ match dir {
 }
 ```
 
-### Métodos de clase con nombre de keyword ✅ (arreglado en v2.1.0)
+### Class methods named after a keyword ✅ (fixed in v2.1.0)
 
-Antes, un método llamado `get`, `set` o `static` fallaba en el parser porque esos tokens son keywords (`KwGet`, `KwSet`, `KwStatic`). Desde B-75, el parser acepta cualquier token que no sea operador/delimitador como nombre de método:
+A method called `get`, `set` or `static` used to fail in the parser because those
+tokens are keywords (`KwGet`, `KwSet`, `KwStatic`). Since B-75, the parser
+accepts any token that is not an operator/delimiter as a method name:
 
 ```sz
 class Counter {
     value: int = 0;
-    public int get() { return this.value; }   // ✅ ahora funciona
+    public int get() { return this.value; }   // ✅ works now
     public void set(int v) { this.value = v; }  // ✅
 }
 ```
 
 ---
 
-## 15. Apéndice — features implementadas (histórico)
+## 15. Appendix — implemented features (historical)
 
-Lista que vivía en el README bajo "Roadmap". Está enteramente en `[x]`: no es un
-plan, es el registro de lo que ya existe, y se conserva acá porque es material de
-contribuidor, no de usuario. El registro canónico y fechado de cambios es
-[CHANGELOG.md](CHANGELOG.md) — ante cualquier discrepancia, manda el CHANGELOG.
+This list used to live in the README under "Roadmap". It is entirely `[x]`: it is
+not a plan, it is the record of what already exists, and it is kept here because
+it is contributor material, not user material. The canonical, dated record of
+changes is [CHANGELOG.md](CHANGELOG.md) — on any discrepancy, the CHANGELOG wins.
 
 
 ### Language features
@@ -918,5 +927,5 @@ contribuidor, no de usuario. El registro canónico y fechado de cambios es
 - [x] Watch mode — `sz --watch file.sz` re-runs on every save
 - [x] VS Code extension — syntax highlighting and formatter for `.sz` files (`vscode-serez/`)
 - [x] Demo apps — five `apps/*.sz` programs that exercise every language feature end-to-end
-- [x] `.sz` file formatter — `DocumentFormattingEditProvider` integrado en la extensión VS Code; `formatOnSave` activado automáticamente para `.sz`
+- [x] `.sz` file formatter — `DocumentFormattingEditProvider` integrated into the VS Code extension; `formatOnSave` enabled automatically for `.sz`
 - [x] LSP server for editor support — `sz-lsp` binary (stdio JSON-RPC): live diagnostics (parser + type checker), completion (keywords, native namespaces + their methods, document symbols), hover, go-to-definition and document symbols; wired into the VS Code extension (`serez.lsp.enabled` / `serez.lsp.path`)
