@@ -7,80 +7,80 @@ Order: most recent to oldest.
 
 ## [9.11.0] — 2026-07-27
 
-### GUI: transform afín por nodo — `Gui.nodeTransform` (rotate/scale)
+### GUI: per-node affine transform — `Gui.nodeTransform` (rotate/scale)
 
-- Nuevo primitivo de escena: **`Gui.nodeTransform(id, rotDeg, scaleXmille, scaleYmille, origX, origY)`**
-  asigna un transform afín OPCIONAL al nodo retenido (rotación en grados, escala en
-  milésimas —1000 = 1.0—, origen en px de canvas). Identidad `(0,1000,1000)` lo borra.
-- El pintor (`draw_node_transformed`) rasteriza los nodos con transform por
-  **inverse-mapping** con supersampling 2×2 (AA de bordes): rellenos (Rect/RectAlpha/
-  RoundRect) y **texto** (coverage local de glifos) e **imagen** (muestreo del bitmap)
-  se mapean pixel a pixel; los **contornos/líneas** transforman sus vértices y se
-  dibujan rectos; el círculo escala su radio. `SceneNode` lleva un campo `tr: Option`.
-- Habilita `transform: rotate()/scale()/scaleX/scaleY` en serez-ui (el subárbol del
-  elemento se transforma alrededor de su top-left = `transform-origin: 0 0`).
+- New scene primitive: **`Gui.nodeTransform(id, rotDeg, scaleXmille, scaleYmille, origX, origY)`**
+  assigns an OPTIONAL affine transform to the retained node (rotation in degrees, scale in
+  thousandths —1000 = 1.0—, origin in canvas px). The identity `(0,1000,1000)` clears it.
+- The painter (`draw_node_transformed`) rasterizes transformed nodes by
+  **inverse-mapping** with 2×2 supersampling (edge AA): fills (Rect/RectAlpha/
+  RoundRect), **text** (local glyph coverage) and **images** (bitmap sampling)
+  are mapped pixel by pixel; **outlines/lines** transform their vertices and are
+  drawn straight; the circle scales its radius. `SceneNode` carries a `tr: Option` field.
+- Enables `transform: rotate()/scale()/scaleX/scaleY` in serez-ui (the element's
+  subtree is transformed around its top-left = `transform-origin: 0 0`).
 
 ## [9.10.0] — 2026-07-27
 
-### GUI: texto por PÍXELES — `Gui.nodeTextPx` / `Gui.measureTextPx` (font-size real)
+### GUI: text in PIXELS — `Gui.nodeTextPx` / `Gui.measureTextPx` (real font-size)
 
-- El motor de glifos (cosmic-text) ahora rasteriza por **tamaño en píxeles** en vez de
-  por una escala entera de la rejilla 8×8. Internamente `ensure_glyph`/`measure`/
-  `text_width`/`char_width`/`advances`/`draw_text` toman `px` (el tamaño real); la
-  rejilla monoespaciada avanza `px`/carácter en vez de `8*scale`. La cache de glifos
-  se indexa por px.
-- **API scale-based intacta**: `Gui.nodeText`, `Gui.measureText`, `Gui.drawText` y
-  `Gui.textAdvances` mapean `px = 8*scale` en su frontera → **cero cambio de
-  comportamiento** para el código existente (incluido el nodo `Text` de la escena y
-  el renderer nativo de primitivos).
-- Nuevos primitivos: **`Gui.nodeTextPx(x, y, texto, px, color)`** (nodo de escena a
-  tamaño de píxel literal) y **`Gui.measureTextPx(texto, px)`** → `[ancho_px, px]`.
-  Habilitan `font-size: Npx` de verdad en serez-ui (14/20/27/34…px, no solo múltiplos
-  de 8) en el renderer INTERPRETADO. `nodeSet` acepta `"px"` además de `"scale"`.
+- The glyph engine (cosmic-text) now rasterizes by **pixel size** instead of by an
+  integer scale of the 8×8 grid. Internally `ensure_glyph`/`measure`/
+  `text_width`/`char_width`/`advances`/`draw_text` take `px` (the real size); the
+  monospaced grid advances `px` per character instead of `8*scale`. The glyph cache
+  is keyed by px.
+- **The scale-based API is untouched**: `Gui.nodeText`, `Gui.measureText`, `Gui.drawText` and
+  `Gui.textAdvances` map `px = 8*scale` at their boundary → **zero behavior change**
+  for existing code (including the scene's `Text` node and the native primitive
+  renderer).
+- New primitives: **`Gui.nodeTextPx(x, y, text, px, color)`** (scene node at a
+  literal pixel size) and **`Gui.measureTextPx(text, px)`** → `[width_px, px]`.
+  They enable real `font-size: Npx` in serez-ui (14/20/27/34…px, not only multiples
+  of 8) in the INTERPRETED renderer. `nodeSet` accepts `"px"` in addition to `"scale"`.
 
 ## [9.9.0] — 2026-07-26
 
-### GUI: `Gui.nodeImage` con `radius` — clip redondeado de imagen
+### GUI: `Gui.nodeImage` with `radius` — rounded image clipping
 
-- `Gui.nodeImage` acepta un 7º argumento opcional `radius`:
-  `(x, y, imageId, w, h, alpha, radius)`. El blit (nativo y escalado) enmascara las
-  esquinas con la cobertura AA del round-rect (nuevo helper `round_cov`, misma
-  distancia que `fill_round_rect`), redondeando los **píxeles** de la imagen. Habilita
-  `Image { border-radius }` de verdad en serez-ui — antes el borde redondeaba pero la
-  imagen adentro quedaba rectangular.
+- `Gui.nodeImage` accepts an optional 7th argument `radius`:
+  `(x, y, imageId, w, h, alpha, radius)`. The blit (native and scaled) masks the
+  corners with the round-rect's AA coverage (new `round_cov` helper, same distance
+  as `fill_round_rect`), rounding the image's **pixels**. This enables real
+  `Image { border-radius }` in serez-ui — previously the border was rounded but the
+  image inside stayed rectangular.
 
-### GUI: `Gui.nodeRoundRectOutline` — contorno redondeado (nodo retained)
+### GUI: `Gui.nodeRoundRectOutline` — rounded outline (retained node)
 
-- Nuevo primitivo de escena: **`Gui.nodeRoundRectOutline(x, y, w, h, radius, color)`**
-  dibuja el **contorno** (1px, esquinas antialiased) de un rect redondeado. Antes solo
-  había `nodeRoundRect` (relleno) y `nodeRectOutline` (recto), así que un `border` con
-  `border-radius` quedaba con el borde cuadrado. Reusa la distancia AA de
-  `fill_round_rect` pintando solo la banda del anillo.
-- Habilita `border` + `border-radius` juntos en serez-ui: contenedores (`div`/`.card`),
-  Image y Modal dibujan el borde redondeado en vez de cuadrado.
+- New scene primitive: **`Gui.nodeRoundRectOutline(x, y, w, h, radius, color)`**
+  draws the **outline** (1px, antialiased corners) of a rounded rect. Previously there
+  was only `nodeRoundRect` (filled) and `nodeRectOutline` (straight), so a `border` with
+  `border-radius` ended up with square corners. It reuses the AA distance from
+  `fill_round_rect`, painting only the ring band.
+- Enables `border` + `border-radius` together in serez-ui: containers (`div`/`.card`),
+  Image and Modal draw a rounded border instead of a square one.
 
 ## [9.7.0] — 2026-07-26
 
-### GUI: `Gui.nodeImage` escala y aplica alpha (nodo retained)
+### GUI: `Gui.nodeImage` scales and applies alpha (retained node)
 
-- El nodo de imagen **retained** (`Gui.nodeImage`) pasa de solo tamaño nativo a
-  aceptar, de forma **aditiva**, tamaño y opacidad:
-  `Gui.nodeImage(x, y, imageId)` (nativo), `(x, y, imageId, w, h)` (escalado) y
-  `(x, y, imageId, w, h, alpha)` (escalado + alpha global 0–255). Reusa el mismo
-  `draw_image_scaled` que ya usaba `Gui.drawImage`, pero en la escena (con dirty-skip),
-  así que sirve al renderer **retained** de serez-ui — antes solo el `Gui.drawImage`
-  inmediato escalaba, y `renderScene` lo tapaba.
-- Habilita el CSS de imágenes de serez-ui: `Image { width / height / opacity }` ahora
-  funciona (el escalado por el nodo retained no existía).
+- The **retained** image node (`Gui.nodeImage`) goes from native size only to
+  accepting, **additively**, size and opacity:
+  `Gui.nodeImage(x, y, imageId)` (native), `(x, y, imageId, w, h)` (scaled) and
+  `(x, y, imageId, w, h, alpha)` (scaled + global alpha 0–255). It reuses the same
+  `draw_image_scaled` that `Gui.drawImage` already used, but in the scene (with dirty-skip),
+  so it serves serez-ui's **retained** renderer — previously only the immediate
+  `Gui.drawImage` scaled, and `renderScene` covered it up.
+- Enables serez-ui's image CSS: `Image { width / height / opacity }` now
+  works (scaling via the retained node did not exist).
 
 ## [9.6.0] — 2026-07-24
 
-### `.szs`: bloques `@when` / `@else` — una lógica que agrupa varios elementos
+### `.szs`: `@when` / `@else` blocks — one condition grouping several elements
 
-- Nuevo at-rule del motor CSS: **`@when (cond) { … }`** envuelve varias reglas
-  (tags, `.clases`, `#ids`) bajo **una misma condición lógica**, para no repetir la
-  condición selector por selector. La "consulta" no es una media-query: es la misma
-  lógica `.szs` de las reglas (una variable de estado, o `width`/`height`, con
+- New at-rule in the CSS engine: **`@when (cond) { … }`** wraps several rules
+  (tags, `.classes`, `#ids`) under **a single logical condition**, so the condition
+  does not have to be repeated selector by selector. The "query" is not a media query:
+  it is the same `.szs` logic the rules use (a state variable, or `width`/`height`, with
   `and`/`or`/`not`).
 
   ```css
@@ -90,383 +90,379 @@ Order: most recent to oldest.
       #main  { gap: 4 }
   }
   ```
-- **`@else`** es el complemento del `@when` anterior, y **`@else (cond)`** encadena
-  else-if. Las ramas son **mutuamente excluyentes** (se evalúan de arriba hacia
-  abajo, la primera que cumple gana), así que no hay que negar a mano los rangos:
+- **`@else`** is the complement of the preceding `@when`, and **`@else (cond)`** chains
+  else-if. The branches are **mutually exclusive** (evaluated top to bottom, the first
+  match wins), so ranges do not have to be negated by hand:
 
   ```css
   @when (w < 200) { body { color: #100 } }
   @else (w < 400) { body { color: #200 } }
   @else           { body { color: #300 } }
   ```
-- Se pueden **anidar** (`@when` dentro de `@when`: las condiciones se AND-ean) y una
-  regla de adentro puede tener **su propia** `(cond)`, que se combina con la del
-  bloque. `@else` niega la condición **completa** de la rama previa (`¬(a or b)` es
-  `!eval(a or b)`, sin De Morgan), así que compuestos como `(a or b)` se complementan
-  bien.
-- Las at-rules **desconocidas** (`@media`, …) se **descartan enteras** en vez de
-  ensuciar el parseo.
-- Implementación: la condición de una regla pasó de una sola DNF a un **AND de
-  términos** negables (`CondTerm`); el parser es recursivo por bloque con condición
-  heredada. Cubierto por 9 tests Rust nuevos en `namespaces_gui::css` (18 en total),
-  incl. el caso de negación de condición compuesta. El motor interpretado de serez-ui
-  recibe la misma gramática (nuevo `when_test`, suite 22/22) para no romper la paridad.
+- They can be **nested** (`@when` inside `@when`: the conditions are AND-ed) and a rule
+  inside can carry **its own** `(cond)`, which is combined with the block's. `@else`
+  negates the **whole** condition of the previous branch (`¬(a or b)` is
+  `!eval(a or b)`, no De Morgan), so compounds like `(a or b)` complement correctly.
+- **Unknown** at-rules (`@media`, …) are **discarded whole** instead of polluting
+  the parse.
+- Implementation: a rule's condition went from a single DNF to an **AND of negatable
+  terms** (`CondTerm`); the parser is recursive per block with an inherited condition.
+  Covered by 9 new Rust tests in `namespaces_gui::css` (18 in total), including the
+  negation of a compound condition. serez-ui's interpreted engine gets the same grammar
+  (new `when_test`, suite 22/22) so parity is not broken.
 
 ## [9.5.0] — 2026-07-21
 
-### `.szs`: condiciones compuestas con `and` / `or` / `not`
+### `.szs`: compound conditions with `and` / `or` / `not`
 
-- La condición de una regla del motor CSS nativo ya no es una sola comparación:
-  admite varias unidas por **`and`** y **`or`**, y negación con **`not`**, al
-  estilo de las media queries de CSS. `&&`, `||` y `!` se aceptan como alias.
+- A rule's condition in the native CSS engine is no longer a single comparison:
+  it accepts several joined by **`and`** and **`or`**, plus negation with **`not`**,
+  in the style of CSS media queries. `&&`, `||` and `!` are accepted as aliases.
 
   ```css
   body  (width > 600 and flag == true) { background-color: #c12; }
   .item (selected or hovered)          { border-color: #3b82f6; }
   .row  (not hidden)                   { display: flex; }
   ```
-- Precedencia habitual: `not` liga más que `and`, y `and` más que `or`, así que
-  `a or b and c` es `a or (b and c)`. **No** hay paréntesis de agrupación: el
-  scanner de la hoja cierra la condición en el primer `)`.
-- Los conectores sólo cuentan como palabra completa y respetan las comillas, así
-  que un nombre como `android`/`notify` o un valor `"a or b"` no parten nada.
-- Antes esto fallaba **en silencio**: el parser cortaba en el primer operador de
-  comparación, dejaba una variable inexistente (`width > 600 && flag`) y la regla
-  no aplicaba nunca, sin ningún error.
-- `()` vacío pasó a significar "sin condición" en vez de una condición que nunca
-  pasa.
-- Cubierto por los tests Rust de `namespaces_gui::css` (9 casos), ahora incluidos
-  en `run_tests.ps1`. El motor interpretado de serez-ui recibe la misma gramática
-  para no romper la paridad.
+- Usual precedence: `not` binds tighter than `and`, and `and` tighter than `or`, so
+  `a or b and c` is `a or (b and c)`. There are **no** grouping parentheses: the
+  stylesheet scanner closes the condition at the first `)`.
+- The connectors only count as whole words and respect quotes, so a name like
+  `android`/`notify` or a value `"a or b"` does not split anything.
+- This used to fail **silently**: the parser cut at the first comparison operator,
+  left a non-existent variable (`width > 600 && flag`) and the rule never applied,
+  with no error at all.
+- An empty `()` now means "no condition" instead of a condition that never passes.
+- Covered by the `namespaces_gui::css` Rust tests (9 cases), now included in
+  `run_tests.ps1`. serez-ui's interpreted engine gets the same grammar so parity is
+  not broken.
 
 ## [9.4.0] — 2026-07-21
 
-### GUI: colores tolerantes — hex `#rgba` / `#rrggbbaa` de color-picker
+### GUI: forgiving colors — `#rgba` / `#rrggbbaa` hex from color pickers
 
-- El parser de color acepta las formas con alpha que emiten los color-pickers
-  (`#rgba`, `#rrggbbaa`): el alpha tiñe el fondo, como `rgba()` en CSS.
-- Documentación del motor de primitivos puesta al día en el README.
+- The color parser accepts the alpha forms that color pickers emit
+  (`#rgba`, `#rrggbbaa`): the alpha tints the background, like `rgba()` in CSS.
+- Primitive-engine documentation brought up to date in the README.
 
-### BUG: `obj.metodo` sin paréntesis ejecutaba el método en vez de referenciarlo
+### BUG: `obj.method` without parentheses ran the method instead of referencing it
 
-- **Leer un método ahora vale la función ligada al objeto, no su ejecución.**
-  `let ref = obj.metodo` (sin paréntesis, sin argumentos) devuelve una función
-  invocable después; antes caía al despacho de métodos y lo corría con cero
-  argumentos, devolviendo su valor de retorno.
-- Esto rompía el patrón de **pasar un handler como dato** (`onClick={this.handler}`,
-  handlers en arrays/dicts, callbacks entre componentes): el método se disparaba
-  en CADA lectura, así que un método que muta estado lo hacía en cada render
-  (un booleano se daba vuelta solo, frame a frame), y lo que quedaba guardado era
-  su retorno — `null` en un `void` — de modo que el callback nunca se ejecutaba
-  al invocarlo ("Attempt to call a non-function").
-- Si el método declaraba parámetros, la auto-invocación con cero argumentos
-  mataba el programa en el acto: `Method 'pick' expects 1 argument(s), got 0`.
-- La referencia ligada **conserva el contexto de su clase**: su cuerpo sigue
-  viendo los miembros privados propios, y referenciar un método privado desde
-  afuera se rechaza igual que llamarlo.
-- **No cambia** el mecanismo de `get prop()`: los getters explícitos se siguen
-  ejecutando al leerlos, y `obj.campo` sigue siendo lectura de campo. La
-  resolución es campo → getter → referencia a método.
-- **Breaking**: código que escribiera `obj.metodoSinArgs` esperando que se
-  ejecutara ahora obtiene la función sin llamarla. Barrido del ecosistema
+- **Reading a method now yields the function bound to the object, not its execution.**
+  `let ref = obj.method` (no parentheses, no arguments) returns a function you can
+  invoke later; previously it fell through to method dispatch and ran it with zero
+  arguments, returning its return value.
+- This broke the pattern of **passing a handler as data** (`onClick={this.handler}`,
+  handlers in arrays/dicts, callbacks between components): the method fired on
+  EVERY read, so a state-mutating method did so on every render (a boolean flipped
+  by itself, frame after frame), and what got stored was its return value —
+  `null` for a `void` — so the callback never ran when invoked
+  ("Attempt to call a non-function").
+- If the method declared parameters, the zero-argument auto-invocation killed the
+  program on the spot: `Method 'pick' expects 1 argument(s), got 0`.
+- The bound reference **keeps its class context**: its body still sees its own
+  private members, and referencing a private method from outside is rejected just
+  like calling it.
+- The `get prop()` mechanism is **unchanged**: explicit getters still run when read,
+  and `obj.field` is still a field read. Resolution is field → getter → method
+  reference.
+- **Breaking**: code that wrote `obj.methodWithNoArgs` expecting it to run now gets
+  the function without calling it. Ecosystem sweep
   (`Serez-code`, `serez-ui`, `serez-http`, `serez-ai`, `serez-graph`,
   `serez-pack`, `serez-dotenv`, `serez-cobol`, `serez-strike`, `serez-apipack`):
-  cero ocurrencias de esa forma.
-- Regresión cubierta por `tests/unit_method_ref.sz` (10 casos).
+  zero occurrences of that form.
+- Regression covered by `tests/unit_method_ref.sz` (10 cases).
 
 ## [9.3.8] — 2026-07-20
 
-> Primera versión publicada después de 9.2.7: el tag local `v9.2.8` (bump
-> revertido) no tiene release, así que sus cambios se listan acá.
+> First version published after 9.2.7: the local tag `v9.2.8` (a reverted bump)
+> has no release, so its changes are listed here.
 
-### Extensión de editor: formateo de `.szx` y `.szs` (vscode-serez 1.9.0)
+### Editor extension: `.szx` and `.szs` formatting (vscode-serez 1.9.0)
 
-- El formatter cubre los tres lenguajes: además de `.sz`, ahora `.szx` (llaves y
-  profundidad del JSX) y `.szs` (bloques y comentarios `/* */`).
+- The formatter covers all three languages: besides `.sz`, now `.szx` (JSX braces
+  and depth) and `.szs` (blocks and `/* */` comments).
 
-### GUI: paridad del motor nativo con el renderer interpretado
+### GUI: native engine parity with the interpreted renderer
 
-- `:font` reconocido en `loadStylesheet`, condición booleana "a pelo" (sin
-  comparador) en las reglas `.szs`, herencia de `font-scale`, `white-space: nowrap`,
-  shrink-wrap de elementos `absolute` sin `width`, alpha en los nodos de texto y
-  alias `:active-focus`.
+- `:font` recognized in `loadStylesheet`, bare boolean conditions (no comparator)
+  in `.szs` rules, `font-scale` inheritance, `white-space: nowrap`,
+  shrink-wrap of `absolute` elements without `width`, alpha on text nodes and the
+  `:active-focus` alias.
 
-### `sz publish` multi-usuario: login con cuenta del registry, sin tokens a mano
+### Multi-user `sz publish`: log in with a registry account, no hand-made tokens
 
-- **`sz publish` / `sz unpublish` ya no exigen `SEREZ_API_KEY`**: la primera vez
-  piden usuario y contraseña de una cuenta del registry (se crea en
-  `packages.serezcode.org/register`), canjean las credenciales por un token de
-  larga vida vía `POST /api/login` y lo guardan en `~/.serez/credentials.json`.
-  De ahí en adelante es solo `sz publish`.
-- La contraseña se lee sin eco (raw mode por crossterm) en TTY real; con stdin
-  piped (scripts/tests) cae a lectura plana.
-- Si el token guardado fue revocado (401), se borra la credencial, se pide
-  login de nuevo y se reintenta una vez automáticamente.
-- Errores 403 del registry (paquete de otro usuario) llegan con el mensaje del
-  servidor; 409 sigue reportando "version already exists".
-- **Compat**: si `SEREZ_API_KEY` está seteada se usa como antes (header
-  `x-api-key` legacy) y no se pide login. `SEREZ_REGISTRY_URL` sigue
-  funcionando para apuntar a un registry propio; la credencial guardada es por
-  registry (si cambia la URL, pide login de nuevo).
-- **`sz logout` nuevo**: borra la credencial guardada; el próximo `sz publish`
-  vuelve a pedir usuario/contraseña (sirve para cambiar de cuenta). Sin sesión
-  activa avisa y sale con éxito.
+- **`sz publish` / `sz unpublish` no longer require `SEREZ_API_KEY`**: the first time
+  they ask for the username and password of a registry account (created at
+  `packages.serezcode.org/register`), exchange the credentials for a long-lived token
+  via `POST /api/login` and store it in `~/.serez/credentials.json`.
+  From then on it is just `sz publish`.
+- The password is read without echo (raw mode via crossterm) on a real TTY; with
+  piped stdin (scripts/tests) it falls back to plain reading.
+- If the stored token was revoked (401), the credential is deleted, login is
+  requested again and the operation is retried once automatically.
+- Registry 403 errors (someone else's package) arrive with the server's message;
+  409 still reports "version already exists".
+- **Compat**: if `SEREZ_API_KEY` is set it is used as before (legacy `x-api-key`
+  header) and no login is requested. `SEREZ_REGISTRY_URL` still works for pointing
+  at your own registry; the stored credential is per registry (if the URL changes,
+  it asks for login again).
+- **New `sz logout`**: deletes the stored credential; the next `sz publish` asks for
+  username/password again (useful for switching accounts). With no active session it
+  says so and exits successfully.
 
 ## [9.2.7] — 2026-07-14
 
-### Fixes de propagación de `throw` + errores de traducción `.szx` visibles
+### `throw` propagation fixes + visible `.szx` translation errors
 
-- **`throw` en `out f()` conserva el mensaje**: el rewind del scratch-mark del
-  statement `out` liberaba el payload lanzado ANTES de renderizarlo — el uncaught
-  mostraba "Referencia inválida" en vez del mensaje real. Ahora se renderiza
-  primero y se rebobina después.
-- **`throw` al evaluar un argumento anidado ya no muere en silencio**: en
-  `f(g())` con `g` lanzando (también spread `f(...g())`), el throw degradaba a
-  un Error pelado — exit 1 sin ningún mensaje y sin posibilidad de `catch`.
-  Ahora se propaga como Throw re-plantando el payload a través del frame de la
-  llamada (capturable con try/catch, y visible como UNCAUGHT si nadie lo agarra).
-- **Los errores del traductor `.szx` llegan a la consola**: el proceso hijo del
-  traductor corre con `CREATE_NO_WINDOW` y su stderr se perdía; ahora
-  `sz app.szx` y el `import` de módulos `.szx` lo capturan y lo reimprimen como
-  `TRANSLATE ERROR` antes del mensaje genérico. (Complementa la validación nueva
-  del traductor de serez-ui: dos raíces JSX adyacentes en un `return()` abortan
-  con la línea real del `.szx` y la sugerencia del fragmento `<>…</>`.)
-- Tests: `unit_throw_propagation` (3 casos capturables), `err_throw_out_stmt`,
-  `err_throw_nested_arg` + 2 tests CLI que verifican el contenido exacto del
-  mensaje en stderr.
+- **`throw` inside `out f()` keeps its message**: rewinding the `out` statement's
+  scratch mark freed the thrown payload BEFORE rendering it — the uncaught error
+  showed "Referencia inválida" instead of the real message. Now it renders first
+  and rewinds afterwards.
+- **A `throw` while evaluating a nested argument no longer dies silently**: in
+  `f(g())` with `g` throwing (also spread `f(...g())`), the throw degraded into a
+  bare Error — exit 1 with no message at all and no chance to `catch` it.
+  It now propagates as a Throw, re-planting the payload across the call's frame
+  (catchable with try/catch, and visible as UNCAUGHT if nobody catches it).
+- **`.szx` translator errors reach the console**: the translator's child process
+  runs with `CREATE_NO_WINDOW` and its stderr was lost; now
+  `sz app.szx` and `import` of `.szx` modules capture and reprint it as
+  `TRANSLATE ERROR` before the generic message. (This complements serez-ui's new
+  translator validation: two adjacent JSX roots in a `return()` abort with the real
+  `.szx` line and the `<>…</>` fragment suggestion.)
+- Tests: `unit_throw_propagation` (3 catchable cases), `err_throw_out_stmt`,
+  `err_throw_nested_arg` + 2 CLI tests that verify the exact message content on stderr.
 
 ## [9.2.6] — 2026-07-14
 
-### Motor de primitivos: translucidez real del fondo (rgba/hsla)
+### Primitive engine: real background translucency (rgba/hsla)
 
-- **`background`/`background-color` con `rgba()`/`hsla()` respeta el canal
-  alfa**: la translucidez aplica SOLO al fondo del nodo (y se multiplica con la
-  `opacity` acumulada del subárbol) en vez de ignorarse. Corrige el backdrop
-  del Modal: `.modal-backdrop { opacity: 0.6 }` lavaba también la caja hija;
-  con `background-color: rgba(0,0,0,0.6)` (hoja UA de serez-ui ≥ 4.3.6) el
-  velo es translúcido y el modal queda opaco.
+- **`background`/`background-color` with `rgba()`/`hsla()` respects the alpha
+  channel**: translucency applies ONLY to the node's background (and is multiplied
+  with the subtree's accumulated `opacity`) instead of being ignored. This fixes the
+  Modal backdrop: `.modal-backdrop { opacity: 0.6 }` washed out the child box too;
+  with `background-color: rgba(0,0,0,0.6)` (serez-ui UA sheet ≥ 4.3.6) the veil is
+  translucent and the modal stays opaque.
 
 ## [9.2.5] — 2026-07-14
 
-### Motor de primitivos: gaps CSS estructurales
+### Primitive engine: structural CSS gaps
 
-- **Selectores descendientes `.a .b`** (el último simple es el sujeto, los
-  anteriores matchean ancestros; `>` se trata como descendiente), **clases
-  compuestas `.a.b`** (antes solo se retenía la última) y **grupos
-  `h1, h2 { }`** (una regla por selector). Los anillos de foco tipo
-  `Switch.focused .switch-track` dejan de ser inertes.
-- **Pseudo-clases `:focus`/`:hover`/`:active`/`:disabled`**: matchean
-  atributos de estado del nodo (el motor es stateless; el framework marca el
-  estado en el árbol, mismo contrato que `.focused`).
-- **`height` en `%` resuelve contra el PADRE** (el ancestro con height
-  explícito más cercano; sin él cae a la ventana, compat con lo anterior).
-- **`opacity` se propaga al subárbol completo, incluido el texto** (alpha
-  acumulado ancestros × propio; los glifos multiplican su cobertura).
-- **`linear-gradient(...)`** en `background`/`background-image`
-  (`to right/left/top/bottom` y `Ndeg`; con borde pinta marco inset).
-- **`box-shadow`** `[ox oy [blur [spread]]] color` con falloff suave
-  (inset/spread se ignoran).
-- **`transform: translate/translateX/translateY`** (px): corrimiento visual
-  sin tocar el flujo (como relative).
-- **`display: grid` básico**: `grid-template-columns` con px/%/fr/repeat(),
-  `gap`/`column-gap`/`row-gap`, hijos row-major.
-- Adopción serez-ui (4.3.5): **drag continuo del Slider** con el mouse
-  (antes solo click-to-set + teclado).
+- **Descendant selectors `.a .b`** (the last simple selector is the subject, the
+  earlier ones match ancestors; `>` is treated as descendant), **compound classes
+  `.a.b`** (previously only the last one was kept) and **groups
+  `h1, h2 { }`** (one rule per selector). Focus rings like
+  `Switch.focused .switch-track` stop being inert.
+- **Pseudo-classes `:focus`/`:hover`/`:active`/`:disabled`**: they match the node's
+  state attributes (the engine is stateless; the framework marks the state in the
+  tree, the same contract as `.focused`).
+- **`height` in `%` resolves against the PARENT** (the nearest ancestor with an
+  explicit height; without one it falls back to the window, compatible with the
+  previous behavior).
+- **`opacity` propagates to the whole subtree, text included** (accumulated alpha
+  ancestors × own; glyphs multiply their coverage).
+- **`linear-gradient(...)`** in `background`/`background-image`
+  (`to right/left/top/bottom` and `Ndeg`; with a border it paints an inset frame).
+- **`box-shadow`** `[ox oy [blur [spread]]] color` with soft falloff
+  (inset/spread are ignored).
+- **`transform: translate/translateX/translateY`** (px): visual offset without
+  touching the flow (like relative).
+- **Basic `display: grid`**: `grid-template-columns` with px/%/fr/repeat(),
+  `gap`/`column-gap`/`row-gap`, children in row-major order.
+- serez-ui adoption (4.3.5): **continuous Slider dragging** with the mouse
+  (previously click-to-set + keyboard only).
 
 ## [9.2.4] — 2026-07-12
 
-### Import de módulos `.szx` + refactor modular del motor de primitivos + más CSS
+### `.szx` module imports + modular refactor of the primitive engine + more CSS
 
-- **`sz app.szx` corre directo** y **`import "x"` resuelve módulos `.szx`**
-  (JSX) con traducción on-the-fly, delegada al translator de serez-ui
-  (`tools/translate.sz`; requiere serez-ui instalado). Si `.sz` y `.szx`
-  coexisten gana `.sz`. Reemplaza los wrappers szx.ps1/szx.sh.
-- **Refactor modular**: el motor de primitivos salió de `namespaces_gui.rs`
-  (5290 → 4037 líneas) a los submódulos `namespaces_gui/css.rs` (selectores +
-  resolución de props) y `namespaces_gui/render.rs` (layout + emit de escena),
-  sin exponer internos (submódulo hijo ve los privados del padre).
-- **CSS**: colores `rgb()/rgba()/hsl()/hsla()` y más nombres CSS; `font-size`
-  en px (prioridad sobre font-scale); el **`border` desplaza el contenido**
-  (content arranca en `max(padding, border)`); **herencia de `color`** de
-  ancestro a hijos; **`flex-shrink`** (una fila de fijos que no caben encoge
-  proporcionalmente en vez de desbordar).
-- **Build sin warnings propios** (limpieza de unused/deprecated en crypto,
-  autodiff, svg y Cargo.toml).
+- **`sz app.szx` runs directly** and **`import "x"` resolves `.szx` modules**
+  (JSX) with on-the-fly translation, delegated to serez-ui's translator
+  (`tools/translate.sz`; requires serez-ui installed). If `.sz` and `.szx`
+  coexist, `.sz` wins. This replaces the szx.ps1/szx.sh wrappers.
+- **Modular refactor**: the primitive engine moved out of `namespaces_gui.rs`
+  (5290 → 4037 lines) into the submodules `namespaces_gui/css.rs` (selectors +
+  prop resolution) and `namespaces_gui/render.rs` (layout + scene emission),
+  without exposing internals (a child submodule sees its parent's privates).
+- **CSS**: `rgb()/rgba()/hsl()/hsla()` colors and more CSS names; `font-size`
+  in px (takes priority over font-scale); **`border` displaces the content**
+  (content starts at `max(padding, border)`); **`color` inheritance** from
+  ancestor to children; **`flex-shrink`** (a row of fixed items that do not fit
+  shrinks proportionally instead of overflowing).
+- **Build with no warnings of our own** (cleanup of unused/deprecated in crypto,
+  autodiff, svg and Cargo.toml).
 
 ## [9.2.2] — 2026-07-11
 
-### Motor de primitivos: flex web-like + refactor legible + fixes de texto
+### Primitive engine: web-like flex + readable refactor + text fixes
 
-- **Shrink-to-fit del texto en flex row**: spans/labels sin `flex` ni `width`
-  miden su contenido en vez de crecer y llenar — `justify-content` por fin
-  actúa en filas de texto (arregla la flecha del Dropdown pegada al borde,
-  `.modal-header` y los centrados de checkbox/fileinput). Los strings sueltos
-  en una fila miden igual que un span.
-- **Tanda quirúrgica CSS**: `width` px/`%` en hijos flex (el `%` es del
-  contenedor, no se re-aplica sobre el slot), valores con sufijo `px` en
-  props numéricas, `gap` solo ENTRE hijos (no después del último),
-  `position:relative` con left/top (right/bottom = negativos) sin alterar el
-  flujo.
-- **textbox**: `line-height` real, un `height` explícito manda sobre el
-  calculado, y caret/selección con alto de glifo.
-- **Refactor legible del motor** (para poder modificarlo a mano):
-  `prim_render` monolítico (~400 líneas) → dispatcher de ~70 líneas + piezas
-  tipadas `PrimCtx`/`PrimFrame`/`PrimStyle`/`PrimBox`, hojas (`prim_draw_*`)
-  y contenedores (`prim_layout_*`), comentado en español con un mapa del
-  código al tope.
-- Adopción serez-ui: **caret proporcional al click** en Input/Textarea
-  (`Gui.textAdvances`, límite de carácter más cercano) con drag-selección.
+- **Shrink-to-fit text in flex rows**: spans/labels without `flex` or `width`
+  measure their content instead of growing to fill — `justify-content` finally
+  acts on rows of text (this fixes the Dropdown arrow stuck against the edge,
+  `.modal-header` and the checkbox/fileinput centering). Bare strings in a row
+  measure the same as a span.
+- **Surgical CSS batch**: `width` in px/`%` on flex children (the `%` is of the
+  container and is not re-applied over the slot), values with a `px` suffix in
+  numeric props, `gap` only BETWEEN children (not after the last one),
+  `position:relative` with left/top (right/bottom = negatives) without altering
+  the flow.
+- **textbox**: real `line-height`, an explicit `height` overrides the computed one,
+  and caret/selection at glyph height.
+- **Readable refactor of the engine** (so it can be modified by hand):
+  the monolithic `prim_render` (~400 lines) → a ~70-line dispatcher + typed pieces
+  `PrimCtx`/`PrimFrame`/`PrimStyle`/`PrimBox`, leaves (`prim_draw_*`)
+  and containers (`prim_layout_*`), commented in Spanish with a code map at the top.
+- serez-ui adoption: **caret proportional to the click** in Input/Textarea
+  (`Gui.textAdvances`, nearest character boundary) with drag selection.
 
 ## [9.2.1] — 2026-07-10
 
-### Motor de primitivos: adopción en apps reales (serez-strike)
+### Primitive engine: adoption in real apps (serez-strike)
 
-- **`img` acepta una RUTA de imagen raster**: si `src` no es un handle numérico de
-  `Gui.loadSvg`, se trata como ruta a PNG/JPG — se lee del disco, se decodifica
-  (crate `image`), se escala (preservando aspecto si solo se da una dimensión) y
-  se cachea por ruta+dimensiones. Comportamiento web-like de `<img src="…">`.
-- **`textbox` a 16px por defecto** (`font-scale: 2`, como el camino interpretado
-  de serez-ui); la hoja puede sobreescribirlo. Antes caía a 8px y los Input
-  nativos salían con texto chico.
+- **`img` accepts an image PATH**: if `src` is not a numeric handle from
+  `Gui.loadSvg`, it is treated as a path to a PNG/JPG — read from disk, decoded
+  (the `image` crate), scaled (preserving aspect ratio if only one dimension is
+  given) and cached by path+dimensions. Web-like `<img src="…">` behavior.
+- **`textbox` at 16px by default** (`font-scale: 2`, like serez-ui's interpreted
+  path); the stylesheet can override it. Previously it fell back to 8px and native
+  Inputs came out with tiny text.
 
-## [9.2.0] — 2026-07-10 (trabajo del 2026-07-07 al 2026-07-10)
+## [9.2.0] — 2026-07-10 (work from 2026-07-07 to 2026-07-10)
 
-### Motor de primitivos de render nativo: layout + CSS + paint en el core
+### Native render primitive engine: layout + CSS + paint in the core
 
-El cuello de las UIs grandes no era rasterizar píxeles (~1 ms) sino el walk de
-layout + match de CSS corriendo interpretado (51–103 ms/frame en un árbol de app
-real). El core gana un motor estilo navegador: recibe un árbol de primitivos
-genéricos tipo HTML + una hoja CSS, resuelve estilos, maqueta y emite la escena
-en Rust. Medido: **~0.04–0.08 ms/frame** de layout+CSS+emit (~1000× vs
-interpretado); frame completo ≈ 3.6 ms. El core queda genérico (no conoce los
-widgets de serez-ui): el framework hace *lowering* de sus componentes a estos
-primitivos.
+The bottleneck in large UIs was not rasterizing pixels (~1 ms) but the layout walk
++ CSS matching running interpreted (51–103 ms/frame on a real app tree). The core
+gains a browser-style engine: it takes a tree of generic HTML-like primitives + a
+CSS sheet, resolves styles, lays out and emits the scene in Rust. Measured:
+**~0.04–0.08 ms/frame** of layout+CSS+emit (~1000× vs interpreted); a full frame
+≈ 3.6 ms. The core stays generic (it does not know serez-ui's widgets): the
+framework *lowers* its components to these primitives.
 
-- **API nueva**: `Gui.loadStylesheet(src) -> handle` (hoja `.szs`),
-  `Gui.loadSvg(srcOrPath) -> handle`, y
-  `Gui.renderTree(root, sheet, w, h[, ctx]) -> regions`. El árbol es un array
-  anidado `[tag, [[prop, val]…], [hijo|texto…]]`; `renderTree` reconstruye la
-  escena retained y `Gui.renderScene(bg)` la rasteriza (dirty-skip intacto).
-- **Primitivos**: `div`, `row`, `p`, `h1`–`h6`, `span`, `b`/`strong`, `i`/`em`,
-  `hr`, `img`, `svg`, `circle`, `line`, `polyline`, `polygon` y `textbox`
-  editable (caret + selección pintados por el core; virtualización — solo
-  maqueta las líneas visibles, un texto de 10 KB deja de costar).
-- **CSS web-like**: selectores por `tag`, `*`, `.clase`, `#id` y compuestos
-  (`tag.clase#id`) + condiciones reactivas `(var op val)` evaluadas contra el
-  `ctx`; resolución "última gana". Box model completo (padding/margin por lado
-  + shorthands de 1–4 valores), `border` (incl. shorthand `1px solid #333`) y
-  `border-radius`, `width`/`height` en px/`%`/`auto`, `display:none`,
-  `text-align`, `line-height`, `letter-spacing`, `font-weight` numérico,
-  `text-decoration` (underline/line-through), `font-family`/`font-scale` por
-  nodo.
-- **Flexbox**: `row`/`display:flex` (+ `flex-direction:column`), pesos `flex`,
-  `justify-content` (los 6 modos), `align-items`, `gap`; los hijos
-  `position:absolute` quedan fuera del flujo.
-- **Overlays**: `position:absolute` con `left`/`top`/`bottom`/`right` (containing
-  block = ancestro posicionado) y `z-index` — base de Dropdown/Modal/Tooltip/
+- **New API**: `Gui.loadStylesheet(src) -> handle` (`.szs` sheet),
+  `Gui.loadSvg(srcOrPath) -> handle`, and
+  `Gui.renderTree(root, sheet, w, h[, ctx]) -> regions`. The tree is a nested array
+  `[tag, [[prop, val]…], [child|text…]]`; `renderTree` rebuilds the retained scene
+  and `Gui.renderScene(bg)` rasterizes it (dirty-skip intact).
+- **Primitives**: `div`, `row`, `p`, `h1`–`h6`, `span`, `b`/`strong`, `i`/`em`,
+  `hr`, `img`, `svg`, `circle`, `line`, `polyline`, `polygon` and an editable
+  `textbox` (caret + selection painted by the core; virtualization — it only lays
+  out the visible lines, so a 10 KB text stops being expensive).
+- **Web-like CSS**: selectors by `tag`, `*`, `.class`, `#id` and compounds
+  (`tag.class#id`) + reactive conditions `(var op val)` evaluated against the
+  `ctx`; "last one wins" resolution. Full box model (padding/margin per side
+  + 1–4 value shorthands), `border` (including the `1px solid #333` shorthand) and
+  `border-radius`, `width`/`height` in px/`%`/`auto`, `display:none`,
+  `text-align`, `line-height`, `letter-spacing`, numeric `font-weight`,
+  `text-decoration` (underline/line-through), per-node `font-family`/`font-scale`.
+- **Flexbox**: `row`/`display:flex` (+ `flex-direction:column`), `flex` weights,
+  `justify-content` (all 6 modes), `align-items`, `gap`; `position:absolute`
+  children are out of the flow.
+- **Overlays**: `position:absolute` with `left`/`top`/`bottom`/`right` (containing
+  block = positioned ancestor) and `z-index` — the basis for Dropdown/Modal/Tooltip/
   Toast.
-- **Texto proporcional real**: medición por advance de glifo (bold/italic
-  aware), word-wrap de verdad (rompe en espacios), scroll con clip por-nodo
-  (los fondos scrolleados se recortan limpio).
-- **SVG vectorial**: parser propio de un subset de SVG (paths
-  M/L/H/V/C/S/Q/T/A/Z abs+rel, shapes, `<g transform>`, herencia fill/stroke,
-  `viewBox`, colores) rasterizado con **tiny-skia** (antialiasing), con caché
-  por handle+dimensiones. Nueva dependencia de core: `tiny-skia`.
-- **Hit-testing**: las regions vuelven en PRE-orden como
-  `[tag, x, y, w, h, onClick|null]`; el valor de función embebido en `onClick`
-  sobrevive el round-trip y `.sz` enruta el click con `region[5]()`.
-- **fix(evaluator)**: al promover un objeto capturado por un closure
-  (Scoped→Global) ahora se rebindean TODOS los alias del scope, no solo el frame
-  más interno — antes el objeto se bifurcaba y las mutaciones posteriores a
-  crear una lambda se perdían.
-- Tests: `tests/unit_gui_primitives.sz` (checks headless del motor); el render
-  real se verifica con demos + screenshots. Suite **399/0**.
-- **Adopción**: serez-ui baja sus componentes a estos primitivos tras el flag
-  `useNativeRenderer` (Fase 3 completa: todos los widgets verificados nativos)
-  y serez-strike corre sobre el renderer nativo.
+- **Real proportional text**: measurement by glyph advance (bold/italic aware),
+  true word-wrap (breaking on spaces), scrolling with per-node clipping
+  (scrolled backgrounds are cut cleanly).
+- **Vector SVG**: our own parser for a subset of SVG (paths
+  M/L/H/V/C/S/Q/T/A/Z abs+rel, shapes, `<g transform>`, fill/stroke inheritance,
+  `viewBox`, colors) rasterized with **tiny-skia** (antialiasing), cached by
+  handle+dimensions. New core dependency: `tiny-skia`.
+- **Hit-testing**: regions come back in PRE-order as
+  `[tag, x, y, w, h, onClick|null]`; the function value embedded in `onClick`
+  survives the round-trip and `.sz` routes the click with `region[5]()`.
+- **fix(evaluator)**: when promoting an object captured by a closure
+  (Scoped→Global), ALL of the scope's aliases are now rebound, not just the
+  innermost frame — previously the object forked and mutations made after creating
+  a lambda were lost.
+- Tests: `tests/unit_gui_primitives.sz` (headless engine checks); the real render
+  is verified with demos + screenshots. Suite **399/0**.
+- **Adoption**: serez-ui lowers its components to these primitives behind the
+  `useNativeRenderer` flag (Phase 3 complete: every widget verified natively)
+  and serez-strike runs on the native renderer.
 
-## [8.2.0] — 2026-07-03 (trabajo del 2026-07-02 al 2026-07-03)
+## [8.2.0] — 2026-07-03 (work from 2026-07-02 to 2026-07-03)
 
-### Tanda "deuda técnica": parser estricto, semántica de closures, multi-ventana, retained-mode, audio
+### "Technical debt" batch: strict parser, closure semantics, multi-window, retained-mode, audio
 
-- **Parser: se acabaron las recuperaciones silenciosas.** `let x = ;`, `let = 5;`,
-  `let x;`, `return a +`, literales numéricos inválidos y el resto de huecos donde
-  el parser descartaba statements sin reportar ahora emiten `PARSER ERROR` con
-  posición y caret. Un programa con errores de parseo **ya no se ejecuta a medias**
-  (aborta con exit 1), y los `import` de módulos con errores de parseo abortan en
-  vez de evaluar el módulo parcial. El `;` suelto es un statement vacío legal.
-  Esto destapó y corrigió 2 bugs latentes en serez-ui (renderer.sz: `"{·"` sin
-  escapar disparaba el parser de interpolación y el `out` entero se descartaba
-  en silencio — el Select de TUI nunca imprimió). Nuevos tests `err_parse_*`.
-- **Los errores del parser dicen el ARCHIVO** (`PARSER ERROR [ruta line:col]`),
-  incluidos los módulos importados y las expresiones interpoladas.
-- **Lexer: `token.column` uniforme.** Todos los tokens llevan la posición de su
-  PRIMER carácter (antes: identificadores apuntaban una posición después del
-  último char). El LSP eliminó su corrección `ident_start_col`.
-- **Semántica: closures con CELDA compartida.** Una lambda y el scope que la
-  envuelve comparten la variable capturada a cualquier nivel de anidación: las
-  mutaciones dentro del closure escapan (contadores `makeCounter` funcionan) y
-  las escrituras posteriores son visibles dentro. El contador de un `for` es
-  fresco por iteración (como `let` de JS): los closures del loop conservan el
-  valor de su iteración (10,20,30 — no 40,40,40). Un contador declarado fuera de
-  un `while` es una celda única compartida (333). Tests de semántica actualizados.
-- **Semántica: un parámetro no-invocable ya no oculta una función homónima en
-  LLAMADAS** (el caso del param `h` que rompía render de serez-ui): `nombre(...)`
-  cae al binding invocable más cercano; las lecturas siguen viendo la sombra.
-- **Gui multi-ventana:** `Gui.openWindow(title,w,h) -> id`, `Gui.selectWindow(id)`
-  (todo el dibujo/input existente pasa a esa ventana), `Gui.currentWindow()`,
-  `Gui.closeWindow(id)`. La ventana clásica de `Gui.open` es la id 0 y su
-  protocolo no cambia (serez-ui intacto). Cada ventana extra tiene canvas e
-  input propios (mouse/teclado/scroll/foco). Verificado con demo de 2 ventanas
-  (~2 600 presents/s combinados).
-- **Gui retained-mode (scene graph):** nodos persistentes que el core redibuja
-  en Rust — `nodeRect/nodeCircle/nodeLine/nodeText/nodeImage -> id`,
-  `nodeSet(id, prop, valor)` (x, y, w, h, r, x2, y2, color, z, visible, text,
-  scale, image), `nodeDelete`, `sceneClear`, `nodeCount` y
-  `Gui.renderScene(bg) -> bool` que redibuja SOLO si la escena está sucia (si
-  no, re-presenta y devuelve false). Elimina re-ejecutar el árbol de dibujo
-  interpretado cada frame.
-- **Nuevo namespace `Media` (audio, permiso `Media`):** `playSound(path) -> id`
-  (wav/mp3/flac/vorbis vía rodio, asíncrono), `stop/stopAll/pause/resume`,
-  `setVolume(id, 0..200)`, `isPlaying(id)`, `playingCount()`. Errores
-  capturables: `IOError` (archivo) y `MediaError` (formato/dispositivo);
-  la denegación de permiso sigue siendo fatal (`sec_media_no_permission`).
-  Video queda fuera: decodificarlo exige ffmpeg (decisión de diseño pendiente).
-- **LSP:** análisis multi-archivo (símbolos/definición/completado siguen los
-  `import` transitivos, caché por mtime), soporte `.szx` (símbolos/outline sin
-  diagnósticos: el parser no habla JSX), `rename`, `references` y
-  `signatureHelp` (funciones de usuario, builtins y métodos de namespace).
-  Extensión **1.8.0**: cliente para `.szx`, soporte parcial de Restricted Mode
-  (`untrustedWorkspaces: limited` — resaltado/formatter sí; sz-lsp solo en
-  workspaces de confianza, y arranca solo al conceder la confianza).
-- Suite: **398/0** (+9 tests nuevos); fuzz 300 casos sin panics; LSP 27 tests +
-  smoke 9/9; ecosistema completo verde (ui 17/17, http/ai/pack/apipack/agentai/
+- **Parser: no more silent recoveries.** `let x = ;`, `let = 5;`,
+  `let x;`, `return a +`, invalid numeric literals and the rest of the holes where
+  the parser discarded statements without reporting now emit a `PARSER ERROR` with
+  position and caret. A program with parse errors **no longer runs halfway**
+  (it aborts with exit 1), and `import`s of modules with parse errors abort instead
+  of evaluating the partial module. A bare `;` is a legal empty statement.
+  This uncovered and fixed 2 latent bugs in serez-ui (renderer.sz: an unescaped
+  `"{·"` triggered the interpolation parser and the whole `out` was silently
+  discarded — the TUI Select never printed). New `err_parse_*` tests.
+- **Parser errors name the FILE** (`PARSER ERROR [path line:col]`),
+  including imported modules and interpolated expressions.
+- **Lexer: uniform `token.column`.** Every token carries the position of its
+  FIRST character (before: identifiers pointed one position past the last char).
+  The LSP dropped its `ident_start_col` correction.
+- **Semantics: closures with a SHARED CELL.** A lambda and its enclosing scope
+  share the captured variable at any nesting level: mutations inside the closure
+  escape (`makeCounter` counters work) and later writes are visible inside. A `for`
+  counter is fresh per iteration (like JS `let`): the loop's closures keep the value
+  of their iteration (10,20,30 — not 40,40,40). A counter declared outside a
+  `while` is a single shared cell (333). Semantics tests updated.
+- **Semantics: a non-callable parameter no longer hides a same-named function in
+  CALLS** (the `h` parameter case that broke serez-ui's render): `name(...)`
+  falls back to the nearest callable binding; reads still see the shadow.
+- **Multi-window Gui:** `Gui.openWindow(title,w,h) -> id`, `Gui.selectWindow(id)`
+  (all existing drawing/input moves to that window), `Gui.currentWindow()`,
+  `Gui.closeWindow(id)`. The classic `Gui.open` window is id 0 and its protocol
+  does not change (serez-ui untouched). Each extra window has its own canvas and
+  input (mouse/keyboard/scroll/focus). Verified with a 2-window demo
+  (~2,600 combined presents/s).
+- **Retained-mode Gui (scene graph):** persistent nodes the core redraws in Rust —
+  `nodeRect/nodeCircle/nodeLine/nodeText/nodeImage -> id`,
+  `nodeSet(id, prop, value)` (x, y, w, h, r, x2, y2, color, z, visible, text,
+  scale, image), `nodeDelete`, `sceneClear`, `nodeCount` and
+  `Gui.renderScene(bg) -> bool`, which redraws ONLY if the scene is dirty (if not,
+  it re-presents and returns false). This removes re-running the interpreted draw
+  tree every frame.
+- **New `Media` namespace (audio, `Media` permission):** `playSound(path) -> id`
+  (wav/mp3/flac/vorbis via rodio, asynchronous), `stop/stopAll/pause/resume`,
+  `setVolume(id, 0..200)`, `isPlaying(id)`, `playingCount()`. Catchable errors:
+  `IOError` (file) and `MediaError` (format/device); a permission denial is still
+  fatal (`sec_media_no_permission`). Video is out of scope: decoding it requires
+  ffmpeg (design decision pending).
+- **LSP:** multi-file analysis (symbols/definition/completion follow transitive
+  `import`s, cached by mtime), `.szx` support (symbols/outline without
+  diagnostics: the parser does not speak JSX), `rename`, `references` and
+  `signatureHelp` (user functions, builtins and namespace methods).
+  Extension **1.8.0**: client for `.szx`, partial Restricted Mode support
+  (`untrustedWorkspaces: limited` — highlighting/formatter yes; sz-lsp only in
+  trusted workspaces, and it starts as soon as trust is granted).
+- Suite: **398/0** (+9 new tests); fuzzing 300 cases with no panics; LSP 27 tests +
+  smoke 9/9; whole ecosystem green (ui 17/17, http/ai/pack/apipack/agentai/
   graph 3/0, dotenv 2/0, cobol 23+22, strike 53/0).
 
-### Adopción en el ecosistema (misma fecha): escena con paridad total + serez-ui retained
+### Ecosystem adoption (same date): full scene parity + retained serez-ui
 
-- **La escena retained ganó paridad con TODAS las primitivas que usa serez-ui**:
+- **The retained scene reached parity with EVERY primitive serez-ui uses**:
   `nodeRoundRect`, `nodeRectAlpha`, `nodeRectOutline`, `nodePolygon`,
-  `nodePolyline`, `nodeClipPush`/`nodeClipPop` (clipping como marcadores en el
-  orden de dibujo) y texto con fuente/estilo/espaciado por nodo (`nodeSet`:
+  `nodePolyline`, `nodeClipPush`/`nodeClipPop` (clipping as markers in the
+  draw order) and text with per-node font/style/spacing (`nodeSet`:
   `font`, `style`, `spacing`, `radius`, `alpha`, `width`, `points`).
-- **La escena es POR VENTANA** (cada ventana tiene su scene graph; `node*` y
-  `renderScene` operan sobre la ventana seleccionada) — dos ventanas retained
-  ya no chocan.
-- **Click por EVENTO en ventanas extra**: `Gui.mousePressed()` de una ventana
-  secundaria cuenta presses como eventos en su acumulador — un click corto
-  entre dos presents ya no se pierde (antes era flanco por nivel).
-- **`serez.json` ilegible ya no falla en silencio**: si existe pero no parsea
-  (p.ej. sin `"version"`), se avisa con WARNING en vez de correr sin permisos.
-- **serez-ui (2.3.0)**: el renderer GUI migró a retained-mode (métodos `sw*` con
-  reuso posicional de nodos; `Gui.renderScene` en vez de `clear+draw+present`;
-  paridad visual pixel-perfect verificada contra el motor anterior) y ganó
-  **ventanas secundarias**: `openPanel/closePanel/panelCount` + `renderPanel(id)`
-  en el propio componente (clicks de Button/Link ruteados por panel; verificado
-  con demo real: click en panel → estado del app → re-render de la principal).
-- **serez-pack**: compatible verificado end-to-end (app con permiso `Media`
-  empaquetada y ejecutada); ahora valida al empaquetar que el `serez.json`
-  tenga `"version"` (sin él, la app instalada correría sin permisos).
+- **The scene is PER WINDOW** (each window has its own scene graph; `node*` and
+  `renderScene` operate on the selected window) — two retained windows no longer
+  collide.
+- **Click by EVENT in extra windows**: `Gui.mousePressed()` on a secondary window
+  counts presses as events in its accumulator — a short click between two presents
+  is no longer lost (it used to be level-triggered).
+- **An unreadable `serez.json` no longer fails silently**: if it exists but does not
+  parse (e.g. without `"version"`), a WARNING is emitted instead of running with no
+  permissions.
+- **serez-ui (2.3.0)**: the GUI renderer migrated to retained-mode (`sw*` methods with
+  positional node reuse; `Gui.renderScene` instead of `clear+draw+present`;
+  pixel-perfect visual parity verified against the previous engine) and gained
+  **secondary windows**: `openPanel/closePanel/panelCount` + `renderPanel(id)`
+  on the component itself (Button/Link clicks routed per panel; verified with a real
+  demo: click on a panel → app state → re-render of the main one).
+- **serez-pack**: compatibility verified end-to-end (an app with the `Media`
+  permission packaged and executed); it now validates at packaging time that
+  `serez.json` has a `"version"` (without it, the installed app would run with no
+  permissions).
 
 ### New: `sz-lsp` — Language Server Protocol for editor support
 
@@ -658,69 +654,67 @@ primitivos.
 
 ## [7.2.0] — 2026-06-30
 
-### GUI: dibujo vectorial, entrada completa y control de ventana
+### GUI: vector drawing, full input and window control
 
-- **Primitivas vectoriales**: líneas gruesas, polilíneas, polígonos y círculo
-  antialiased.
-- **Texto**: subrayado / tachado y `letter-spacing` en `drawText`.
-- **Imágenes**: carga desde bytes (además de ruta), clipboard de imágenes
-  (get/set) y cursor del mouse con imagen custom.
-- **Ventana y pantalla**: posición de ventana, enumerar monitores y el resto de
-  las operaciones de ventana.
-- **Entrada**: eventos de `winit` que faltaban — foco, cursor, drop de archivos,
-  preedit de IME y botones laterales del mouse — más touch, hover y pinch.
-- **Scroll horizontal** en el compositing predictivo.
+- **Vector primitives**: thick lines, polylines, polygons and an antialiased
+  circle.
+- **Text**: underline / strikethrough and `letter-spacing` in `drawText`.
+- **Images**: loading from bytes (in addition to a path), image clipboard
+  (get/set) and a custom-image mouse cursor.
+- **Window and screen**: window position, monitor enumeration and the rest of
+  the window operations.
+- **Input**: the missing `winit` events — focus, cursor, file drop,
+  IME preedit and side mouse buttons — plus touch, hover and pinch.
+- **Horizontal scrolling** in the predictive compositing.
 
 ---
 
 ## [7.1.0] — 2026-06-29
 
-### GUI: scroll predictivo asíncrono (threaded compositing)
+### GUI: asynchronous predictive scrolling (threaded compositing)
 
-- El compositing del scroll pasa a un hilo aparte y anticipa el desplazamiento,
-  de modo que la ventana no espera al repintado para responder.
+- Scroll compositing moves to a separate thread and anticipates the displacement,
+  so the window does not wait for the repaint to respond.
 
 ---
 
 ## [7.0.0] — 2026-06-28
 
-### Namespace `Task` — concurrencia aislada en hilos nativos
+### `Task` namespace — isolated concurrency on native threads
 
-- Nuevo namespace **`Task`**: ejecución asíncrona de subprocesos aislados sobre
-  hilos de Rust, *share-nothing* (cada worker con su propia arena, comunicación
-  por JSON). Requiere el permiso `Task`.
-- Cubierto por tests de estrés, workers anidados y protección contra panics
-  dentro de un subproceso.
+- New **`Task`** namespace: asynchronous execution of isolated subprocesses on
+  Rust threads, *share-nothing* (each worker with its own arena, communicating
+  via JSON). Requires the `Task` permission.
+- Covered by stress tests, nested workers and protection against panics inside
+  a subprocess.
 
-### BREAKING: los nombres de namespace del sistema son reservados
+### BREAKING: system namespace names are reserved
 
-- **Una clase, interfaz o enum ya no puede llamarse como un namespace del
-  sistema** (`Task`, `File`, `OS`, `Gui`, `Env`, `Time`, `Socket`, …). El parser
-  lo rechaza con un mensaje explícito.
-- Es la contrapartida de agregar `Task`: sin la regla, una `class Task` del
-  usuario ensombrecería el namespace nativo. Código previo que usara uno de esos
-  nombres debe renombrar la clase — como se hizo con el ejemplo
-  `apps/01_task_manager.sz` (`Task` → `TaskItem`).
+- **A class, interface or enum can no longer be named after a system namespace**
+  (`Task`, `File`, `OS`, `Gui`, `Env`, `Time`, `Socket`, …). The parser rejects it
+  with an explicit message.
+- This is the counterpart of adding `Task`: without the rule, a user `class Task`
+  would shadow the native namespace. Existing code using one of those names must
+  rename the class — as was done with the `apps/01_task_manager.sz` example
+  (`Task` → `TaskItem`).
 
-### OS: `OS.spawn` no bloqueante
+### OS: non-blocking `OS.spawn`
 
-- `OS.spawn` deja de bloquear y se cosecha por *polling* con **`OS.tick()`**
-  (sin callbacks: los callbacks abrirían un use-after-free con el modelo de
-  regiones).
+- `OS.spawn` stops blocking and is harvested by *polling* with **`OS.tick()`**
+  (no callbacks: callbacks would open a use-after-free with the region model).
 
-### GUI: CPU ~0 en reposo
+### GUI: ~0 CPU when idle
 
-- El loop pasa a ser *event-driven*: sin actividad, el uso de CPU cae a ~0. Se
-  suman APIs de ventana, diálogo, imagen y texto, y se corrige el reflow al
-  redimensionar.
+- The loop becomes *event-driven*: with no activity, CPU usage drops to ~0.
+  Window, dialog, image and text APIs are added, and reflow on resize is fixed.
 
-### Correcciones
+### Fixes
 
-- Dos panics del intérprete ante entrada inválida.
-- Desbordamiento en el benchmark de fibonacci iterativo; se agregan benchmarks
-  de concurrencia y de decimales.
-- Extensión de editor: tema Serez Dark y gramática al día (1.6.0), interpolación
-  `"{var}"` coloreada como llaves + variable (1.6.1).
+- Two interpreter panics on invalid input.
+- Overflow in the iterative fibonacci benchmark; concurrency and decimal
+  benchmarks are added.
+- Editor extension: Serez Dark theme and up-to-date grammar (1.6.0), `"{var}"`
+  interpolation colored as braces + variable (1.6.1).
 
 ---
 
