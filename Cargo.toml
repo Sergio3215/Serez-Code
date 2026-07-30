@@ -1,6 +1,6 @@
 [package]
 name = "serez-code"
-version = "9.11.0"
+version = "9.12.0"
 edition = "2024"
 description = "Serez Code - The programming language for AI, UI, systems, and GPU in a single runtime"
 license = "MIT"
@@ -50,6 +50,12 @@ serde_json = "1"
 version = "0.4"
 optional = true
 features = ["llvm17-0"]
+
+# The interpreter as a library, so `sz file.sz` and `sz --eval "<code>"` are two
+# doors onto one pipeline instead of two implementations. See src/lib.rs.
+[lib]
+name = "serez_code"
+path = "src/lib.rs"
 
 [[bin]]
 name = "sz"

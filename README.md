@@ -171,6 +171,27 @@ sz
 30
 ```
 
+### Run a snippet without a file
+
+```bash
+sz --eval 'out 2 + 3;'
+echo 'let x = 10; out x * x;' | sz --eval -
+```
+
+`--eval` (short: `-e`) runs source handed in as a string. Use `-` to read it from
+stdin, which saves you from escaping quotes and newlines through the shell.
+
+Because there is no file, there is no `serez.json` to read permissions from, and
+snippets run under **lockdown**: `use permissions { … }` is refused instead of
+granting itself the permissions it asks for, and `File`, `import` and Autodiff's
+weight files — which are otherwise reachable with nothing declared — are denied.
+All of them as catchable `PermissionError`s. Running `sz script.sz` is unaffected;
+declaring permissions inline in your own file still works.
+
+Lockdown is not a sandbox against a hostile program: `fetch` still reaches the
+network from wherever `sz` is running. Don't feed `--eval` source you don't trust
+without real isolation around the process.
+
 ### Watch mode (auto-rerun on save)
 
 ```bash

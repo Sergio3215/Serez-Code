@@ -1454,6 +1454,21 @@ impl super::Evaluator {
             }
 
             // ── Weight persistence ────────────────────────────────────────────
+            // These two are the only Autodiff methods that touch the disk, and
+            // like `File` they are behind no permission. Everything else in this
+            // namespace is pure computation and stays available under lockdown.
+            "saveWeights" | "loadWeights"
+                if self.lockdown =>
+            {
+                match self.deny_in_lockdown(
+                    "Autodiff.saveWeights / Autodiff.loadWeights",
+                    "this code runs with no filesystem access.",
+                ) {
+                    Some(err) => err,
+                    None => unreachable!("guarded by self.lockdown"),
+                }
+            }
+
             "saveWeights" => {
                 // Autodiff.saveWeights(path, tensors_array)
                 // Saves an array of tensors to a .szw binary file.

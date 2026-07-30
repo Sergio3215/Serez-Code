@@ -133,8 +133,8 @@ impl super::Evaluator {
                     }
                 }
 
-                if self.call_depth >= 1000 {
-                    eprintln!("❌ ERROR: Stack overflow — maximum call depth (1000) exceeded");
+                if self.call_depth >= super::MAX_CALL_DEPTH {
+                    eprintln!("❌ ERROR: Stack overflow — maximum call depth ({}) exceeded", super::MAX_CALL_DEPTH);
                     return EvalResult::Error;
                 }
 

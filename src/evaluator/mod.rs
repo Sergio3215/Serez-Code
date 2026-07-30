@@ -11,7 +11,6 @@ mod namespaces;
 mod methods_set;
 mod methods_tensor;
 mod namespaces_crypto;
-mod namespaces_socket;
 mod namespaces_binary;
 mod namespaces_gpu;
 mod namespaces_memory;
@@ -19,14 +18,21 @@ mod namespaces_random;
 mod namespaces_autodiff;
 mod methods_dec;
 pub(crate) mod namespaces_datetime;
+mod namespaces_socket;
 mod namespaces_os;
-pub(crate) mod namespaces_gui;
+// `pub`, not `pub(crate)`: the `sz` binary is a separate crate now and has to
+// reach GuiHost/gui_host_main_loop — winit requires the event loop to own the
+// main thread, so that wiring can only live in main().
+pub mod namespaces_gui;
 mod namespaces_task;
 mod namespaces_regex;
 mod svg;
 #[cfg(feature = "audio")]
 mod namespaces_media;
 
+/// How deep a program may recurse before the interpreter stops it. `main()` hands
+/// the interpreter a 64 MB stack, which is what makes this many frames survivable.
+pub(crate) const MAX_CALL_DEPTH: usize = 1000;
 
 use crate::ast::{self, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
@@ -123,6 +129,13 @@ pub struct Evaluator {
     memory_heap_next_id: i64,
     // Granted permissions: populated from serez.json + `use permissions { }` blocks
     permissions: HashSet<String>,
+    // Untrusted-source mode. The permission set is a MANIFEST, not a sandbox: any
+    // program can hand itself the lot with `use permissions { .. }`, and File /
+    // import / Autodiff's weight files reach the disk with no permission declared
+    // at all. Fine when you are running your own file, wrong when the source
+    // arrived from somewhere else (`--eval`, the playground), so lockdown closes
+    // them. Network access is NOT part of this. See run::RunOpts::sandboxed.
+    lockdown: bool,
     // ── Autodiff tape ─────────────────────────────────────────────────────────
     ad_recording: bool,
     ad_tape: Vec<namespaces_autodiff::TapeEntry>,
@@ -298,6 +311,7 @@ impl Evaluator {
             memory_heap: HashMap::new(),
             memory_heap_next_id: 1,
             permissions: HashSet::new(),
+            lockdown: false,
             ad_recording: false,
             ad_tape: Vec::new(),
             ad_grads: HashMap::new(),
@@ -351,6 +365,34 @@ impl Evaluator {
         for p in perms {
             self.permissions.insert(p);
         }
+    }
+
+    /// Treat the source as untrusted: `use permissions { .. }` stops granting and
+    /// `fetch` is refused. Everything else (the permission checks themselves) is
+    /// unchanged — with no permissions granted, that already denies OS, File,
+    /// Socket, Task, Gui, Media and Time.
+    pub fn set_lockdown(&mut self, on: bool) {
+        self.lockdown = on;
+    }
+
+    pub fn is_lockdown(&self) -> bool {
+        self.lockdown
+    }
+
+    /// Refuse `what` when the source is untrusted, as a catchable `PermissionError`.
+    ///
+    /// This exists because the permission set does NOT cover the whole native
+    /// surface: `File`, `import` and the autodiff weight files reach the disk
+    /// without any permission being declared, unlike OS/Socket/Task/Gui/Media/Time.
+    /// Returns `Some(err)` to be propagated, `None` when not under lockdown.
+    pub(crate) fn deny_in_lockdown(&mut self, what: &str, hint: &str) -> Option<EvalResult> {
+        if !self.lockdown {
+            return None;
+        }
+        Some(self.rt_err_kind(
+            "PermissionError",
+            format!("{} is not available here — {}", what, hint),
+        ))
     }
 
     pub fn set_task_context(&mut self, id: i64, arg: String) {

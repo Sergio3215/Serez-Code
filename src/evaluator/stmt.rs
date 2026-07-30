@@ -130,6 +130,19 @@ impl super::Evaluator {
             }
 
             Statement::UsePermissions(perms) => {
+                // Under lockdown the source is untrusted, and a block that grants
+                // itself whatever it asks for is exactly the thing that cannot be
+                // allowed to work. Refusing loudly beats ignoring it silently: the
+                // program would otherwise fail later with a confusing permission
+                // error on a line that looks properly declared.
+                if self.lockdown {
+                    eprintln!(
+                        "❌ ERROR: `use permissions` is not available here — this code is running \
+                         without permissions and cannot grant itself any. Install Serez-Code to \
+                         run programs that use OS, File, Socket and the rest."
+                    );
+                    return EvalResult::Error;
+                }
                 for p in perms {
                     self.permissions.insert(p.clone());
                 }
@@ -1021,7 +1034,6 @@ impl super::Evaluator {
             None => result, // Break, Continue, BreakLabel, ContinueLabel, or Error — pass through as-is
         }
     }
-
     fn eval_import_url(&mut self, url: &str) -> EvalResult {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -1142,6 +1154,16 @@ impl super::Evaluator {
     }
 
     fn eval_import(&mut self, path: &str) -> EvalResult {
+        // `import` reads an arbitrary path off disk (or fetches a URL) and then
+        // EXECUTES it — the widest capability in the language, and gated by no
+        // permission. Under lockdown there is also no entry file to be relative to.
+        if let Some(err) = self.deny_in_lockdown(
+            "import",
+            "this code runs as a single file, with no packages and no filesystem access.",
+        ) {
+            return err;
+        }
+
         // URL imports — delegate to the package manager
         if path.starts_with("https://") || path.starts_with("http://") {
             return self.eval_import_url(path);
@@ -1216,7 +1238,7 @@ impl super::Evaluator {
         // verbatim and resolve against the `.szx`'s own directory (current_dir below).
         let is_szx = canonical.extension().map(|e| e == "szx").unwrap_or(false);
         let source = if is_szx {
-            match crate::translate_szx_to_string(&canonical) {
+            match crate::szx::translate_szx_to_string(&canonical) {
                 Some(s) => s,
                 None => {
                     eprintln!(

@@ -1,234 +1,13 @@
-#![allow(dead_code)]
-mod ast;
-// AOT backend (AST->HIR->MIR->LLVM IR): compiled only with `--features llvm`.
-// Phase 1; not wired to any CLI verb yet - gating it keeps ~3k lines and the
-// inkwell dependency out of the default build until the backend is resumed.
-#[cfg(feature = "llvm")]
-mod compiler;
-mod evaluator;
-mod lexer;
-mod package_manager;
-mod parser;
-mod region;
-mod repl;
-mod scope;
-mod token;
-mod type_checker;
+//! The `sz` CLI. Argument parsing and the GUI host thread live here; everything
+//! that actually runs code lives in the library (see `src/lib.rs`), so `--eval`
+//! and the wasm build share one pipeline with `sz file.sz`.
+
+use serez_code::evaluator;
+use serez_code::package_manager;
+use serez_code::repl;
+use serez_code::run::{run_eval, run_file};
 
 use std::env;
-use std::fs;
-use std::io::Write;
-
-/// Lex/parse/evaluate a `.sz` file. Returns the process exit code:
-/// 0 on success, 1 if the file can't be read, fails to parse, or the program
-/// ends with an uncaught exception / runtime error.
-fn run_file(file_path: &str, is_check: bool) -> i32 {
-    // .szx files (serez-ui JSX) are translated to .sz first, then run.
-    if file_path.ends_with(".szx") {
-        return run_szx_file(file_path, is_check);
-    }
-
-    let input = match fs::read_to_string(file_path) {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("❌ ERROR reading file '{}': {}", file_path, e);
-            return 1;
-        }
-    };
-
-    let source_lines: Vec<String> = input.lines().map(|l| l.to_string()).collect();
-
-    let lexer = lexer::Lexer::new(input);
-    let mut parser = parser::Parser::new(lexer);
-    parser.set_source(source_lines.clone());
-    parser.set_source_name(file_path);
-    let program = parser.parse_program();
-    let parse_failed = parser.has_errors();
-
-    let mut checker = type_checker::TypeChecker::new(&program);
-    checker.check();
-
-    let mut evaluator = evaluator::Evaluator::new();
-    evaluator.set_source(source_lines);
-
-    // Load permissions from serez.json if present in the file's directory
-    let file_path_obj = std::path::Path::new(file_path);
-    if let Some(dir) = file_path_obj.parent() {
-        let dir = if dir == std::path::Path::new("") { std::path::Path::new(".") } else { dir };
-        match package_manager::SerezManifest::load(dir) {
-            Ok(manifest) => evaluator.set_permissions(manifest.permissions),
-            Err(e) => {
-                // A serez.json that EXISTS but doesn't parse must not fail
-                // silently: the program would run with zero permissions and
-                // the user would only see a confusing permission error.
-                if dir.join("serez.json").exists() {
-                    eprintln!("⚠️  WARNING: serez.json found but not loaded ({}); running WITHOUT permissions.", e);
-                }
-            }
-        }
-    }
-
-    evaluator.set_current_file(file_path_obj);
-    let mut run_failed = false;
-    if parse_failed {
-        // A program with parse errors must not half-run: statements after the
-        // broken one would execute against missing definitions.
-        eprintln!("❌ Aborted: fix the parse errors above before running.");
-    } else if is_check {
-        evaluator.check_program(&program);
-    } else {
-        // eval_program returns None on uncaught exception / runtime / flash-scope error
-        if evaluator.eval_program(&program).is_none() {
-            run_failed = true;
-        }
-        if std::env::var("SEREZ_ARENA_STATS").is_ok() {
-            let (global, scoped) = evaluator.arena_stats();
-            eprintln!("[arena] global={} scoped={}", global, scoped);
-        }
-    }
-    let _ = std::io::stdout().flush();
-
-    if parse_failed || run_failed { 1 } else { 0 }
-}
-
-/// Locate serez-ui's `.szx → .sz` translator (`tools/translate.sz`), searching
-/// the local project packages, the source file's packages, the global store, and
-/// the executable's directory (for packaged apps that bundle serez-ui).
-pub fn find_szx_translator(szx: &std::path::Path) -> Option<std::path::PathBuf> {
-    let mut roots: Vec<std::path::PathBuf> = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        roots.push(cwd.join("packages"));
-    }
-    if let Some(dir) = szx.parent() {
-        let dir = if dir == std::path::Path::new("") { std::path::Path::new(".") } else { dir };
-        roots.push(dir.join("packages"));
-    }
-    roots.push(package_manager::packages_dir());
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(d) = exe.parent() {
-            roots.push(d.to_path_buf());
-        }
-    }
-    for r in roots {
-        let cand = r.join("serez-ui").join("tools").join("translate.sz");
-        if cand.exists() {
-            return Some(cand);
-        }
-    }
-    None
-}
-
-/// Run a `.szx` (serez-ui JSX) file directly: translate it to `.sz` with
-/// serez-ui's translator, run the result, then clean up. This is what the old
-/// `szx.ps1` / `szx.sh` wrappers did — now the runtime does it itself, so
-/// `sz app.szx` just works (and opens the UI).
-fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
-    let szx = std::path::Path::new(szx_path);
-    if !szx.exists() {
-        eprintln!("❌ ERROR reading file '{}': not found", szx_path);
-        return 1;
-    }
-    let translator = match find_szx_translator(szx) {
-        Some(t) => t,
-        None => {
-            eprintln!(
-                "❌ ERROR: cannot run '{}': serez-ui not found. Install it with `sz install serez-ui` to run .szx files.",
-                szx_path
-            );
-            return 1;
-        }
-    };
-    let sz_exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("❌ ERROR: cannot locate the sz executable: {}", e);
-            return 1;
-        }
-    };
-    // Translate next to the source so the app's relative imports still resolve.
-    let out_sz = szx.with_extension("szx.sz");
-    let mut cmd = std::process::Command::new(&sz_exe);
-    cmd.arg(&translator)
-        .arg(szx)
-        .arg(&out_sz)
-        .stdout(std::process::Stdio::null()); // hide the translator's own chatter
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW); // never pop a console for the translate step
-    }
-    // Capture stderr: the child runs detached from the console (CREATE_NO_WINDOW),
-    // so the translator's own error (e.g. invalid JSX + how to fix it) would be
-    // lost unless we pipe it and re-print it here.
-    cmd.stderr(std::process::Stdio::piped());
-    let output = cmd.output();
-    let ok = matches!(output, Ok(ref o) if o.status.success()) && out_sz.exists();
-    if !ok {
-        let _ = std::fs::remove_file(&out_sz);
-        if let Ok(ref o) = output {
-            let msg = String::from_utf8_lossy(&o.stderr);
-            let msg = msg.trim();
-            if !msg.is_empty() {
-                eprintln!("{}", msg.replace("UNCAUGHT EXCEPTION:", "TRANSLATE ERROR:"));
-            }
-        }
-        eprintln!(
-            "❌ ERROR: could not translate '{}' (is it valid .szx, and is serez-ui's translator present?)",
-            szx_path
-        );
-        return 1;
-    }
-    let code = run_file(out_sz.to_string_lossy().as_ref(), is_check);
-    let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
-    code
-}
-
-/// Translate a `.szx` (serez-ui JSX) module to `.sz` source and return the
-/// translated text. Used by the import resolver so `import "src/components"` can
-/// pull in a `.szx` file (JSX components split into their own files), not just
-/// plain `.sz`. Translates into a throwaway temp file (the caller controls the
-/// module's directory for relative imports, so the temp's location is irrelevant),
-/// reads it back, and deletes it. Returns None if serez-ui's translator isn't
-/// found or the translation fails.
-pub fn translate_szx_to_string(szx: &std::path::Path) -> Option<String> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-
-    let translator = find_szx_translator(szx)?;
-    let sz_exe = std::env::current_exe().ok()?;
-    let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let out_sz = std::env::temp_dir().join(format!("szimport_{}_{}.sz", std::process::id(), n));
-
-    let mut cmd = std::process::Command::new(&sz_exe);
-    cmd.arg(&translator)
-        .arg(szx)
-        .arg(&out_sz)
-        .stdout(std::process::Stdio::null()); // hide the translator's own chatter
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    // Piped stderr for the same reason as run_szx_file: surface the translator's
-    // error (lost to CREATE_NO_WINDOW) before the import-level message.
-    cmd.stderr(std::process::Stdio::piped());
-    let output = cmd.output();
-    let ok = matches!(output, Ok(ref o) if o.status.success()) && out_sz.exists();
-    if !ok {
-        if let Ok(ref o) = output {
-            let msg = String::from_utf8_lossy(&o.stderr);
-            let msg = msg.trim();
-            if !msg.is_empty() {
-                eprintln!("{}", msg.replace("UNCAUGHT EXCEPTION:", "TRANSLATE ERROR:"));
-            }
-        }
-    }
-    let translated = if ok { std::fs::read_to_string(&out_sz).ok() } else { None };
-    let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
-    translated
-}
 
 /// Print a subcommand error (if any) and map it to a process exit code.
 fn subcommand_code(result: Result<(), String>) -> i32 {
@@ -237,6 +16,21 @@ fn subcommand_code(result: Result<(), String>) -> i32 {
         Err(e) => {
             eprintln!("❌ ERROR: {}", e);
             1
+        }
+    }
+}
+
+/// Read the whole of stdin, for `sz --eval -`. Passing a multi-line snippet as an
+/// argv string means fighting the shell over quotes, newlines and `$`; a pipe
+/// doesn't have that problem.
+fn read_stdin() -> Option<String> {
+    use std::io::Read;
+    let mut buf = String::new();
+    match std::io::stdin().read_to_string(&mut buf) {
+        Ok(_) => Some(buf),
+        Err(e) => {
+            eprintln!("❌ ERROR reading stdin: {}", e);
+            None
         }
     }
 }
@@ -338,6 +132,28 @@ fn run() -> i32 {
         if args.contains(&"--version".to_string()) {
             println!("Serez-Code v{}", env!("CARGO_PKG_VERSION"));
             return 0;
+        }
+
+        // ── `sz --eval "<code>"` / `sz --eval -` ──────────────────────────────
+        // Runs a snippet with no file behind it: no serez.json, so no permissions,
+        // and lockdown on. Handled before the flag loop below because its argument
+        // is arbitrary source text, not a path.
+        if let Some(i) = args.iter().position(|a| a == "--eval" || a == "-e") {
+            let is_check = args.iter().any(|a| a == "--check");
+            let src = match args.get(i + 1) {
+                Some(a) if a == "-" => match read_stdin() {
+                    Some(s) => s,
+                    None => return 1,
+                },
+                Some(a) => a.clone(),
+                None => {
+                    eprintln!(
+                        "❌ ERROR: Usage: sz --eval \"<code>\"  (or `sz --eval -` to read the snippet from stdin)"
+                    );
+                    return 1;
+                }
+            };
+            return run_eval(src, is_check);
         }
 
         for arg in args.iter().skip(1) {

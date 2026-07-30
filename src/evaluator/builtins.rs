@@ -9,6 +9,15 @@ use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_st
             obj_data_eq, format_decimal, json_stringify_owned, json_parse,
             operator_to_method_name};
 
+/// An HTTP response, normalised so `fetch` reads the same whether the bytes came
+/// from ureq or from the browser. Header names are lowercased.
+pub(super) struct FetchResponse {
+    pub status: u16,
+    pub status_text: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
 impl super::Evaluator {
     pub(super) fn eval_assert(&mut self, args: &[ast::Expression]) -> EvalResult {
         if args.is_empty() || args.len() > 2 {
@@ -339,6 +348,16 @@ impl super::Evaluator {
     //                      and does NOT throw on status.
     //   { binary: true } → body is returned as a byte array [int] instead of a string.
     pub(super) fn eval_fetch(&mut self, args: &[ast::Expression]) -> EvalResult {
+        // NOT gated by lockdown, deliberately: lockdown is about capabilities that
+        // belong to the machine running the code — the filesystem, spawning
+        // processes, granting itself permissions — and the network is treated as a
+        // separate question.
+        //
+        // Worth knowing where that leaves `--eval`: the request goes out from the
+        // host's network position, which is the usual SSRF shape (cloud metadata
+        // endpoints, services bound to localhost, the host as an open relay). If
+        // you run source you didn't write, put real isolation around the process,
+        // or gate `fetch` behind a permission of its own.
         if args.is_empty() || args.len() > 4 {
             return self.rt_err_kind("RuntimeError", "fetch(url, [method], [body], [options])");
         }
@@ -462,98 +481,51 @@ impl super::Evaluator {
             return EvalResult::Throw(msg);
         }
 
-        // ── Build request ─────────────────────────────────────────────────────
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(timeout_secs.min(30)))
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .build();
-
-        let mut req = agent.request(&method, &url);
-        // Default JSON content-type only when a body is sent and the user didn't set one.
-        let has_ct = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
-        if !body_str.is_empty() && !has_ct {
-            req = req.set("Content-Type", "application/json");
-        }
-        // Send an identifiable User-Agent unless the caller set one. Without it
-        // ureq sends "ureq/x.y", which many CDNs/WAFs answer with a 503.
-        let has_ua = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
-        if !has_ua {
-            req = req.set("User-Agent", concat!("Serez-Code/", env!("CARGO_PKG_VERSION")));
-        }
-        for (k, v) in &headers {
-            req = req.set(k, v);
-        }
-        let response_result = if body_str.is_empty() {
-            req.call()
-        } else {
-            req.send_string(&body_str)
-        };
-
-        // ── Handle response ───────────────────────────────────────────────────
-        match response_result {
-            Ok(resp) => self.fetch_make_value(resp, full, binary),
-            // ureq returns 4xx/5xx as Err(Status). In `full` mode build the response
-            // object anyway; otherwise throw, embedding the body so the error detail
-            // isn't lost.
-            Err(ureq::Error::Status(code, resp)) => {
-                if full {
-                    self.fetch_make_value(resp, true, binary)
-                } else {
-                    let detail = if binary { None } else { resp.into_string().ok() };
+        // ── Perform the request ───────────────────────────────────────────────
+        // Everything above is parsing and validation and is the same everywhere.
+        // Only the transport differs: ureq natively, a synchronous XHR in the
+        // browser. See `fetch_transport` for both.
+        match self.fetch_transport(&method, &url, &headers, &body_str, timeout_secs) {
+            Ok(resp) => {
+                // 4xx/5xx: in `full` mode build the response object anyway;
+                // otherwise throw, embedding the body so the detail isn't lost.
+                if resp.status >= 400 && !full {
+                    let detail = if binary {
+                        None
+                    } else {
+                        Some(String::from_utf8_lossy(&resp.body).into_owned())
+                    };
                     let msg = match detail {
-                        Some(b) => format!("❌ fetch: HTTP {}: {}", code, b),
-                        None => format!("❌ fetch: HTTP {}", code),
+                        Some(b) => format!("❌ fetch: HTTP {}: {}", resp.status, b),
+                        None => format!("❌ fetch: HTTP {}", resp.status),
                     };
                     let m = self.alloc(ObjectData::Str(msg));
-                    EvalResult::Throw(m)
+                    return EvalResult::Throw(m);
                 }
+                self.fetch_make_value(resp, full, binary)
             }
             Err(e) => {
-                let m = self.alloc(ObjectData::Str(
-                    format!("❌ fetch: request failed: {}", e)
-                ));
+                let m = self.alloc(ObjectData::Str(format!("❌ fetch: {}", e)));
                 EvalResult::Throw(m)
             }
         }
     }
 
-    // Build a serez value from a ureq Response. With `full`, returns a
+    // Build a serez value from a response. With `full`, returns a
     // Dict<string, any> { status, ok, statusText, headers, body }; otherwise just
     // the body (string, or a byte array [int] when `binary`). Never throws on status.
-    fn fetch_make_value(&mut self, resp: ureq::Response, full: bool, binary: bool) -> EvalResult {
-        use std::io::Read;
-        let status = resp.status() as i64;
-        let status_text = resp.status_text().to_string();
-        // Collect response headers before the body consumes `resp`.
-        let header_pairs: Vec<(String, String)> = if full {
-            resp.headers_names()
-                .iter()
-                .filter_map(|n| resp.header(n).map(|v| (n.to_lowercase(), v.to_string())))
-                .collect()
-        } else {
-            Vec::new()
-        };
+    fn fetch_make_value(&mut self, resp: FetchResponse, full: bool, binary: bool) -> EvalResult {
+        let status = resp.status as i64;
+        let status_text = resp.status_text;
+        let header_pairs: Vec<(String, String)> = if full { resp.headers } else { Vec::new() };
 
         let body_val: OwnedValue = if binary {
-            let mut buf: Vec<u8> = Vec::new();
-            if let Err(e) = resp.into_reader().read_to_end(&mut buf) {
-                let m = self.alloc(ObjectData::Str(
-                    format!("❌ fetch: failed to read response body: {}", e)));
-                return EvalResult::Throw(m);
-            }
             OwnedValue::Array {
                 element_type: Some("int".to_string()),
-                elements: buf.into_iter().map(|b| OwnedValue::Integer(b as i64)).collect(),
+                elements: resp.body.into_iter().map(|b| OwnedValue::Integer(b as i64)).collect(),
             }
         } else {
-            match resp.into_string() {
-                Ok(s) => OwnedValue::Str(s),
-                Err(e) => {
-                    let m = self.alloc(ObjectData::Str(
-                        format!("❌ fetch: failed to read response body: {}", e)));
-                    return EvalResult::Throw(m);
-                }
-            }
+            OwnedValue::Str(String::from_utf8_lossy(&resp.body).into_owned())
         };
 
         if !full {
@@ -586,6 +558,63 @@ impl super::Evaluator {
             ],
         };
         EvalResult::Value(self.plant_global(resp_dict))
+    }
+
+    // ── fetch transport ───────────────────────────────────────────────────────
+    // Native: ureq. A 4xx/5xx comes back as Err(Status) there, but it is a real
+    // response, so it is normalised into Ok — the caller decides whether a status
+    // is an error (it depends on the `full` option).
+    fn fetch_transport(
+        &mut self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        timeout_secs: u64,
+    ) -> Result<FetchResponse, String> {
+        use std::io::Read;
+
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(timeout_secs.min(30)))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .build();
+
+        let mut req = agent.request(method, url);
+        // Default JSON content-type only when a body is sent and the user didn't set one.
+        let has_ct = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+        if !body.is_empty() && !has_ct {
+            req = req.set("Content-Type", "application/json");
+        }
+        // Send an identifiable User-Agent unless the caller set one. Without it
+        // ureq sends "ureq/x.y", which many CDNs/WAFs answer with a 503.
+        let has_ua = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
+        if !has_ua {
+            req = req.set("User-Agent", concat!("Serez-Code/", env!("CARGO_PKG_VERSION")));
+        }
+        for (k, v) in headers {
+            req = req.set(k, v);
+        }
+
+        let resp = match if body.is_empty() { req.call() } else { req.send_string(body) } {
+            Ok(r) => r,
+            Err(ureq::Error::Status(_, r)) => r,
+            Err(e) => return Err(format!("request failed: {}", e)),
+        };
+
+        let status = resp.status();
+        let status_text = resp.status_text().to_string();
+        let header_pairs: Vec<(String, String)> = resp
+            .headers_names()
+            .iter()
+            .filter_map(|n| resp.header(n).map(|v| (n.to_lowercase(), v.to_string())))
+            .collect();
+
+        let mut buf: Vec<u8> = Vec::new();
+        if let Err(e) = resp.into_reader().read_to_end(&mut buf) {
+            return Err(format!("failed to read response body: {}", e));
+        }
+
+        Ok(FetchResponse { status, status_text, headers: header_pairs, body: buf })
     }
 
     // Look up a string key in dict entries (used to read fetch options).

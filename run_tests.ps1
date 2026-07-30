@@ -540,6 +540,59 @@ if ($runAll -or $cli) {
                  -expectErr "desde inner"
 }
 
+# ── --eval Tests ──────────────────────────────────────────────────────────────
+# `sz --eval` runs a snippet with no file behind it: no serez.json, so no
+# permissions, and lockdown on. Same pipeline as `sz file.sz` (see src/run.rs) —
+# these cover the door, not the interpreter.
+Write-Host ""
+Write-Host "═══ --eval Tests ═════════════════════════════" -ForegroundColor Cyan
+if ($runAll -or $cli) {
+    Run-CLI-Test "eval: runs a snippet from argv"       @("--eval", "`"out 2+3;`"") `
+                 -expectOut "5"
+    Run-CLI-Test "eval: reads the snippet from stdin"   @("--eval", "-") `
+                 -expectOut "100" -stdinContent "let x = 10;`nout x * x;"
+    Run-CLI-Test "eval: -e is accepted as a short form" @("-e", "`"out 7;`"") `
+                 -expectOut "7"
+    Run-CLI-Test "eval: no snippet reports usage"       @("--eval") `
+                 -expectErr "Usage: sz --eval"
+    Run-CLI-Test "eval: parse errors still abort"       @("--eval", "-") `
+                 -expectErr "Aborted" -stdinContent "let = ;"
+
+    # ── Lockdown ──────────────────────────────────────────────────────────────
+    # The permission set is a manifest, not a sandbox. Everything below reaches
+    # the machine without any permission being declared, so lockdown closes it.
+    Run-CLI-Test "eval/lockdown: use permissions denied" @("--eval", "-") `
+                 -expectErr "use permissions" `
+                 -stdinContent "use permissions { OS };`nout 1;"
+    Run-CLI-Test "eval/lockdown: File denied"            @("--eval", "-") `
+                 -expectErr "File is not available" `
+                 -stdinContent "out File.read(`"Cargo.toml`");"
+    Run-CLI-Test "eval/lockdown: import denied"          @("--eval", "-") `
+                 -expectErr "import is not available" `
+                 -stdinContent "import `"std/math`";"
+    Run-CLI-Test "eval/lockdown: URL import denied"      @("--eval", "-") `
+                 -expectErr "import is not available" `
+                 -stdinContent "import `"https://example.invalid/x.sz`";"
+    Run-CLI-Test "eval/lockdown: Autodiff weights denied" @("--eval", "-") `
+                 -expectErr "Autodiff.saveWeights" `
+                 -stdinContent "Autodiff.saveWeights(`"w.szw`", []);"
+    Run-CLI-Test "eval/lockdown: permission set is empty" @("--eval", "-") `
+                 -expectErr "requires permission" `
+                 -stdinContent "unsafe { OS.exec(`"whoami`"); }"
+    # Deliberately NOT gated: in the wasm build `fetch` runs in the viewer's own
+    # tab under the browser's origin rules. Reaching the arity error proves the
+    # builtin is still live under lockdown (and needs no network to check).
+    Run-CLI-Test "eval/lockdown: fetch is NOT gated"     @("--eval", "-") `
+                 -expectErr "fetch(url," `
+                 -stdinContent "out fetch();"
+    # Lockdown is only for `--eval`; running your own file keeps declaring inline.
+    $permFile = Join-Path $env:TEMP "sz_eval_perm_$(Get-Random).sz"
+    Set-Content $permFile "use permissions { Time };`nout DateTime.now() != null;" -NoNewline
+    Run-CLI-Test "eval/lockdown: sz file.sz still grants inline" @("`"$permFile`"") `
+                 -expectOut "true"
+    Remove-Item $permFile -ErrorAction SilentlyContinue
+}
+
 # ── REPL Tests ────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "═══ REPL Tests ═══════════════════════════════" -ForegroundColor Cyan

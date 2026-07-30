@@ -71,6 +71,16 @@ impl super::Evaluator {
     // ── File namespace ─────────────────────────────────────────────────────────
 
     pub(super) fn eval_file_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
+        // Unlike OS/Socket/Task/Gui/Media/Time, `File` is not behind a permission —
+        // it reads, writes, deletes and renames with nothing declared. Fine for a
+        // program you wrote; not fine for source that arrived from elsewhere.
+        if let Some(err) = self.deny_in_lockdown(
+            "File",
+            "this code runs with no filesystem access. Install Serez-Code to read and write files.",
+        ) {
+            return err;
+        }
+
         match dot_call.method.as_str() {
             "exists" => {
                 if dot_call.arguments.len() != 1 {

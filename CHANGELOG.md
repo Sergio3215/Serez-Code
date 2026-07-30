@@ -5,6 +5,61 @@ Order: most recent to oldest.
 
 ---
 
+## [9.12.0] — 2026-07-30
+
+### `sz --eval "<code>"` — run a snippet with no file
+
+The interpreter lived entirely inside the `sz` binary, so the only way to run code
+was to hand the CLI a path. It is a library now (`src/lib.rs`, crate `serez_code`),
+and the binary is a thin shell over it, with two doors onto one pipeline:
+
+| Door | Entry point |
+|---|---|
+| `sz file.sz` | `run::run_file` — reads disk, permissions from `serez.json` |
+| `sz --eval "…"` | `run::run_eval` — source as a string, no permissions |
+
+- **`run::run_source(src, name, opts)`** is the single pipeline (lex → parse →
+  type-check → eval). A `.sz` file was only ever a string that came from disk: past
+  the lexer nothing downstream can tell the difference, and the path survived only
+  to label errors and locate `serez.json`. `RunOpts` carries those explicitly now,
+  and `run_file` just reads the bytes and delegates.
+- **`sz --eval "<code>"`** (also `-e`) takes the source as an argument — no temp
+  file to write, keep clean and delete. **`sz --eval -`** reads it from stdin, which
+  avoids fighting the shell over quotes and newlines in a multi-line snippet.
+- The `.szx` (serez-ui JSX) plumbing moved out of `main.rs` into `src/szx.rs`.
+
+### Lockdown mode — for source you did not write
+
+The permission set is a **manifest, not a sandbox**. Any program can hand itself
+everything with `use permissions { … }`, and three more capabilities reach the disk
+with no permission declared at all — unlike OS/Socket/Task/Gui/Media/Time:
+
+| Closed under lockdown | Why it needs closing |
+|---|---|
+| `use permissions { … }` | Inserts straight into the evaluator's permission set at runtime |
+| `File` | Reads, writes, deletes and renames with nothing declared |
+| `import` | Reads an arbitrary path off disk and **executes** it |
+| `Autodiff.saveWeights` / `loadWeights` | The only methods in that namespace that touch disk |
+
+All four come back as catchable `PermissionError`s. On for `--eval`
+(`RunOpts::sandboxed()`), off for `sz file.sz` — declaring permissions inline in
+your own file is unaffected.
+
+**`fetch` is deliberately NOT part of lockdown.** It stays reachable, so on the
+`--eval` path the request leaves from the host's network position: the usual SSRF
+shape (cloud metadata endpoints, services on localhost, the host as an open relay).
+Running untrusted source through `--eval` still needs real isolation around the
+process, or a permission of its own for `fetch`.
+
+### Also
+
+- `fetch`'s transport is split out of `eval_fetch` into `fetch_transport`, with a
+  shared `FetchResponse`; parsing, validation and the response shape no longer sit
+  in the same function as the HTTP call.
+- The three hardcoded `1000`s guarding recursion depth are one `MAX_CALL_DEPTH`
+  const, and the error reports the actual limit.
+- Suite: 419 (13 new `--eval`/lockdown CLI tests), 0 failures.
+
 ## [9.11.0] — 2026-07-27
 
 ### GUI: per-node affine transform — `Gui.nodeTransform` (rotate/scale)
