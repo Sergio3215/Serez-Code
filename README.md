@@ -59,6 +59,7 @@ out fibonacci(10);   // → 55
    - [System](#system)
    - [Permissions](#permissions)
    - [Tasks (Multithreading)](#tasks-multithreading)
+   - [Modules (`import` / `export`)](#modules-import--export)
    - [Package Manager](#package-manager)
    - [Classes & Interfaces](#classes--interfaces)
    - [Type Conversions](#type-conversions)
@@ -614,6 +615,52 @@ let name = n == 1 ? "one" : n == 2 ? "two" : "other";
 out name;   // → two
 ```
 
+#### Pipe operator (`|>`)
+
+`expr |> f` feeds the left-hand value into `f` as its single argument — it is exactly `f(expr)`, resolved at parse time. It turns nested calls into a left-to-right reading order:
+
+```serez
+fn int double(int n) { return n * 2; }
+fn int plus1(int n)  { return n + 1; }
+
+out 5 |> double;             // → 10   (same as double(5))
+out 5 |> double |> plus1;    // → 11   (same as plus1(double(5)))
+```
+
+The right-hand side is any expression that evaluates to a function, so a lambda held in a variable works too:
+
+```serez
+let inc = int (int n) => { return n + 1; };
+out 5 |> inc;    // → 6
+```
+
+`|>` has the **lowest precedence of every operator** — everything else binds tighter. That makes the left-hand side work as expected, but means the right-hand side swallows any operator that follows it:
+
+```serez
+out 2 + 3 |> double;     // → 10  — left side groups first: double(2 + 3)
+out 5 |> double + 1;     // ❌ ERROR: '+' between 'function' and 'int'
+out (5 |> double) + 1;   // → 11  — parenthesize when mixing
+```
+
+#### `sizeof`
+
+`sizeof(T)` returns the size in bytes of a **type's** in-memory slot, as a static `int`:
+
+```serez
+out sizeof(int);       // → 8
+out sizeof(decimal);   // → 8
+out sizeof(dec);       // → 8
+out sizeof(bool);      // → 1
+out sizeof(string);    // → 8
+out sizeof(any);       // → 8
+out sizeof(null);      // → 0
+out sizeof(void);      // → 0
+```
+
+`sizeof(string)` is 8 because it measures the pointer-sized handle, **not** the length of the text. For the number of characters use `.length`.
+
+> **Types only.** `sizeof` accepts a type keyword and nothing else. Passing a value or a variable — `sizeof(5)`, `sizeof(x)`, `sizeof("hi")` — fails with `❌ PARSE ERROR: expected ')' to close sizeof`.
+
 #### Operator precedence
 
 From lowest to highest:
@@ -621,6 +668,7 @@ From lowest to highest:
 | Level | Operators |
 |---|---|
 | `Lowest` | — |
+| `Pipe` | `\|>` |
 | `Ternary` | `? :` |
 | `NullCoalesce` | `??` |
 | `LogicalOr` | `\|\|` |
@@ -796,6 +844,42 @@ fn int double(int n) {
 
 let op = double;    // functions are values
 out op(21);         // → 42
+```
+
+#### Generators (`fn*` / `yield`)
+
+A function declared with `fn*` is a **generator**: instead of returning a single value, every `yield` inside it appends to a result the call produces at the end.
+
+```serez
+fn* gen() {
+    yield 1;
+    yield 2;
+    yield 3;
+}
+
+out gen();            // → [1, 2, 3]
+out type_of(gen());   // → array
+```
+
+`yield` works anywhere in the body, including inside loops:
+
+```serez
+fn* evens(int n) {
+    for (let i = 0; i < n; i = i + 1) {
+        yield i * 2;
+    }
+}
+
+out evens(4);   // → [0, 2, 4, 6]
+```
+
+> **Generators are eager, not lazy.** The call runs the whole body to completion and hands back a plain `array` of everything yielded — there is no iterator, no `.next()`, and no pausing. `fn*` is shorthand for "build a list by yielding into it", not a coroutine. An infinite generator never returns.
+
+`yield` is only valid inside a `fn*`. Using it in a normal function is an error:
+
+```serez
+fn any wrong() { yield 1; }
+// ❌ ERROR: 'yield' used outside of a generator function (fn*)
 ```
 
 ---
@@ -1082,6 +1166,56 @@ switch (day) {
 ```
 
 `switch` does **not** fall through — only the matched case runs. `break` is not needed.
+
+---
+
+#### `match` expression
+
+Where `switch` is a statement that runs blocks, `match` is an **expression**: it evaluates to a value, so it can be returned or assigned directly. Each arm is `pattern => body`, and arms are separated by commas.
+
+```serez
+let x = 2;
+let r = match (x) {
+    1 => "one",
+    2 => "two",
+    _ => "other"
+};
+out r;   // → two
+```
+
+`_` is the wildcard arm. Patterns can be integer, decimal, `dec`, string, `true`/`false` and `null` literals, or an `Enum.Variant`.
+
+**Alternatives** are joined with `|`, and an arm can carry a **guard** with `if`. A bare identifier binds the subject to that name, which is what makes guards useful:
+
+```serez
+fn string classify(int n) {
+    return match (n) {
+        0            => "zero",
+        1 | 2 | 3    => "small",
+        x if x > 100 => "huge",
+        _            => "normal"
+    };
+}
+
+out classify(0);     // → zero
+out classify(2);     // → small
+out classify(500);   // → huge
+out classify(50);    // → normal
+```
+
+An arm body can also be a block, in which case the block's last expression is its value:
+
+```serez
+let cmd = "add";
+let r = match (cmd) {
+    "add" => { let a = 2; a + 3 },
+    "del" => 0,
+    _     => -1
+};
+out r;   // → 5
+```
+
+Arms are tried top to bottom and the first match wins, so put `_` last.
 
 ---
 
@@ -2121,6 +2255,61 @@ let weights = Autodiff.loadWeights("model.szw")
 **Tensor activations (all tracked):** `relu`, `sigmoid`, `tanh`, `softmax`, `gelu`, `leaky_relu`, `elu`, `swish`, `silu`, `mish`
 
 **Tensor N-D ops:** `permute`, `unsqueeze`, `squeeze`, `broadcastTo`, `broadcastAddNd`, `broadcastMulNd`, `bmm`, `reduceSum`, `reduceMean`, `reduceMax`
+
+---
+
+### Modules (`import` / `export`)
+
+A `.sz` file is a module. `export` marks what other files may use; `import` pulls another module's exports into the current scope.
+
+```serez
+// src/math.sz
+export fn int double(int n) { return n * 2; }
+export fn int quadruple(int n) { return double(double(n)); }
+```
+
+```serez
+// index.sz
+import "src/math";
+
+out double(5);      // → 10
+out quadruple(5);   // → 20
+```
+
+Imported names land directly in the importing scope — there is no namespace object and no `as` alias. The extension is omitted: `import "src/math"` loads `src/math.sz`.
+
+**Paths are relative to the directory of the file doing the importing**, not to the project root. This trips people up in a package with `index.sz` at the root and modules under `src/`:
+
+```serez
+// index.sz          → import "src/parser";   ✅
+// src/lexer.sz      → import "parser";       ✅  (sibling, simple name)
+// src/lexer.sz      → import "src/parser";   ❌  looks for src/src/parser.sz
+```
+
+A bare package name resolves through several roots in order — the app's directory, the CWD, `<cwd>/packages`, `SEREZ_HOME`, the directory of the `sz` executable, and `~/.serez/packages` — trying `<root>/<pkg>/index.sz` at each:
+
+```serez
+import "serez-ui";
+```
+
+> **Export every function reachable from another file, including helpers.** A non-exported function is invisible when an exported function that calls it is invoked from a different module — even though both live in the same file. The failure surfaces at the call site, not at import:
+>
+> ```serez
+> // src/math.sz
+> fn int helper(int n) { return n + 1; }             // not exported
+> export fn int useHelper(int n) { return helper(n); }
+> ```
+> ```serez
+> // index.sz
+> import "src/math";
+> out useHelper(5);
+> // ❌ ERROR: Variable not found: helper
+> //     called from 'useHelper'
+> ```
+>
+> The fix is `export fn int helper(...)`. This applies transitively: if `a` calls `b` calls `c`, all three need `export`.
+
+Classes are visible globally once their module is imported. Functions are bound per importer, so import order matters when two modules export the same name — the last import wins.
 
 ---
 
