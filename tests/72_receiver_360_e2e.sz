@@ -1,0 +1,226 @@
+// 72_receiver_360_e2e.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// End-to-end programs that lean on the dispatch paths reworked by the
+// receiver-clone fix: indexed loops, instance methods over collection fields,
+// dicts as records, and strings rebuilt character by character. These are whole
+// algorithms rather than isolated asserts — if the slot paths returned stale or
+// aliased data, the results below would drift rather than error.
+
+// ── 1. Classic index-heavy algorithms ────────────────────────────────────────
+
+fn any bubbleSort(any src) {
+    let a = [];
+    for (let i = 0; i < src.length(); i = i + 1) { a.push(src[i]); }
+    for (let i = 0; i < a.length(); i = i + 1) {
+        for (let j = 0; j < a.length() - i - 1; j = j + 1) {
+            if (a[j] > a[j + 1]) {
+                let tmp = a[j];
+                a[j] = a[j + 1];
+                a[j + 1] = tmp;
+            }
+        }
+    }
+    return a;
+}
+
+fn int binarySearch(any a, int target) {
+    let lo = 0;
+    let hi = a.length() - 1;
+    while (lo <= hi) {
+        let mid = (lo + hi) / 2;
+        if (a[mid] == target) { return mid; }
+        if (a[mid] < target) { lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return 0 - 1;
+}
+
+let raw = [42, 7, 19, 3, 88, 15, 4, 23];
+let sorted = bubbleSort(raw);
+out "sorted      : " + sorted.join(",");
+out "source kept : " + raw.join(",");
+out "find 19     : " + binarySearch(sorted, 19);
+out "find 88     : " + binarySearch(sorted, 88);
+out "find 999    : " + binarySearch(sorted, 999);
+
+// Matrix work: nested indexing on both axes.
+fn any transpose(any m) {
+    let rows = m.length();
+    let cols = m[0].length();
+    let out_m = [];
+    for (let c = 0; c < cols; c = c + 1) {
+        let row = [];
+        for (let r = 0; r < rows; r = r + 1) { row.push(m[r][c]); }
+        out_m.push(row);
+    }
+    return out_m;
+}
+
+let matrix = [[1, 2, 3], [4, 5, 6]];
+let t = transpose(matrix);
+out "transposed  : " + t.length() + "x" + t[0].length();
+out "t[2][1]     : " + t[2][1];
+out "original    : " + matrix[0].join(",") + " / " + matrix[1].join(",");
+
+// ── 2. OOP over collection fields ────────────────────────────────────────────
+
+class Inventory {
+    public Inventory(string name) {
+        this.name  = name;
+        this.items = [];
+        this.qty   = [];
+    }
+    public void add(string item, int n) {
+        this.items.push(item);
+        this.qty.push(n);
+    }
+    public int total() {
+        let sum = 0;
+        for (let i = 0; i < this.qty.length(); i = i + 1) { sum = sum + this.qty[i]; }
+        return sum;
+    }
+    public int count() { return this.items.length(); }
+    public string report() {
+        let parts = [];
+        for (let i = 0; i < this.items.length(); i = i + 1) {
+            parts.push(this.items[i] + "=" + this.qty[i]);
+        }
+        return this.name + "[" + parts.join(" ") + "]";
+    }
+}
+
+class Warehouse : Inventory {
+    public Warehouse(string name, int cap) {
+        super(name);
+        this.cap = cap;
+    }
+    public bool overCapacity() { return this.total() > this.cap; }
+    public string report() { return "W:" + super.report(); }
+}
+
+let inv = new Inventory("shop");
+inv.add("bolt", 40);
+inv.add("nut", 25);
+inv.add("washer", 12);
+out "inv count   : " + inv.count();
+out "inv total   : " + inv.total();
+out "inv report  : " + inv.report();
+
+let wh = new Warehouse("depot", 50);
+wh.add("beam", 30);
+wh.add("plate", 45);
+out "wh total    : " + wh.total();
+out "wh over cap : " + wh.overCapacity();
+out "wh report   : " + wh.report();
+
+// Many instances, each carrying its own collection.
+let fleet = [];
+for (let i = 0; i < 25; i = i + 1) {
+    let w = new Warehouse("w" + i, 100);
+    w.add("unit", i * 2);
+    w.add("spare", i);
+    fleet.push(w);
+}
+let fleetTotal = 0;
+let overCount = 0;
+for (let i = 0; i < fleet.length(); i = i + 1) {
+    fleetTotal = fleetTotal + fleet[i].total();
+    if (fleet[i].overCapacity()) { overCount = overCount + 1; }
+}
+out "fleet size  : " + fleet.length();
+out "fleet total : " + fleetTotal;
+out "fleet over  : " + overCount;
+out "fleet[7]    : " + fleet[7].report();
+
+// ── 3. Dicts as records ──────────────────────────────────────────────────────
+
+let stock <string, int> = ({"apple", 10}, {"pear", 4});
+stock["plum"] = 7;
+stock["apple"] = stock["apple"] + 5;
+out "stock len   : " + stock.length();
+out "apple       : " + stock["apple"];
+out "missing     : " + stock["kiwi"];
+
+let keys = stock.toList();
+keys.sort();
+let acc = 0;
+for (let i = 0; i < keys.length(); i = i + 1) { acc = acc + stock[keys[i]]; }
+out "keys sorted : " + keys.join(",");
+out "stock sum   : " + acc;
+
+let buckets <string, any> = ({"even", []}, {"odd", []});
+for (let i = 1; i <= 10; i = i + 1) {
+    if (i % 2 == 0) { buckets["even"].push(i); } else { buckets["odd"].push(i); }
+}
+out "even        : " + buckets["even"].join(",");
+out "odd         : " + buckets["odd"].join(",");
+out "even count  : " + buckets["even"].length();
+
+// ── 4. Strings built through indexing ────────────────────────────────────────
+
+fn string reverseStr(string s) {
+    let r = "";
+    for (let i = s.length() - 1; i >= 0; i = i - 1) { r = r + s[i]; }
+    return r;
+}
+
+fn bool isPalindrome(string s) {
+    let clean = s.toLowerCase().replaceAll(" ", "");
+    return clean == reverseStr(clean);
+}
+
+out "reversed    : " + reverseStr("Serez-Code");
+out "palindrome1 : " + isPalindrome("Never odd or even");
+out "palindrome2 : " + isPalindrome("hello world");
+
+fn any charFreq(string s) {
+    let seen = [];
+    let cnt  = [];
+    for (let i = 0; i < s.length(); i = i + 1) {
+        let c = s[i];
+        let at = seen.indexOf(c);
+        if (at == 0 - 1) { seen.push(c); cnt.push(1); }
+        else { cnt[at] = cnt[at] + 1; }
+    }
+    let parts = [];
+    for (let i = 0; i < seen.length(); i = i + 1) { parts.push(seen[i] + ":" + cnt[i]); }
+    return parts.join(" ");
+}
+out "freq        : " + charFreq("abracadabra");
+
+// ── 5. Value semantics under pressure ────────────────────────────────────────
+
+class Ledger {
+    public Ledger() { this.entries = [10, 20, 30]; }
+    public any snapshot() { return this.entries; }
+}
+
+let led = new Ledger();
+let snap = led.snapshot();
+snap.push(40);
+snap.push(50);
+out "snapshot len: " + snap.length();
+out "ledger len  : " + led.entries.length();
+out "ledger sum  : " + (led.entries[0] + led.entries[1] + led.entries[2]);
+
+let outer = [[1], [2]];
+let grabbed = outer[0];
+grabbed.push(99);
+out "grabbed len : " + grabbed.length();
+out "outer[0] len: " + outer[0].length();
+
+// ── 6. Scale: the shape that used to be quadratic ────────────────────────────
+
+let big = [];
+for (let i = 0; i < 2000; i = i + 1) { big.push(i); }
+let evens = 0;
+let total = 0;
+for (let i = 0; i < big.length(); i = i + 1) {
+    total = total + big[i];
+    if (big[i] % 2 == 0) { evens = evens + 1; }
+}
+out "big len     : " + big.length();
+out "big sum     : " + total;
+out "big evens   : " + evens;
+out "big[1999]   : " + big[1999];
+
+out "DONE";

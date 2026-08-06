@@ -1,0 +1,40 @@
+sorted      : 3,4,7,15,19,23,42,88
+source kept : 42,7,19,3,88,15,4,23
+find 19     : 4
+find 88     : 7
+find 999    : -1
+transposed  : 3x2
+t[2][1]     : 6
+original    : 1,2,3 / 4,5,6
+inv count   : 3
+inv total   : 77
+inv report  : shop[bolt=40 nut=25 washer=12]
+wh total    : 75
+wh over cap : true
+wh report   : W:depot[beam=30 plate=45]
+fleet size  : 25
+fleet total : 900
+fleet over  : 0
+fleet[7]    : W:w7[unit=14 spare=7]
+stock len   : 3
+apple       : 15
+missing     : null
+keys sorted : apple,pear,plum
+stock sum   : 26
+even        : 2,4,6,8,10
+odd         : 1,3,5,7,9
+even count  : 5
+reversed    : edoC-zereS
+palindrome1 : true
+palindrome2 : false
+freq        : a:5 b:2 r:2 c:1 d:1
+snapshot len: 5
+ledger len  : 3
+ledger sum  : 60
+grabbed len : 2
+outer[0] len: 1
+big len     : 2000
+big sum     : 1999000
+big evens   : 1000
+big[1999]   : 1999
+DONE

@@ -1,0 +1,383 @@
+// unit_slot_receiver_semantics.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// Blast radius of the receiver-clone fix (v9.12.0): `a[i]`, instance dot
+// dispatch and `length()` now run against the arena slot instead of cloning the
+// whole receiver. The clone used to be what produced value semantics by
+// accident, so every observable consequence of it is pinned here:
+//
+//   A. reading still COPIES (value semantics)
+//   B. evaluation order is unchanged (receiver snapshotted before arguments)
+//   C. the two writeback machineries still persist mutations
+//   D. every instance-dispatch path still resolves
+//   E. length() dispatch is not hijacked from user code
+//   F. index reads keep their exact in-range / out-of-range behaviour
+
+// ── A. Reading copies ────────────────────────────────────────────────────────
+
+class Bag {
+    public Bag() {
+        this.items = [1, 2, 3];
+        this.name  = "bag";
+    }
+    public int count() { return this.items.length(); }
+}
+
+test("A1: reading a collection field returns a copy, not an alias", () => {
+    let b = new Bag();
+    let borrowed = b.items;
+    borrowed.push(99);
+    assert(borrowed.length() == 4, "the copy must see its own push");
+    assert(b.items.length() == 3, "the instance field must NOT see it");
+});
+
+test("A2: reading a nested element returns a copy, not an alias", () => {
+    let m = [[1, 2], [3, 4]];
+    let row = m[0];
+    row.push(99);
+    assert(row.length() == 3, "the copy must see its own push");
+    assert(m[0].length() == 2, "the nested element must NOT see it");
+});
+
+test("A3: assigning an instance copies it", () => {
+    let a = new Bag();
+    let c = a;
+    c.items.push(4);
+    assert(a.items.length() == 3, "the original instance must be untouched");
+});
+
+test("A4: a field read of a scalar is independent", () => {
+    let b = new Bag();
+    let n = b.name;
+    n = n + "-changed";
+    assert(b.name == "bag", "mutating the copy must not touch the field");
+});
+
+test("A5: dict value read returns a copy", () => {
+    let d <string, any> = ({"list", [1, 2]});
+    let got = d["list"];
+    got.push(3);
+    assert(d["list"].length() == 2, "dict value must not be aliased");
+});
+
+// ── B. Evaluation order ──────────────────────────────────────────────────────
+
+let __order_arr = [10, 20, 30];
+
+fn int __grow() {
+    __order_arr.push(40);
+    return 0;
+}
+
+test("B1: the index expression runs before the element is read", () => {
+    let before = __order_arr.length();
+    let v = __order_arr[__grow()];
+    assert(v == 10, "index 0 must still read the first element");
+    assert(__order_arr.length() == before + 1, "the side effect must have happened");
+});
+
+class Swapper {
+    public Swapper() {
+        this.marker = 1;
+        this.hook   = (x) => { return "original"; };
+    }
+    public string swap() {
+        this.hook = (x) => { return "replaced"; };
+        return "arg";
+    }
+}
+
+// Built at top level on purpose: a lambda-valued field is lost when the
+// instance is constructed INSIDE a closure. That is a pre-existing bug
+// (identical output before and after the receiver-clone fix), not something
+// this suite is pinning — see the note in the header.
+let __swapper_order = new Swapper();
+let __swapper_next  = new Swapper();
+
+test("B2: a callable field is snapshotted before its arguments are evaluated", () => {
+    // The argument reassigns this.hook. The call must still run the ORIGINAL
+    // function — that is what the whole-receiver clone used to guarantee.
+    let r = __swapper_order.hook(__swapper_order.swap());
+    assert(r == "original", "must call the function captured before the args ran");
+});
+
+test("B2b: reassigning a callable field is visible on the NEXT call", () => {
+    assert(__swapper_next.hook("x") == "original", "first call");
+    __swapper_next.swap();
+    assert(__swapper_next.hook("x") == "replaced", "after the swap");
+});
+
+test("B3: method arguments still see the live receiver", () => {
+    let b = new Bag();
+    b.items.push(4);
+    assert(b.count() == 4, "count must observe the mutation");
+});
+
+// ── C. Writeback machinery ───────────────────────────────────────────────────
+
+class Store {
+    public Store() {
+        this.rows = [3, 1, 2];
+        this.tags = new Set(["x", "y"]);
+    }
+    public void add(int v) { this.rows.push(v); }
+}
+
+test("C1: instance.field.push persists", () => {
+    let s = new Store();
+    s.rows.push(9);
+    assert(s.rows.length() == 4, "push through the field must persist");
+});
+
+test("C2: instance.field.sort persists", () => {
+    let s = new Store();
+    s.rows.sort();
+    assert(s.rows[0] == 1, "sort through the field must persist");
+});
+
+test("C3: instance.field.reverse persists", () => {
+    let s = new Store();
+    s.rows.reverse();
+    assert(s.rows[0] == 2, "reverse through the field must persist");
+});
+
+test("C4: instance.field(set).remove persists", () => {
+    let s = new Store();
+    s.tags.remove("x");
+    assert(s.tags.size() == 1, "set remove through the field must persist");
+});
+
+test("C5: method mutating this.field persists", () => {
+    let s = new Store();
+    s.add(7);
+    s.add(8);
+    assert(s.rows.length() == 5, "mutation inside a method must persist");
+});
+
+test("C6: dict[key].push persists", () => {
+    let d <string, any> = ({"a", [1]});
+    d["a"].push(2);
+    d["a"].push(3);
+    assert(d["a"].length() == 3, "push through a dict slot must persist");
+});
+
+test("C7: dict[key].pop persists", () => {
+    let d <string, any> = ({"a", [1, 2, 3]});
+    let popped = d["a"].pop();
+    assert(popped == 3, "pop must return the last element");
+    assert(d["a"].length() == 2, "pop through a dict slot must persist");
+});
+
+// ── D. Instance dispatch paths ───────────────────────────────────────────────
+
+class Base {
+    public Base(string tag) {
+        this.tag     = tag;
+        this.payload = [1, 2, 3];
+    }
+    public string who() { return "base"; }
+    public string describe() { return this.who() + ":" + this.tag; }
+    public int size() { return this.payload.length(); }
+    public get string label() { return "L-" + this.tag; }
+    private string secret() { return "hidden"; }
+    public string callSecret() { return this.secret(); }
+    public static string kind() { return "Base-static"; }
+}
+
+class Derived : Base {
+    public Derived(string tag) { super(tag); }
+    public string who() { return "derived"; }
+    public string parentWho() { return super.who(); }
+}
+
+test("D1: field read", () => {
+    let b = new Base("t1");
+    assert(b.tag == "t1", "field read must work");
+});
+
+test("D2: method call", () => {
+    let b = new Base("t2");
+    assert(b.who() == "base", "method call must work");
+});
+
+test("D3: method calling another method through this", () => {
+    let b = new Base("t3");
+    assert(b.describe() == "base:t3", "nested this-dispatch must work");
+});
+
+test("D4: getter (no parens, no field)", () => {
+    let b = new Base("t4");
+    assert(b.label == "L-t4", "getter must resolve");
+});
+
+test("D5: method reference is a value, not an invocation", () => {
+    let b = new Base("t5");
+    let f = b.who;
+    assert(f() == "base", "the reference must be callable");
+});
+
+test("D6: callable field (instance built at top level — see B2 note)", () => {
+    assert(__swapper_next.hook("x") == "replaced", "a function-valued field must be callable");
+});
+
+test("D7: virtual dispatch through inheritance", () => {
+    let d = new Derived("t7");
+    assert(d.who() == "derived", "the override must win");
+    assert(d.describe() == "derived:t7", "this-dispatch must reach the override");
+});
+
+test("D8: super reaches the parent implementation", () => {
+    let d = new Derived("t8");
+    assert(d.parentWho() == "base", "super must reach the parent");
+});
+
+test("D9: a private method is reachable from inside the class", () => {
+    let b = new Base("t9");
+    assert(b.callSecret() == "hidden", "internal private call must work");
+});
+
+test("D10: static method dispatch", () => {
+    assert(Base.kind() == "Base-static", "static dispatch must work");
+});
+
+test("D11: method on an instance carrying a big collection", () => {
+    let b = new Base("t11");
+    for (let i = 0; i < 200; i = i + 1) { b.payload.push(i); }
+    assert(b.size() == 203, "size must see every push");
+    assert(b.who() == "base", "dispatch must still work with a big payload");
+});
+
+test("D12: toString fallback on an instance", () => {
+    let b = new Base("t12");
+    let s = b.toString();
+    assert(s.length() > 0, "toString must produce something");
+});
+
+test("D13: instances inside an array keep their identity", () => {
+    let list = [];
+    list.push(new Base("a"));
+    list.push(new Derived("b"));
+    assert(list[0].who() == "base", "element 0 dispatch");
+    assert(list[1].who() == "derived", "element 1 dispatch");
+    assert(list[1].tag == "b", "element 1 field");
+});
+
+// ── E. length() is not hijacked ──────────────────────────────────────────────
+
+class Ruler {
+    public Ruler() { this.units = 12; }
+    public int length() { return this.units; }
+}
+
+test("E1: a user class method named length() still wins", () => {
+    let r = new Ruler();
+    assert(r.length() == 12, "the class method must be dispatched, not a builtin");
+});
+
+test("E2: array length", () => {
+    let a = [1, 2, 3];
+    assert(a.length() == 3, "array length");
+    let empty = [];
+    assert(empty.length() == 0, "empty array length");
+});
+
+test("E3: dict length", () => {
+    let d <string, int> = ({"a", 1}, {"b", 2});
+    assert(d.length() == 2, "dict length");
+    d["c"] = 3;
+    assert(d.length() == 3, "dict length after insert");
+    d.Remove("a");
+    assert(d.length() == 2, "dict length after remove");
+});
+
+test("E4: string length is unchanged", () => {
+    assert("hello".length() == 5, "string length");
+    assert("".length() == 0, "empty string length");
+});
+
+test("E5: set size is unchanged", () => {
+    let s = new Set([1, 2, 2, 3]);
+    assert(s.size() == 3, "set size dedupes");
+});
+
+test("E6: length() tracks mutation", () => {
+    let a = [];
+    for (let i = 0; i < 50; i = i + 1) { a.push(i); }
+    assert(a.length() == 50, "length after 50 pushes");
+    a.pop();
+    assert(a.length() == 49, "length after pop");
+});
+
+// ── F. Index read behaviour ──────────────────────────────────────────────────
+
+test("F1: array index in range", () => {
+    let a = [10, 20, 30];
+    assert(a[0] == 10, "first");
+    assert(a[2] == 30, "last");
+});
+
+test("F2: array index out of range throws", () => {
+    let a = [1, 2];
+    let caught = false;
+    try { let x = a[5]; } catch (e) { caught = true; }
+    assert(caught, "out of range must throw");
+});
+
+test("F3: negative array index throws", () => {
+    let a = [1, 2];
+    let caught = false;
+    try { let x = a[0 - 1]; } catch (e) { caught = true; }
+    assert(caught, "negative index must throw");
+});
+
+test("F4: string index in range", () => {
+    let s = "abc";
+    assert(s[0] == "a", "first char");
+    assert(s[2] == "c", "last char");
+});
+
+test("F5: string index out of range is null", () => {
+    let s = "abc";
+    assert(s[9] == null, "past the end must be null");
+    assert(s[0 - 1] == null, "negative must be null");
+});
+
+test("F6: nested index", () => {
+    let m = [[1, 2], [3, 4]];
+    assert(m[1][0] == 3, "nested read");
+});
+
+test("F7: dict index hit and miss", () => {
+    let d <string, int> = ({"k", 5});
+    assert(d["k"] == 5, "hit");
+    assert(d["nope"] == null, "miss is null");
+});
+
+test("F8: index on an unsupported type throws", () => {
+    let n = 42;
+    let caught = false;
+    try { let x = n[0]; } catch (e) { caught = true; }
+    assert(caught, "indexing an int must throw");
+});
+
+test("F9: index with a computed expression", () => {
+    let a = [1, 2, 3, 4];
+    let i = 1;
+    assert(a[i + 2] == 4, "computed index");
+});
+
+test("F10: indexed write still works alongside the read fast path", () => {
+    let a = [1, 2, 3];
+    a[1] = 99;
+    assert(a[1] == 99, "indexed write must persist");
+    assert(a.length() == 3, "length unchanged by write");
+});
+
+test("F11: large indexed loop stays correct", () => {
+    let a = [];
+    for (let i = 0; i < 500; i = i + 1) { a.push(i * 2); }
+    let sum = 0;
+    for (let i = 0; i < a.length(); i = i + 1) { sum = sum + a[i]; }
+    assert(sum == 249500, "indexed sum must be exact");
+});
+
+summary();

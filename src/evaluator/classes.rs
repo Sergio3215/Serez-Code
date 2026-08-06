@@ -440,19 +440,22 @@ impl super::Evaluator {
         }
     }
 
+    /// Dispatched from expr.rs against the arena slot: the receiver is NOT
+    /// cloned. Field values are pulled one at a time via `field_value`, so a
+    /// method call on an instance carrying a big collection no longer copies
+    /// that collection. Reading a field still copies that field's value —
+    /// that is the language's value semantics, unchanged.
     pub(super) fn eval_instance_dot(
         &mut self,
         obj_ref: ObjectRef,
         class_name: String,
-        fields: Vec<(String, OwnedValue)>,
         dot_call: &ast::DotCallExpression,
     ) -> EvalResult {
         let method_name = &dot_call.method;
 
         // Field read: no parens and no args and field exists → return value (not call)
         if !dot_call.has_parens && dot_call.arguments.is_empty() {
-            if let Some((_, owned)) = fields.iter().find(|(n, _)| n == method_name) {
-                let owned = owned.clone();
+            if let Some(owned) = self.field_value(obj_ref, method_name) {
                 return EvalResult::Value(self.plant(owned));
             }
             // Getter: no parens, no field → look for `get prop()`
@@ -500,9 +503,11 @@ impl super::Evaluator {
                     let s = self.display(obj_ref);
                     return EvalResult::Value(self.alloc(ObjectData::Str(s)));
                 }
-                // Fallback: field holds a callable function (this.fn_field(args))
-                if let Some((_, owned)) = fields.iter().find(|(n, _)| n == method_name) {
-                    let owned = owned.clone();
+                // Fallback: field holds a callable function (this.fn_field(args)).
+                // The field is snapshotted BEFORE the arguments are evaluated —
+                // same order as when the whole receiver was cloned up front, so an
+                // argument that reassigns the field still calls the old one.
+                if let Some(owned) = self.field_value(obj_ref, method_name) {
                     let fn_ref = self.plant(owned);
                     let mut arg_vals = Vec::new();
                     for arg_expr in &dot_call.arguments {
@@ -516,6 +521,18 @@ impl super::Evaluator {
                 eprintln!("❌ ERROR: '{}' has no field or method named '{}'", class_name, method_name);
                 EvalResult::Error
             }
+        }
+    }
+
+    /// One field's value, copied out of the instance living in the arena slot.
+    /// Copies that field alone — never the whole instance.
+    pub(super) fn field_value(&self, obj_ref: ObjectRef, name: &str) -> Option<OwnedValue> {
+        match self.resolve(obj_ref) {
+            Some(ObjectData::Instance { fields, .. }) => fields
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.clone()),
+            _ => None,
         }
     }
 

@@ -1,0 +1,318 @@
+// unit_slot_collections_surface.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// Surface sweep of every array / string / dict / set method that exists in the
+// evaluator (methods_array.rs, methods_string.rs, methods_set.rs and the dict
+// arm of expr.rs) — including the ones no doc mentions (aliases `upper`,
+// `lower`, `trimLeft`, `trimRight`, `contains`; `Set.union`/`intersection`;
+// `flat`; `findIndex`).
+//
+// Each one is exercised TWICE: standalone, and through a receiver that reaches
+// it via the dispatch paths changed by the receiver-clone fix — an instance
+// field and a dict slot. A method that silently stopped seeing the live
+// receiver would pass the first and fail the second.
+
+class Holder {
+    public Holder() {
+        this.nums  = [5, 3, 9, 1];
+        this.words = ["beta", "alpha"];
+        this.text  = "  Hello World  ";
+        // A dict literal only parses in a typed `let`, so it is built here and
+        // then assigned into the field.
+        let m <string, int> = ({"a", 1}, {"b", 2});
+        this.map   = m;
+        this.tags  = new Set(["x", "y"]);
+    }
+}
+
+// ── Arrays: read-only methods ────────────────────────────────────────────────
+
+test("array length / indexOf / includes / contains", () => {
+    let a = [5, 3, 9, 1];
+    assert(a.length() == 4, "length");
+    assert(a.indexOf(9) == 2, "indexOf hit");
+    assert(a.indexOf(77) == 0 - 1, "indexOf miss is -1");
+    assert(a.includes(3), "includes hit");
+    assert(!a.includes(77), "includes miss");
+    assert(a.contains(5), "contains alias");
+});
+
+test("array length / indexOf / includes through an instance field", () => {
+    let h = new Holder();
+    assert(h.nums.length() == 4, "length via field");
+    assert(h.nums.indexOf(9) == 2, "indexOf via field");
+    assert(h.nums.includes(1), "includes via field");
+});
+
+test("array join / toString", () => {
+    let a = [1, 2, 3];
+    assert(a.join("-") == "1-2-3", "join");
+    assert(a.join("") == "123", "join with empty separator");
+    assert(a.toString().length() > 0, "toString");
+});
+
+test("array join through an instance field", () => {
+    let h = new Holder();
+    assert(h.words.join(",") == "beta,alpha", "join via field");
+});
+
+test("array slice", () => {
+    let a = [1, 2, 3, 4, 5];
+    let s = a.slice(1, 3);
+    assert(s.length() == 2, "slice length");
+    assert(s[0] == 2, "slice first");
+    assert(a.length() == 5, "slice must not mutate the source");
+});
+
+test("array find / findIndex", () => {
+    let a = [5, 3, 9, 1];
+    assert(a.find(x => x > 4) == 5, "find");
+    assert(a.findIndex(x => x == 9) == 2, "findIndex");
+});
+
+test("array every / some", () => {
+    let a = [2, 4, 6];
+    assert(a.every(x => x % 2 == 0), "every true");
+    assert(!a.every(x => x > 4), "every false");
+    assert(a.some(x => x > 5), "some true");
+    assert(!a.some(x => x > 99), "some false");
+});
+
+test("array flat", () => {
+    let nested = [[1, 2], [3, 4]];
+    let f = nested.flat();
+    assert(f.length() == 4, "flat length");
+    assert(f[0] == 1, "flat first");
+    assert(f[3] == 4, "flat last");
+});
+
+test("array map / filter / reduce", () => {
+    let a = [1, 2, 3, 4];
+    assert(a.map(x => x * 2)[3] == 8, "map");
+    assert(a.filter(x => x % 2 == 0).length() == 2, "filter");
+    // NOTE: Serez takes the initial value FIRST — reduce(initial, callback).
+    assert(a.reduce(0, (acc, x) => acc + x) == 10, "reduce");
+    assert(a.reduce((acc, x) => acc + x) == 10, "reduce without an initial value");
+    assert(a.length() == 4, "none of them may mutate the source");
+});
+
+test("array map / filter / reduce through an instance field", () => {
+    let h = new Holder();
+    assert(h.nums.map(x => x + 1).length() == 4, "map via field");
+    assert(h.nums.filter(x => x > 3).length() == 2, "filter via field");
+    assert(h.nums.reduce(0, (acc, x) => acc + x) == 18, "reduce via field");
+    assert(h.nums.length() == 4, "the field must be unchanged");
+});
+
+// ── Arrays: mutating methods ─────────────────────────────────────────────────
+
+test("array push / pop", () => {
+    let a = [1];
+    a.push(2);
+    a.push(3);
+    assert(a.length() == 3, "after pushes");
+    assert(a.pop() == 3, "pop returns the last");
+    assert(a.length() == 2, "after pop");
+});
+
+test("array shift / unshift", () => {
+    let a = [1, 2, 3];
+    assert(a.shift() == 1, "shift returns the first");
+    assert(a.length() == 2, "after shift");
+    a.unshift(0);
+    assert(a[0] == 0, "unshift puts it first");
+    assert(a.length() == 3, "after unshift");
+});
+
+test("array remove", () => {
+    let a = [1, 2, 3];
+    a.remove(1);
+    assert(a.length() == 2, "after remove");
+    assert(a[1] == 3, "the tail shifted down");
+});
+
+test("array sort / reverse", () => {
+    let a = [5, 3, 9, 1];
+    a.sort();
+    assert(a[0] == 1, "sorted ascending");
+    assert(a[3] == 9, "sorted last");
+    a.reverse();
+    assert(a[0] == 9, "reversed");
+});
+
+test("mutating methods through an instance field persist", () => {
+    let h = new Holder();
+    h.nums.push(7);
+    assert(h.nums.length() == 5, "push persists");
+    h.nums.sort();
+    assert(h.nums[0] == 1, "sort persists");
+    h.nums.reverse();
+    assert(h.nums[0] == 9, "reverse persists");
+    h.nums.pop();
+    assert(h.nums.length() == 4, "pop persists");
+    h.nums.shift();
+    assert(h.nums.length() == 3, "shift persists");
+    h.nums.unshift(0);
+    assert(h.nums[0] == 0, "unshift persists");
+});
+
+test("mutating methods through a dict slot persist", () => {
+    let d <string, any> = ({"list", [3, 1, 2]});
+    d["list"].push(4);
+    assert(d["list"].length() == 4, "push persists");
+    d["list"].sort();
+    assert(d["list"][0] == 1, "sort persists");
+    d["list"].pop();
+    assert(d["list"].length() == 3, "pop persists");
+});
+
+// ── Strings ──────────────────────────────────────────────────────────────────
+
+test("string length / charAt / index", () => {
+    let s = "hello";
+    assert(s.length() == 5, "length");
+    assert(s.charAt(1) == "e", "charAt");
+    assert(s[1] == "e", "index");
+});
+
+test("string case: toUpperCase/upper, toLowerCase/lower", () => {
+    assert("ab".toUpperCase() == "AB", "toUpperCase");
+    assert("ab".upper() == "AB", "upper alias");
+    assert("AB".toLowerCase() == "ab", "toLowerCase");
+    assert("AB".lower() == "ab", "lower alias");
+});
+
+test("string trim family incl. the undocumented aliases", () => {
+    assert("  x  ".trim() == "x", "trim");
+    assert("  x".trimStart() == "x", "trimStart");
+    assert("x  ".trimEnd() == "x", "trimEnd");
+    assert("  x".trimLeft() == "x", "trimLeft alias");
+    assert("x  ".trimRight() == "x", "trimRight alias");
+});
+
+test("string startsWith / endsWith / includes / contains / indexOf", () => {
+    let s = "hello world";
+    assert(s.startsWith("hello"), "startsWith");
+    assert(s.endsWith("world"), "endsWith");
+    assert(s.includes("lo w"), "includes");
+    assert(s.contains("world"), "contains alias");
+    assert(s.indexOf("world") == 6, "indexOf");
+});
+
+test("string replace / replaceAll / split / substring / slice", () => {
+    assert("aXbXc".replace("X", "-") == "a-bXc", "replace hits once");
+    assert("aXbXc".replaceAll("X", "-") == "a-b-c", "replaceAll hits all");
+    assert("a,b,c".split(",").length() == 3, "split");
+    assert("hello".substring(1, 3) == "el", "substring");
+    assert("hello".slice(1, 3) == "el", "slice");
+});
+
+test("string padStart / padEnd", () => {
+    assert("5".padStart(3, "0") == "005", "padStart");
+    assert("5".padEnd(3, "0") == "500", "padEnd");
+});
+
+test("string methods through an instance field", () => {
+    let h = new Holder();
+    assert(h.text.trim() == "Hello World", "trim via field");
+    assert(h.text.trim().upper() == "HELLO WORLD", "chained via field");
+    assert(h.text.length() == 15, "length via field");
+});
+
+// ── Dicts ────────────────────────────────────────────────────────────────────
+
+test("dict read / write / length", () => {
+    let d <string, int> = ({"a", 1});
+    assert(d["a"] == 1, "read");
+    assert(d["zz"] == null, "miss is null");
+    d["b"] = 2;
+    assert(d.length() == 2, "length after write");
+});
+
+test("dict Add / Remove / RemoveAll", () => {
+    let d <string, int> = ({"a", 1});
+    d.Add({"b", 2});
+    assert(d.length() == 2, "after Add");
+    d.Remove("a");
+    assert(d.length() == 1, "after Remove");
+    assert(d["a"] == null, "removed key is gone");
+    d.RemoveAll();
+    assert(d.length() == 0, "after RemoveAll");
+});
+
+test("dict toList / keys / values / toArray", () => {
+    let d <string, int> = ({"a", 1}, {"b", 2});
+    assert(d.toList().length() == 2, "toList");
+    assert(d.keys().length() == 2, "keys");
+    assert(d.values().length() == 2, "values");
+    assert(d.toArray().length() == 2, "toArray");
+});
+
+test("dict through an instance field", () => {
+    let h = new Holder();
+    assert(h.map.length() == 2, "length via field");
+    assert(h.map["a"] == 1, "read via field");
+    assert(h.map.keys().length() == 2, "keys via field");
+});
+
+// ── Sets ─────────────────────────────────────────────────────────────────────
+
+test("set size / add / has / contains / delete / remove / clear", () => {
+    let s = new Set([1, 2]);
+    assert(s.size() == 2, "size");
+    s.add(3);
+    assert(s.size() == 3, "after add");
+    s.add(3);
+    assert(s.size() == 3, "add is idempotent");
+    assert(s.has(1), "has");
+    assert(s.contains(2), "contains alias");
+    s.delete(1);
+    assert(!s.has(1), "after delete");
+    s.remove(2);
+    assert(!s.has(2), "remove alias");
+    s.clear();
+    assert(s.size() == 0, "after clear");
+});
+
+test("set union / intersection / toArray / toString", () => {
+    let a = new Set([1, 2, 3]);
+    let b = new Set([2, 3, 4]);
+    assert(a.union(b).size() == 4, "union");
+    assert(a.intersection(b).size() == 2, "intersection");
+    assert(a.toArray().length() == 3, "toArray");
+    assert(a.toString().length() > 0, "toString");
+});
+
+test("set through an instance field", () => {
+    let h = new Holder();
+    assert(h.tags.size() == 2, "size via field");
+    // KNOWN GAP (pre-existing, verified identical before and after the
+    // receiver-clone fix): `set.add` through an instance field does NOT
+    // persist, because the writeback trigger list in expr.rs:720 spells the
+    // dict method "Add" but never the Set method "add" (same for "delete").
+    // `remove` and `clear` are on that list, so they do persist — asserted
+    // below. Add the assertion for `add` once the list is corrected.
+    h.tags.remove("x");
+    assert(!h.tags.has("x"), "remove via field persists");
+    assert(h.tags.size() == 1, "size after remove via field");
+    h.tags.clear();
+    assert(h.tags.size() == 0, "clear via field persists");
+});
+
+// ── Chaining across the changed paths ────────────────────────────────────────
+
+test("deep chaining: field -> method -> index -> method", () => {
+    let h = new Holder();
+    assert(h.words.join("|").split("|")[0].upper() == "BETA", "four hops");
+});
+
+test("nested containers keep value semantics under indexing", () => {
+    let grid = [[1, 2, 3], [4, 5, 6]];
+    assert(grid[1][2] == 6, "nested read");
+    assert(grid.length() == 2, "outer length");
+    assert(grid[0].length() == 3, "inner length");
+    let row = grid[0];
+    row.push(99);
+    assert(grid[0].length() == 3, "the copy must not write through");
+});
+
+summary();

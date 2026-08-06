@@ -502,30 +502,57 @@ impl super::Evaluator {
                     };
                 }
 
-                let left_data = self.resolve(left_ref).unwrap().clone();
-                match (&left_data, &idx_data) {
-                    (ObjectData::Str(s), ObjectData::Integer(i)) => {
-                        let chars: Vec<char> = s.chars().collect();
-                        if *i < 0 || *i as usize >= chars.len() {
-                            EvalResult::Value(self.null_ref)
-                        } else {
-                            let c = chars[*i as usize].to_string();
-                            EvalResult::Value(self.alloc(ObjectData::Str(c)))
-                        }
+                // Array/string fast path: read the element straight out of the
+                // arena slot. The generic clone below copied the WHOLE container
+                // to hand back a single element, which is what turned an indexed
+                // loop into O(N²) (10k elements: 5600 ms vs 5 ms with for-in).
+                // Evaluation order is untouched: the index expression was already
+                // evaluated above, so no user code runs between resolve and read.
+                if let ObjectData::Integer(i) = idx_data {
+                    // Ok(element) | Err(len) so the borrow ends before plant/rt_err.
+                    let from_array: Option<Result<OwnedValue, usize>> = match self.resolve(left_ref) {
+                        Some(ObjectData::Array { elements, .. }) => Some(
+                            if i >= 0 && (i as usize) < elements.len() {
+                                Ok(elements[i as usize].clone())
+                            } else {
+                                Err(elements.len())
+                            },
+                        ),
+                        _ => None,
+                    };
+                    if let Some(got) = from_array {
+                        return match got {
+                            Ok(v) => EvalResult::Value(self.plant(v)),
+                            Err(len) => self.rt_err_kind(
+                                "IndexOutOfBounds",
+                                format!("Index out of bounds: {} (length {})", i, len),
+                            ),
+                        };
                     }
-                    (ObjectData::Array { elements, .. }, ObjectData::Integer(i)) => {
-                        if *i < 0 || *i as usize >= elements.len() {
-                            let (i, len) = (*i, elements.len());
-                            self.rt_err_kind("IndexOutOfBounds", format!("Index out of bounds: {} (length {})", i, len))
+                    // Same for strings: indexing one char no longer copies the
+                    // string. Out of range (and any negative index) stays null.
+                    let from_str: Option<Option<String>> = match self.resolve(left_ref) {
+                        Some(ObjectData::Str(s)) => Some(if i < 0 {
+                            None
                         } else {
-                            EvalResult::Value(self.plant(elements[*i as usize].clone()))
-                        }
-                    }
-                    _ => {
-                        let tn = left_data.type_name().to_string();
-                        self.rt_err_kind("TypeError", format!("Index operator not supported for type '{}'", tn))
+                            s.chars().nth(i as usize).map(|c| c.to_string())
+                        }),
+                        _ => None,
+                    };
+                    if let Some(got) = from_str {
+                        return match got {
+                            Some(c) => EvalResult::Value(self.alloc(ObjectData::Str(c))),
+                            None => EvalResult::Value(self.null_ref),
+                        };
                     }
                 }
+
+                // Fallback: unsupported receiver/index combination (error path only).
+                let tn = match self.resolve(left_ref) {
+                    Some(d) => d.type_name().to_string(),
+                    None => "unknown".to_string(),
+                };
+                self.rt_err_kind("TypeError", format!("Index operator not supported for type '{}'", tn))
             }
 
             Expression::DictLiteral(dict_lit) => {
@@ -732,6 +759,40 @@ impl super::Evaluator {
                         self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
                     }
                     return result;
+                }
+
+                // Instances dispatch against the slot as well. The generic clone
+                // below copies EVERY field to service a call that only ever reads
+                // them, so an instance holding a 1000-element array paid that copy
+                // on each `obj.method()`. Mutation never went through the copy —
+                // invoke_method already works off obj_ref — so this only removes
+                // waste. eval_instance_dot pulls the one field it needs, if any,
+                // out of the slot.
+                if let Some(ObjectData::Instance { class_name, .. }) = self.resolve(obj_ref) {
+                    let class_name = class_name.clone();
+                    let result = self.eval_instance_dot(obj_ref, class_name, dot_call);
+                    if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+                        self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+                    }
+                    return result;
+                }
+
+                // length() is O(1) on both collections, but the generic path paid
+                // an O(N) clone to read it — and it is the single most common call
+                // in an indexed loop header. No arguments, so there is no
+                // evaluation-order question. Inherently-O(N) methods (indexOf,
+                // join, map…) deliberately stay on the snapshot path below: the
+                // clone does not change their complexity, and moving them would
+                // change when their arguments observe the receiver.
+                if dot_call.method == "length" && dot_call.arguments.is_empty() {
+                    let n = match self.resolve(obj_ref) {
+                        Some(ObjectData::Array { elements, .. }) => Some(elements.len() as i64),
+                        Some(ObjectData::Dict { entries, .. }) => Some(entries.len() as i64),
+                        _ => None,
+                    };
+                    if let Some(n) = n {
+                        return EvalResult::Value(self.alloc(ObjectData::Integer(n)));
+                    }
                 }
 
                 let obj_data = match self.resolve(obj_ref) {
@@ -947,9 +1008,8 @@ impl super::Evaluator {
                         }
                     }
                     // ── Instance field read / method call ─────────────────────
-                    ObjectData::Instance { class_name, fields } => {
-                        self.eval_instance_dot(obj_ref, class_name, fields, dot_call)
-                    }
+                    // Instance is handled by the slot fast path above and never
+                    // reaches this match.
 
                     // (Set methods are intercepted before this match — see the
                     // slot fast path above; a Set can never reach here.)
