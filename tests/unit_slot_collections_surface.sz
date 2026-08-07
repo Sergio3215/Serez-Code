@@ -331,6 +331,59 @@ test("a standalone set is unaffected by the writeback", () => {
     assert(s.has(2), "the right element survived");
 });
 
+// A Set stored as a dict VALUE is the second receiver shape. It used to be
+// skipped entirely: the dict writeback was computed after the generic receiver
+// clone and applied only inside the Array arm, while the Set fast path returned
+// before either. Arrays in a dict slot always worked — asserted alongside, so a
+// regression on that side would show up here too.
+test("set add through a dict slot persists", () => {
+    let d <string, any> = ({"s", new Set([1])});
+    d["s"].add(2);
+    assert(d["s"].size() == 2, "add through a dict slot persists");
+    assert(d["s"].has(2), "the added element is there");
+    d["s"].add(2);
+    assert(d["s"].size() == 2, "add through a dict slot stays idempotent");
+});
+
+test("set delete and clear through a dict slot persist", () => {
+    let d <string, any> = ({"s", new Set([1, 2, 3])});
+    d["s"].delete(1);
+    assert(d["s"].size() == 2, "delete persists");
+    assert(!d["s"].has(1), "the deleted element is gone");
+    d["s"].remove(2);
+    assert(d["s"].size() == 1, "remove persists");
+    d["s"].clear();
+    assert(d["s"].size() == 0, "clear persists");
+});
+
+test("set mutators through a dict slot work with an integer key", () => {
+    let g <int, any> = ({1, new Set([7])});
+    g[1].add(8);
+    assert(g[1].size() == 2, "integer-keyed slot persists too");
+    g[1].delete(7);
+    assert(!g[1].has(7), "delete on an integer-keyed slot");
+});
+
+test("arrays in a dict slot keep working alongside sets", () => {
+    let e <string, any> = ({"a", [3, 1, 2]});
+    e["a"].push(4);
+    assert(e["a"].length() == 4, "push");
+    e["a"].sort();
+    assert(e["a"][0] == 1, "sort");
+    e["a"].reverse();
+    assert(e["a"][0] == 4, "reverse");
+    e["a"].pop();
+    assert(e["a"].length() == 3, "pop");
+});
+
+test("two dict slots holding sets stay independent", () => {
+    let d <string, any> = ({"a", new Set([1])}, {"b", new Set([9])});
+    d["a"].add(2);
+    assert(d["a"].size() == 2, "the touched slot grew");
+    assert(d["b"].size() == 1, "the other slot is untouched");
+    assert(d["b"].has(9), "and kept its element");
+});
+
 // ── Chaining across the changed paths ────────────────────────────────────────
 
 test("deep chaining: field -> method -> index -> method", () => {

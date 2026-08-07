@@ -30,6 +30,65 @@ impl super::Evaluator {
         }
     }
 
+    /// Detects the `dict["key"].mutatingMethod()` shape and returns the dict
+    /// slot to write the mutated value back into. `Err` carries the failure of
+    /// evaluating the key expression, exactly as the inline version did.
+    ///
+    /// The method list must name every spelling of a mutator, including the Set
+    /// pair `add`/`delete` — the dict method `Add` is a different one.
+    fn dict_slot_ctx(
+        &mut self,
+        dot_call: &ast::DotCallExpression,
+    ) -> Result<Option<(ObjectRef, String)>, EvalResult> {
+        const MUTATING_OPS: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove",
+                                        "reverse", "add", "delete", "Add", "Remove", "RemoveAll", "clear"];
+        if !MUTATING_OPS.contains(&dot_call.method.as_str()) {
+            return Ok(None);
+        }
+        let Expression::Index(idx_expr) = dot_call.object.as_ref() else { return Ok(None) };
+        let (dict_expr, key_expr) = (idx_expr.left.as_ref(), idx_expr.index.as_ref());
+        let Expression::Identifier(dict_name) = dict_expr else { return Ok(None) };
+        let Some(dr) = self.lookup_var(dict_name.as_str()) else { return Ok(None) };
+        if !matches!(self.resolve(dr), Some(ObjectData::Dict { .. })) {
+            return Ok(None);
+        }
+        let key_ref = match self.eval_expression(key_expr) {
+            EvalResult::Value(r) => r,
+            _ => return Err(EvalResult::Error),
+        };
+        let key_str = match self.resolve(key_ref).cloned() {
+            Some(ObjectData::Str(s)) => s,
+            Some(ObjectData::Integer(n)) => n.to_string(),
+            _ => String::new(),
+        };
+        Ok(if key_str.is_empty() { None } else { Some((dr, key_str)) })
+    }
+
+    /// Writes the mutated value at `obj_ref` back into `dict_ref[key_str]`.
+    /// The counterpart of `apply_field_writeback` for the dict-slot receiver:
+    /// value semantics planted a copy when `d["k"]` was read, so without this
+    /// the mutation would be dropped.
+    fn apply_dict_writeback(&mut self, dict_ref: ObjectRef, key_str: &str, obj_ref: ObjectRef) {
+        let updated = self.extract(obj_ref);
+        let Some(ObjectData::Dict { key_type, value_type, mut entries, .. }) =
+            self.resolve(dict_ref).cloned() else { return };
+        let mut found = false;
+        for entry in entries.iter_mut() {
+            let ks = match &entry.0 {
+                OwnedValue::Str(s) => s.clone(),
+                OwnedValue::Integer(n) => n.to_string(),
+                _ => String::new(),
+            };
+            if ks == key_str { entry.1 = updated.clone(); found = true; break; }
+        }
+        if !found { entries.push((OwnedValue::Str(key_str.to_string()), updated)); }
+        let new_dict = ObjectData::Dict { key_type, value_type, entries, index: Default::default() };
+        match dict_ref.region {
+            RegionId::Global => self.global_arena.update(dict_ref.index, new_dict),
+            RegionId::Scoped => self.scopes.arena.update(dict_ref.index, new_dict),
+        }
+    }
+
     pub(super) fn eval_expression(&mut self, expr: &Expression) -> EvalResult {
         match expr {
             Expression::Integer(i) => EvalResult::Value(self.int_ref(*i)),
@@ -741,9 +800,21 @@ impl super::Evaluator {
                 // `instance.field.remove/clear(...)` DOES write the mutated set
                 // back into the field — same as the generic path below.
                 if matches!(self.resolve(obj_ref), Some(ObjectData::Set { .. })) {
+                    // A Set living in a dict slot needs the same writeback an
+                    // Array gets: `d["k"]` planted a copy, so a mutation on it
+                    // is dropped unless it is written back. The context is taken
+                    // BEFORE the method runs and AFTER obj_ref was evaluated —
+                    // the same order the generic path below uses.
+                    let dict_ctx = match self.dict_slot_ctx(dot_call) {
+                        Ok(c) => c,
+                        Err(e) => return e,
+                    };
                     let result = self.eval_set_method_slot(obj_ref, dot_call);
                     if let Some((inner_obj_expr, field_name)) = writeback_ctx {
                         self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+                    }
+                    if let Some((dict_ref, key_str)) = dict_ctx {
+                        self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
                     }
                     return result;
                 }
@@ -815,29 +886,9 @@ impl super::Evaluator {
                 }
 
                 // Detect dict["key"].mutatingMethod() pattern for writeback
-                let dict_writeback_ctx: Option<(ObjectRef, String)> = {
-                    const MUTATING_OPS: &[&str] = &["push","pop","shift","unshift","sort","remove","reverse","Add","Remove","RemoveAll","clear"];
-                    if MUTATING_OPS.contains(&dot_call.method.as_str()) {
-                        if let Expression::Index(idx_expr) = dot_call.object.as_ref() {
-                            let (dict_expr, key_expr) = (idx_expr.left.as_ref(), idx_expr.index.as_ref());
-                            if let Expression::Identifier(dict_name) = dict_expr {
-                                if let Some(dr) = self.lookup_var(dict_name.as_str()) {
-                                    if matches!(self.resolve(dr), Some(ObjectData::Dict { .. })) {
-                                        let key_ref = match self.eval_expression(key_expr) {
-                                            EvalResult::Value(r) => r,
-                                            _ => return EvalResult::Error,
-                                        };
-                                        let key_str = match self.resolve(key_ref).cloned() {
-                                            Some(ObjectData::Str(s)) => s,
-                                            Some(ObjectData::Integer(n)) => n.to_string(),
-                                            _ => String::new(),
-                                        };
-                                        if !key_str.is_empty() { Some((dr, key_str)) } else { None }
-                                    } else { None }
-                                } else { None }
-                            } else { None }
-                        } else { None }
-                    } else { None }
+                let dict_writeback_ctx = match self.dict_slot_ctx(dot_call) {
+                    Ok(c) => c,
+                    Err(e) => return e,
                 };
 
                 let result = match obj_data {
@@ -846,26 +897,7 @@ impl super::Evaluator {
                         let r = self.eval_array_method(obj_ref, element_type.clone(), elems.clone(), dot_call);
                         // Writeback: if array came from dict["key"], update the dict entry
                         if let Some((dict_ref, key_str)) = dict_writeback_ctx {
-                            let updated = self.extract(obj_ref);
-                            if let Some(ObjectData::Dict { key_type, value_type, mut entries, .. }) =
-                                self.resolve(dict_ref).cloned()
-                            {
-                                let mut found = false;
-                                for entry in entries.iter_mut() {
-                                    let ks = match &entry.0 {
-                                        OwnedValue::Str(s) => s.clone(),
-                                        OwnedValue::Integer(n) => n.to_string(),
-                                        _ => String::new(),
-                                    };
-                                    if ks == key_str { entry.1 = updated.clone(); found = true; break; }
-                                }
-                                if !found { entries.push((OwnedValue::Str(key_str), updated)); }
-                                let new_dict = ObjectData::Dict { key_type, value_type, entries, index: Default::default() };
-                                match dict_ref.region {
-                                    crate::region::RegionId::Global => self.global_arena.update(dict_ref.index, new_dict),
-                                    crate::region::RegionId::Scoped => self.scopes.arena.update(dict_ref.index, new_dict),
-                                }
-                            }
+                            self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
                         }
                         r
                     }
