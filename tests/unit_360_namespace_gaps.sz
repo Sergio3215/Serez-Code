@@ -1,0 +1,123 @@
+// unit_360_namespace_gaps.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// The remaining namespace methods absent from the test corpus:
+//   Autodiff.clear / detach / isRecording
+//   DateTime.fromTimestamp   (the alias of fromEpoch)
+//   Dec.MIN / Dec.MAX_SCALE
+//   Media.stopAll
+//   OS.kill                  (gating only — never actually signalling)
+//   Terminal.clear / readByte / setCursor / writeByte
+//
+// The Terminal and OS entries are pinned through their permission and `unsafe`
+// gates rather than by running them: `Terminal.clear` would wipe the runner's
+// own output, and `OS.kill` needs a live victim process. Verifying that the
+// gate holds is the part that matters for safety anyway.
+use permissions { Time, Media }
+
+// ── Autodiff ─────────────────────────────────────────────────────────────────
+
+test("isRecording is false outside a tape", () => {
+    Autodiff.clear();
+    assert(!Autodiff.isRecording(), "no tape means not recording");
+});
+
+test("clear is idempotent and safe to call repeatedly", () => {
+    Autodiff.clear();
+    Autodiff.clear();
+    assert(!Autodiff.isRecording(), "still not recording after two clears");
+});
+
+test("detach returns a tensor with the same values", () => {
+    let t = Tensor.from([[1.5, 2.5], [3.5, 4.5]]);
+    let d = Autodiff.detach(t);
+    assert(d.shape()[0] == 2, "rows preserved");
+    assert(d.shape()[1] == 2, "cols preserved");
+    let r = d.toArray();
+    assert(r[0][0] == 1.5, "first value");
+    assert(r[1][1] == 4.5, "last value");
+});
+
+test("detach matches stopGrad, its documented alias", () => {
+    let t = Tensor.from([2.0, 4.0, 6.0]);
+    let a = Autodiff.detach(t).toArray();
+    let b = Autodiff.stopGrad(t).toArray();
+    assert(a[0] == b[0], "entry 0 matches");
+    assert(a[1] == b[1], "entry 1 matches");
+    assert(a[2] == b[2], "entry 2 matches");
+});
+
+test("detach rejects a non-tensor argument", () => {
+    let caught = false;
+    try { Autodiff.detach(42); } catch (e) { caught = true; }
+    assert(caught, "an int must throw");
+});
+
+// ── DateTime.fromTimestamp ───────────────────────────────────────────────────
+
+test("fromTimestamp is an exact alias of fromEpoch", () => {
+    let ms = 1700000000000;
+    let a = DateTime.fromEpoch(ms);
+    let b = DateTime.fromTimestamp(ms);
+    assert(a.format("YYYY-MM-DD") == b.format("YYYY-MM-DD"), "same date");
+    assert(a.format("HH:mm:ss") == b.format("HH:mm:ss"), "same time");
+});
+
+test("fromTimestamp round-trips through the epoch", () => {
+    let ms = 946684800000;                 // 2000-01-01T00:00:00Z
+    let d = DateTime.fromTimestamp(ms);
+    assert(d.format("YYYY") == "2000", "year survives the round trip");
+});
+
+test("fromTimestamp(0) is the epoch itself", () => {
+    let d = DateTime.fromTimestamp(0);
+    assert(d.format("YYYY") == "1970", "epoch year");
+});
+
+// ── Dec constants ────────────────────────────────────────────────────────────
+
+test("Dec.MAX_SCALE is the documented 28 digits", () => {
+    assert(Dec.MAX_SCALE == 28, "rust_decimal caps the scale at 28");
+});
+
+test("Dec.MIN is negative and mirrors Dec.MAX", () => {
+    let lo = Dec.MIN;
+    let hi = Dec.MAX;
+    assert(lo.sign() == 0 - 1, "MIN is negative");
+    assert(hi.sign() == 1, "MAX is positive");
+    assert(lo.isZero() == false, "MIN is not zero");
+    assert(lo.abs().toString() == hi.toString(), "|MIN| equals MAX");
+});
+
+test("Dec.MIN survives a comparison against an ordinary value", () => {
+    let lo = Dec.MIN;
+    assert(lo < Dec.fromInt(0, 0), "MIN is below zero");
+});
+
+// ── Media.stopAll ────────────────────────────────────────────────────────────
+
+test("stopAll is safe with nothing playing", () => {
+    Media.stopAll();
+    assert(Media.playingCount() == 0, "nothing is playing after stopAll");
+});
+
+test("stopAll is idempotent", () => {
+    Media.stopAll();
+    Media.stopAll();
+    assert(Media.playingCount() == 0, "still silent");
+});
+
+// ── OS.kill and Terminal.clear/readByte/setCursor/writeByte ──────────────────
+//
+// NOT asserted here, on purpose. Permission denials are deliberately
+// NON-catchable — `try { OS.kill(1) } catch (e) {...}` does not run the catch,
+// it aborts the program (the same design that sec_notcatch_permission pins), so
+// a unit test cannot observe the refusal without dying with it. The namespace
+// gates are already covered by sec_os_no_permission and
+// sec_terminal_no_permission, and the raw-mode ops additionally by
+// sec_terminal_raw_requires_unsafe / sec_terminal_readevent_requires_unsafe.
+//
+// Running them for real is worse than useless in-suite: `Terminal.clear()` and
+// `Terminal.setCursor()` would wipe and reposition the runner's own output, and
+// `OS.kill` needs a live victim process. They stay uncovered by design.
+
+summary();

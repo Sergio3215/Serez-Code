@@ -1,0 +1,9 @@
+// err_enum_string_concat.sz — the README's "Enum parameters must not be
+// annotated as string" gotcha, from the operator side: an enum variant does not
+// implicitly become a string. The error is non-catchable by design, so it is
+// pinned here (stderr must carry a ❌) rather than in a unit test.
+enum Priority { Low, High }
+
+let p = Priority.High;
+out "before: " + p.toString();   // the supported bridge
+out "boom: " + p;                // ❌ type error — no implicit enum→string

@@ -1,0 +1,248 @@
+// 73_language_360_e2e.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// One program that walks the README's "Language Reference" from top to bottom
+// and prints a deterministic trace: variables, types, every operator family,
+// functions (defaults, rest, generators), control flow (labeled loops, match,
+// switch, do-while), the four collections, enums, the whole class system,
+// destructuring, spread, optional chaining, nullables, exceptions, and the pure
+// stdlib namespaces (JSON, Regex, DateTime, Dec, Math, Memory.sizeof).
+//
+// Unit files assert in isolation; this one checks the pieces still compose.
+use permissions { }
+
+out "== variables & types ==";
+let i = 42;
+let d = 3.5;
+let s = "text";
+let b = true;
+let n = null;
+out type_of(i) + " " + type_of(d) + " " + type_of(s) + " " + type_of(b) + " " + type_of(n);
+// Scalar `let` takes no annotation — the annotated forms are the typed
+// container `[int]` / `<K,V>` and function signatures.
+let typedArr [int] = [7, 8];
+const FROZEN = 100;
+out "typed-array=" + typedArr.join(",") + " const=" + FROZEN;
+out "sci=" + 1e3 + " neg-exp=" + 1e-2;
+
+out "== operators ==";
+out "arith " + (7 + 3) + " " + (7 - 3) + " " + (7 * 3) + " " + (7 / 3) + " " + (7 % 3);
+out "power " + (2 ** 10);
+out "cmp   " + (3 < 4) + " " + (3 >= 4) + " " + (3 == 3) + " " + (3 != 3);
+out "logic " + (true && false) + " " + (true || false) + " " + (!true);
+out "bits  " + (6 & 3) + " " + (6 | 3) + " " + (6 ^ 3) + " " + (6 << 1) + " " + (6 >> 1);
+let compound = 10;
+compound += 5; compound -= 3; compound *= 2; compound /= 4;
+out "compound " + compound;
+let inc = 0;
+inc++;
+inc++;
+out "increment " + inc;
+out "ternary " + (i > 10 ? "big" : "small");
+out "coalesce " + (n ?? "fallback");
+
+out "== pipe ==";
+fn int dbl(int x) { return x * 2; }
+fn int inc1(int x) { return x + 1; }
+out "piped " + (5 |> dbl |> inc1);
+
+out "== functions ==";
+fn int addDefault(int a, int b = 10) { return a + b; }
+out "default " + addDefault(5) + " " + addDefault(5, 1);
+fn int sumAll(...nums) {
+    let t = 0;
+    for (let v in nums) { t = t + v; }
+    return t;
+}
+out "rest " + sumAll(1, 2, 3, 4);
+let spreadArgs = [2, 3, 4];
+out "spread-call " + sumAll(...spreadArgs);
+let lam = x => x * 3;
+out "lambda " + lam(4);
+fn int makeAdder(int k) { return k; }
+let adder = (x) => { return x + makeAdder(100); };
+out "closure " + adder(1);
+
+out "== generators ==";
+fn* count(int upTo) {
+    let k = 0;
+    while (k < upTo) {
+        yield k;
+        k = k + 1;
+    }
+}
+let gen = count(4);
+out "generator " + gen.join(",");
+
+out "== control flow ==";
+let cf = "";
+for (let k = 0; k < 3; k++) { cf = cf + k; }
+out "for " + cf;
+let w = 0;
+while (w < 3) { w = w + 1; }
+out "while " + w;
+let dw = 0;
+do { dw = dw + 1; } while (dw < 3);
+out "do-while " + dw;
+let hits = "";
+outer: for (let a = 0; a < 3; a++) {
+    for (let bb = 0; bb < 3; bb++) {
+        if (bb == 1) { continue outer; }
+        if (a == 2) { break outer; }
+        hits = hits + a + bb + " ";
+    }
+}
+out "labeled " + hits;
+let sw = "";
+switch (2) {
+    case 1: { sw = "one"; }
+    case 2: { sw = "two"; }
+    default: { sw = "other"; }
+}
+let swMiss = "";
+switch (99) {
+    case 1: { swMiss = "one"; }
+    default: { swMiss = "fell-through"; }
+}
+out "switch " + sw + " default " + swMiss;
+out "match " + match 3 { 1 | 2 => "low", 3 => "three", _ => "high" };
+
+out "== arrays ==";
+let arr = [5, 1, 4, 2];
+out "len " + arr.length() + " idx " + arr[2];
+arr.push(9); arr.sort();
+out "sorted " + arr.join(",");
+out "map/filter/reduce " + arr.map(x => x * 2).join(",") + " | "
+    + arr.filter(x => x > 2).join(",") + " | " + arr.reduce(0, (acc, x) => acc + x);
+out "find " + arr.find(x => x > 3) + " indexOf " + arr.indexOf(4)
+    + " includes " + arr.includes(9) + " slice " + arr.slice(1, 3).join(",");
+out "nested " + [[1, 2], [3, 4]].flat().join(",");
+
+out "== strings ==";
+let str = "  Serez Code  ";
+out "trim [" + str.trim() + "] upper " + str.trim().toUpperCase()
+    + " lower " + str.trim().toLowerCase();
+out "split " + "a,b,c".split(",").join("|") + " sub " + "abcdef".substring(1, 4)
+    + " char " + "abc".charAt(1) + " idx " + "abc"[2];
+out "replace " + "aXbXc".replace("X", "-") + " all " + "aXbXc".replaceAll("X", "-");
+out "pad " + "7".padStart(3, "0") + " " + "7".padEnd(3, "0");
+out "interp {i} and {arr[0]} and {1 + 1}";
+out "raw " + r"no {interp} here";
+
+out "== dicts ==";
+let dict <string, int> = ({"b", 2}, {"a", 1});
+dict["c"] = 3;
+let dkeys = dict.toList();
+dkeys.sort();
+out "len " + dict.length() + " keys " + dkeys.join(",") + " get " + dict["a"]
+    + " miss " + dict["zz"];
+dict.Remove("a");
+out "after remove " + dict.length();
+
+out "== sets ==";
+let st = new Set([1, 2, 2, 3]);
+st.add(4); st.delete(1);
+out "size " + st.size() + " has2 " + st.has(2) + " has1 " + st.has(1);
+out "union " + new Set([1, 2]).union(new Set([2, 3])).size()
+    + " inter " + new Set([1, 2]).intersection(new Set([2, 3])).size();
+
+out "== enums ==";
+enum Color { Red, Green, Blue }
+let col = Color.Green;
+out "variant " + col.toString() + " type " + type_of(col) + " eq " + (col == Color.Green);
+
+out "== destructuring & spread ==";
+let [d1, d2, ...drest] = [1, 2, 3, 4];
+out "array-destructure " + d1 + " " + d2 + " rest " + drest.join(",");
+out "merge " + [...[1, 2], ...[3]].join(",");
+
+out "== classes ==";
+interface Named { name: string; }
+class Animal {
+    public Animal(string name, int legs) {
+        this.name = name;
+        this.legs = legs;
+    }
+    public string speak() { return "..."; }
+    public string describe() { return this.name + "/" + this.speak() + "/" + this.legs; }
+    public get string tag() { return "T-" + this.name; }
+    public set rename(string v) { this.name = v; }
+    public static string kind() { return "animal"; }
+}
+class Dog : Animal {
+    public Dog(string name) { super(name, 4); }
+    public string speak() { return "woof"; }
+    public string both() { return super.speak() + "+" + this.speak(); }
+}
+let dog = new Dog("rex");
+out "describe " + dog.describe();
+out "getter " + dog.tag + " static " + Animal.kind() + " super " + dog.both();
+dog.rename = "max";
+out "setter " + dog.name;
+let named = new Named({ name: "iface" });
+out "interface " + named.name;
+let zoo = [new Dog("a"), new Animal("b", 2)];
+out "poly " + zoo[0].speak() + " " + zoo[1].speak();
+
+out "== optional chaining & nullables ==";
+fn string? findName(bool hit) {
+    if (hit) { return "found"; }
+    return null;
+}
+let maybe = findName(false);
+out "nullable " + (maybe ?? "none") + " hit " + (findName(true) ?? "none");
+out "optional " + (maybe?.length() ?? 0 - 1) + " on-value " + (findName(true)?.length() ?? 0 - 1);
+
+out "== exceptions ==";
+fn string risky(bool boom) {
+    if (boom) { throw "exploded"; }
+    return "fine";
+}
+try {
+    risky(true);
+} catch (e) {
+    out "caught " + e;
+} finally {
+    out "finally ran";
+}
+out "no-throw " + risky(false);
+
+out "== json ==";
+// Braces inside a string literal start an interpolation, so JSON text has to
+// escape them — the README's "{ inside a string literal" gotcha in practice.
+let obj = JSON.parse("\{\"k\": [1, 2], \"n\": 3\}");
+out "parsed " + obj["n"] + " " + obj["k"].length();
+out "stringify " + JSON.stringify([1, 2, 3]);
+
+out "== regex ==";
+// Argument order is (pattern, subject); patterns go in raw strings so that
+// backslash classes survive the lexer.
+out "test " + Regex.test(r"[0-9]", "a1b2") + " no-match " + Regex.test(r"[0-9]", "abc");
+out "findAll " + Regex.findAll(r"[0-9]", "a1b2c3").join(",");
+out "replace " + Regex.replace(r"[0-9]", "a1b2", "#");
+out "split " + Regex.split(r"[0-9]", "a1b2c").join("|");
+out "digits " + Regex.test(r"^\d+$", "12345") + " " + Regex.test(r"^\d+$", "12a45");
+
+out "== dec ==";
+let money = Dec.parse("10.05");
+let fee = Dec.parse("0.10");
+out "exact " + (money + fee).toString() + " scale " + money.scale()
+    + " round " + money.round(1).toString();
+out "abs " + Dec.parse("-3.5").abs().toString() + " sign " + Dec.parse("-3.5").sign();
+
+out "== datetime ==";
+let dt = DateTime.fromEpoch(946684800000);
+out "fmt " + dt.format("YYYY-MM-DD") + " year " + dt.format("YYYY");
+
+out "== math ==";
+out "builtins " + abs(0 - 5) + " " + floor(3.7) + " " + ceil(3.2) + " " + round(3.5)
+    + " " + min(2, 9) + " " + max(2, 9) + " " + pow(2, 8) + " " + sqrt(81.0);
+out "ns " + Math.sign(0 - 3) + " " + Math.clamp(15, 0, 10) + " " + Math.max(1, 2);
+
+out "== memory ==";
+out "sizeof int " + Memory.sizeof("int") + " bool " + Memory.sizeof("bool");
+
+out "== conversions ==";
+out "parseInt " + parseInt("123") + " parseDecimal " + parseDecimal("1.5")
+    + " toString " + (99).toString();
+
+out "DONE";

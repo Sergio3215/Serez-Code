@@ -1,0 +1,213 @@
+// unit_360_documented_gotchas.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// The README's "Known Gotchas" chapter (§ Known Gotchas) states seven
+// behaviours as guarantees — "not bugs, correct semantics" — but none of them
+// were pinned by a test. If any silently changed, the documentation would start
+// lying and nothing would fail. Each section below quotes what the doc promises
+// and asserts it.
+//
+// The two that are parse errors by design (reserved namespace names, abstract
+// method declarations) cannot be asserted from inside a running program: a
+// parse error aborts before any test body executes. They are covered by the
+// err_*/sec_* corpus instead — see err_task_reserved_class and
+// sec_abstract_instantiate.
+use permissions { }
+
+// ── 1. "for-in loop variable is a copy" ──────────────────────────────────────
+
+test("for-in binds a copy: mutating it leaves the array alone", () => {
+    let items = [1, 2, 3];
+    for (let x in items) {
+        x = x * 10;
+    }
+    assert(items[0] == 1, "element 0 untouched");
+    assert(items[1] == 2, "element 1 untouched");
+    assert(items[2] == 3, "element 2 untouched");
+});
+
+test("the documented workaround — an index loop — does mutate", () => {
+    let items = [1, 2, 3];
+    for (let i = 0; i < items.length(); i = i + 1) {
+        items[i] = items[i] * 10;
+    }
+    assert(items[0] == 10, "element 0 mutated");
+    assert(items[2] == 30, "element 2 mutated");
+});
+
+test("for-in over an array of arrays also binds copies", () => {
+    let rows = [[1], [2]];
+    for (let r in rows) {
+        r.push(99);
+    }
+    assert(rows[0].length() == 1, "nested element untouched");
+});
+
+// ── 2. "this.field mutations persist, but not on retrieved elements" ─────────
+
+class Holder {
+    public Holder() { this.items = [1, 2, 3]; }
+    public void indexAssign() { this.items[0] = 99; }
+    public void directPush()  { this.items.push(4); }
+    public void chainedOnElement() {
+        // The doc's warning: a method call on an element retrieved from
+        // this.field acts on a copy and is not written back.
+        this.items[0] = this.items[0];
+    }
+}
+
+test("index-assign on this.field persists (documented as working)", () => {
+    let h = new Holder();
+    h.indexAssign();
+    assert(h.items[0] == 99, "this.items[i] = v must persist");
+});
+
+test("a direct mutating call on this.field persists (documented as working)", () => {
+    let h = new Holder();
+    h.directPush();
+    assert(h.items.length() == 4, "this.items.push(v) must persist");
+});
+
+test("chained mutation on an element retrieved from a field does NOT persist", () => {
+    let h = new Holder();
+    let grabbed = h.items;      // a copy, per the doc
+    grabbed.push(999);
+    assert(h.items.length() == 3, "the instance field is unaffected");
+    assert(grabbed.length() == 4, "the copy took the mutation");
+});
+
+// ── 3. "{ inside a string literal triggers interpolation" ────────────────────
+
+test("interpolation substitutes the expression", () => {
+    let score = 42;
+    assert("Score: {score}" == "Score: 42", "interpolation runs");
+});
+
+test("escaped braces produce literal braces", () => {
+    // NOTE: the comparison target must ALSO escape (or be raw) — writing the
+    // expected value as a plain "…{}" would itself interpolate, which is the
+    // very gotcha under test.
+    let escaped = "Empty dict: \{\}";
+    assert(escaped.length() == 14, "two literal brace characters are present");
+    assert(escaped.endsWith(r"{}"), "it ends in a literal open+close brace");
+    assert(escaped == r"Empty dict: {}", "escaped form equals the raw form");
+});
+
+test("a raw string disables interpolation entirely", () => {
+    let score = 42;
+    let raw = r"Score: {score}";
+    assert(raw.includes(r"{score}"), "raw string does not substitute");
+    assert(!raw.includes("42"), "the variable value never appears");
+    assert(r"Empty dict: {}" == "Empty dict: \{\}", "raw form equals the escaped form");
+});
+
+test("interpolation evaluates real expressions, not just names", () => {
+    let a = 3;
+    let b = 4;
+    assert("sum {a + b}" == "sum 7", "arithmetic inside braces");
+    let arr = [10, 20];
+    assert("first {arr[0]}" == "first 10", "index inside braces");
+});
+
+// ── 4. "extract the separator to a variable" ─────────────────────────────────
+
+test("the documented workaround for a quoted separator works", () => {
+    let arr = ["a", "b", "c"];
+    let sep = ", ";
+    assert("Names: {arr.join(sep)}" == "Names: a, b, c", "variable separator");
+});
+
+// ── 5. "enum parameters must not be annotated as string" ─────────────────────
+
+enum Priority { Low, High }
+
+fn string takesUntyped(p) {
+    // An enum value does NOT concatenate with a string directly — `"x" + p` is
+    // a type error. toString() is the bridge.
+    return "got " + p.toString();
+}
+
+test("an untyped parameter accepts an enum value (documented as the fix)", () => {
+    let s = takesUntyped(Priority.High);
+    assert(s.includes("High"), "the enum variant arrives intact");
+    assert(s == "got Priority.High", "toString qualifies with the enum name");
+});
+
+// NOTE: `"x" + Priority.High` is a type error, and type errors are NOT
+// catchable — they abort rather than throw. Pinned in err_enum_string_concat.sz
+// instead, which is the corpus's home for non-catchable diagnostics.
+
+test("type_of reports the enum's own type, not string", () => {
+    assert(type_of(Priority.High) == "Priority", "the variant carries its type");
+});
+
+test("an enum value keeps its identity through a round trip", () => {
+    let p = Priority.Low;
+    assert(p == Priority.Low, "same variant compares equal");
+    assert(p != Priority.High, "different variants differ");
+});
+
+// ── 6. "abstract declarations: use a throwing default body" ──────────────────
+
+class Shape {
+    public Shape(string name) { this.name = name; }
+    // The documented substitute for `public abstract decimal area();`
+    public decimal area() {
+        throw "area() not implemented in " + this.name;
+        return 0.0;
+    }
+}
+
+class Square : Shape {
+    public Square(decimal side) {
+        super("Square");
+        this.side = side;
+    }
+    public decimal area() { return this.side * this.side; }
+}
+
+test("the throwing default body fires on the base class", () => {
+    let s = new Shape("Generic");
+    let threw = false;
+    try { s.area(); } catch (e) { threw = true; }
+    assert(threw, "the base implementation must throw");
+});
+
+test("an override replaces the throwing body", () => {
+    let sq = new Square(3.0);
+    assert(sq.area() == 9.0, "the override computes instead of throwing");
+});
+
+test("the throwing default still throws through a base-typed array", () => {
+    let shapes = [];
+    shapes.push(new Square(2.0));
+    shapes.push(new Shape("Bare"));
+    assert(shapes[0].area() == 4.0, "the concrete one computes");
+    let threw = false;
+    try { shapes[1].area(); } catch (e) { threw = true; }
+    assert(threw, "the bare one throws");
+});
+
+// ── 7. Namespaces are reserved but prefixed names are free ───────────────────
+
+class TaskList {
+    public TaskList() { this.n = 1; }
+}
+class UrgentTask {
+    public UrgentTask() { this.n = 2; }
+}
+
+test("only the exact namespace name collides — prefixed names are fine", () => {
+    // The doc promises UrgentTask and TaskList are legal while `Task` is not.
+    let a = new TaskList();
+    let b = new UrgentTask();
+    assert(a.n == 1, "TaskList instantiates");
+    assert(b.n == 2, "UrgentTask instantiates");
+});
+
+// NOTE: that `Task` itself cannot be redeclared is a PARSE error, so it cannot
+// be observed from a running program — err_task_reserved_class pins it. Probing
+// the live namespace here is no good either: a missing permission aborts rather
+// than throwing. What is assertable is the other half of the promise, above:
+// only the exact name collides.
+
+summary();

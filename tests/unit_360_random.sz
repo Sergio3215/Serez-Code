@@ -1,0 +1,243 @@
+// unit_360_random.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// The Random namespace. Seven of its ten methods appeared nowhere in the test
+// corpus before this file: bernoulli, choice, decimal, int, shuffle, uniform,
+// uniformTensor. Randomness is pinned through `Random.seed`, which makes the
+// stream reproducible, plus range/shape invariants that must hold for any draw.
+use permissions { }
+
+// ── Determinism: the seed is the contract ────────────────────────────────────
+
+test("seed makes the stream reproducible", () => {
+    Random.seed(12345);
+    let a1 = Random.int(0, 1000);
+    let a2 = Random.int(0, 1000);
+    let a3 = Random.int(0, 1000);
+    Random.seed(12345);
+    assert(Random.int(0, 1000) == a1, "draw 1 must repeat");
+    assert(Random.int(0, 1000) == a2, "draw 2 must repeat");
+    assert(Random.int(0, 1000) == a3, "draw 3 must repeat");
+});
+
+test("different seeds give different streams", () => {
+    Random.seed(1);
+    let a = Random.int(0, 1000000);
+    Random.seed(2);
+    let b = Random.int(0, 1000000);
+    assert(a != b, "two seeds should not collide on the first draw");
+});
+
+// ── Random.int ───────────────────────────────────────────────────────────────
+
+test("int stays inside [min, max]", () => {
+    Random.seed(7);
+    let lo = 10;
+    let hi = 20;
+    let allIn = true;
+    for (let i = 0; i < 200; i = i + 1) {
+        let v = Random.int(lo, hi);
+        if (v < lo) { allIn = false; }
+        if (v > hi) { allIn = false; }
+    }
+    assert(allIn, "every draw must be within bounds");
+});
+
+test("int with a degenerate range is constant", () => {
+    Random.seed(3);
+    assert(Random.int(5, 5) == 5, "min == max must return that value");
+});
+
+test("int spans its range over many draws", () => {
+    Random.seed(99);
+    let seenLow = false;
+    let seenHigh = false;
+    for (let i = 0; i < 300; i = i + 1) {
+        let v = Random.int(0, 9);
+        if (v <= 2) { seenLow = true; }
+        if (v >= 7) { seenHigh = true; }
+    }
+    assert(seenLow, "should reach the low end");
+    assert(seenHigh, "should reach the high end");
+});
+
+// NOTE: Random's arity errors are NOT catchable — they print and abort
+// (eprintln + EvalResult::Error) instead of going through rt_err_kind like
+// Set.has or Dec.parse do. So `try { Random.int(1) } catch (e) {...}` cannot be
+// asserted here: it would take the whole file down. Left unpinned on purpose.
+
+// ── Random.decimal ───────────────────────────────────────────────────────────
+
+test("decimal stays inside [0, 1)", () => {
+    Random.seed(21);
+    let allIn = true;
+    for (let i = 0; i < 200; i = i + 1) {
+        let v = Random.decimal();
+        if (v < 0.0) { allIn = false; }
+        if (v >= 1.0) { allIn = false; }
+    }
+    assert(allIn, "every draw must be in [0,1)");
+});
+
+test("decimal is reproducible under a seed", () => {
+    Random.seed(555);
+    let a = Random.decimal();
+    Random.seed(555);
+    assert(Random.decimal() == a, "same seed, same decimal");
+});
+
+// ── Random.uniform ───────────────────────────────────────────────────────────
+
+test("uniform stays inside [lo, hi]", () => {
+    Random.seed(31);
+    let allIn = true;
+    for (let i = 0; i < 200; i = i + 1) {
+        let v = Random.uniform(2.5, 7.5);
+        if (v < 2.5) { allIn = false; }
+        if (v > 7.5) { allIn = false; }
+    }
+    assert(allIn, "every draw must be within bounds");
+});
+
+test("uniform over negative bounds", () => {
+    Random.seed(32);
+    let allIn = true;
+    for (let i = 0; i < 100; i = i + 1) {
+        let v = Random.uniform(0.0 - 5.0, 0.0 - 1.0);
+        if (v < 0.0 - 5.0) { allIn = false; }
+        if (v > 0.0 - 1.0) { allIn = false; }
+    }
+    assert(allIn, "negative ranges must work too");
+});
+
+// ── Random.bernoulli ─────────────────────────────────────────────────────────
+
+test("bernoulli(0) is always false and bernoulli(1) always true", () => {
+    Random.seed(41);
+    let allFalse = true;
+    let allTrue = true;
+    for (let i = 0; i < 50; i = i + 1) {
+        if (Random.bernoulli(0.0)) { allFalse = false; }
+        if (!Random.bernoulli(1.0)) { allTrue = false; }
+    }
+    assert(allFalse, "p=0 must never fire");
+    assert(allTrue, "p=1 must always fire");
+});
+
+test("bernoulli(0.5) produces both outcomes", () => {
+    Random.seed(42);
+    let trues = 0;
+    for (let i = 0; i < 300; i = i + 1) {
+        if (Random.bernoulli(0.5)) { trues = trues + 1; }
+    }
+    assert(trues > 50, "should fire a fair share of the time");
+    assert(trues < 250, "should not fire almost always");
+});
+
+// ── Random.choice ────────────────────────────────────────────────────────────
+
+test("choice returns an element of the array", () => {
+    Random.seed(51);
+    let pool = [10, 20, 30, 40];
+    let allMembers = true;
+    for (let i = 0; i < 100; i = i + 1) {
+        if (!pool.includes(Random.choice(pool))) { allMembers = false; }
+    }
+    assert(allMembers, "every pick must come from the pool");
+});
+
+test("choice on a single-element array is constant", () => {
+    Random.seed(52);
+    assert(Random.choice([99]) == 99, "one element means one answer");
+});
+
+test("choice does not consume the array", () => {
+    Random.seed(53);
+    let pool = [1, 2, 3];
+    Random.choice(pool);
+    Random.choice(pool);
+    assert(pool.length() == 3, "the pool must be intact");
+});
+
+test("choice eventually reaches every element", () => {
+    Random.seed(54);
+    let pool = [1, 2, 3];
+    let hits = [0, 0, 0];
+    for (let i = 0; i < 300; i = i + 1) {
+        let v = Random.choice(pool);
+        hits[v - 1] = hits[v - 1] + 1;
+    }
+    assert(hits[0] > 0, "element 1 reached");
+    assert(hits[1] > 0, "element 2 reached");
+    assert(hits[2] > 0, "element 3 reached");
+});
+
+// ── Random.shuffle ───────────────────────────────────────────────────────────
+
+test("shuffle preserves length and membership", () => {
+    Random.seed(61);
+    let src = [1, 2, 3, 4, 5, 6, 7, 8];
+    let out_a = Random.shuffle(src);
+    assert(out_a.length() == 8, "length preserved");
+    let allPresent = true;
+    for (let i = 1; i <= 8; i = i + 1) {
+        if (!out_a.includes(i)) { allPresent = false; }
+    }
+    assert(allPresent, "every element survives the shuffle");
+});
+
+test("shuffle actually reorders over repeated draws", () => {
+    Random.seed(62);
+    let src = [1, 2, 3, 4, 5, 6, 7, 8];
+    let moved = false;
+    for (let t = 0; t < 20; t = t + 1) {
+        let s = Random.shuffle(src);
+        if (s[0] != 1) { moved = true; }
+    }
+    assert(moved, "20 shuffles should displace the head at least once");
+});
+
+test("shuffle of an empty or single array is stable", () => {
+    Random.seed(63);
+    assert(Random.shuffle([]).length() == 0, "empty stays empty");
+    let one = Random.shuffle([7]);
+    assert(one.length() == 1, "single keeps its length");
+    assert(one[0] == 7, "single keeps its element");
+});
+
+// ── Random tensors ───────────────────────────────────────────────────────────
+
+test("uniformTensor has the requested shape and range", () => {
+    Random.seed(71);
+    let t = Random.uniformTensor([2, 3], 0.0, 1.0);
+    assert(t.shape()[0] == 2, "rows");
+    assert(t.shape()[1] == 3, "cols");
+    assert(t.size() == 6, "element count");
+    // toArray on a 2-D tensor gives rows, not a flat list.
+    let rows = t.toArray();
+    let allIn = true;
+    for (let r = 0; r < rows.length(); r = r + 1) {
+        let row = rows[r];
+        for (let c = 0; c < row.length(); c = c + 1) {
+            if (row[c] < 0.0) { allIn = false; }
+            if (row[c] > 1.0) { allIn = false; }
+        }
+    }
+    assert(allIn, "every entry within bounds");
+});
+
+test("normalTensor has the requested shape", () => {
+    Random.seed(72);
+    let t = Random.normalTensor([4, 2], 0.0, 1.0);
+    assert(t.shape()[0] == 4, "rows");
+    assert(t.shape()[1] == 2, "cols");
+    assert(t.size() == 8, "element count");
+});
+
+test("normal draws vary", () => {
+    Random.seed(73);
+    let a = Random.normal(0.0, 1.0);
+    let b = Random.normal(0.0, 1.0);
+    assert(a != b, "two consecutive normals should differ");
+});
+
+summary();

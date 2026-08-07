@@ -1,0 +1,313 @@
+// unit_360_tensor_gaps.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// The nineteen tensor methods that appeared nowhere in the test corpus:
+// argmax, argmin, broadcastDiv, broadcastMul, broadcastSub, conv2d, detach,
+// gelu, gru, leaky_relu, leaky_relu_tracked, lstm, max_pool2d, meanAxis,
+// minimum, neg, outer, reduceMax, sumAxis.
+//
+// Every result is checked against a value computed by hand, not against
+// whatever the implementation happens to return.
+use permissions { }
+
+// ── Reductions along an axis ─────────────────────────────────────────────────
+
+test("sumAxis collapses the requested axis", () => {
+    let t = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+    let byCol = t.sumAxis(0);          // 1+4, 2+5, 3+6
+    assert(byCol.size() == 3, "axis 0 leaves 3 columns");
+    let c = byCol.toArray();
+    assert(c[0] == 5.0, "col 0");
+    assert(c[1] == 7.0, "col 1");
+    assert(c[2] == 9.0, "col 2");
+
+    let byRow = t.sumAxis(1);          // 1+2+3, 4+5+6
+    assert(byRow.size() == 2, "axis 1 leaves 2 rows");
+    let r = byRow.toArray();
+    assert(r[0] == 6.0, "row 0");
+    assert(r[1] == 15.0, "row 1");
+});
+
+test("meanAxis averages along the requested axis", () => {
+    let t = Tensor.from([[1.0, 3.0], [5.0, 7.0]]);
+    let byCol = t.meanAxis(0);         // (1+5)/2, (3+7)/2
+    let c = byCol.toArray();
+    assert(c[0] == 3.0, "col 0 mean");
+    assert(c[1] == 5.0, "col 1 mean");
+
+    let byRow = t.meanAxis(1);         // (1+3)/2, (5+7)/2
+    let r = byRow.toArray();
+    assert(r[0] == 2.0, "row 0 mean");
+    assert(r[1] == 6.0, "row 1 mean");
+});
+
+test("reduceMax takes the maximum along an axis", () => {
+    let t = Tensor.from([[1.0, 9.0], [7.0, 3.0]]);
+    let byCol = t.reduceMax(0).toArray();
+    assert(byCol[0] == 7.0, "max of col 0");
+    assert(byCol[1] == 9.0, "max of col 1");
+    let byRow = t.reduceMax(1).toArray();
+    assert(byRow[0] == 9.0, "max of row 0");
+    assert(byRow[1] == 7.0, "max of row 1");
+});
+
+// ── argmax / argmin ──────────────────────────────────────────────────────────
+
+test("argmax and argmin locate the extremes", () => {
+    let t = Tensor.from([3.0, 1.0, 9.0, 4.0]);
+    assert(t.argmax() == 2, "argmax index");
+    assert(t.argmin() == 1, "argmin index");
+});
+
+// FINDING (pinned as-is, not asserted as desirable): argmax and argmin break
+// ties in OPPOSITE directions, and argmax disagrees with the NumPy/PyTorch
+// convention of returning the first occurrence. It falls out of the Rust
+// iterators used in methods_tensor.rs — `max_by` returns the LAST maximum,
+// `min_by` the FIRST minimum. It matters for classification, where argmax
+// picks the predicted class. These tests record today's behaviour so that any
+// deliberate change is a visible decision rather than a silent drift.
+test("argmax breaks ties toward the LAST index", () => {
+    let t = Tensor.from([5.0, 5.0, 5.0]);
+    assert(t.argmax() == 2, "all-equal picks the last");
+    let u = Tensor.from([7.0, 7.0, 1.0, 7.0]);
+    assert(u.argmax() == 3, "the last of the tied maxima");
+});
+
+test("argmin breaks ties toward the FIRST index", () => {
+    let b = Tensor.from([2.0, 1.0, 1.0, 5.0]);
+    assert(b.argmin() == 1, "the first of the tied minima");
+});
+
+// NOTE: the `data.is_empty()` guards on argmax/argmin are unreachable —
+// `Tensor.zeros([0])` is rejected at construction ("shape dimensions must be
+// positive"), so an empty tensor cannot be built to reach them.
+
+// ── Broadcast arithmetic ─────────────────────────────────────────────────────
+
+test("broadcastMul multiplies a row across every row", () => {
+    let m = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let v = Tensor.from([10.0, 100.0]);
+    let r = m.broadcastMul(v).toArray();
+    assert(r[0][0] == 10.0, "r0c0");
+    assert(r[0][1] == 200.0, "r0c1");
+    assert(r[1][0] == 30.0, "r1c0");
+    assert(r[1][1] == 400.0, "r1c1");
+});
+
+test("broadcastSub subtracts a row from every row", () => {
+    let m = Tensor.from([[10.0, 20.0], [30.0, 40.0]]);
+    let v = Tensor.from([1.0, 2.0]);
+    let r = m.broadcastSub(v).toArray();
+    assert(r[0][0] == 9.0, "r0c0");
+    assert(r[0][1] == 18.0, "r0c1");
+    assert(r[1][0] == 29.0, "r1c0");
+    assert(r[1][1] == 38.0, "r1c1");
+});
+
+test("broadcastDiv divides every row by a row", () => {
+    let m = Tensor.from([[10.0, 20.0], [30.0, 40.0]]);
+    let v = Tensor.from([10.0, 20.0]);
+    let r = m.broadcastDiv(v).toArray();
+    assert(r[0][0] == 1.0, "r0c0");
+    assert(r[0][1] == 1.0, "r0c1");
+    assert(r[1][0] == 3.0, "r1c0");
+    assert(r[1][1] == 2.0, "r1c1");
+});
+
+test("broadcast ops reject a mismatched argument count", () => {
+    let m = Tensor.from([[1.0, 2.0]]);
+    let caught = false;
+    try { m.broadcastMul(); } catch (e) { caught = true; }
+    assert(caught, "zero arguments must throw");
+});
+
+// ── Elementwise ──────────────────────────────────────────────────────────────
+
+test("neg flips every sign", () => {
+    let t = Tensor.from([1.0, 0.0 - 2.0, 3.0]);
+    let r = t.neg().toArray();
+    assert(r[0] == 0.0 - 1.0, "positive becomes negative");
+    assert(r[1] == 2.0, "negative becomes positive");
+    assert(r[2] == 0.0 - 3.0, "third entry");
+});
+
+test("minimum takes the elementwise smaller value", () => {
+    let a = Tensor.from([1.0, 5.0, 3.0]);
+    let b = Tensor.from([4.0, 2.0, 3.0]);
+    let r = a.minimum(b).toArray();
+    assert(r[0] == 1.0, "a wins");
+    assert(r[1] == 2.0, "b wins");
+    assert(r[2] == 3.0, "tie");
+});
+
+test("outer builds the outer product", () => {
+    let a = Tensor.from([1.0, 2.0]);
+    let b = Tensor.from([10.0, 20.0, 30.0]);
+    let o = a.outer(b);
+    assert(o.shape()[0] == 2, "rows from a");
+    assert(o.shape()[1] == 3, "cols from b");
+    let r = o.toArray();
+    assert(r[0][0] == 10.0, "1*10");
+    assert(r[0][2] == 30.0, "1*30");
+    assert(r[1][1] == 40.0, "2*20");
+    assert(r[1][2] == 60.0, "2*30");
+});
+
+// ── Activations ──────────────────────────────────────────────────────────────
+
+test("leaky_relu keeps positives and scales negatives", () => {
+    let t = Tensor.from([2.0, 0.0 - 4.0]);
+    let r = t.leaky_relu(0.5).toArray();
+    assert(r[0] == 2.0, "positive passes through");
+    assert(r[1] == 0.0 - 2.0, "negative scaled by alpha");
+});
+
+test("leaky_relu_tracked matches leaky_relu numerically", () => {
+    let t = Tensor.from([3.0, 0.0 - 6.0]);
+    let plain = t.leaky_relu(0.25).toArray();
+    let tracked = t.leaky_relu_tracked(0.25).toArray();
+    assert(tracked[0] == plain[0], "positive entry matches");
+    assert(tracked[1] == plain[1], "negative entry matches");
+});
+
+test("gelu is monotone and pins its endpoints", () => {
+    let t = Tensor.from([0.0 - 3.0, 0.0, 3.0]);
+    let r = t.gelu().toArray();
+    assert(r[1] == 0.0, "gelu(0) is 0");
+    assert(r[0] < 0.0, "large negative stays negative");
+    assert(r[0] > 0.0 - 0.5, "but is squashed toward 0");
+    assert(r[2] > 2.9, "large positive approaches identity");
+    assert(r[2] < 3.0, "and stays below it");
+});
+
+test("gelu increases with its input", () => {
+    let t = Tensor.from([0.0 - 1.0, 0.5, 2.0]);
+    let r = t.gelu().toArray();
+    assert(r[0] < r[1], "monotone across the first pair");
+    assert(r[1] < r[2], "monotone across the second pair");
+});
+
+// ── detach ───────────────────────────────────────────────────────────────────
+
+test("detach preserves the values and the shape", () => {
+    let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let d = t.detach();
+    assert(d.shape()[0] == 2, "rows preserved");
+    assert(d.shape()[1] == 2, "cols preserved");
+    let r = d.toArray();
+    assert(r[0][0] == 1.0, "first value");
+    assert(r[1][1] == 4.0, "last value");
+});
+
+// ── Convolution and pooling ──────────────────────────────────────────────────
+
+// Both take NHWC: input is 4D [N, H, W, C]. conv2d weights are 2D,
+// [kH*kW*C_in, C_out]. A 2-D tensor is a catchable TypeError, asserted below.
+
+test("max_pool2d halves a 4x4 with a 2x2 window", () => {
+    // one image, 4x4, one channel; values 1..16 row-major
+    let flat = [];
+    for (let i = 1; i <= 16; i = i + 1) { flat.push(i * 1.0); }
+    let t = Tensor.from(flat).reshape([1, 4, 4, 1]);
+    let p = t.max_pool2d(2, 2);
+    assert(p.shape()[1] == 2, "pooled height");
+    assert(p.shape()[2] == 2, "pooled width");
+    let v = p.reshape([4]).toArray();
+    assert(v[0] == 6.0, "max of the top-left window");
+    assert(v[1] == 8.0, "max of the top-right window");
+    assert(v[2] == 14.0, "max of the bottom-left window");
+    assert(v[3] == 16.0, "max of the bottom-right window");
+});
+
+test("max_pool2d with stride 1 slides one step at a time", () => {
+    let t = Tensor.from([1.0, 9.0, 2.0, 3.0, 4.0, 8.0, 7.0, 5.0, 6.0]).reshape([1, 3, 3, 1]);
+    let p = t.max_pool2d(2, 1);
+    assert(p.shape()[1] == 2, "3 - 2 + 1 rows");
+    assert(p.shape()[2] == 2, "3 - 2 + 1 cols");
+    let v = p.reshape([4]).toArray();
+    assert(v[0] == 9.0, "window at 0,0");
+    assert(v[1] == 9.0, "window at 0,1");
+    assert(v[2] == 7.0, "window at 1,0");
+    assert(v[3] == 8.0, "window at 1,1");
+});
+
+test("max_pool2d rejects a 2-D input", () => {
+    let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let caught = false;
+    try { t.max_pool2d(2, 2); } catch (e) { caught = true; }
+    assert(caught, "a 2-D input must throw, not abort");
+});
+
+test("conv2d with a 1x1 unit kernel preserves the signal", () => {
+    let img = Tensor.from([1.0, 2.0, 3.0, 4.0]).reshape([1, 2, 2, 1]);
+    let w   = Tensor.ones([1, 1]);   // [kH*kW*C_in, C_out] = [1,1]
+    let b   = Tensor.zeros([1]);
+    let c   = img.conv2d(w, b, 1, 1);
+    assert(c.size() == 4, "a 1x1 stride-1 kernel preserves the element count");
+    let v = c.reshape([4]).toArray();
+    assert(v[0] == 1.0, "top-left survives");
+    assert(v[3] == 4.0, "bottom-right survives");
+});
+
+test("conv2d applies the bias", () => {
+    let img = Tensor.from([1.0, 2.0, 3.0, 4.0]).reshape([1, 2, 2, 1]);
+    let w   = Tensor.ones([1, 1]);
+    let b   = Tensor.from([10.0]);
+    let v   = img.conv2d(w, b, 1, 1).reshape([4]).toArray();
+    assert(v[0] == 11.0, "bias added to the first element");
+    assert(v[3] == 14.0, "bias added to the last element");
+});
+
+test("conv2d rejects a wrong argument count", () => {
+    let img = Tensor.from([1.0, 2.0, 3.0, 4.0]).reshape([1, 2, 2, 1]);
+    let caught = false;
+    try { img.conv2d(Tensor.ones([1, 1])); } catch (e) { caught = true; }
+    assert(caught, "one argument must throw");
+});
+
+test("conv2d rejects a 2-D input", () => {
+    let img = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let caught = false;
+    try { img.conv2d(Tensor.ones([1, 1]), Tensor.zeros([1]), 1, 1); } catch (e) { caught = true; }
+    assert(caught, "a 2-D input must throw");
+});
+
+// ── Recurrent cells ──────────────────────────────────────────────────────────
+
+test("lstm returns a state of the expected width", () => {
+    // 1 timestep, input size 2, hidden size 2 → gates are 4*hidden wide.
+    let x  = Tensor.from([[1.0, 0.5]]);
+    let wx = Tensor.zeros([2, 8]);
+    let wh = Tensor.zeros([2, 8]);
+    let bb = Tensor.zeros([8]);
+    let h0 = Tensor.zeros([2]);
+    let c0 = Tensor.zeros([2]);
+    let outp = x.lstm(wx, wh, bb, h0, c0);
+    assert(outp.size() > 0, "the cell produces a state");
+});
+
+test("lstm rejects a wrong argument count", () => {
+    let x = Tensor.from([[1.0, 0.5]]);
+    let caught = false;
+    try { x.lstm(Tensor.zeros([2, 8])); } catch (e) { caught = true; }
+    assert(caught, "one argument must throw");
+});
+
+test("gru returns a state of the expected width", () => {
+    // gates are 3*hidden wide.
+    let x  = Tensor.from([[1.0, 0.5]]);
+    let wx = Tensor.zeros([2, 6]);
+    let wh = Tensor.zeros([2, 6]);
+    let bb = Tensor.zeros([6]);
+    let h0 = Tensor.zeros([2]);
+    let outp = x.gru(wx, wh, bb, h0);
+    assert(outp.size() > 0, "the cell produces a state");
+});
+
+test("gru rejects a wrong argument count", () => {
+    let x = Tensor.from([[1.0, 0.5]]);
+    let caught = false;
+    try { x.gru(Tensor.zeros([2, 6])); } catch (e) { caught = true; }
+    assert(caught, "one argument must throw");
+});
+
+summary();

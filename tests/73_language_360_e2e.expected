@@ -1,0 +1,90 @@
+== variables & types ==
+int decimal string bool null
+typed-array=7,8 const=100
+sci=1000.0 neg-exp=0.01
+== operators ==
+arith 10 4 21 2 1
+power 1024
+cmp   true false true false
+logic false true false
+bits  2 7 5 12 3
+compound 6
+increment 2
+ternary big
+coalesce fallback
+== pipe ==
+piped 11
+== functions ==
+default 15 6
+rest 10
+spread-call 9
+lambda 12
+closure 101
+== generators ==
+generator 0,1,2,3
+== control flow ==
+for 012
+while 3
+do-while 3
+labeled 00 10 
+switch two default fell-through
+match three
+== arrays ==
+len 4 idx 4
+sorted 1,2,4,5,9
+map/filter/reduce 2,4,8,10,18 | 4,5,9 | 21
+find 4 indexOf 2 includes true slice 2,4
+nested 1,2,3,4
+== strings ==
+trim [Serez Code] upper SEREZ CODE lower serez code
+split a|b|c sub bcd char b idx c
+replace a-bXc all a-b-c
+pad 007 700
+interp 42 and 1 and 2
+raw no {interp} here
+== dicts ==
+len 3 keys a,b,c get 1 miss null
+after remove 2
+== sets ==
+size 3 has2 true has1 false
+union 3 inter 1
+== enums ==
+variant Color.Green type Color eq true
+== destructuring & spread ==
+array-destructure 1 2 rest 3,4
+merge 1,2,3
+== classes ==
+describe rex/woof/4
+getter T-rex static animal super ...+woof
+setter max
+interface iface
+poly woof ...
+== optional chaining & nullables ==
+nullable none hit found
+optional -1 on-value 5
+== exceptions ==
+caught exploded
+finally ran
+no-throw fine
+== json ==
+parsed 3 2
+stringify [1,2,3]
+== regex ==
+test true no-match false
+findAll 1,2,3
+replace a#b#
+split a|b|c
+digits true false
+== dec ==
+exact 10.15 scale 2 round 10.0
+abs 3.5 sign -1
+== datetime ==
+fmt 2000-01-01 year 2000
+== math ==
+builtins 5 3 4 4 2 9 256.0 9.0
+ns -1 10 2
+== memory ==
+sizeof int 8 bool 1
+== conversions ==
+parseInt 123 parseDecimal 1.5 toString 99
+DONE
