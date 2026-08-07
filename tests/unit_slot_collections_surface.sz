@@ -282,20 +282,53 @@ test("set union / intersection / toArray / toString", () => {
     assert(a.toString().length() > 0, "toString");
 });
 
-test("set through an instance field", () => {
+// Every Set mutator must persist through an instance field. `add` and `delete`
+// used to be dropped: the writeback trigger list in expr.rs named the dict
+// method "Add" and the aliases "remove"/"clear", but never "add"/"delete", so
+// those two mutated the copy planted by the field read and the result vanished.
+test("set add through an instance field persists", () => {
     let h = new Holder();
     assert(h.tags.size() == 2, "size via field");
-    // KNOWN GAP (pre-existing, verified identical before and after the
-    // receiver-clone fix): `set.add` through an instance field does NOT
-    // persist, because the writeback trigger list in expr.rs:720 spells the
-    // dict method "Add" but never the Set method "add" (same for "delete").
-    // `remove` and `clear` are on that list, so they do persist — asserted
-    // below. Add the assertion for `add` once the list is corrected.
+    h.tags.add("z");
+    assert(h.tags.size() == 3, "add via field persists");
+    assert(h.tags.has("z"), "the added element is there");
+    h.tags.add("z");
+    assert(h.tags.size() == 3, "add via field stays idempotent");
+});
+
+test("set delete through an instance field persists", () => {
+    let h = new Holder();
+    h.tags.delete("x");
+    assert(h.tags.size() == 1, "delete via field persists");
+    assert(!h.tags.has("x"), "the deleted element is gone");
+});
+
+test("set remove / clear through an instance field persist", () => {
+    let h = new Holder();
     h.tags.remove("x");
     assert(!h.tags.has("x"), "remove via field persists");
     assert(h.tags.size() == 1, "size after remove via field");
     h.tags.clear();
     assert(h.tags.size() == 0, "clear via field persists");
+});
+
+test("set mutators compose through an instance field", () => {
+    let h = new Holder();
+    h.tags.add("z");
+    h.tags.delete("x");
+    h.tags.add("w");
+    assert(h.tags.size() == 3, "add/delete/add in sequence");
+    assert(h.tags.has("y"), "untouched element survives");
+    assert(h.tags.has("w"), "last add survives");
+    assert(!h.tags.has("x"), "deleted element stays gone");
+});
+
+test("a standalone set is unaffected by the writeback", () => {
+    let s = new Set([1]);
+    s.add(2);
+    s.delete(1);
+    assert(s.size() == 1, "standalone add/delete still work");
+    assert(s.has(2), "the right element survived");
 });
 
 // ── Chaining across the changed paths ────────────────────────────────────────

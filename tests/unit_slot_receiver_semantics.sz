@@ -167,6 +167,37 @@ test("C7: dict[key].pop persists", () => {
     assert(d["a"].length() == 2, "pop through a dict slot must persist");
 });
 
+class Counter {
+    public Counter() { this.n = 0; }
+    public void add(int k) { this.n = this.n + k; }
+    public void remove(int k) { this.n = this.n - k; }
+}
+class Owner {
+    public Owner() { this.c = new Counter(); }
+}
+
+test("C8: a user method named add() persists through a field hop", () => {
+    // `add` reached the writeback trigger list along with the Set fix; before
+    // that this mutation was silently dropped.
+    let o = new Owner();
+    o.c.add(5);
+    o.c.add(3);
+    assert(o.c.n == 8, "the mutation must land on the field's instance");
+});
+
+test("C9: a user method named remove() persists through a field hop", () => {
+    let o = new Owner();
+    o.c.add(10);
+    o.c.remove(4);
+    assert(o.c.n == 6, "remove must land too");
+});
+
+test("C10: a user method called without a field hop is untouched", () => {
+    let c = new Counter();
+    c.add(7);
+    assert(c.n == 7, "direct call still mutates in place");
+});
+
 // ── D. Instance dispatch paths ───────────────────────────────────────────────
 
 class Base {

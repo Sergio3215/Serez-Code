@@ -713,11 +713,15 @@ impl super::Evaluator {
                 }
 
                 // Detect chained mutation pattern: instance.field.mutate(args)
-                // After mutation we write the modified array/dict back to the instance field
+                // After mutation we write the modified array/dict back to the instance field.
+                // The list must name every spelling a mutator answers to: the Set
+                // methods `add` and `delete` were missing while their aliases
+                // `remove`/`clear` were present, so `inst.someSet.add(x)` mutated
+                // the copy planted by the field read and the result was dropped.
                 let writeback_ctx: Option<(Expression, String)> =
                     if let Expression::DotCall(inner) = dot_call.object.as_ref() {
                         if inner.arguments.is_empty() {
-                            const MUTATING: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove", "reverse", "Add", "Remove", "RemoveAll", "clear"];
+                            const MUTATING: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove", "reverse", "add", "delete", "Add", "Remove", "RemoveAll", "clear"];
                             if MUTATING.contains(&dot_call.method.as_str()) {
                                 Some((*inner.object.clone(), inner.method.clone()))
                             } else { None }
