@@ -1,0 +1,312 @@
+// unit_dict_methods_slot.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// Dict methods after they moved off the generic dot-call path (which deep-cloned
+// the whole dict per call, rewrote the slot and reset the hash index) onto slot
+// dispatch in methods_dict.rs.
+//
+// The risk of that move is not speed, it is a mutation landing on a copy nobody
+// reads, or the hash index disagreeing with the entries it indexes. So every
+// method is exercised three ways: standalone, through an instance field, and
+// through another dict's slot — plus above DICT_INDEX_MIN (16), where lookups
+// stop being linear scans and start going through the index.
+
+class Holder {
+    public Holder() {
+        let m <string, int> = ({"a", 1}, {"b", 2});
+        this.map = m;
+    }
+
+    public int addTo(string k, int v) {
+        this.map.Add({k, v});
+        return this.map.length();
+    }
+}
+
+// ── Add: append vs replace ───────────────────────────────────────────────────
+
+test("Add appends a new key", () => {
+    let d <string, int> = ({"a", 1});
+    d.Add({"b", 2});
+    assert(d.length() == 2, "length after append");
+    assert(d["b"] == 2, "appended value is readable");
+    assert(d["a"] == 1, "existing entry survives");
+});
+
+test("Add replaces the value of an existing key", () => {
+    let d <string, int> = ({"a", 1}, {"b", 2});
+    d.Add({"a", 99});
+    assert(d.length() == 2, "replace must not grow the dict");
+    assert(d["a"] == 99, "value replaced");
+});
+
+test("Add keeps insertion order", () => {
+    let d <string, int> = ({"a", 1});
+    d.Add({"b", 2});
+    d.Add({"c", 3});
+    let ks = d.keys();
+    assert(ks[0] == "a", "first key");
+    assert(ks[1] == "b", "second key");
+    assert(ks[2] == "c", "third key");
+});
+
+test("Add with int keys", () => {
+    let d <int, string> = ({1, "one"});
+    d.Add({2, "two"});
+    d.Add({1, "uno"});
+    assert(d.length() == 2, "int key replace");
+    assert(d[1] == "uno", "int key replaced");
+    assert(d[2] == "two", "int key appended");
+});
+
+test("Add evaluates its key and value expressions", () => {
+    let d <string, int> = ({"a", 1});
+    let i = 7;
+    d.Add({"k" + i, i * 2});
+    assert(d["k7"] == 14, "computed key and value");
+});
+
+test("Add sees the live dict from inside its own argument", () => {
+    let d <string, int> = ({"a", 1});
+    d.Add({"count", d.length()});
+    assert(d["count"] == 1, "argument read the pre-insert length");
+    assert(d.length() == 2, "insert still happened");
+});
+
+// ── Remove / clear ───────────────────────────────────────────────────────────
+
+test("Remove drops the entry", () => {
+    let d <string, int> = ({"a", 1}, {"b", 2});
+    d.Remove("a");
+    assert(d.length() == 1, "length after remove");
+    assert(d["a"] == null, "removed key reads null");
+    assert(d["b"] == 2, "sibling survives");
+});
+
+test("Remove of an absent key is a no-op", () => {
+    let d <string, int> = ({"a", 1});
+    d.Remove("zzz");
+    assert(d.length() == 1, "nothing removed");
+    assert(d["a"] == 1, "entry untouched");
+});
+
+test("Remove then re-Add the same key", () => {
+    let d <string, int> = ({"a", 1}, {"b", 2});
+    d.Remove("a");
+    d.Add({"a", 42});
+    assert(d.length() == 2, "back to two entries");
+    assert(d["a"] == 42, "re-added value");
+});
+
+test("RemoveAll and clear empty the dict", () => {
+    let d <string, int> = ({"a", 1}, {"b", 2});
+    d.RemoveAll();
+    assert(d.length() == 0, "RemoveAll");
+    d.Add({"z", 9});
+    assert(d.length() == 1, "usable after RemoveAll");
+    d.clear();
+    assert(d.length() == 0, "clear alias");
+    assert(d["z"] == null, "cleared key reads null");
+});
+
+// ── Read-only methods ────────────────────────────────────────────────────────
+
+test("keys / toList / values / toArray / length", () => {
+    let d <string, int> = ({"a", 1}, {"b", 2});
+    assert(d.keys().length() == 2, "keys length");
+    assert(d.toList().length() == 2, "toList alias");
+    assert(d.keys()[0] == "a", "keys content");
+    assert(d.values()[1] == 2, "values content");
+    let pairs = d.toArray();
+    assert(pairs.length() == 2, "toArray length");
+    assert(pairs[0][0] == "a", "toArray key");
+    assert(pairs[0][1] == 1, "toArray value");
+});
+
+test("read-only methods do not mutate the dict", () => {
+    let d <string, int> = ({"a", 1}, {"b", 2});
+    d.keys();
+    d.values();
+    d.toArray();
+    d.toString();
+    assert(d.length() == 2, "still two entries");
+    assert(d["a"] == 1, "values intact");
+});
+
+test("toString returns something non-empty", () => {
+    let d <string, int> = ({"a", 1});
+    assert(d.toString().length() > 0, "toString");
+});
+
+// ── Through an instance field (field writeback) ──────────────────────────────
+
+test("Add through an instance field persists", () => {
+    let h = new Holder();
+    h.map.Add({"c", 3});
+    assert(h.map.length() == 3, "field dict grew");
+    assert(h.map["c"] == 3, "value readable from the field");
+});
+
+test("Add through an instance field replaces in place", () => {
+    let h = new Holder();
+    h.map.Add({"a", 50});
+    assert(h.map.length() == 2, "no growth on replace");
+    assert(h.map["a"] == 50, "field value replaced");
+});
+
+test("Remove and clear through an instance field persist", () => {
+    let h = new Holder();
+    h.map.Remove("a");
+    assert(h.map.length() == 1, "field dict shrank");
+    assert(h.map["a"] == null, "removed from the field");
+    h.map.clear();
+    assert(h.map.length() == 0, "cleared the field dict");
+});
+
+test("Add from inside a method mutates this.map", () => {
+    let h = new Holder();
+    let n = h.addTo("c", 3);
+    assert(n == 3, "method saw its own insert");
+    assert(h.map["c"] == 3, "insert survived the method call");
+});
+
+test("read-only methods on a field dict", () => {
+    let h = new Holder();
+    assert(h.map.keys().length() == 2, "keys via field");
+    assert(h.map.values()[0] == 1, "values via field");
+    assert(h.map.toArray().length() == 2, "toArray via field");
+});
+
+// ── Through another dict's slot (dict writeback) ─────────────────────────────
+
+test("Add on a dict living in another dict's slot persists", () => {
+    let inner <string, int> = ({"x", 1});
+    let outer <string, any> = ({"in", inner});
+    outer["in"].Add({"y", 2});
+    assert(outer["in"].length() == 2, "nested dict grew");
+    assert(outer["in"]["y"] == 2, "nested value readable");
+});
+
+test("Remove on a nested dict persists", () => {
+    let inner <string, int> = ({"x", 1}, {"y", 2});
+    let outer <string, any> = ({"in", inner});
+    outer["in"].Remove("x");
+    assert(outer["in"].length() == 1, "nested dict shrank");
+    assert(outer["in"]["x"] == null, "nested key gone");
+});
+
+test("read-only methods on a nested dict leave both dicts alone", () => {
+    let inner <string, int> = ({"x", 1}, {"y", 2});
+    let outer <string, any> = ({"in", inner}, {"n", 7});
+    assert(outer["in"].length() == 2, "nested length");
+    assert(outer["in"].keys()[0] == "x", "nested keys");
+    assert(outer["in"].values()[1] == 2, "nested values");
+    assert(outer["in"].toArray().length() == 2, "nested toArray");
+    assert(outer.length() == 2, "outer untouched");
+    assert(outer["n"] == 7, "outer sibling untouched");
+    assert(outer["in"]["y"] == 2, "nested entry untouched");
+});
+
+// ── Index coherence: methods and subscripts on the same dict ─────────────────
+
+test("Add and d[k] = v agree on the same dict", () => {
+    let d <string, int> = ({"a", 1});
+    d["b"] = 2;
+    d.Add({"c", 3});
+    d["c"] = 33;
+    d.Add({"b", 22});
+    assert(d.length() == 3, "three distinct keys");
+    assert(d["a"] == 1, "a");
+    assert(d["b"] == 22, "Add replaced what the subscript wrote");
+    assert(d["c"] == 33, "subscript replaced what Add wrote");
+});
+
+test("Remove keeps subsequent subscript reads correct", () => {
+    let d <string, int> = ({"a", 1}, {"b", 2}, {"c", 3});
+    d.Remove("b");
+    assert(d["a"] == 1, "before the hole");
+    assert(d["b"] == null, "the hole");
+    assert(d["c"] == 3, "after the hole");
+    d["b"] = 20;
+    assert(d["b"] == 20, "reinserted through the subscript");
+    assert(d.length() == 3, "back to three");
+});
+
+// ── Above DICT_INDEX_MIN (16): the hash-index path ───────────────────────────
+
+test("build 60 entries with Add and read them all back", () => {
+    let d <string, int> = ({"seed", 0});
+    for (let i = 0; i < 60; i = i + 1) {
+        d.Add({"k" + i, i});
+    }
+    assert(d.length() == 61, "seed + 60");
+    assert(d["k0"] == 0, "first");
+    assert(d["k37"] == 37, "middle");
+    assert(d["k59"] == 59, "last");
+    assert(d["k60"] == null, "one past the end is absent");
+    assert(d.keys().length() == 61, "keys covers everything");
+    assert(d.values().length() == 61, "values covers everything");
+});
+
+test("replace every entry of a large dict through Add", () => {
+    let d <string, int> = ({"seed", 0});
+    for (let i = 0; i < 40; i = i + 1) { d.Add({"k" + i, i}); }
+    for (let i = 0; i < 40; i = i + 1) { d.Add({"k" + i, i * 10}); }
+    assert(d.length() == 41, "no duplicates created");
+    assert(d["k0"] == 0, "k0 replaced");
+    assert(d["k7"] == 70, "k7 replaced");
+    assert(d["k39"] == 390, "k39 replaced");
+});
+
+test("remove half of a large dict", () => {
+    let d <string, int> = ({"seed", 0});
+    for (let i = 0; i < 40; i = i + 1) { d.Add({"k" + i, i}); }
+    for (let i = 0; i < 40; i = i + 2) { d.Remove("k" + i); }
+    assert(d.length() == 21, "seed + the 20 odd keys");
+    assert(d["k0"] == null, "even key gone");
+    assert(d["k1"] == 1, "odd key stayed");
+    assert(d["k38"] == null, "last even key gone");
+    assert(d["k39"] == 39, "last odd key stayed");
+});
+
+test("large dict built with Add survives interleaved subscript writes", () => {
+    let d <string, int> = ({"seed", 0});
+    for (let i = 0; i < 30; i = i + 1) {
+        d.Add({"k" + i, i});
+        d["s" + i] = i * 2;
+    }
+    assert(d.length() == 61, "seed + 30 + 30");
+    assert(d["k29"] == 29, "method-inserted key");
+    assert(d["s29"] == 58, "subscript-inserted key");
+});
+
+test("large dict inside an instance field", () => {
+    let h = new Holder();
+    for (let i = 0; i < 40; i = i + 1) {
+        h.map.Add({"k" + i, i});
+    }
+    assert(h.map.length() == 42, "a + b + 40");
+    assert(h.map["k39"] == 39, "last insert survived the writeback");
+    assert(h.map["a"] == 1, "original entry intact");
+});
+
+// ── Value types beyond int ───────────────────────────────────────────────────
+
+test("Add with <string, any> values", () => {
+    let d <string, any> = ({"n", 1});
+    d.Add({"s", "text"});
+    d.Add({"arr", [1, 2, 3]});
+    assert(d["s"] == "text", "string value");
+    assert(d["arr"].length() == 3, "array value");
+    assert(d.length() == 3, "three entries");
+});
+
+test("Add of an array value can be read back and mutated", () => {
+    let d <string, any> = ({"seed", 0});
+    d.Add({"list", [1, 2]});
+    let got = d["list"];
+    got.push(3);
+    d.Add({"list", got});
+    assert(d["list"].length() == 3, "array value replaced");
+});
+
+summary();

@@ -1,0 +1,123 @@
+use permissions { Time }
+
+// 74_dict_slot_e2e — dict methods dispatched against the arena slot.
+//
+// Two things this file is here to catch:
+//
+//  1. Semantics. `Add`/`Remove`/`clear` used to run on a deep clone of the dict
+//     that was written back over the whole slot. They now mutate the slot in
+//     place, so anything that reads the dict afterwards — a subscript, another
+//     method, an instance field, an enclosing dict — has to see the same state.
+//
+//  2. Cost. The clone made a build loop O(N²): 4000 `Add` calls took 8.4 s while
+//     the identical `d[k] = v` loop took 73 ms. The guard at the end fails if
+//     that ever comes back, without hardcoding a machine-specific number.
+
+out "── inventory: build with Add ──";
+
+let stock <string, int> = ({"bolts", 100});
+stock.Add({"nuts", 250});
+stock.Add({"washers", 75});
+stock.Add({"bolts", 120});          // replace, not append
+
+out stock.length();                  // 3
+out stock["bolts"];                  // 120
+out stock["nuts"];                   // 250
+out stock.keys().join(",");          // bolts,nuts,washers
+out stock.values().join(",");        // 120,250,75
+
+stock.Remove("nuts");
+out stock.length();                  // 2
+out stock["nuts"];                   // null
+out stock.keys().join(",");          // bolts,washers
+
+out "── methods and subscripts on one dict ──";
+
+let d <string, int> = ({"a", 1});
+d["b"] = 2;
+d.Add({"c", 3});
+d["c"] = 33;
+d.Add({"b", 22});
+out d.length() + " " + d["a"] + " " + d["b"] + " " + d["c"];   // 3 1 22 33
+
+d.Remove("a");
+d["a"] = 111;
+out d.length() + " " + d["a"];                                  // 3 111
+
+out "── dict inside an instance field ──";
+
+class Warehouse {
+    public Warehouse() {
+        let m <string, int> = ({"north", 10});
+        this.bins = m;
+    }
+
+    public int store(string bin, int qty) {
+        this.bins.Add({bin, qty});
+        return this.bins.length();
+    }
+}
+
+let w = new Warehouse();
+w.bins.Add({"south", 20});
+out w.bins.length();                 // 2
+out w.bins["south"];                 // 20
+out w.store("east", 30);             // 3
+out w.bins["east"];                  // 30
+w.bins.Remove("north");
+out w.bins.length() + " " + w.bins["north"];   // 2 null
+
+out "── dict inside another dict ──";
+
+let inner <string, int> = ({"x", 1});
+let outer <string, any> = ({"in", inner});
+outer["in"].Add({"y", 2});
+out outer["in"].length();            // 2
+out outer["in"]["y"];                // 2
+outer["in"].Remove("x");
+out outer["in"].length();            // 1
+out outer["in"]["x"];                // null
+
+out "── above the index threshold ──";
+
+let big <string, int> = ({"seed", 0});
+for (let i = 0; i < 100; i = i + 1) {
+    big.Add({"k" + i, i});
+}
+out big.length();                    // 101
+out big["k0"] + " " + big["k50"] + " " + big["k99"];   // 0 50 99
+out big["k100"];                     // null
+
+for (let i = 0; i < 100; i = i + 2) { big.Remove("k" + i); }
+out big.length();                    // 51
+out big["k0"];                       // null
+out big["k99"];                      // 99
+
+big.clear();
+out big.length();                    // 0
+
+out "── cost guard ──";
+
+// 4000 inserts through the method. Before slot dispatch this loop was 8.4 s on
+// the development machine; it is ~12 ms now, and `d[k] = v` — the same insert
+// written with a subscript — is ~13 ms. The budget below sits far above any
+// plausible machine while staying far below the quadratic cost, so it fails on
+// a regression and never on a slow day.
+let N = 4000;
+
+let viaMethod <string, int> = ({"seed", 0});
+let t0 = Time.now();
+for (let i = 0; i < N; i = i + 1) { viaMethod.Add({"k" + i, i}); }
+let methodMs = Time.now() - t0;
+
+let viaSubscript <string, int> = ({"seed", 0});
+let t1 = Time.now();
+for (let i = 0; i < N; i = i + 1) { viaSubscript["k" + i] = i; }
+let subscriptMs = Time.now() - t1;
+
+out viaMethod.length() == viaSubscript.length();   // true
+out viaMethod["k3999"] == viaSubscript["k3999"];   // true
+out methodMs < 5000;                               // true
+out subscriptMs < 5000;                            // true
+
+out "OK";

@@ -1,0 +1,53 @@
+// BENCH 16: Dictionary construction and teardown through the METHOD surface
+// 5 000 `Add` inserts + 5 000 replaces + 5 000 lookups + misses + keys/values,
+// then a drain with `Remove`.
+//
+// Bench 08 covers the subscript surface (`d[k] = v`), which has been O(1) since
+// 7.3.0. This one covers `Add`/`Remove`, which reached the same class only when
+// dict methods moved onto slot dispatch: the generic dot-call used to deep-clone
+// every entry per call, so this file measured 6384 ms against the pre-fix binary
+// and 352 ms after. A regression does not change the output, only the clock.
+let N = 5000;
+
+// ── build ────────────────────────────────────────────────────────────────────
+let d <string, int> = ({"seed", 0});
+for (let i = 0; i < N; i = i + 1) {
+    d.Add({"k" + i, i});
+}
+out d.length();          // 5001
+
+// ── replace every entry (no growth) ──────────────────────────────────────────
+for (let i = 0; i < N; i = i + 1) {
+    d.Add({"k" + i, i * 2});
+}
+out d.length();          // 5001
+
+// ── read back through the subscript (index must survive the inserts) ─────────
+let total = 0;
+for (let i = 0; i < N; i = i + 1) {
+    total = total + d["k" + i];
+}
+out total;               // 24995000
+
+// ── misses: the key is absent, the probe must not scan ───────────────────────
+let misses = 0;
+for (let i = 0; i < N; i = i + 1) {
+    if (d["absent" + i] == null) { misses = misses + 1; }
+}
+out misses;              // 5000
+
+// ── whole-dict reads ─────────────────────────────────────────────────────────
+out d.keys().length();   // 5001
+out d.values().length(); // 5001
+out d.toArray().length();// 5001
+
+// ── drain: Remove of an absent key is the cheap path, of a present one is not ─
+for (let i = 0; i < N; i = i + 1) {
+    d.Remove("absent" + i);
+}
+out d.length();          // 5001
+
+for (let i = 0; i < 500; i = i + 1) {
+    d.Remove("k" + i);
+}
+out d.length();          // 4501

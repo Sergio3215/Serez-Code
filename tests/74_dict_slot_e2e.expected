@@ -1,0 +1,37 @@
+── inventory: build with Add ──
+3
+120
+250
+bolts,nuts,washers
+120,250,75
+2
+null
+bolts,washers
+── methods and subscripts on one dict ──
+3 1 22 33
+3 111
+── dict inside an instance field ──
+2
+20
+3
+30
+2 null
+── dict inside another dict ──
+2
+2
+1
+null
+── above the index threshold ──
+101
+0 50 99
+null
+51
+null
+99
+0
+── cost guard ──
+true
+true
+true
+true
+OK

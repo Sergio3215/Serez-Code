@@ -819,6 +819,39 @@ impl super::Evaluator {
                     return result;
                 }
 
+                // Dicts dispatch against the slot too (methods_dict.rs). The
+                // generic path below deep-cloned every entry per call and then
+                // rewrote the whole slot, so `d.Add(...)` in a loop was O(N²) —
+                // 4000 inserts took 8.4 s while the identical `d[k] = v` took
+                // 73 ms. Same writeback contexts as the Set branch: a dict read
+                // out of a field or out of another dict's slot is a planted
+                // copy, and the mutation has to travel back.
+                if matches!(self.resolve(obj_ref), Some(ObjectData::Dict { .. })) {
+                    // Only a mutator needs the writeback, and taking it is not
+                    // free: it deep-copies the receiver into the enclosing slot.
+                    // The generic path used to pay that on every dict method, so
+                    // `outer["in"].keys()` copied `outer["in"]` back over itself.
+                    // The field writeback (writeback_ctx) is already gated the
+                    // same way, by the MUTATING list above.
+                    const MUTATING: &[&str] = &["Add", "Remove", "RemoveAll", "clear"];
+                    let dict_ctx = if MUTATING.contains(&dot_call.method.as_str()) {
+                        match self.dict_slot_ctx(dot_call) {
+                            Ok(c) => c,
+                            Err(e) => return e,
+                        }
+                    } else {
+                        None
+                    };
+                    let result = self.eval_dict_method_slot(obj_ref, dot_call);
+                    if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+                        self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+                    }
+                    if let Some((dict_ref, key_str)) = dict_ctx {
+                        self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
+                    }
+                    return result;
+                }
+
                 // Array fast path for the loop builders/drainers: push/pop run
                 // against the arena slot instead of cloning the whole array per
                 // call (the generic path below made `a.push(x)` O(N) — building
@@ -907,142 +940,8 @@ impl super::Evaluator {
                         self.eval_string_method(s.clone(), dot_call)
                     }
 
-                    // ── Dict methods ──────────────────────────────────────────
-                    ObjectData::Dict { key_type, value_type, entries, .. } => {
-                        let mut entries = entries;
-                        match dot_call.method.as_str() {
-                            "Add" => {
-                                if dot_call.arguments.len() != 1 {
-                                    eprintln!("❌ ERROR: Add expects 1 argument {{key, value}}");
-                                    return EvalResult::Error;
-                                }
-                                let (key_ref, val_ref) = match &dot_call.arguments[0] {
-                                    Expression::EntryLiteral(k_expr, v_expr) => {
-                                        let k = match self.eval_expression(k_expr) {
-                                            EvalResult::Value(r) => r,
-                                            EvalResult::Throw(v) => return EvalResult::Throw(v),
-                                            _ => return EvalResult::Error,
-                                        };
-                                        let v = match self.eval_expression(v_expr) {
-                                            EvalResult::Value(r) => r,
-                                            EvalResult::Throw(v) => return EvalResult::Throw(v),
-                                            _ => return EvalResult::Error,
-                                        };
-                                        (k, v)
-                                    }
-                                    _ => {
-                                        eprintln!("❌ ERROR: Add argument must be an entry literal {{key, value}}");
-                                        return EvalResult::Error;
-                                    }
-                                };
-
-                                if key_type != "any" {
-                                    let kd = self.resolve(key_ref).unwrap();
-                                    if !type_matches(&key_type, kd) {
-                                        eprintln!("❌ TYPE ERROR: Dict key type mismatch on Add (expected '{}')", key_type);
-                                        return EvalResult::Error;
-                                    }
-                                }
-                                if value_type != "any" {
-                                    let vd = self.resolve(val_ref).unwrap();
-                                    if !type_matches(&value_type, vd) {
-                                        eprintln!("❌ TYPE ERROR: Dict value type mismatch on Add (expected '{}')", value_type);
-                                        return EvalResult::Error;
-                                    }
-                                }
-
-                                let key_data = self.resolve(key_ref).unwrap().clone();
-                                let search_key = obj_data_to_key_str(&key_data);
-
-                                let mut replaced = false;
-                                for (k, v) in entries.iter_mut() {
-                                    if owned_to_key_str(k) == search_key {
-                                        *v = self.extract(val_ref);
-                                        replaced = true;
-                                        break;
-                                    }
-                                }
-                                if !replaced {
-                                    let owned_k = self.extract(key_ref);
-                                    let owned_v = self.extract(val_ref);
-                                    entries.push((owned_k, owned_v));
-                                }
-
-                                self.update_dict(obj_ref, key_type, value_type, entries);
-                                EvalResult::Value(self.null_ref)
-                            }
-
-                            "Remove" => {
-                                if dot_call.arguments.len() != 1 {
-                                    eprintln!("❌ ERROR: Remove expects 1 argument (key)");
-                                    return EvalResult::Error;
-                                }
-                                let key_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                                    EvalResult::Value(r) => r,
-                                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                                    _ => return EvalResult::Error,
-                                };
-                                let key_data = self.resolve(key_ref).unwrap().clone();
-                                let search_key = obj_data_to_key_str(&key_data);
-
-                                entries.retain(|(k, _)| {
-                                    owned_to_key_str(k) != search_key
-                                });
-
-                                self.update_dict(obj_ref, key_type, value_type, entries);
-                                EvalResult::Value(self.null_ref)
-                            }
-
-                            "RemoveAll" | "clear" => {
-                                if !dot_call.arguments.is_empty() {
-                                    eprintln!("❌ ERROR: {} expects no arguments", dot_call.method);
-                                    return EvalResult::Error;
-                                }
-                                self.update_dict(obj_ref, key_type, value_type, Vec::new());
-                                EvalResult::Value(self.null_ref)
-                            }
-
-                            // Returns array of keys: [k1, k2, ...]
-                            "toList" | "keys" => {
-                                let keys: Vec<OwnedValue> = entries.iter()
-                                    .map(|(k, _)| k.clone())
-                                    .collect();
-                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: keys }))
-                            }
-
-                            "values" => {
-                                let vals: Vec<OwnedValue> = entries.iter()
-                                    .map(|(_, v)| v.clone())
-                                    .collect();
-                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: vals }))
-                            }
-
-                            // Returns 2-D array of entries: [[k1,v1],[k2,v2],...]
-                            "toArray" => {
-                                let pairs: Vec<OwnedValue> = entries.iter()
-                                    .map(|(k, v)| OwnedValue::Array {
-                                        element_type: None,
-                                        elements: vec![k.clone(), v.clone()],
-                                    })
-                                    .collect();
-                                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: pairs }))
-                            }
-
-                            "length" => {
-                                EvalResult::Value(self.alloc(ObjectData::Integer(entries.len() as i64)))
-                            }
-
-                            "toString" => {
-                                let s = self.display(obj_ref);
-                                EvalResult::Value(self.alloc(ObjectData::Str(s)))
-                            }
-
-                            _ => {
-                                eprintln!("❌ ERROR: Unknown dict method '{}'", dot_call.method);
-                                EvalResult::Error
-                            }
-                        }
-                    }
+                    // (Dict methods are intercepted before this match — see the
+                    // slot fast path above; a Dict can never reach here.)
                     // ── Instance field read / method call ─────────────────────
                     // Instance is handled by the slot fast path above and never
                     // reaches this match.

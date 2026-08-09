@@ -9,6 +9,7 @@ mod methods_string;
 mod control;
 mod namespaces;
 mod methods_set;
+mod methods_dict;
 mod methods_tensor;
 mod namespaces_crypto;
 mod namespaces_binary;
