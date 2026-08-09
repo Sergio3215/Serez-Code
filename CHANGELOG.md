@@ -5,6 +5,114 @@ Order: most recent to oldest.
 
 ---
 
+## [9.13.0] — 2026-08-09
+
+### Dispatch stops copying the receiver
+
+`.` and `[ ]` cloned the **whole receiver** before operating on it. That is not
+what value semantics asks for: `ANALISIS_MEMORIA_RENDIMIENTO.md` picked P1
+(Embedding), where reading copies **the element** — the code copied **the
+container**. The copy was then mutated and written back over the same slot, so
+it protected nobody: it was work that existed only to be thrown away one line
+later.
+
+Every method now runs against the arena slot, the way `d[k] = v` and `Set` have
+since 7.3.0 and 9.12.0. Measured on release builds, best of three:
+
+| | before | after |
+|---|---|---|
+| `a[i]` read, 10 000 elements | 7138 ms | 30 ms |
+| `length()` × 10 000 | 2233 ms | 32 ms |
+| `obj.method()`, instance holding 1000 elements | 956 ms | 297 ms |
+| `obj.field`, same instance | 275 ms | 82 ms |
+| `d.Add(…)` × 4000 | 8411 ms | 6 ms |
+| `d.Remove(…)` × 200 over 3000 entries | 505 ms | 66 ms |
+
+- **`a[i]`** on an array or a string reads the element out of the slot. The
+  index expression was already evaluated before the clone, so evaluation order
+  is untouched.
+- **Instance dispatch** no longer copies every field. The copy was only ever
+  read — mutation always went through `obj_ref` — so a new `field_value` helper
+  pulls out the one field a call actually needs.
+- **`length()`** on arrays and dicts reads the slot. It is O(1) and was paying
+  an O(N) clone, in the single most common call in an indexed `for` header.
+- **Dict methods** move to a new `methods_dict.rs` (`eval_dict_method_slot`),
+  built on the `methods_set.rs` template; the dict arm of the generic match is
+  gone. `Add` also stops scanning linearly for a duplicate key: it probes the
+  slot-resident hash index, which the old whole-slot rewrite used to discard on
+  every insert. Building a dict with `Add` was quadratic twice over.
+  The indexed probe is validated against the legacy comparator and falls back to
+  the scan when they disagree, so `Decimal` and compound keys keep the exact
+  behavior they had; a miss cannot disagree, which is what makes each insert
+  O(1).
+
+Array methods that are inherently O(N) (`indexOf`, `join`, `map`…) deliberately
+stay on the snapshot path: the clone does not change their complexity, and
+moving them would change when their arguments observe the receiver.
+
+### Mutations through a field or a dict slot no longer vanish
+
+Reading `instance.field` or `d["k"]` plants a **copy**, so a mutation on the
+result is dropped unless it is written back. Three shapes had no writeback at
+all and failed silently — no error, just a change that never happened:
+
+| Shape | Was | Now |
+|---|---|---|
+| `h.tags.add(x)` — a `Set` in an instance field | mutation dropped | persists |
+| `d["k"].add(x)` — a `Set` in a dict slot | mutation dropped | persists |
+| `outer["in"].Add({k, v})` — a dict in a dict slot | mutation dropped | persists |
+
+The first was a missing entry in the list that triggers the field writeback: it
+named `Add` (the dict method) and the aliases `remove`/`clear`, but never `add`
+or `delete`. A user-defined `add`/`remove` method reached across a field hop
+(`o.c.add(5)`) was losing its mutation for the same reason.
+
+The other two were the writeback machinery living in the wrong place. It is now
+two helpers — `dict_slot_ctx` (recognizes the `dict["k"].mutator()` shape) and
+`apply_dict_writeback` (returns the mutated value to the slot) — shared by every
+dispatch path instead of being inlined in the Array arm, which is precisely why
+it only ever worked for arrays. The Array arm drops from 22 inline lines to 3.
+The context is taken before the method runs and after `obj_ref` is evaluated —
+the order the generic path always used, so nothing changes about when the key is
+evaluated. A read-only method does not take it at all, so `outer["in"].keys()`
+no longer copies itself back over itself.
+
+### Also
+
+- **README**: five features that had worked for a long time and were documented
+  nowhere — `|>` (plus the missing `Pipe` row in the precedence table; it is the
+  lowest precedence of all), `sizeof` (type keywords only — `sizeof(5)` is a
+  parse error), `fn*`/`yield` (generators are **eager**: they return an array of
+  everything yielded, not a lazy iterator), `match` as an expression with `|`
+  alternatives, guards and subject binding, and a new Modules section (paths are
+  relative to the importing file's directory, and every function reached from
+  another file has to be exported, private helpers included).
+- **360 coverage battery**, aimed by measurement rather than by eye: crossing the
+  generated inventory in `src/lsp/builtins_gen.rs` against every test file found
+  100 methods with zero coverage. Namespace gaps went 80 → 64, value-method gaps
+  20 → 1; the remainder is structural (62 Gui methods need a real window and are
+  verified by screenshot, 2 Terminal methods would corrupt the runner's output).
+  New: `unit_360_random`, `unit_360_tensor_gaps`, `unit_360_namespace_gaps`,
+  `unit_360_documented_gotchas` (the README's seven Known Gotchas, promised as
+  guarantees and tested by nobody — all seven hold), `73_language_360_e2e` and
+  `err_enum_string_concat`.
+- **Pinned, not changed**: `argmax` and `argmin` break ties in opposite
+  directions — `argmax` returns the LAST maximum, `argmin` the FIRST minimum
+  (out of Rust's `max_by`/`min_by`). `argmax` also disagrees with NumPy and
+  PyTorch, which return the first, and it is what picks the predicted class in
+  classification. Asserted as-is so any change to it is a visible decision.
+- **New test suites for the dispatch change**: `unit_slot_receiver_semantics`
+  (value semantics, evaluation order, both writebacks), `unit_slot_collections_surface`
+  (every array/string/dict/set method, each one standalone, through an instance
+  field and through a dict slot), `unit_dict_methods_slot`, plus the
+  `72_receiver_360_e2e` and `74_dict_slot_e2e` programs. The last one carries a
+  cost guard that fails if the quadratic build ever comes back, without
+  hardcoding a machine-specific number.
+- **New benchmark** `16_dict_build`: dict construction and teardown through the
+  method surface (bench 08 covers the subscript surface). 6384 ms against the
+  previous binary, 347 ms now.
+- Suite: 430 (39 new), 0 failures.
+
 ## [9.12.0] — 2026-07-30
 
 ### `sz --eval "<code>"` — run a snippet with no file
