@@ -10,7 +10,10 @@
 .\run_tests.ps1 -generate          # regenerate .expected (after language changes)
 ```
 
-**Result:** 214 tests · 0 failures
+**Result:** 430 tests · 0 failures
+
+The sections below catalogue a selection of the suite, not every file in
+`tests/`. `run_tests.ps1` is the authority on what exists and what passes.
 
 ---
 

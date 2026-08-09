@@ -359,9 +359,17 @@ scopes never alias the same slot.
 
 The cost: composites are stored EMBEDDED — an array occupies ONE slot holding a
 `Vec<OwnedValue>`, not one slot per element. Extract/plant is O(total size) ⇒
-returning a 100k-element array copies 100k elements and `a[i] = x` on a large
-array is O(n). For heavy numeric work, use `Tensor` (a flat `Vec<f64>` in a
-single slot).
+every copy the value semantics actually calls for costs the whole size: returning
+a 100k-element array copies 100k elements.
+
+Reaching INTO a composite is NOT one of those copies. `a[i]`, `a[i] = x`, `d[k]`,
+`d[k] = v` and the array/dict/set method surface (`methods_array.rs`,
+`methods_dict.rs`, `methods_set.rs`) all work against the slot: they read or write
+one element without copying the container to get at it. That was not always true —
+dispatch used to clone the whole receiver first, which turned an indexed loop into
+O(N²); see 7.3.0 and 9.13.0 in the CHANGELOG.
+
+For heavy numeric work, use `Tensor` (a flat `Vec<f64>` in a single slot).
 
 ### The real cost of cleanup
 
