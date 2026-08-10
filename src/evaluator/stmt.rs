@@ -1300,13 +1300,32 @@ impl super::Evaluator {
             return EvalResult::Error;
         }
 
-        // If the module used `export`, enforce visibility: remove everything
-        // that was added but NOT exported.
+        // If the module used `export`, enforce visibility: remove what the module
+        // DECLARED and did not export.
+        //
+        // "Declared" is the operative word. This used to drop everything added
+        // while the module loaded, which silently included whatever its OWN
+        // imports had brought in — a module that imports a component and exports
+        // only its own class was deleting the imported one on the way out. The
+        // symptom was as confusing as it gets: `new Card()` worked, and then
+        // `Card.render()` died with "Unknown class or interface 'Badge'",
+        // because Badge had been wiped after Card.sz finished loading. It made
+        // composing components across files impossible unless the top-level file
+        // ALSO imported every transitive dependency.
+        //
+        // Only names this module declares at its own top level are candidates
+        // for removal; anything a nested import registered stays.
         if !exports.is_empty() {
-            self.global_bindings.retain(|k, _| before_globals.contains(k) || exports.contains(k));
-            self.class_registry.retain(|k, _| before_classes.contains(k) || exports.contains(k));
-            self.interface_registry.retain(|k, _| before_interfaces.contains(k) || exports.contains(k));
-            self.enum_registry.retain(|k, _| before_enums.contains(k) || exports.contains(k));
+            let declared: HashSet<String> = program
+                .statements
+                .iter()
+                .filter_map(declaration_name)
+                .collect();
+            let keep = |k: &String| !declared.contains(k) || exports.contains(k);
+            self.global_bindings.retain(|k, _| before_globals.contains(k) || keep(k));
+            self.class_registry.retain(|k, _| before_classes.contains(k) || keep(k));
+            self.interface_registry.retain(|k, _| before_interfaces.contains(k) || keep(k));
+            self.enum_registry.retain(|k, _| before_enums.contains(k) || keep(k));
         }
         // If no `export` was used, everything the module defined stays (backwards compat)
 
