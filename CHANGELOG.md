@@ -5,6 +5,50 @@ Order: most recent to oldest.
 
 ---
 
+## [9.14.0] — 2026-08-10
+
+### `&&` and `||` return an operand, not a boolean
+
+They used to demand a boolean on **both** sides and reject anything else with
+`'&&' operator requires boolean operands`. Now they behave the way this operator
+behaves in every language that has it:
+
+```
+a && b   // a if a is falsy, otherwise b
+a || b   // a if a is truthy, otherwise b
+```
+
+With booleans on both sides the result is **identical to before** — `false && x`
+is still `false`, `true && b` is still `b` — which is what makes this safe for
+existing code, and the right-hand side is still not evaluated when the left one
+already decides. What it opens up is the one-line conditional:
+
+```
+let name = input || "anonymous"        // fallback
+let row  = items && buildRow(items)    // only when there is something
+```
+
+The second line is what prompted the change: building a UI, `items && <Row/>` is
+how you say "render this when there is something to render", and it was a hard
+error.
+
+### One rule for what counts as falsy
+
+`false`, `null`, `0`, `0.0`, `""` and an **empty** array, dict or set. Everything
+else is truthy. The same rule now backs `&&` / `||`, the ternary, `match` guards
+and the `filter` / `some` / `every` callbacks — previously only `false` and
+`null` were falsy there, so `0` and `""` passed as true.
+
+Empty collections being falsy is a **deliberate departure from JavaScript**,
+where `[]` is truthy: there, `items && render(items)` fires on an empty list, and
+the workaround (`items.length && …`) is itself the well-known bug that prints a
+stray `0`. Here the plain form already means "if there is anything".
+
+- Suite: 431 (new `unit_logical_operators`, 14 assertions), 0 failures.
+- Not touched: the AOT/LLVM path (`compiler/llvm_emit.rs`) still lowers `&&`/`||`
+  as bitwise ops on `i1`, so it only agrees with the interpreter for boolean
+  operands. Worth reconciling before that path is used for anything real.
+
 ## [9.13.0] — 2026-08-09
 
 ### Dispatch stops copying the receiver

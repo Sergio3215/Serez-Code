@@ -942,10 +942,24 @@ impl Evaluator {
         Some(result)
     }
 
+    /// Regla ÚNICA de "truthy" del lenguaje: la usan el ternario, las guardas de
+    /// `match`, los callbacks de filter/some/every y los operadores `&&` / `||`.
+    ///
+    /// Es la misma que las condiciones de `.szs` ya aplicaban — false, 0, "" y
+    /// null no pasan — extendida a las colecciones VACÍAS, que es lo que vuelve
+    /// útil `items && <Row/>`: una lista sin elementos no debería pintar la fila.
+    /// Eso se aparta de JavaScript a propósito, donde `[]` es truthy y ese idiom
+    /// es un error clásico.
     fn is_truthy(&self, data: &ObjectData) -> bool {
         match data {
             ObjectData::Boolean(b) => *b,
             ObjectData::Null => false,
+            ObjectData::Integer(i) => *i != 0,
+            ObjectData::Decimal(d) => *d != 0.0,
+            ObjectData::Str(s) => !s.is_empty(),
+            ObjectData::Array { elements, .. } => !elements.is_empty(),
+            ObjectData::Dict { entries, .. } => !entries.is_empty(),
+            ObjectData::Set { elements, .. } => !elements.is_empty(),
             _ => true,
         }
     }

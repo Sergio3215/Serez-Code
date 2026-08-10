@@ -1083,39 +1083,40 @@ impl super::Evaluator {
                     EvalResult::Value(r) => r,
                     other => return other,
                 };
-                let left_data = self.resolve(left_ref).unwrap().clone();
-                let left_bool = match left_data {
-                    ObjectData::Boolean(b) => b,
-                    _ => {
-                        eprintln!(
-                            "❌ ERROR: '{}' operator requires boolean operands",
-                            infix_expr.operator
-                        );
-                        return EvalResult::Error;
-                    }
+                // `&&` y `||` devuelven UN OPERANDO, no un booleano recalculado:
+                //
+                //     a && b   →  a si a es falsy, si no b
+                //     a || b   →  a si a es truthy, si no b
+                //
+                // Con booleanos el resultado es idéntico al de siempre (false && x
+                // sigue siendo false, true && b sigue siendo b), así que ningún
+                // programa existente cambia. Lo que se abre es el condicional que
+                // la gente ya escribe en la UI:
+                //
+                //     items && <Row>…</Row>
+                //
+                // Antes eso era un error duro ("requires boolean operands") aunque
+                // la intención fuera obvia. Ahora una lista vacía devuelve la lista
+                // vacía (que el constructor del vdom aplana a nada) y una con
+                // elementos devuelve el nodo.
+                //
+                // La regla de falsy es la que el ecosistema ya usaba en las
+                // condiciones de .szs — false, 0, "" y null no pasan — extendida a
+                // las colecciones VACÍAS, que es lo que hace útil el idiom con un
+                // array. Ojo: eso se aparta de JavaScript, donde `[]` es truthy.
+                let left_truthy = {
+                    let d = self.resolve(left_ref).unwrap();
+                    self.is_truthy(d)
                 };
 
-                if infix_expr.operator == "&&" && !left_bool {
-                    return EvalResult::Value(self.alloc(ObjectData::Boolean(false)));
+                if infix_expr.operator == "&&" && !left_truthy {
+                    return EvalResult::Value(left_ref);
                 }
-                if infix_expr.operator == "||" && left_bool {
-                    return EvalResult::Value(self.alloc(ObjectData::Boolean(true)));
+                if infix_expr.operator == "||" && left_truthy {
+                    return EvalResult::Value(left_ref);
                 }
 
-                let right_ref = match self.eval_expression(&infix_expr.right) {
-                    EvalResult::Value(r) => r,
-                    other => return other,
-                };
-                match self.resolve(right_ref).unwrap().clone() {
-                    ObjectData::Boolean(_) => EvalResult::Value(right_ref),
-                    _ => {
-                        eprintln!(
-                            "❌ ERROR: '{}' operator requires boolean operands",
-                            infix_expr.operator
-                        );
-                        EvalResult::Error
-                    }
-                }
+                self.eval_expression(&infix_expr.right)
             }
 
             Expression::Infix(infix_expr) => {

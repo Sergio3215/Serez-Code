@@ -1,0 +1,121 @@
+// unit_logical_operators.sz — `&&` y `||` devuelven un OPERANDO, no un booleano.
+//
+// Antes exigían booleanos de los dos lados y fallaban con "requires boolean
+// operands". Ahora siguen la regla de siempre en los lenguajes que tienen esto:
+//
+//     a && b  →  a si a es falsy, si no b
+//     a || b  →  a si a es truthy, si no b
+//
+// Con booleanos el resultado es idéntico al anterior, que es lo que hace que el
+// cambio no rompa nada; lo que se abre es el condicional de una sola línea.
+
+// ── Con booleanos: exactamente como antes ────────────────────────────────────
+
+test("&& con booleanos", () => {
+    assert((true && true) == true, "true && true");
+    assert((true && false) == false, "true && false");
+    assert((false && true) == false, "false && true");
+    assert((false && false) == false, "false && false");
+});
+
+test("|| con booleanos", () => {
+    assert((true || false) == true, "true || false");
+    assert((false || true) == true, "false || true");
+    assert((false || false) == false, "false || false");
+    assert((true || true) == true, "true || true");
+});
+
+test("siguen sirviendo como condicion", () => {
+    let n = 5;
+    if (n > 0 && n < 10) { assert(true, "and en un if"); } else { assert(false, "and en un if"); }
+    if (n < 0 || n == 5) { assert(true, "or en un if"); } else { assert(false, "or en un if"); }
+});
+
+// ── Devuelven el operando ────────────────────────────────────────────────────
+
+test("&& devuelve el derecho cuando el izquierdo es truthy", () => {
+    assert((true && "X") == "X", "bool && string");
+    assert((5 && "X") == "X", "int && string");
+    assert(("hola" && 42) == 42, "string && int");
+});
+
+test("&& devuelve el IZQUIERDO cuando es falsy", () => {
+    assert((false && "X") == false, "false se devuelve tal cual");
+    assert((0 && "X") == 0, "0 se devuelve tal cual");
+    assert(("" && "X") == "", "string vacio se devuelve tal cual");
+    assert((null && "X") == null, "null se devuelve tal cual");
+});
+
+test("|| devuelve el izquierdo cuando es truthy", () => {
+    assert(("hola" || "alt") == "hola", "string || alt");
+    assert((7 || 9) == 7, "int || alt");
+    assert((true || "alt") == true, "true || alt");
+});
+
+test("|| devuelve el derecho cuando el izquierdo es falsy", () => {
+    assert((null || "alt") == "alt", "null || alt");
+    assert((0 || "alt") == "alt", "0 || alt");
+    assert(("" || "alt") == "alt", "vacio || alt");
+    assert((false || "alt") == "alt", "false || alt");
+});
+
+test("|| como valor por defecto", () => {
+    let dado = "";
+    let nombre = dado || "anonimo";
+    assert(nombre == "anonimo", "cae al default");
+    let dado2 = "Ana";
+    assert((dado2 || "anonimo") == "Ana", "respeta el valor dado");
+});
+
+// ── Colecciones vacías son falsy (a propósito, distinto de JavaScript) ───────
+
+test("una coleccion VACIA es falsy", () => {
+    let arr = [];
+    let d <string, int> = ();
+    assert((arr && "X") != "X", "array vacio no pasa");
+    assert((d && "X") != "X", "dict vacio no pasa");
+    assert((arr || "alt") == "alt", "array vacio cae al alternativo");
+});
+
+test("una coleccion CON elementos es truthy", () => {
+    let arr = [1, 2];
+    let d <string, int> = ({"a", 1});
+    assert((arr && "X") == "X", "array con elementos pasa");
+    assert((d && "X") == "X", "dict con entradas pasa");
+});
+
+test("el idiom `items && algo` que motivo el cambio", () => {
+    fn any fila(any items) { return "fila de " + items.length(); }
+    let conItems = [1, 2, 3];
+    let sinItems = [];
+    assert((conItems && fila(conItems)) == "fila de 3", "con elementos construye");
+    assert((sinItems && fila(sinItems)) != "fila de 0", "vacio NO construye");
+});
+
+// ── Corto circuito ───────────────────────────────────────────────────────────
+
+test("&& no evalua el lado derecho si el izquierdo es falsy", () => {
+    let veces = 0;
+    fn any efecto() { veces = veces + 1; return true; }
+    let r = false && efecto();
+    assert(veces == 0, "no se llamo");
+    let r2 = true && efecto();
+    assert(veces == 1, "si se llamo cuando correspondia");
+});
+
+test("|| no evalua el lado derecho si el izquierdo es truthy", () => {
+    let veces = 0;
+    fn any efecto() { veces = veces + 1; return true; }
+    let r = true || efecto();
+    assert(veces == 0, "no se llamo");
+    let r2 = false || efecto();
+    assert(veces == 1, "si se llamo cuando correspondia");
+});
+
+test("encadenados", () => {
+    assert((true && true && "fin") == "fin", "tres en cadena");
+    assert((false && true && "fin") == false, "corta en el primero");
+    assert((null || 0 || "ultimo") == "ultimo", "cae hasta el ultimo");
+});
+
+summary();
