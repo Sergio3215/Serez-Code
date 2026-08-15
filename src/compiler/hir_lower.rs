@@ -265,6 +265,12 @@ impl HirLowerer {
                 )]
             }
 
+            // a.b.c = v — el HIR sólo tiene un lvalue de UN salto
+            // (`HirLValue::Field` sobre una variable), así que este caso todavía
+            // no baja. Igual que Throw y DerefAssign, queda como no-op: este
+            // backend está detrás de la feature `llvm` y sin usar.
+            Statement::NestedFieldAssign(_) => vec![],
+
             Statement::Break | Statement::BreakLabel(_)       => vec![HirStmt::Break],
             Statement::Continue | Statement::ContinueLabel(_) => vec![HirStmt::Continue],
 

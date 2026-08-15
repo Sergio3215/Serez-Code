@@ -1,6 +1,7 @@
 mod stmt;
 mod expr;
 mod ops;
+mod lvalue;
 mod check;
 mod builtins;
 mod classes;
@@ -177,6 +178,12 @@ pub struct Evaluator {
     // is handled, not aborted).
     last_error: Option<(String, String)>,
     try_depth: usize,
+    // ── Writeback de receptores anidados ──────────────────────────────────────
+    // (clase, método) → ¿el cuerpo puede escribir en `this`? Lo llena
+    // `method_mutates_self` (lvalue.rs) la primera vez que se consulta un
+    // método; decide si `a[i].m()` tiene que devolver el receptor a su
+    // contenedor. Se consulta sólo cuando el receptor es una ruta anidada.
+    mutator_cache: HashMap<(String, String), bool>,
 }
 
 // ── Free-identifier collection (for consistent lambda capture, B-83) ──────────
@@ -209,6 +216,7 @@ fn collect_idents_stmt(s: &crate::ast::Statement, out: &mut Vec<String>) {
         St::ForEach(fe) => { collect_idents_expr(&fe.iterable, out); collect_idents_block(&fe.body, out); }
         St::IndexAssign(ia) => { collect_idents_expr(&ia.target, out); collect_idents_expr(&ia.index, out); collect_idents_expr(&ia.value, out); }
         St::FieldAssign(fa) => { out.push(fa.object.clone()); collect_idents_expr(&fa.value, out); }
+        St::NestedFieldAssign(fa) => { collect_idents_expr(&fa.object, out); collect_idents_expr(&fa.value, out); }
         St::DerefAssign { ptr, value } => { collect_idents_expr(ptr, out); collect_idents_expr(value, out); }
         _ => {}
     }
@@ -330,6 +338,7 @@ impl Evaluator {
             task_arg: None,
             last_error: None,
             try_depth: 0,
+            mutator_cache: HashMap::new(),
         }
     }
 
@@ -943,14 +952,15 @@ impl Evaluator {
     }
 
     /// Regla ÚNICA de "truthy" del lenguaje: la usan el ternario, las guardas de
-    /// `match`, los callbacks de filter/some/every y los operadores `&&` / `||`.
+    /// `match`, los callbacks de filter/some/every, los operadores `&&` / `||`
+    /// y el prefijo `!`.
     ///
     /// Es la misma que las condiciones de `.szs` ya aplicaban — false, 0, "" y
     /// null no pasan — extendida a las colecciones VACÍAS, que es lo que vuelve
     /// útil `items && <Row/>`: una lista sin elementos no debería pintar la fila.
     /// Eso se aparta de JavaScript a propósito, donde `[]` es truthy y ese idiom
     /// es un error clásico.
-    fn is_truthy(&self, data: &ObjectData) -> bool {
+    pub(super) fn is_truthy(&self, data: &ObjectData) -> bool {
         match data {
             ObjectData::Boolean(b) => *b,
             ObjectData::Null => false,

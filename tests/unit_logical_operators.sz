@@ -118,4 +118,54 @@ test("encadenados", () => {
     assert((null || 0 || "ultimo") == "ultimo", "cae hasta el ultimo");
 });
 
+// ── El prefijo `!` niega la MISMA regla ──────────────────────────────────────
+//
+// Quedó afuera cuando `&&`/`||` pasaron a la regla única y el idiom quedaba
+// partido al medio: `items && algo` compilaba, `!items` moría con
+// "Prefix '!' only applies to booleans" y había que escribir
+// `items.length() == 0`. `!` devuelve SIEMPRE un booleano — a diferencia de
+// `&&`/`||`, que devuelven un operando.
+
+test("! con booleanos: igual que antes", () => {
+    assert(!true == false, "!true");
+    assert(!false == true, "!false");
+});
+
+test("! sobre los falsy no booleanos", () => {
+    let vacio = [];
+    let d <string, int> = ();
+    assert(!0 == true, "!0");
+    assert(!"" == true, "!vacio");
+    assert(!null == true, "!null");
+    assert(!vacio == true, "!array vacio");
+    assert(!d == true, "!dict vacio");
+});
+
+test("! sobre los truthy", () => {
+    let arr = [1, 2];
+    assert(!42 == false, "!entero");
+    assert(!"hola" == false, "!string con texto");
+    assert(!arr == false, "!array con elementos");
+});
+
+test("! coincide con la regla de && / ||", () => {
+    let casos = [0, 1, "", "x"];
+    let i = 0;
+    while (i < casos.length()) {
+        let v = casos[i];
+        // `v || "ALT"` cae al alternativo exactamente cuando v es falsy, que es
+        // cuando `!v` tiene que dar true. Una sola regla, comprobada desde los
+        // dos lados.
+        let cayo = (v || "ALT") == "ALT";
+        assert(!v == cayo, "coherente para el caso " + i);
+        i = i + 1;
+    }
+});
+
+test("doble negacion normaliza a booleano", () => {
+    assert(!!"hola" == true, "!!string");
+    assert(!![] == false, "!!array vacio");
+    assert(!!0 == false, "!!0");
+});
+
 summary();

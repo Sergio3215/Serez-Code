@@ -2,6 +2,19 @@ use crate::ast::*;
 use crate::lexer::Lexer;
 use crate::token::{Token, TokenType};
 
+/// ¿La expresión es una cadena de LECTURAS (`a`, `a.b`, `a[i]`, `a.b[i].c`)?
+/// Sólo esas sirven como receptor de una asignación anidada: una llamada
+/// (`a.dame().c`) produce un temporal, y escribirle no se ve desde ningún lado.
+/// El evaluador vuelve a recorrer la misma forma para encontrar el slot.
+fn is_writable_chain(e: &Expression) -> bool {
+    match e {
+        Expression::Identifier(_) => true,
+        Expression::DotCall(d) if d.arguments.is_empty() && !d.has_parens => is_writable_chain(&d.object),
+        Expression::Index(ix) => is_writable_chain(&ix.left),
+        _ => false,
+    }
+}
+
 #[derive(PartialEq, PartialOrd)]
 pub enum Precedence {
     Lowest,
@@ -765,6 +778,10 @@ impl Parser {
                         if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
                         return Some(Statement::FieldAssign(FieldAssignStatement { object, field, value }));
                     }
+
+                    if let Some(st) = self.try_build_nested_field_assign(dot, is_compound) {
+                        return Some(st);
+                    }
                 }
             }
 
@@ -984,7 +1001,9 @@ impl Parser {
     }
 
     fn try_build_index_assign(&mut self, expr: Expression) -> Option<Statement> {
-        if self.peek_token.token_type == TokenType::Assign {
+        let is_assign = self.peek_token.token_type == TokenType::Assign;
+        let is_compound = self.is_compound_assign(&self.peek_token.token_type);
+        if is_assign {
             if let Expression::Index(idx_expr) = &expr {
                 let target = (*idx_expr.left).clone();
                 let index = (*idx_expr.index).clone();
@@ -995,8 +1014,65 @@ impl Parser {
                 return Some(Statement::IndexAssign(IndexAssignStatement { target, index, value }));
             }
         }
+        // `objs[1].campo = x` entra por acá (la sentencia arranca con `ident[`,
+        // no por parse_expression_statement) y termina siendo un DotCall, no un
+        // Index. Sin esto el '=' quedaba sin consumir y era un error de parseo.
+        if is_assign || is_compound {
+            if let Expression::DotCall(ref dot) = expr {
+                if let Some(st) = self.try_build_nested_field_assign(dot, is_compound) {
+                    return Some(st);
+                }
+            }
+        }
         if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
         Some(Statement::Expression(expr))
+    }
+
+    /// `a.b.c = val` (y su forma compuesta) — el receptor es una CADENA, no un
+    /// nombre suelto, así que no entra en `FieldAssignStatement`. Antes moría en
+    /// el parser con "Unexpected token '='" y había que rearmar y reasignar el
+    /// objeto intermedio entero.
+    ///
+    /// Sólo una cadena de lecturas es destino válido: `a.dame().c = x` escribe
+    /// sobre un temporal y no se vería desde ningún lado. Devuelve `None` sin
+    /// consumir nada si la forma no aplica, para que el llamador siga probando.
+    fn try_build_nested_field_assign(
+        &mut self,
+        dot: &DotCallExpression,
+        is_compound: bool,
+    ) -> Option<Statement> {
+        if dot.has_parens || !dot.arguments.is_empty() { return None; }
+        if !is_writable_chain(&dot.object) { return None; }
+        // Un solo salto sobre una variable ya lo cubre FieldAssign.
+        if matches!(*dot.object, Expression::Identifier(_)) { return None; }
+
+        let object = (*dot.object).clone();
+        let field = dot.method.clone();
+        let line = dot.line;
+        let column = dot.column;
+        let op_str = if is_compound {
+            Some(Self::compound_op(&self.peek_token.token_type).to_string())
+        } else { None };
+        self.next_token(); // '=' or compound token
+        self.next_token(); // first token of rhs
+        let rhs = self.parse_expression(Precedence::Lowest)?;
+        let value = if let Some(op) = op_str {
+            Expression::Infix(InfixExpression {
+                left: Box::new(Expression::DotCall(DotCallExpression {
+                    object: Box::new(object.clone()),
+                    method: field.clone(),
+                    arguments: vec![],
+                    has_parens: false,
+                    is_optional: false,
+                    line, column,
+                })),
+                operator: op,
+                right: Box::new(rhs),
+                line, column,
+            })
+        } else { rhs };
+        if self.peek_token.token_type == TokenType::Semicolon { self.next_token(); }
+        Some(Statement::NestedFieldAssign(NestedFieldAssignStatement { object, field, value }))
     }
 
     /// Desugar `arr[i] += rhs` → `arr[i] = arr[i] + rhs`

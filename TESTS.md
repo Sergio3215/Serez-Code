@@ -10,7 +10,7 @@
 .\run_tests.ps1 -generate          # regenerate .expected (after language changes)
 ```
 
-**Result:** 430 tests · 0 failures
+**Result:** 432 tests · 0 failures
 
 The sections below catalogue a selection of the suite, not every file in
 `tests/`. `run_tests.ps1` is the authority on what exists and what passes.
@@ -654,7 +654,6 @@ If no error is produced, the test **fails** (the error condition was not detecte
 | File | Error condition it checks |
 |------|--------------------------|
 | `err_arity.sz` | Function called with fewer arguments than declared |
-| `err_bang_nonbool.sz` | `!` applied to integer (not boolean) |
 | `err_bool_plus_int.sz` | `true + 1` — adding boolean and integer |
 | `err_bounds.sz` | Array access out of bounds |
 | `err_call_undefined.sz` | Calling a function that does not exist |
@@ -1082,7 +1081,8 @@ Exhaustive unit tests of all added features: `const`, `enum`, labeled loops, `ab
 | Try/Catch/Throw/Finally | 33_try_catch | unit_try_catch (12) + unit_try_catch_edge (10) | — | 32 cases |
 | Switch | 32_switch | unit_switch (8) + unit_switch_edge (9) | — | 23 cases |
 | Compound assign | 31_compound_assign | unit_compound_assign (11) + unit_compound_assign_edge (12) | — | 34 cases |
-| Operators | 14_arch_features, 18_error_cases | unit_operators (15) | err_bang_nonbool | 20 cases |
+| Operators | 14_arch_features, 18_error_cases | unit_operators (15) + unit_logical_operators (19) | — | 34 cases |
+| Nested writeback / assignment | — | unit_nested_receiver_writeback (12) + unit_nested_assignment (14) | — | 26 cases |
 | Regressions | 29_bug_regression | — | — | ~25 cases |
 | Edge cases | 13_edge_cases, 15_arch_stress, 20_more_edge_cases, 23_boundary_cases, 28_final_checks | — | — | ~40 cases |
 | ForEach / Ternary / ++-- | — | unit_foreach_ternary_incr (22) + unit_foreach_edge (18) + unit_forin_string (10) | err_foreach_nonarray, err_foreach_dict | 50 cases |

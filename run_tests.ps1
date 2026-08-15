@@ -181,6 +181,13 @@
 #                          break/continue, nested, return-inside, vs while equivalence
 #   unit_lexer_edge        Lexer/parser edge cases: ++ --, hex/binary literals, escape seqs,
 #                          string interpolation, spread (...), arrow =>, keyword-as-method
+#   unit_logical_operators && y || devuelven un OPERANDO; la regla única de falsy
+#                          (incluye colecciones vacías); corto circuito; el prefijo !
+#   unit_nested_receiver_writeback
+#                          Un método PROPIO sobre un receptor anidado (a[i].m(),
+#                          o.campo.m(), this.celdas[i].m()) persiste sus mutaciones
+#   unit_nested_assignment a.b.c = x y a[i][j] = x; setter en el medio del camino;
+#                          escribir sobre un temporal sigue siendo error
 #   unit_optional_chain    Optional chaining (?.) with Node/Container classes: null vs non-null,
 #                          chained ?., with ??, in conditionals, describe method
 #   unit_power_op          Power operator (**): int**int, negative exponent→decimal,
@@ -218,7 +225,6 @@
 # ── Error tests (tests/err_*.sz) ──────────────────────────────────────────────
 #
 #   err_arity              Llamar función con número incorrecto de argumentos
-#   err_bang_nonbool       Operador ! sobre valor no booleano
 #   err_bool_plus_int      Suma bool + int (type mismatch en operador)
 #   err_bounds             Acceso a array fuera de rango (índice negativo o >= length)
 #   err_call_undefined     Llamar identificador no declarado como función

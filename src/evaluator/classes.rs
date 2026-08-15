@@ -161,17 +161,33 @@ impl super::Evaluator {
 
             self.constructing_class = old_class;
 
-            // Extract instance state before popping constructor scope
-            let instance_owned = self.extract(instance_ref);
+            // El objeto vivo no siempre es `instance_ref`: si el cuerpo creó una
+            // closure que captura `this`, `capture_lambda_env` lo PROMOVIÓ a la
+            // arena global y rebindeó el nombre. Hay que leer el binding, no la
+            // variable de Rust, o se devuelve la copia vieja.
+            let live_ref = self.scopes.lookup("this").unwrap_or(instance_ref);
             let throw_owned = ctor_throw.map(|r| self.extract(r));
             self.scopes.pop();
 
             if body_error { return EvalResult::Error; }
             if let Some(owned) = throw_owned { return EvalResult::Throw(self.plant(owned)); }
 
-            // Re-plant instance in outer context with updated fields
-            let final_ref = self.plant(instance_owned);
-            EvalResult::Value(final_ref)
+            // Se devuelve el slot que el constructor usó, NO una copia suya.
+            //
+            // Antes acá había un extract + plant, y ésa era la razón de que una
+            // closure creada en el constructor no funcionara: capturaba el
+            // `this` de la construcción y el `new` devolvía OTRO slot, así que
+            // sus escrituras iban a un objeto que ya nadie leía. Registrar
+            // efectos o callbacks en el constructor —lo natural viniendo de
+            // React— quedaba mudo. Creada en un método normal andaba, porque
+            // ahí no hay re-plant de por medio.
+            //
+            // La copia tampoco hacía falta para la vida del valor: `instance_ref`
+            // se aloca ANTES del push del constructor, así que su pop no lo
+            // toca, y el plant que había después alocaba a la misma profundidad.
+            // De paso se ahorra una copia profunda de la instancia por cada
+            // `new`.
+            EvalResult::Value(live_ref)
         } else {
             if !arg_vals.is_empty() {
                 eprintln!("❌ ERROR: Class '{}' has no constructor but received {} arguments",

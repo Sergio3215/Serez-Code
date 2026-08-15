@@ -878,9 +878,41 @@ impl super::Evaluator {
                 // out of the slot.
                 if let Some(ObjectData::Instance { class_name, .. }) = self.resolve(obj_ref) {
                     let class_name = class_name.clone();
+
+                    // Un método PROPIO sobre un receptor anidado (`a[i].m()`,
+                    // `o.campo.m()`, `this.celdas[i].m()`) mutaba una copia y la
+                    // tiraba: la lectura del elemento planta un valor nuevo, y
+                    // hasta acá sólo los mutadores built-in de una lista fija
+                    // tenían writeback. Es lo que rompía useEffect en serez-ui
+                    // (`this.effects[i].run()` no persistía `ran`/`cleanup`).
+                    //
+                    // El writeback copia el receptor de vuelta a su contenedor,
+                    // así que se paga sólo si hace falta. Dos condiciones, en
+                    // este orden porque la primera es sintáctica y gratis:
+                    //   1. el receptor es una ruta anidada — una variable suelta
+                    //      ya muta su propio slot y no necesita nada;
+                    //   2. el método puede escribir en `this` (análisis estático
+                    //      cacheado por clase+método, ver lvalue.rs).
+                    let nested_receiver = matches!(
+                        dot_call.object.as_ref(),
+                        Expression::Index(_) | Expression::DotCall(_)
+                    );
+                    let mut self_mut_path = None;
+                    if nested_receiver && (dot_call.has_parens || !dot_call.arguments.is_empty()) {
+                        if let Some(m) = self.find_method(&class_name, &dot_call.method) {
+                            if self.method_mutates_self(&class_name, &m) {
+                                self_mut_path = self.resolve_lvalue_path(dot_call.object.as_ref());
+                            }
+                        }
+                    }
+
                     let result = self.eval_instance_dot(obj_ref, class_name, dot_call);
                     if let Some((inner_obj_expr, field_name)) = writeback_ctx {
                         self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+                    }
+                    if let Some((root, steps)) = self_mut_path {
+                        let updated = self.extract(obj_ref);
+                        self.store_path(root, &steps, updated);
                     }
                     return result;
                 }

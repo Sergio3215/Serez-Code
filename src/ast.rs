@@ -22,6 +22,7 @@ pub enum Statement {
     ClassDeclaration(ClassDeclaration),           // class / public class ...
     InterfaceDeclaration(InterfaceDeclaration),   // interface ...
     FieldAssign(FieldAssignStatement),            // obj.field = expr  /  this.field = expr
+    NestedFieldAssign(NestedFieldAssignStatement),// a.b.c = expr — más de un salto
     Break,                                        // break; (or break label;)
     Continue,                                     // continue; (or continue label;)
     BreakLabel(String),                           // break outer;
@@ -233,6 +234,18 @@ pub struct ClassMethod {
 #[derive(Debug, Clone)]
 pub struct FieldAssignStatement {
     pub object: String,  // "this" or a variable name
+    pub field: String,
+    pub value: Expression,
+}
+
+/// `a.b.c = expr` — el caso de MÁS DE UN salto, que `FieldAssignStatement` no
+/// puede representar porque su `object` es un nombre suelto. Se mantiene aparte
+/// en vez de generalizar aquél: `obj.campo = v` es el camino masivo y no tiene
+/// por qué pagar la resolución de una ruta.
+#[derive(Debug, Clone)]
+pub struct NestedFieldAssignStatement {
+    /// El receptor completo (`a.b` en `a.b.c = x`): una cadena de lecturas.
+    pub object: Expression,
     pub field: String,
     pub value: Expression,
 }

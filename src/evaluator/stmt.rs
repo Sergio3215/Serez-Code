@@ -19,14 +19,24 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
 
-                // Always allocate a fresh slot so the variable never aliases its
+                // Allocate a fresh slot so the variable never aliases its
                 // source (e.g. `let x = arr[0]` must not share the slot with arr[0],
                 // or a later `x = new_val` would silently mutate the array element).
                 // Cloning ObjectData::Tensor preserves the tid, so autodiff tracking
                 // works automatically via the stable tid in ad_tensor_ids.
-                let fresh_data = self.resolve(val_ref).unwrap().clone();
-                let new_ref = self.alloc(fresh_data);
-                let val_ref = new_ref;
+                //
+                // EXCEPCIÓN: `let x = new C(...)`. Un `new` produce un objeto
+                // RECIÉN hecho que nadie más puede estar mirando, así que copiarlo
+                // no protege de ningún aliasing — y sí rompe la identidad que una
+                // closure creada en el constructor capturó de `this`, que apunta al
+                // slot original. Con la copia, `x` y la closure quedaban en objetos
+                // distintos y las escrituras de la closure no se veían.
+                let val_ref = if matches!(let_stmt.value, Expression::New(_)) {
+                    val_ref
+                } else {
+                    let fresh_data = self.resolve(val_ref).unwrap().clone();
+                    self.alloc(fresh_data)
+                };
 
                 if self.scopes.is_empty() {
                     self.global_bindings.insert(let_stmt.name.clone(), val_ref);
@@ -358,18 +368,19 @@ impl super::Evaluator {
                     _ => None,
                 };
 
-                // Only assignments to a variable (`a[i] = x`) or an object field
-                // (`obj.field[i] = x`) persist, because reading anything else yields a
-                // COPY (value semantics). A nested/temporary target such as `m[i][j] = x`
-                // (where `m[i]` is a copy) or `getArr()[i] = x` would silently do nothing,
-                // so we reject it loudly instead of losing the write. To mutate a nested
-                // element, rebuild and reassign the whole element: `m[i] = updatedInner`.
+                // Reading anything that is not a variable or an object field yields a
+                // COPY (value semantics), so the write has to travel back to where the
+                // copy came from. Los dos casos de siempre — `a[i] = x` y
+                // `obj.campo[i] = x` — siguen por el camino directo de abajo, que muta
+                // el slot en su lugar.
+                //
+                // Un destino ANIDADO (`m[i][j] = x`, `this.filas[i].celdas[j] = x`) ya no
+                // se rechaza: se resuelve como una ruta escribible desde la variable
+                // raíz. Lo que sigue siendo un error es un TEMPORAL (`getArr()[i] = x`),
+                // donde no hay ningún lugar al que volver.
                 let is_persistable = matches!(&target, Expression::Identifier(_)) || writeback.is_some();
                 if !is_persistable {
-                    return self.rt_err_kind(
-                        "InvalidAssignTarget",
-                        "Cannot assign to an index of a temporary value (e.g. `m[i][j] = x`, where `m[i]` is a copy): only variables and object fields are writable. Rebuild and reassign the whole element instead, e.g. `m[i] = updatedInner`.",
-                    );
+                    return self.nested_index_assign(&target, &index, &value);
                 }
 
                 // Resolve the target array
@@ -616,34 +627,160 @@ impl super::Evaluator {
                     }
                 };
 
-                if let Some(ObjectData::Instance { class_name, mut fields }) = self.resolve(obj_ref).cloned() {
-                    // Check for setter first
-                    if let Some(setter) = self.find_setter(&class_name, &stmt.field) {
-                        return self.invoke_method(obj_ref, &class_name.clone(), &setter, vec![new_val], 0, 0);
+                self.assign_field_on(obj_ref, &stmt.field, new_val, &stmt.object)
+            }
+
+            // a.b.c = valor. El receptor es una cadena de lecturas, así que
+            // leerlo planta una COPIA: se le asigna el campo con los mismos
+            // chequeos de siempre (setter, getter de sólo lectura) y después se
+            // la devuelve a su lugar por la ruta. Antes esto era un error de
+            // parseo y había que rearmar el objeto intermedio a mano.
+            Statement::NestedFieldAssign(stmt) => {
+                let val_ref = match self.eval_expression(&stmt.value) {
+                    EvalResult::Value(r) => r,
+                    other => return other,
+                };
+                let new_val = self.extract(val_ref);
+
+                let obj_ref = match self.eval_expression(&stmt.object) {
+                    EvalResult::Value(r) => r,
+                    other => return other,
+                };
+
+                let res = self.assign_field_on(obj_ref, &stmt.field, new_val, "the target");
+                if matches!(res, EvalResult::Error) { return res; }
+
+                match self.resolve_lvalue_path(&stmt.object) {
+                    Some((root, steps)) => {
+                        let updated = self.extract(obj_ref);
+                        if !self.store_path(root, &steps, updated) {
+                            return self.rt_err_kind(
+                                "InvalidAssignTarget",
+                                format!("Cannot write '{}': the path to it does not exist (a missing field, an index out of bounds or an absent key).", stmt.field),
+                            );
+                        }
+                        res
                     }
-                    // Getter exists but no setter → read-only property, cannot assign
-                    if self.find_getter(&class_name, &stmt.field).is_some() {
-                        eprintln!(
-                            "❌ ERROR: '{}' is a getter-only property of '{}' (no setter defined)",
-                            stmt.field, class_name
-                        );
-                        return EvalResult::Error;
-                    }
-                    if let Some(f) = fields.iter_mut().find(|(n, _)| n == &stmt.field) {
-                        f.1 = new_val;
-                    } else {
-                        fields.push((stmt.field.clone(), new_val));
-                    }
-                    match obj_ref.region {
-                        RegionId::Global => self.global_arena.update(obj_ref.index, ObjectData::Instance { class_name, fields }),
-                        RegionId::Scoped => self.scopes.arena.update(obj_ref.index, ObjectData::Instance { class_name, fields }),
-                    }
-                    EvalResult::Value(self.null_ref)
-                } else {
-                    eprintln!("❌ ERROR: '{}' is not a class or interface instance", stmt.object);
-                    EvalResult::Error
+                    None => self.rt_err_kind(
+                        "InvalidAssignTarget",
+                        "Cannot assign to a field of a temporary value: only variables, object fields and container elements are writable.",
+                    ),
                 }
             }
+        }
+    }
+
+    /// `m[i][j] = x`, `this.filas[i].celdas[j] = x` — el contenedor de destino no
+    /// es una variable ni un campo directo, así que leerlo da una copia. Se
+    /// resuelve la RUTA escribible hasta él y se escribe ahí, con los mismos
+    /// chequeos de índice y de tipo que el camino directo.
+    ///
+    /// Un temporal de verdad (`getArr()[i] = x`) sigue siendo un error: no hay
+    /// ruta que resolver y la escritura no se vería desde ningún lado.
+    fn nested_index_assign(
+        &mut self,
+        target: &Expression,
+        index: &Expression,
+        value: &Expression,
+    ) -> EvalResult {
+        let Some((root, steps)) = self.resolve_lvalue_path(target) else {
+            return self.rt_err_kind(
+                "InvalidAssignTarget",
+                "Cannot assign to an index of a temporary value (e.g. `getArr()[i] = x`): only variables, object fields and the elements reachable from them are writable.",
+            );
+        };
+
+        let idx_ref = match self.eval_expression(index) {
+            EvalResult::Value(v) => v,
+            other => return other,
+        };
+        let val_ref = match self.eval_expression(value) {
+            EvalResult::Value(v) => v,
+            other => return other,
+        };
+
+        let idx_data = match self.resolve(idx_ref).cloned() {
+            Some(ObjectData::DateField { value, .. }) => ObjectData::Integer(value),
+            Some(other) => other,
+            None => return EvalResult::Error,
+        };
+
+        let Some(container) = self.peek_path_container(root, &steps) else {
+            return self.rt_err_kind(
+                "InvalidAssignTarget",
+                "Target is not an array or dict, or the path to it does not exist (a missing field, an index out of bounds or an absent key).",
+            );
+        };
+
+        let key = match container {
+            super::lvalue::PathContainer::Array(element_type, len) => {
+                let ObjectData::Integer(i) = idx_data else {
+                    return self.rt_err_kind("TypeError", "Array index must be an integer");
+                };
+                if i < 0 || i as usize >= len {
+                    return self.rt_err_kind("IndexOutOfBounds", "Index out of bounds");
+                }
+                if let Some(ref et) = element_type {
+                    let val_data = self.resolve(val_ref).unwrap();
+                    if !type_matches(et, val_data) {
+                        let (tn, et) = (val_data.type_name().to_string(), et.clone());
+                        return self.rt_err_kind("TypeError", format!(
+                            "Cannot assign '{}' to [{}] array element", tn, et));
+                    }
+                }
+                OwnedValue::Integer(i)
+            }
+            super::lvalue::PathContainer::Dict(key_type, value_type) => {
+                let val_data = self.resolve(val_ref).unwrap();
+                if !type_matches(&value_type, val_data) {
+                    let tn = val_data.type_name().to_string();
+                    return self.rt_err_kind("TypeError", format!(
+                        "Cannot assign '{}' to <{},{}> dict value", tn, key_type, value_type));
+                }
+                OwnedValue::Str(obj_data_to_key_str(&idx_data))
+            }
+        };
+
+        let owned = self.extract(val_ref);
+        if !self.store_index_at_path(root, &steps, &key, owned) {
+            return self.rt_err_kind(
+                "InvalidAssignTarget",
+                "The write could not reach its target (the path changed while it was being resolved).",
+            );
+        }
+        EvalResult::Value(self.null_ref)
+    }
+
+    /// Asigna `new_val` al campo `field` de la instancia en `obj_ref`, con los
+    /// chequeos de setter y de propiedad de sólo lectura. `what` sólo aparece en
+    /// el mensaje cuando el receptor no es una instancia.
+    fn assign_field_on(&mut self, obj_ref: ObjectRef, field: &str, new_val: OwnedValue, what: &str) -> EvalResult {
+        if let Some(ObjectData::Instance { class_name, mut fields }) = self.resolve(obj_ref).cloned() {
+            // Check for setter first
+            if let Some(setter) = self.find_setter(&class_name, field) {
+                return self.invoke_method(obj_ref, &class_name.clone(), &setter, vec![new_val], 0, 0);
+            }
+            // Getter exists but no setter → read-only property, cannot assign
+            if self.find_getter(&class_name, field).is_some() {
+                eprintln!(
+                    "❌ ERROR: '{}' is a getter-only property of '{}' (no setter defined)",
+                    field, class_name
+                );
+                return EvalResult::Error;
+            }
+            if let Some(f) = fields.iter_mut().find(|(n, _)| n == field) {
+                f.1 = new_val;
+            } else {
+                fields.push((field.to_string(), new_val));
+            }
+            match obj_ref.region {
+                RegionId::Global => self.global_arena.update(obj_ref.index, ObjectData::Instance { class_name, fields }),
+                RegionId::Scoped => self.scopes.arena.update(obj_ref.index, ObjectData::Instance { class_name, fields }),
+            }
+            EvalResult::Value(self.null_ref)
+        } else {
+            eprintln!("❌ ERROR: '{}' is not a class or interface instance", what);
+            EvalResult::Error
         }
     }
 

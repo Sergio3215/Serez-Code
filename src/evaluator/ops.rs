@@ -50,20 +50,26 @@ impl super::Evaluator {
                     EvalResult::Error
                 }
             },
+            // `!` niega la regla ÚNICA de truthiness (`is_truthy`), la misma que
+            // usan `&&`, `||`, el ternario y las guardas de `match`. Antes exigía
+            // un booleano, lo que dejaba el idiom partido por la mitad: desde 9.14
+            // `items && <Fila/>` compila, pero `!items` moría con
+            // "Prefix '!' only applies to booleans" y había que escribir
+            // `items.length() == 0`. Con booleanos el resultado es idéntico al
+            // anterior, así que sólo se agregan casos que antes eran un error.
+            //
+            // Una instancia que define `op_not` sigue ganando: la sobrecarga es
+            // una decisión explícita del autor de la clase y tiene prioridad sobre
+            // la regla general (donde una instancia es truthy → `!inst` es false).
             "!" => match right {
                 ObjectData::Boolean(b) => EvalResult::Value(self.bool_ref(!b)),
-                ObjectData::Instance { ref class_name, .. } => {
+                ObjectData::Instance { ref class_name, .. } if self.find_method(class_name, "op_not").is_some() => {
                     let cn = class_name.clone();
-                    if self.find_method(&cn, "op_not").is_some() {
-                        self.call_op_method(right_ref, &cn, "op_not", vec![], 0, 0)
-                    } else {
-                        eprintln!("❌ ERROR: Prefix '!' only applies to booleans (define op_not to enable it on instances)");
-                        EvalResult::Error
-                    }
+                    self.call_op_method(right_ref, &cn, "op_not", vec![], 0, 0)
                 }
-                _ => {
-                    eprintln!("❌ ERROR: Prefix '!' only applies to booleans");
-                    EvalResult::Error
+                ref other => {
+                    let t = self.is_truthy(other);
+                    EvalResult::Value(self.bool_ref(!t))
                 }
             },
             "~" => match right {

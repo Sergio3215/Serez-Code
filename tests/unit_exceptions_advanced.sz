@@ -263,12 +263,28 @@ test("division by zero error has DivisionByZero kind", () => {
     assert(kind == "DivisionByZero", "division reports its kind");
 });
 
-test("nested index assign is a loud catchable error (not a silent no-op)", () => {
+// `m[i][j] = x` ya NO es un error: se resuelve como una ruta escribible desde
+// la variable raíz. Lo que sigue siendo un error, y es lo que este test cuida,
+// es escribir sobre un TEMPORAL — ahí no hay a dónde volver.
+test("nested index assign writes through to the inner element", () => {
+    let m = [[1, 2], [3, 4]];
+    m[0][1] = 99;
+    assert(m[0][1] == 99, "m[i][j]=x persists");
+    assert(m[1][0] == 3, "the other row is untouched");
+});
+
+test("assigning into a temporary is still a loud catchable error", () => {
+    fn any dame() { return [1, 2]; }
+    let kind = "";
+    try { dame()[0] = 99; } catch (e) { kind = e.kind; }
+    assert(kind == "InvalidAssignTarget", "getArr()[i]=x throws InvalidAssignTarget");
+});
+
+test("nested index assign still checks bounds", () => {
     let m = [[1, 2], [3, 4]];
     let kind = "";
-    try { m[0][1] = 99; } catch (e) { kind = e.kind; }
-    assert(kind == "InvalidAssignTarget", "m[i][j]=x throws InvalidAssignTarget");
-    assert(m[0][1] == 2, "original value not corrupted");
+    try { m[0][9] = 99; } catch (e) { kind = e.kind; }
+    assert(kind == "IndexOutOfBounds", "the inner index is bounds-checked");
 });
 
 test("string concatenation with a caught Error uses its message", () => {

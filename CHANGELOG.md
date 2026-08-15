@@ -5,6 +5,133 @@ Order: most recent to oldest.
 
 ---
 
+## [9.16.0] — 2026-08-15
+
+Four gaps that all showed up writing UI with serez-ui, fixed together because
+three of them are the same thing seen from different angles: a value read out of
+a container is a **copy**, and the language only knew how to write that copy back
+in a handful of hardcoded shapes.
+
+### A method of your own on a nested receiver kept its mutations
+
+```
+lista.push(new Celda())
+lista[0].correr()      // mutated a copy
+out lista[0].veces     // 0 — nothing happened
+```
+
+Reading `lista[0]`, `o.campo` or `this.celdas[i]` plants a copy, and until now
+only the built-in mutators (`push`, `add`, `Add`, `clear`…, a fixed list of
+names in `expr.rs`) were written back — and only one level deep. A method you
+wrote yourself mutated the copy and dropped it.
+
+This is what broke `useEffect` in serez-ui: `Window.runEffects()` calls
+`this.effects[i].run()`, so `ran`, `prevDeps` and `cleanup` never persisted —
+`deps []` re-ran on **every** update and the cleanup was never stored, so
+`unmount()` cleaned nothing. **No library change was needed**; the two apps that
+had the broken behaviour pinned in `apps40_test.sz` now assert the real thing.
+
+- It was never just "an array element": `b.campo.metodo()` lost the mutation the
+  same way. Any receiver that is not a plain variable.
+- New `src/evaluator/lvalue.rs`: `resolve_lvalue_path` walks the receiver into a
+  root variable plus a chain of `.field` / `[key]` hops, and `store_path` writes
+  through it with a single `get_mut` on the root slot — no rebuilding of the
+  intermediate containers.
+- The writeback costs a copy back into the container, so it is gated twice, in
+  this order: the receiver has to be a nested path (a syntactic check, free),
+  and the method has to be able to write to `this` (a static walk of its body,
+  cached per class+method). A read-only method pays nothing.
+- The static analysis is deliberately coarse — any call rooted at `this` counts
+  as a write. Refining it would need a whitelist of every read-only built-in,
+  and being wrong there loses a mutation, which is the bug being closed.
+
+### `a.b.c = x` and `a[i][j] = x` are writable
+
+The first was a **parse error** (`Unexpected token '='`), the second a runtime
+one (`Cannot assign to an index of a temporary value`). The workaround was to
+rebuild and reassign the whole intermediate value.
+
+```
+o.inn.v = 9                     // was: parse error
+this.filas[i][j] = 1            // was: InvalidAssignTarget
+d["a"]["nueva"] = 5             // inserts, like the direct path does
+t.o.inn.v += 8                  // compound forms too
+```
+
+Both now resolve the same writable path as the writeback above. New AST node
+`NestedFieldAssign` rather than generalising `FieldAssignStatement`, whose
+`object` is a bare name: `obj.campo = v` is the massive case and has no reason
+to pay for path resolution.
+
+- A setter halfway down the path still runs — the assignment goes through the
+  same checks as the direct path (setter, getter-only property, element type,
+  bounds), only the destination changed.
+- Writing into a real **temporary** (`get()[i] = x`) is still a loud
+  `InvalidAssignTarget`: there is nowhere to write back to.
+- The AOT/LLVM backend (behind the `llvm` feature, unused) does not lower the
+  new node — its HIR only has single-hop lvalues. Noted alongside the `&&`/`||`
+  divergence from 9.14.
+
+### A closure created in the constructor captured another `this`
+
+```
+class W { public W() { this.n = 0; this.f = () => { this.n = this.n + 1 } } }
+let w = new W(); let h = w.f; h()
+out w.n     // 0
+```
+
+The same closure written in a normal method worked. Registering effects or
+callbacks in the constructor — the natural thing coming from React — was silently
+mute.
+
+Two copies stood between the closure and the finished object:
+
+1. `eval_new_class` ended with `extract` + `plant`, returning a **different slot**
+   than the one the constructor body used. Now it returns the live `this` slot
+   (read from the binding, since a closure capture may have promoted it to the
+   global arena). That also removes a deep copy of the instance on every `new`.
+2. `let x = new C(...)` then copied it again. `Statement::Let` copies so a
+   variable never aliases its source (`let x = arr[0]`), but a `new` produces an
+   object nobody else can be holding, so the copy protected nothing and broke the
+   identity. That single case now binds directly.
+
+Value semantics are unchanged everywhere else, and that is the boundary: a
+closure keeps a **cell** to the object it was created in, so if that object is
+later copied into an array, a field or a return value, the copy is a different
+object and the closure still points at the original. Construct-then-use, including
+passing the variable to a function, now behaves.
+
+### `!` follows the one truthiness rule
+
+`&&`, `||`, the ternary and `match` guards moved to a single falsy rule in 9.14
+(`false` · `null` · `0` · `0.0` · `""` · **empty** array/dict/set) but `!` was
+left behind, so the idiom was split down the middle: `items && <Fila/>` compiled
+and `!items` died with `Prefix '!' only applies to booleans`. You had to write
+`items.length() == 0`.
+
+`!` now negates `is_truthy` and always yields a boolean. With booleans the result
+is identical to before, so this only turns former errors into values. A class
+that defines `op_not` still wins — an explicit overload beats the general rule.
+
+- `tests/err_bang_nonbool.sz` was removed: the condition it pinned is no longer
+  an error. Its coverage moved to `unit_logical_operators.sz`, which also
+  documents the rule from both sides.
+- Still inconsistent, and left alone on purpose: `0m` (exact decimal) is truthy,
+  while `0` and `0.0` are falsy. `is_truthy` has no `Dec` arm. Changing it would
+  move `&&`/`||`/ternary/`match` too, so it is a call to make, not a slip to fix
+  in passing.
+
+### Tests
+
+432, 0 failures. New: `unit_nested_receiver_writeback` (12),
+`unit_nested_assignment` (14). `unit_logical_operators` grew to 19.
+`unit_exceptions_advanced` now asserts that `m[i][j] = x` writes through, and
+that a temporary and an out-of-bounds inner index still throw.
+
+Also found and **not** fixed: the test runner reports `[PASS]` for a unit test
+whose file fails to parse (PASS is "no `[FAIL]` line in stdout", and a parse
+error produces neither).
+
 ## [9.15.0] — 2026-08-10
 
 ### A module with `export` erased the classes it imported itself

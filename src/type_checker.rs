@@ -157,6 +157,7 @@ impl<'a> TypeChecker<'a> {
             Statement::ClassDeclaration(_) => {}
             Statement::InterfaceDeclaration(_) => {}
             Statement::FieldAssign(_) => {}
+            Statement::NestedFieldAssign(_) => {}
             Statement::Break => {}
             Statement::Continue => {}
             Statement::BreakLabel(_) => {}

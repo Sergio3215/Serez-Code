@@ -1,0 +1,149 @@
+// unit_nested_assignment.sz — asignar a un destino ANIDADO.
+//
+// Dos formas que antes no se podían escribir:
+//
+//     o.inn.v = 9          → error de PARSEO ("Unexpected token '='")
+//     this.items[i][2] = 1 → error en runtime ("Cannot assign to an index of a
+//                            temporary value")
+//
+// Había que rearmar y reasignar el elemento entero:
+//     let fila = this.items[i]; this.items[i] = [fila[0], fila[1], true]
+//
+// Ahora las dos resuelven la RUTA escribible desde la variable raíz. Lo que
+// sigue siendo un error es escribir sobre un TEMPORAL: el resultado de una
+// llamada no tiene a dónde volver.
+
+class Inner { public Inner() { this.v = 1 } }
+class Outer { public Outer() { this.inn = new Inner() } }
+class Top   { public Top()   { this.o = new Outer() } }
+
+// ── a.b.c = x ────────────────────────────────────────────────────────────────
+
+test("dos saltos", () => {
+    let o = new Outer();
+    o.inn.v = 9;
+    assert(o.inn.v == 9, "o.inn.v");
+});
+
+test("tres saltos", () => {
+    let t = new Top();
+    t.o.inn.v = 42;
+    assert(t.o.inn.v == 42, "t.o.inn.v");
+});
+
+test("compuesto sobre un destino anidado", () => {
+    let t = new Top();
+    t.o.inn.v = 10;
+    t.o.inn.v += 5;
+    assert(t.o.inn.v == 15, "+=");
+    t.o.inn.v -= 3;
+    assert(t.o.inn.v == 12, "-=");
+});
+
+test("campo de un elemento de array", () => {
+    let objs = [new Inner(), new Inner()];
+    objs[1].v = 5;
+    assert(objs[1].v == 5, "objs[1].v");
+    assert(objs[0].v == 1, "el hermano no se toca");
+});
+
+test("desde this", () => {
+    class Duenio {
+        public Duenio() { this.hijo = new Inner() }
+        public void poner(int x) { this.hijo.v = x }
+    }
+    let d = new Duenio();
+    d.poner(77);
+    assert(d.hijo.v == 77, "this.hijo.v = x adentro de un metodo");
+});
+
+test("un setter en el medio del camino se sigue respetando", () => {
+    class ConSetter {
+        public ConSetter() { this.__n = 0 }
+        public set n(int x) { this.__n = x * 2 }
+        public get int n() { return this.__n }
+    }
+    class Caja { public Caja() { this.c = new ConSetter() } }
+    let b = new Caja();
+    b.c.n = 21;
+    assert(b.c.n == 42, "el setter corrio (duplico), no se escribio el campo crudo");
+});
+
+// ── a[i][j] = x ──────────────────────────────────────────────────────────────
+
+test("matriz", () => {
+    let m = [[1, 2, 3], [4, 5, 6]];
+    m[0][2] = 99;
+    assert(m[0][2] == 99, "m[0][2]");
+    assert(m[0][0] == 1, "el resto de la fila queda");
+    assert(m[1][2] == 6, "la otra fila queda");
+});
+
+test("array adentro de un dict", () => {
+    let d <string, any> = ();
+    d["a"] = [10, 20];
+    d["a"][1] = 77;
+    assert(d["a"][1] == 77, "d[a][1]");
+});
+
+test("dict adentro de un dict, insertando una clave nueva", () => {
+    let d <string, any> = ();
+    let inner <string, int> = ();
+    d["x"] = inner;
+    d["x"]["nueva"] = 5;
+    assert(d["x"]["nueva"] == 5, "la clave nueva entro");
+});
+
+test("campo -> array -> indice, adentro de un metodo", () => {
+    class Grid {
+        public Grid() { this.filas = [[0, 0], [0, 0]] }
+        public void marcar(int i, int j) { this.filas[i][j] = 1 }
+    }
+    let g = new Grid();
+    g.marcar(1, 0);
+    g.marcar(0, 1);
+    assert(g.filas[1][0] == 1, "fila 1");
+    assert(g.filas[0][1] == 1, "fila 0");
+    assert(g.filas[0][0] == 0, "lo no marcado sigue en 0");
+});
+
+test("tres niveles de indice", () => {
+    let cubo = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]];
+    cubo[1][0][1] = 60;
+    assert(cubo[1][0][1] == 60, "cubo[1][0][1]");
+    assert(cubo[1][0][0] == 5, "el vecino queda");
+});
+
+// ── Lo que sigue estando prohibido ───────────────────────────────────────────
+
+test("escribir sobre un temporal es un error", () => {
+    fn any dame() { return [1, 2]; }
+    let kind = "";
+    try { dame()[0] = 99; } catch (e) { kind = e.kind; }
+    assert(kind == "InvalidAssignTarget", "getArr()[i] = x");
+});
+
+test("los chequeos del camino directo siguen valiendo", () => {
+    let m = [[1, 2], [3, 4]];
+    let k1 = "";
+    try { m[0][9] = 1; } catch (e) { k1 = e.kind; }
+    assert(k1 == "IndexOutOfBounds", "indice interno fuera de rango");
+
+    let tipado <string, int> = ();
+    let d <string, any> = ();
+    d["t"] = tipado;
+    let k2 = "";
+    try { d["t"]["x"] = "no soy int"; } catch (e) { k2 = e.kind; }
+    assert(k2 == "TypeError", "el tipo del dict interno se respeta");
+});
+
+test("un salto solo sigue andando igual que siempre", () => {
+    let o = new Outer();
+    o.inn = new Inner();
+    assert(o.inn.v == 1, "obj.campo = x");
+    let a = [1, 2, 3];
+    a[1] = 9;
+    assert(a[1] == 9, "a[i] = x");
+});
+
+summary();

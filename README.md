@@ -442,29 +442,58 @@ out 5 != 3;    // → true
 
 #### Logical
 
+`&&` and `||` **return one of their operands**, not a boolean, and
+**short-circuit**: `&&` stops at the first falsy value, `||` at the first truthy
+one.
+
 ```serez
-out !true;     // → false
-out !false;    // → true
+a && b   //  a if a is falsy, otherwise b
+a || b   //  a if a is truthy, otherwise b
 ```
-
-The `!` prefix applies only to booleans. Applying it to any other type is a runtime error.
-
-`&&` and `||` are infix logical operators. Both require boolean operands and use **short-circuit evaluation**: `&&` stops at the first `false`, `||` stops at the first `true`.
 
 ```serez
 out true && true;     // → true
 out true && false;    // → false
 out false && true;    // → false  (right side not evaluated)
 out false || true;    // → true
-out false || false;   // → false
 out true || false;    // → true   (right side not evaluated)
 
 // Combine with comparison operators:
 out (1 < 2) && (3 > 0);    // → true
 out (1 > 2) || (3 == 3);   // → true
+
+// Returning an operand is what makes these useful beyond conditions:
+let name = given || "anonymous";     // default value
+out items && render(items);          // only build the row if there is something
 ```
 
-Applying `&&` or `||` to non-boolean operands is a runtime error.
+##### One rule of truthiness
+
+These are the falsy values — everything else is truthy:
+
+`false` · `null` · `0` · `0.0` · `""` · an **empty** array, dict or set
+
+The same rule drives `&&`, `||`, the `!` prefix, the ternary, `match` guards and
+the `filter`/`some`/`every` callbacks.
+
+**Empty collections being falsy is a deliberate departure from JavaScript**,
+where `[]` is truthy and `items && render(items)` fires on an empty list — the
+classic bug whose usual workaround (`items.length && …`) prints a stray `0`.
+Here the simple form already means "if there is anything".
+
+`!` negates that same rule and always yields a boolean:
+
+```serez
+out !true;      // → false
+out !0;         // → true
+out !"";        // → true
+out ![];        // → true   (empty collection)
+out ![1, 2];    // → false
+out !!"text";   // → true   (double negation normalises to a boolean)
+```
+
+A class can override `!` for its instances by defining `op_not`; that overload
+takes precedence over the general rule.
 
 #### Power operator
 
@@ -1288,7 +1317,7 @@ try {
 | `IndexOutOfBounds` | Array/string access outside `[0, len-1]` |
 | `DivisionByZero` | `/` or `%` with zero on the right |
 | `TypeError` | Type mismatches, wrong argument counts/types, unknown methods |
-| `InvalidAssignTarget` | Index-assign into a nested/temporary target (`m[i][j] = x`) |
+| `InvalidAssignTarget` | Assign into a temporary — one not reachable from a variable (`get()[i] = x`) |
 | `Overflow` | Integer arithmetic outside the `i64` range |
 | `IOError` | `File.*` failures (missing file, permissions), `Terminal.*` I/O |
 | `JsonError` | `JSON.parse` on invalid JSON |
@@ -1473,19 +1502,26 @@ let a = [1, 2, 3];
 a[5] = 0;   // ❌ ERROR: Index out of bounds
 ```
 
-Only assignments to a **variable** (`a[i] = x`) or an **object field**
-(`obj.field[i] = x`) persist, because reading anything else yields a copy
-(value semantics). A **nested** target like `m[i][j] = x` — where `m[i]` is a
-copy — is rejected loudly with an `InvalidAssignTarget` error (never a silent
-no-op). To update a nested element, rebuild and reassign the whole inner value:
+**Nested** targets work: the write is routed down the path from the root
+variable, so `m[i][j] = x` and `obj.a.b = x` land where you wrote them.
 
 ```serez
 let m = [[1, 2], [3, 4]];
-// m[0][1] = 99;              // ❌ ERROR: InvalidAssignTarget (m[0] is a copy)
-let row = m[0];
-row[1] = 99;
-m[0] = row;                   // ✅ reassign the whole element
+m[0][1] = 99;
 out m[0][1];                  // → 99
+
+let grid = [[0, 0], [0, 0]];
+grid[1][0] = 1;               // through a field works too: this.rows[i][j] = 1
+```
+
+What is still rejected — loudly, with `InvalidAssignTarget`, never a silent
+no-op — is writing into a **temporary**: reading anything that is not reachable
+from a variable yields a copy (value semantics), and there is nowhere for the
+write to go back to.
+
+```serez
+fn any get() { return [1, 2]; }
+// get()[0] = 99;             // ❌ ERROR: InvalidAssignTarget (the result is a copy)
 ```
 
 #### Arrays from functions

@@ -1,0 +1,180 @@
+// unit_nested_receiver_writeback.sz — un método PROPIO sobre un receptor
+// anidado ahora persiste sus mutaciones.
+//
+// El intérprete tiene semántica de valor: leer `a[i]`, `o.campo` o
+// `this.celdas[i]` planta una COPIA. Los mutadores built-in (push, add, Add,
+// clear…) ya tenían writeback, pero sólo ellos y sólo a un nivel — un método
+// escrito por el usuario mutaba la copia y la tiraba:
+//
+//     lista.push(new Celda())
+//     lista[0].correr()      // mutaba una copia
+//     out lista[0].veces     // 0 — no pasó nada
+//
+// Es lo que rompía useEffect en serez-ui: `this.effects[i].run()` no guardaba
+// ni `ran` ni `cleanup`, así que `deps []` corría en cada update y el cleanup
+// no existía.
+
+class Celda {
+    public Celda() { this.veces = 0; this.marca = "" }
+    public void correr() { this.veces = this.veces + 1 }
+    public void marcar(string m) { this.marca = m }
+    public int leer() { return this.veces }
+}
+
+// ── Las tres formas de receptor anidado ──────────────────────────────────────
+
+test("elemento de array", () => {
+    let lista = [];
+    lista.push(new Celda());
+    lista[0].correr();
+    assert(lista[0].veces == 1, "una llamada");
+    lista[0].correr();
+    lista[0].correr();
+    assert(lista[0].veces == 3, "se acumulan");
+});
+
+test("campo de objeto", () => {
+    class Caja { public Caja() { this.c = new Celda() } }
+    let b = new Caja();
+    b.c.correr();
+    b.c.correr();
+    assert(b.c.veces == 2, "obj.campo.metodo()");
+});
+
+test("valor de dict", () => {
+    let d <string, any> = ();
+    d["k"] = new Celda();
+    d["k"].correr();
+    assert(d["k"].veces == 1, "dict[k].metodo()");
+});
+
+// ── Dos niveles: el caso exacto de serez-ui ──────────────────────────────────
+
+test("this.arreglo[i].metodo() persiste", () => {
+    class Panel {
+        public Panel() { this.celdas = [] }
+        public void agregar() { this.celdas.push(new Celda()) }
+        public void correrTodas() {
+            let i = 0;
+            while (i < this.celdas.length()) {
+                this.celdas[i].correr();
+                i = i + 1;
+            }
+        }
+    }
+    let p = new Panel();
+    p.agregar();
+    p.agregar();
+    p.correrTodas();
+    p.correrTodas();
+    assert(p.celdas[0].veces == 2, "primera celda acumula");
+    assert(p.celdas[1].veces == 2, "segunda celda acumula");
+});
+
+test("el patron de useEffect: correr una sola vez", () => {
+    // La celda decide sola si le toca correr, y para eso su propio estado
+    // tiene que sobrevivir entre llamadas. Es lo que `deps []` necesita.
+    class Efecto {
+        public Efecto() { this.corrio = false; this.arranques = 0 }
+        public void run() {
+            if (!this.corrio) {
+                this.arranques = this.arranques + 1;
+                this.corrio = true;
+            }
+        }
+    }
+    class Vista {
+        public Vista() { this.efectos = [] }
+        public void registrar() { this.efectos.push(new Efecto()) }
+        public void update() {
+            let i = 0;
+            while (i < this.efectos.length()) {
+                this.efectos[i].run();
+                i = i + 1;
+            }
+        }
+    }
+    let v = new Vista();
+    v.registrar();
+    v.update();
+    v.update();
+    v.update();
+    assert(v.efectos[0].arranques == 1, "arranco una sola vez en tres updates");
+});
+
+// ── Con argumentos, y con valor de retorno ───────────────────────────────────
+
+test("un metodo con argumentos tambien persiste", () => {
+    let lista = [new Celda()];
+    lista[0].marcar("hola");
+    assert(lista[0].marca == "hola", "el argumento llego y quedo");
+});
+
+test("un metodo que solo lee no altera nada", () => {
+    let lista = [new Celda()];
+    lista[0].correr();
+    assert(lista[0].leer() == 1, "devuelve el valor");
+    assert(lista[0].leer() == 1, "y leer dos veces no lo cambia");
+    assert(lista[0].veces == 1, "el campo sigue igual");
+});
+
+// ── Lo que NO tiene que persistir: un temporal sigue siendo un temporal ──────
+
+test("sobre el retorno de una llamada no hay writeback", () => {
+    class Fabrica {
+        public Fabrica() { this.guardada = new Celda() }
+        public any dame() { return this.guardada }
+    }
+    let f = new Fabrica();
+    // `f.dame()` devuelve una copia: mutarla no puede tocar a la guardada.
+    // No es un bug, es la semántica de valor — lo que se arregló es la RUTA
+    // escribible (variable → campo → índice), no los temporales.
+    f.dame().correr();
+    assert(f.guardada.veces == 0, "el temporal no se escribe de vuelta");
+});
+
+test("copiar a una variable local sigue copiando", () => {
+    let lista = [new Celda()];
+    let suelta = lista[0];
+    suelta.correr();
+    assert(suelta.veces == 1, "la copia local si muta");
+    assert(lista[0].veces == 0, "y el original no se entera");
+});
+
+// ── Que no se rompa lo que ya andaba ─────────────────────────────────────────
+
+test("los mutadores built-in siguen andando", () => {
+    class Bolsa {
+        public Bolsa() { this.items = [] }
+        public void meter(any x) { this.items.push(x) }
+    }
+    let b = new Bolsa();
+    b.meter(1);
+    b.meter(2);
+    assert(b.items.length() == 2, "push a traves de un campo");
+    b.items.push(3);
+    assert(b.items.length() == 3, "push directo sobre el campo");
+});
+
+test("un metodo sobre una variable suelta no cambio", () => {
+    let c = new Celda();
+    c.correr();
+    c.correr();
+    assert(c.veces == 2, "el caso de siempre");
+});
+
+test("herencia: el metodo heredado tambien escribe de vuelta", () => {
+    class Base {
+        public Base() { this.n = 0 }
+        public void subir() { this.n = this.n + 1 }
+    }
+    class Hija:Base {
+        public Hija() { super() }
+    }
+    let arr = [new Hija()];
+    arr[0].subir();
+    arr[0].subir();
+    assert(arr[0].n == 2, "metodo de la base sobre un elemento de array");
+});
+
+summary();
