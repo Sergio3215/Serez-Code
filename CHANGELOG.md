@@ -5,6 +5,47 @@ Order: most recent to oldest.
 
 ---
 
+## [9.15.0] — 2026-08-10
+
+### A module with `export` erased the classes it imported itself
+
+Composing a component out of components that live in **separate files** was
+impossible, and the symptom pointed nowhere:
+
+```
+let c = new Card()   // fine
+c.render()           // Unknown class or interface 'Badge'
+```
+
+`Card.szx` imports `Badge` and uses it inside `render()`. Construction worked;
+the call died. The only workaround was to import every transitive dependency
+*again* from the top file — the opposite of what an isolated component is for.
+
+The cause is the visibility barrier in `import` (`stmt.rs`). When a module that
+uses `export` finished loading, everything registered during its load that was
+not in **its** export list got dropped:
+
+```rust
+self.class_registry.retain(|k, _| before.contains(k) || exports.contains(k));
+```
+
+"Everything registered during its load" includes what the module's *own* imports
+brought in. `Card.szx` imports `Badge` (registered), exports only `Card` — so on
+the way out, `Badge` was erased. It survived long enough for `new Card()` to
+resolve because that only needs `Card`; `Badge` was looked up later, from inside
+`render()`, when it was already gone.
+
+Now the only names eligible for removal are the ones the module **declares** at
+its own top level, via the existing `declaration_name`; whatever a nested import
+registered stays. The barrier still does its job: what a module defines and does
+not export remains hidden from its importer.
+
+- Not specific to `.szx` — plain `.sz` modules had it identically.
+- The resolver already handled `.szx`: it tries `<base>/<path>.sz`, then `.szx`,
+  then `index.sz` / `index.szx`.
+- Verified both ways (all `.sz` and all `.szx`, `Panel → Card → Badge`, one file
+  each) and across a three-hop chain. Suite: 431, 0 failures.
+
 ## [9.14.0] — 2026-08-10
 
 ### `&&` and `||` return an operand, not a boolean
