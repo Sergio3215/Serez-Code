@@ -5,6 +5,41 @@ Order: most recent to oldest.
 
 ---
 
+## [9.17.0] — 2026-08-16
+
+### A subclass now chains to its parent's constructor on its own
+
+```
+class App:Window {
+    public render() { ... }      // no constructor — normal coming from React
+}
+new App().mount()                // ❌ 'App' has no field or method named 'effects'
+```
+
+A subclass that never called `super()` got an instance with **none of the parent's
+fields**, and the failure surfaced far away, naming an internal field of a class
+the author never wrote. Java, C# and JavaScript all chain implicitly; now so does
+this. Same for a constructor that simply forgets the call — the chain runs
+**before** its body, so the subclass can still overwrite what it inherits.
+
+The chain only happens when the parent constructor takes **no required
+arguments**. When it does need them:
+
+- the subclass **has** a constructor → nothing happens, silently, exactly as
+  before. Initialising the parent's fields by hand instead of calling `super()`
+  is a style the language allowed and there is code doing it (`tests/30_integral_e2e`
+  has `Perro:Animal` doing precisely that). Turning it into an error broke three
+  suites, so it stays legal.
+- the subclass has **no** constructor → nothing can initialise the object, so it
+  reports it, naming both classes and how many arguments are missing.
+
+Whether the body already calls `super(...)` is a static walk of the constructor,
+cached per class (`super_cache`), so it is paid once per class, not per `new`.
+The walk is conservative: a `super(` anywhere — including inside an `if` — counts
+as explicit and suppresses the implicit call.
+
+`tests/unit_implicit_super.sz` (9 cases). Suite: 433, 0 failures.
+
 ## [9.16.0] — 2026-08-15
 
 Four gaps that all showed up writing UI with serez-ui, fixed together because

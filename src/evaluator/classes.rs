@@ -144,7 +144,20 @@ impl super::Evaluator {
 
             let mut body_error = false;
             let mut ctor_throw: Option<ObjectRef> = None;
+
+            // Encadenar al padre si el cuerpo no lo hace, ANTES de correr el
+            // cuerpo: los campos del padre tienen que existir para que el
+            // constructor propio pueda leerlos o pisarlos.
+            if !self.ctor_calls_super(&new_expr.class_name, &ctor) {
+                match self.run_implicit_super(&new_expr.class_name, instance_ref, true) {
+                    EvalResult::Error => body_error = true,
+                    EvalResult::Throw(v) => ctor_throw = Some(v),
+                    _ => {}
+                }
+            }
+
             for stmt in &ctor.body.statements {
+                if body_error || ctor_throw.is_some() { break; }
                 match self.eval_statement(stmt) {
                     EvalResult::Error => { body_error = true; break; }
                     EvalResult::Return(_) => break,
@@ -194,8 +207,92 @@ impl super::Evaluator {
                     new_expr.class_name, arg_vals.len());
                 return EvalResult::Error;
             }
+            // Sin constructor propio pero CON padre: hay que correr el del padre
+            // igual, o la instancia nace sin sus campos. Es el caso más común
+            // viniendo de React, donde el constructor es opcional.
+            if self.class_registry.get(&new_expr.class_name).and_then(|c| c.parent.clone()).is_some() {
+                self.scopes.push();
+                self.scopes.declare("this".to_string(), instance_ref);
+                let old_class = self.constructing_class.replace(new_expr.class_name.clone());
+                let res = self.run_implicit_super(&new_expr.class_name, instance_ref, false);
+                self.constructing_class = old_class;
+                // El `this` vivo puede haber sido promovido si el constructor del
+                // padre creó una closure que lo captura — mismo caso que arriba.
+                let live_ref = self.scopes.lookup("this").unwrap_or(instance_ref);
+                let throw_owned = match res {
+                    EvalResult::Throw(v) => Some(self.extract(v)),
+                    EvalResult::Error => { self.scopes.pop(); return EvalResult::Error; }
+                    _ => None,
+                };
+                self.scopes.pop();
+                if let Some(owned) = throw_owned { return EvalResult::Throw(self.plant(owned)); }
+                return EvalResult::Value(live_ref);
+            }
             EvalResult::Value(instance_ref)
         }
+    }
+
+    /// ¿El cuerpo del constructor llama a `super(...)` en algún lado?
+    ///
+    /// Decide si hay que encadenar al padre implícitamente. Es un recorrido
+    /// conservador: alcanza con que `super(` aparezca en cualquier rama para no
+    /// insertar nada (mejor no llamarlo dos veces que llamarlo de más).
+    /// Cacheado por clase: el escaneo se hace una vez, no en cada `new`.
+    fn ctor_calls_super(&mut self, class_name: &str, ctor: &ast::ClassConstructor) -> bool {
+        if let Some(&hit) = self.super_cache.get(class_name) {
+            return hit;
+        }
+        let mut found = false;
+        super::lvalue::calls_super_block(&ctor.body, &mut found);
+        self.super_cache.insert(class_name.to_string(), found);
+        found
+    }
+
+    /// Encadena al constructor del padre sin que el usuario escriba `super()`.
+    ///
+    /// Es lo que hacen Java, C# y JavaScript: si una subclase no llama al
+    /// constructor del padre, se llama solo. Sin esto, `class App:Window` sin
+    /// constructor —lo normal viniendo de React— dejaba la instancia SIN NINGUNO
+    /// de los campos del padre, y el programa moría después con un mensaje que
+    /// no apuntaba a nada: "'App' has no field or method named 'effects'".
+    ///
+    /// Sólo se encadena si el constructor del padre se puede llamar SIN
+    /// argumentos. Si exige alguno, la subclase tiene que escribir `super(...)`
+    /// a mano, y acá se distinguen dos situaciones:
+    ///
+    /// - La subclase **tiene** constructor y no llamó a super: se deja pasar en
+    ///   silencio, como siempre. Es un estilo que el lenguaje permitía y que hay
+    ///   código usando — inicializar los campos del padre uno mismo
+    ///   (`public Perro(string n) { this.nombre = n }`). Convertirlo en error
+    ///   rompería programas que andan.
+    /// - La subclase **no tiene** constructor: ahí no hay nadie que inicialice
+    ///   nada, el objeto nace vacío y el fallo aparece mucho después con un
+    ///   mensaje que no apunta a la causa. Eso sí se avisa.
+    fn run_implicit_super(&mut self, class_name: &str, instance_ref: ObjectRef, has_own_ctor: bool) -> EvalResult {
+        let Some(parent_name) = self.class_registry.get(class_name).and_then(|c| c.parent.clone())
+        else { return EvalResult::Value(self.null_ref) };
+        let Some(parent_ctor) = self.class_registry.get(&parent_name).and_then(|c| c.constructor.clone())
+        else { return EvalResult::Value(self.null_ref) };
+
+        let required = parent_ctor.parameters.iter()
+            .filter(|p| !p.is_rest && p.default_value.is_none())
+            .count();
+        if required > 0 {
+            if has_own_ctor {
+                return EvalResult::Value(self.null_ref);
+            }
+            eprintln!(
+                "❌ ERROR: '{}' extends '{}', whose constructor needs {} argument(s), so it cannot be \
+                 chained automatically. Give '{}' a constructor that calls super(...) with them.",
+                class_name, parent_name, required, class_name
+            );
+            return EvalResult::Error;
+        }
+
+        // eval_super_call lee `constructing_class` para encontrar al padre y
+        // espera `this` en scope: es exactamente el estado en el que estamos.
+        let _ = instance_ref;
+        self.eval_super_call(&[])
     }
 
     pub(super) fn eval_super_call(&mut self, args: &[ast::Expression]) -> EvalResult {

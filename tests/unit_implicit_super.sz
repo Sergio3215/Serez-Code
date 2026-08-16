@@ -1,0 +1,121 @@
+// unit_implicit_super.sz — encadenado implícito al constructor del padre.
+//
+// Una subclase que no llama a `super()` ahora lo hace sola, como en Java, C# y
+// JavaScript. Antes la instancia nacía SIN los campos del padre y el programa
+// moría mucho después con un mensaje que no apuntaba a la causa — típicamente
+// "'X' has no field or method named '<campo interno del padre>'".
+//
+// El caso que lo motivó: `class App:Window { public render() { ... } }`, sin
+// constructor, que es lo normal viniendo de React.
+//
+// Sólo se encadena si el constructor del padre se puede llamar SIN argumentos.
+// Si exige alguno y la subclase TIENE constructor, se deja pasar en silencio:
+// inicializar los campos del padre a mano es un estilo que el lenguaje ya
+// permitía y hay código usándolo.
+
+class Base {
+    public Base() { this.n = 10; this.etiqueta = "base" }
+    public int leer() { return this.n }
+}
+
+// ── Sin constructor propio ───────────────────────────────────────────────────
+
+test("una subclase SIN constructor hereda los campos del padre", () => {
+    class Hija:Base { }
+    let h = new Hija();
+    assert(h.n == 10, "el campo del padre existe");
+    assert(h.etiqueta == "base", "y el segundo tambien");
+});
+
+test("y sus metodos siguen funcionando", () => {
+    class Hija:Base {
+        public int doble() { return this.n * 2 }
+    }
+    let h = new Hija();
+    assert(h.leer() == 10, "metodo heredado");
+    assert(h.doble() == 20, "metodo propio leyendo el campo del padre");
+});
+
+// ── Con constructor propio que NO llama a super() ───────────────────────────
+
+test("un constructor propio sin super() igual recibe los campos del padre", () => {
+    class Hija:Base {
+        public Hija() { this.propio = 5 }
+    }
+    let h = new Hija();
+    assert(h.n == 10, "el campo del padre esta");
+    assert(h.propio == 5, "y el propio tambien");
+});
+
+test("el encadenado corre ANTES del cuerpo, asi el propio puede pisar", () => {
+    class Hija:Base {
+        public Hija() { this.n = 99 }
+    }
+    let h = new Hija();
+    assert(h.n == 99, "gana la asignacion del constructor propio");
+});
+
+test("un constructor que SI llama a super() no lo llama dos veces", () => {
+    class Contador {
+        public Contador() { this.veces = 1 }
+    }
+    class Hija:Contador {
+        public Hija() { super() }
+    }
+    let h = new Hija();
+    assert(h.veces == 1, "una sola vez");
+});
+
+test("super() en una rama condicional tambien cuenta como explicito", () => {
+    class Hija:Base {
+        public Hija(bool flag) {
+            if (flag) { super() } else { this.n = -1 }
+        }
+    }
+    let a = new Hija(true);
+    assert(a.n == 10, "la rama con super()");
+    let b = new Hija(false);
+    assert(b.n == -1, "la otra rama no encadena de mas");
+});
+
+// ── Tres niveles ─────────────────────────────────────────────────────────────
+
+test("la cadena sube mas de un nivel", () => {
+    class Intermedia:Base {
+        public Intermedia() { super(); this.media = true }
+    }
+    class Nieta:Intermedia { }
+    let n = new Nieta();
+    assert(n.n == 10, "campo del abuelo");
+    assert(n.media == true, "campo del padre");
+});
+
+// ── Cuando el padre exige argumentos ─────────────────────────────────────────
+
+test("con padre que exige args, un constructor propio decide solo", () => {
+    class ConArgs {
+        public ConArgs(string s) { this.s = s }
+    }
+    // Inicializa el campo del padre a mano, sin super(): estilo permitido.
+    class Hija:ConArgs {
+        public Hija(string s) { this.s = s + "!" }
+    }
+    let h = new Hija("hola");
+    assert(h.s == "hola!", "no se encadeno ni se rompio");
+});
+
+// ── Sin padre ────────────────────────────────────────────────────────────────
+
+test("una clase sin padre no cambia en nada", () => {
+    class Suelta {
+        public Suelta() { this.x = 1 }
+    }
+    let s = new Suelta();
+    assert(s.x == 1, "constructor normal");
+
+    class SinCtor { }
+    let z = new SinCtor();
+    assert(type_of(z) == "SinCtor", "y una sin constructor tampoco");
+});
+
+summary();

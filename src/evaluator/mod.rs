@@ -184,6 +184,9 @@ pub struct Evaluator {
     // método; decide si `a[i].m()` tiene que devolver el receptor a su
     // contenedor. Se consulta sólo cuando el receptor es una ruta anidada.
     mutator_cache: HashMap<(String, String), bool>,
+    // clase → ¿su constructor llama a `super(...)`? Decide si eval_new_class
+    // encadena al padre por su cuenta (ver run_implicit_super).
+    super_cache: HashMap<String, bool>,
 }
 
 // ── Free-identifier collection (for consistent lambda capture, B-83) ──────────
@@ -339,6 +342,7 @@ impl Evaluator {
             last_error: None,
             try_depth: 0,
             mutator_cache: HashMap::new(),
+            super_cache: HashMap::new(),
         }
     }
 

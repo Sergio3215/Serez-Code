@@ -442,6 +442,107 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
     }
 }
 
+// ── ¿El cuerpo de un constructor llama a `super(...)`? ───────────────────────
+//
+// Lo usa eval_new_class para decidir si encadena al padre por su cuenta. Vive
+// acá porque reusa la misma plantilla de recorrido que el análisis de arriba.
+// Conservador: con que aparezca en cualquier rama alcanza para no insertar nada.
+
+pub(super) fn calls_super_block(b: &ast::BlockStatement, found: &mut bool) {
+    for s in &b.statements {
+        if *found { return; }
+        calls_super_stmt(s, found);
+    }
+}
+
+fn calls_super_stmt(s: &ast::Statement, found: &mut bool) {
+    use ast::Statement as St;
+    if *found { return; }
+    match s {
+        St::Expression(e) | St::Throw(e) | St::Yield(e) => calls_super_expr(e, found),
+        St::Let(l) => calls_super_expr(&l.value, found),
+        St::Assign(a) => calls_super_expr(&a.value, found),
+        St::FieldAssign(fa) => calls_super_expr(&fa.value, found),
+        St::NestedFieldAssign(fa) => { calls_super_expr(&fa.object, found); calls_super_expr(&fa.value, found); }
+        St::IndexAssign(ia) => {
+            calls_super_expr(&ia.target, found);
+            calls_super_expr(&ia.index, found);
+            calls_super_expr(&ia.value, found);
+        }
+        St::Block(b) | St::Unsafe(b) => calls_super_block(b, found),
+        St::Return(r) => calls_super_expr(&r.return_value, found),
+        St::Out(o) => calls_super_expr(&o.value, found),
+        St::While(w) | St::DoWhile(w) => { calls_super_expr(&w.condition, found); calls_super_block(&w.body, found); }
+        St::For(f) => {
+            calls_super_expr(&f.init.value, found);
+            calls_super_expr(&f.condition, found);
+            calls_super_expr(&f.update.value, found);
+            calls_super_block(&f.body, found);
+        }
+        St::ForEach(fe) => { calls_super_expr(&fe.iterable, found); calls_super_block(&fe.body, found); }
+        St::DerefAssign { ptr, value } => { calls_super_expr(ptr, found); calls_super_expr(value, found); }
+        _ => {}
+    }
+}
+
+fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
+    use ast::Expression as Ex;
+    if *found { return; }
+    match e {
+        Ex::Call(c) => {
+            if matches!(c.function.as_ref(), Ex::Identifier(n) if n == "super") {
+                *found = true;
+                return;
+            }
+            calls_super_expr(&c.function, found);
+            for a in &c.arguments { calls_super_expr(a, found); }
+        }
+        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) =>
+            calls_super_expr(inner, found),
+        Ex::Infix(i) => { calls_super_expr(&i.left, found); calls_super_expr(&i.right, found); }
+        Ex::DotCall(d) => {
+            calls_super_expr(&d.object, found);
+            for a in &d.arguments { calls_super_expr(a, found); }
+        }
+        Ex::Index(ix) => { calls_super_expr(&ix.left, found); calls_super_expr(&ix.index, found); }
+        Ex::ArrayLiteral(al) => { for el in &al.elements { calls_super_expr(el, found); } }
+        Ex::DictLiteral(dl) => { for (k, v) in &dl.entries { calls_super_expr(k, found); calls_super_expr(v, found); } }
+        Ex::EntryLiteral(k, v) => { calls_super_expr(k, found); calls_super_expr(v, found); }
+        Ex::Ternary(t) => {
+            calls_super_expr(&t.condition, found);
+            calls_super_expr(&t.then_expr, found);
+            calls_super_expr(&t.else_expr, found);
+        }
+        Ex::If(ife) => {
+            calls_super_expr(&ife.condition, found);
+            calls_super_block(&ife.consequence, found);
+            if let Some(alt) = &ife.alternative { calls_super_block(alt, found); }
+        }
+        Ex::InterpolatedString(parts) => {
+            for p in parts { if let ast::StringPart::Expr(ex) = p { calls_super_expr(ex, found); } }
+        }
+        Ex::New(n) => match &n.args {
+            ast::NewArgs::Positional(v) => { for a in v { calls_super_expr(a, found); } }
+            ast::NewArgs::Fields(f) => { for (_, a) in f { calls_super_expr(a, found); } }
+        },
+        Ex::Match(m) => {
+            calls_super_expr(&m.subject, found);
+            for arm in &m.arms {
+                if let Some(g) = &arm.guard { calls_super_expr(g, found); }
+                calls_super_block(&arm.body, found);
+            }
+        }
+        Ex::FunctionLiteral(fl) => calls_super_block(&fl.body, found),
+        Ex::Lambda(l) => match &l.body {
+            ast::LambdaBody::Block(b) => calls_super_block(b, found),
+            ast::LambdaBody::Expr(ex) => calls_super_expr(ex, found),
+        },
+        Ex::UnsafeBlock(b) => calls_super_block(b, found),
+        Ex::ObjectPatch(fields) => { for (_, ex) in fields { calls_super_expr(ex, found); } }
+        _ => {}
+    }
+}
+
 /// ¿La cadena de lecturas (`.campo`, `[i]`) arranca en `this`? Vale también
 /// para `this` a secas, que es el receptor de `this.metodo(...)`.
 fn roots_at_this(e: &Expression) -> bool {
