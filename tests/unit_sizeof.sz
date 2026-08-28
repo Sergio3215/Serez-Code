@@ -1,9 +1,10 @@
 // Unit tests for type sizes.
 //
-// The old `sizeof(TYPE)` / `sizeof(expr)` operator was removed; byte-sizes of the
-// concrete numeric/bool types are now queried with Memory.sizeof("type"), which
-// supports "int", "decimal" and "bool". The `sizeof(null)` operator still returns
-// 0. (Broader Memory.sizeof coverage lives in unit_memory.)
+// Two forms answer the same question and both work: the `sizeof(TYPE)` operator,
+// which takes a type keyword (never an expression — `sizeof(5)` does not parse),
+// and Memory.sizeof("type"), which takes a string and accepts "int", "decimal"
+// and "bool". This file pins the table in spec/operators.md.
+// (Broader Memory.sizeof coverage lives in unit_memory.)
 
 test("Memory.sizeof int is 8", () => {
     let s = Memory.sizeof("int");
@@ -20,6 +21,19 @@ test("Memory.sizeof bool is 1", () => {
 
 test("sizeof(null) operator returns 0", () => {
     assert(sizeof(null) == 0, "null has no size");
+});
+
+test("the sizeof operator takes a type keyword", () => {
+    assert(sizeof(int) == 8, "int slot is 8 bytes");
+    assert(sizeof(decimal) == 8, "decimal slot is 8 bytes");
+    assert(sizeof(bool) == 1, "bool slot is 1 byte");
+    assert(sizeof(string) == 8, "a string slot is 8 bytes, not its contents");
+});
+
+test("both sizeof forms agree", () => {
+    assert(sizeof(int) == Memory.sizeof("int"), "int");
+    assert(sizeof(decimal) == Memory.sizeof("decimal"), "decimal");
+    assert(sizeof(bool) == Memory.sizeof("bool"), "bool");
 });
 
 test("sizeof result is an int (participates in arithmetic)", () => {

@@ -1,4 +1,8 @@
-// Unit tests — operator overloading: op_add, op_sub, op_mul, op_eq, op_ne, op_lt, op_neg, op_str
+// Unit tests — operator overloading. Every method the evaluator dispatches to is
+// covered here: op_add, op_sub, op_mul, op_div, op_mod, op_eq, op_ne, op_lt,
+// op_le, op_gt, op_ge, op_neg, op_not, op_str. The table in spec/operators.md
+// is this list; adding a method there without a test here makes the spec a
+// claim rather than a contract.
 
 public class Vec {
     public Vec(decimal x, decimal y) {
@@ -137,6 +141,50 @@ test("herencia hereda op_add", () => {
     let b = new Vec3(4.0, 5.0, 0.0);
     let s = a + b;
     assert(s.x == 5.0 && s.y == 7.0, "op_add heredado en Vec3");
+});
+
+
+// ── The overloads the original file left uncovered ────────────────────────────
+// op_div, op_mod, op_gt, op_ge and op_not had no test anywhere in the suite,
+// so nothing stopped them from being dropped silently.
+
+public class Num {
+    public Num(int v) { this.v = v; }
+    public Num  op_div(Num o) { return new Num(this.v / o.v); }
+    public Num  op_mod(Num o) { return new Num(this.v % o.v); }
+    public bool op_gt(Num o)  { return this.v >  o.v; }
+    public bool op_ge(Num o)  { return this.v >= o.v; }
+    public bool op_le(Num o)  { return this.v <= o.v; }
+    public bool op_not()      { return this.v == 0; }
+}
+
+test("op_div", () => {
+    let q = new Num(10) / new Num(3);
+    assert(q.v == 3, "10 / 3 dispatches to op_div");
+});
+
+test("op_mod", () => {
+    let r = new Num(10) % new Num(3);
+    assert(r.v == 1, "10 % 3 dispatches to op_mod");
+});
+
+test("op_gt and op_ge", () => {
+    assert(new Num(10) >  new Num(3),  "gt true");
+    assert(!(new Num(3) >  new Num(10)), "gt false");
+    assert(new Num(10) >= new Num(10), "ge on equal values");
+});
+
+test("op_le", () => {
+    assert(new Num(3)  <= new Num(10), "le true");
+    assert(new Num(10) <= new Num(10), "le on equal values");
+    assert(!(new Num(10) <= new Num(3)), "le false");
+});
+
+test("op_not", () => {
+    // `!` normally yields a boolean; with op_not the method's return value is
+    // the result and is not coerced. See spec/operators.md.
+    assert(!(new Num(0)) == true,  "zero is 'not' true");
+    assert(!(new Num(7)) == false, "nonzero is 'not' false");
 });
 
 summary();
