@@ -330,8 +330,11 @@ impl super::Evaluator {
         ctx: &str,
     ) -> Result<String, EvalResult> {
         if args.len() != 1 {
-            eprintln!("❌ ERROR: {}(string) requires 1 argument", ctx);
-            return Err(EvalResult::Error);
+            let given = args.len();
+            return Err(self.rt_err_kind(
+                "TypeError",
+                format!("{ctx}(string) requires 1 argument, got {given}"),
+            ));
         }
         self.eval_to_string(&args[0], ctx)
     }
@@ -348,10 +351,7 @@ impl super::Evaluator {
         };
         match self.resolve(r) {
             Some(ObjectData::Str(s)) => Ok(s.clone()),
-            _ => {
-                eprintln!("❌ ERROR: {}: argument must be a string", ctx);
-                Err(EvalResult::Error)
-            }
+            _ => Err(self.rt_err_kind("TypeError", format!("{ctx}: argument must be a string"))),
         }
     }
 }

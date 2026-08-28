@@ -3268,12 +3268,12 @@ impl super::Evaluator {
         index_args: &[ast::Expression],
     ) -> Result<usize, EvalResult> {
         if index_args.len() != shape.len() {
-            eprintln!(
-                "❌ ERROR: Tensor has {} dimension(s) but {} index(es) given",
-                shape.len(),
-                index_args.len()
-            );
-            return Err(EvalResult::Error);
+            let dims = shape.len();
+            let given = index_args.len();
+            return Err(self.rt_err_kind(
+                "TypeError",
+                format!("Tensor has {dims} dimension(s) but {given} index(es) given"),
+            ));
         }
         let mut flat = 0usize;
         let mut stride: usize = shape.iter().product();
@@ -3284,17 +3284,21 @@ impl super::Evaluator {
                     Some(ObjectData::Integer(n)) => {
                         let n = *n;
                         if n < 0 || (n as usize) >= *dim_size {
-                            eprintln!(
-                                "❌ ERROR: Tensor index {} out of bounds for dimension {} (size {})",
-                                n, dim_idx, dim_size
-                            );
-                            return Err(EvalResult::Error);
+                            let size = *dim_size;
+                            return Err(self.rt_err_kind(
+                                "IndexOutOfBounds",
+                                format!(
+                                    "Tensor index {n} out of bounds for dimension {dim_idx} \
+                                     (size {size})"
+                                ),
+                            ));
                         }
                         n as usize
                     }
                     _ => {
-                        eprintln!("❌ ERROR: Tensor indices must be integers");
-                        return Err(EvalResult::Error);
+                        return Err(
+                            self.rt_err_kind("TypeError", "Tensor indices must be integers")
+                        );
                     }
                 },
                 EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),

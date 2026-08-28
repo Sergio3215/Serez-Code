@@ -1798,6 +1798,60 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
+fn every_type_reports_an_unknown_member_the_same_way() {
+    // `kind` is only useful for classifying a failure if it means the same
+    // thing everywhere. Twelve native namespaces reported an unknown member as
+    // `TypeError`, so a caller could not tell "there is no such member" from
+    // "you called it wrongly" — the same inconsistency Set had.
+    let cases = [
+        ("[1].nope();", "array"),
+        (r#""a".nope();"#, "string"),
+        (r#"let d <string, int> = ({"a", 1}); d.nope();"#, "dict"),
+        ("let s = new Set([1]); s.nope();", "set"),
+        ("let n = 1.5m; n.nope();", "dec"),
+        ("Dec.nope();", "Dec"),
+        ("Math.nope();", "Math"),
+        ("JSON.nope();", "JSON"),
+        ("Memory.nope();", "Memory"),
+        ("Binary.nope();", "Binary"),
+        ("GPU.nope();", "GPU"),
+        (r#"Regex.nope("a", "b");"#, "Regex"),
+        ("Random.nope();", "Random"),
+        ("enum E { A } E.nope();", "enum"),
+    ];
+
+    for (src, label) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4001", "{label}: {src}");
+                assert_eq!(error.kind, "ReferenceError", "{label}: {src}");
+            }
+            other => panic!("{label}: expected SZ4001 ReferenceError, got {other:?}"),
+        }
+    }
+
+    // The permission-gated namespaces reach the same answer once the
+    // permission is declared; without it the gate legitimately answers first.
+    for (src, permission) in [
+        ("File.nope();", "File"),
+        ("Socket.nope();", "Socket"),
+        ("Time.nope();", "Time"),
+        ("Env.nope();", "Env"),
+        ("OS.nope();", "OS"),
+        ("Terminal.nope();", "Terminal"),
+        ("System.nope();", "System"),
+    ] {
+        match evaluate_with_permissions(src, &[permission]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4001", "{src}");
+                assert_eq!(error.kind, "ReferenceError", "{src}");
+            }
+            other => panic!("{src}: expected SZ4001 ReferenceError, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn exact_decimal_method_failures_are_structured_and_catchable() {
     let cases = [
         (

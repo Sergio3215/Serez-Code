@@ -266,7 +266,7 @@ impl super::Evaluator {
 
             _ => {
                 let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown Socket method '{}'", m))
+                self.rt_err_kind("ReferenceError", format!("Unknown Socket method '{}'", m))
             }
         }
     }

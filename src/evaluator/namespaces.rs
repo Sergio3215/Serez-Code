@@ -104,7 +104,7 @@ impl super::Evaluator {
             }
             _ => {
                 let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown Math method '{}'", m))
+                self.rt_err_kind("ReferenceError", format!("Unknown Math method '{}'", m))
             }
         }
     }
@@ -491,7 +491,7 @@ impl super::Evaluator {
             }
             _ => {
                 let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown File method '{}'", m))
+                self.rt_err_kind("ReferenceError", format!("Unknown File method '{}'", m))
             }
         }
     }
@@ -572,7 +572,7 @@ impl super::Evaluator {
             }
             _ => {
                 let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown JSON method '{}'", m))
+                self.rt_err_kind("ReferenceError", format!("Unknown JSON method '{}'", m))
             }
         }
     }

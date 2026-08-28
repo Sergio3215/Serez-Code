@@ -251,7 +251,7 @@ impl super::Evaluator {
 
             other => {
                 let o = other.to_string();
-                self.rt_err_kind("TypeError", &format!("Media.{}: unknown method", o))
+                self.rt_err_kind("ReferenceError", &format!("Media.{}: unknown method", o))
             }
         }
     }

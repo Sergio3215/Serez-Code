@@ -36,14 +36,17 @@ test("playingCount sin sonidos = 0", () => {
     assert(Media.playingCount() == 0, "cuenta 0")
 })
 
-test("metodo desconocido -> TypeError capturable", () => {
+// Every type reports an unknown member as ReferenceError / SZ4001 — arrays,
+// strings, dicts, sets, dec, Random, DateTime, Task, enums and the native
+// namespaces. Media reported TypeError, which is what this test used to pin.
+test("metodo desconocido -> ReferenceError capturable", () => {
     let fallo = false
     try {
         Media.noExiste()
     } catch (e) {
-        fallo = e.kind == "TypeError"
+        fallo = e.kind == "ReferenceError" && e.code == "SZ4001"
     }
-    assert(fallo, "TypeError capturable")
+    assert(fallo, "ReferenceError capturable")
 })
 
 summary()

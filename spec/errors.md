@@ -185,6 +185,34 @@ An unknown `Set` member previously reported `TypeError`, which made Set the only
 collection whose `kind` could not separate "no such member" from "called
 wrongly". It now matches every other type.
 
+Every type reports an unknown member the same way: recoverable
+`ReferenceError` / `SZ4001`. That holds for arrays, strings, dicts, sets, dec,
+`Dec`, enums, Random, DateTime, Task and every native namespace — Math, File,
+JSON, Media, Memory, Binary, GPU, Regex, Socket, OS, Env, Time, Terminal and
+System. A permission-gated namespace answers with `PermissionError` / `SZ6001`
+first when the permission is not declared, which is the gate doing its job, not
+a different classification of the member.
+
+Native namespace argument validation is recoverable `TypeError` / `SZ4002`; a
+negative Memory size or offset is `RangeError` / `SZ4000`; a Tensor index
+outside its dimension is `IndexOutOfBounds` / `SZ4003`.
+
+### Failures still delivered as sentinel values
+
+Three native operations report a failure by returning an ordinary value, so a
+caller cannot distinguish it from a legitimate result. They are recorded here
+rather than changed, because each has a consumer that relies on the current
+shape:
+
+| Operation | On failure | Why it is unchanged |
+| --- | --- | --- |
+| `Socket.recvWsFrame(id)` | prints and returns `null` | `null` is also the documented "no message" answer, and `serez-http` and `serez-strike` both branch on it. Making failure raise would break both. |
+| `OS.spawn(cmd, args)` | prints and returns `-1` | `-1` is the established failure sentinel; changing it to raise is a breaking change with no migration path yet. |
+| `Task.reply(v)` outside a worker | prints a warning and continues | A deliberate compatibility fallback, recorded in `tasks.md`. |
+
+Each needs a compatibility decision before it can change; see
+`compatibility.md`.
+
 Exact-decimal (`dec`) methods and the static `Dec` namespace use the same
 channel: arity and argument types are recoverable `TypeError` / `SZ4002`; a
 scale outside 0..=28, an unknown rounding mode and an unparseable literal are

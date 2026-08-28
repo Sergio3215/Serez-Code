@@ -478,7 +478,7 @@ impl super::Evaluator {
             }
 
             _ => self.rt_err_kind(
-                "TypeError",
+                "ReferenceError",
                 format!("Unknown GPU method '{}'", dot_call.method),
             ),
         }
@@ -532,10 +532,7 @@ impl super::Evaluator {
         };
         match self.resolve(r) {
             Some(ObjectData::Integer(n)) => Ok(*n),
-            _ => {
-                eprintln!("❌ ERROR: {}: buffer id must be an integer", ctx);
-                Err(EvalResult::Error)
-            }
+            _ => Err(self.rt_err_kind("TypeError", format!("{ctx}: buffer id must be an integer"))),
         }
     }
 
@@ -547,10 +544,10 @@ impl super::Evaluator {
         };
         match self.resolve(r) {
             Some(ObjectData::Integer(n)) if *n >= 0 => Ok(*n as usize),
-            _ => {
-                eprintln!("❌ ERROR: {}: argument must be a non-negative integer", ctx);
-                Err(EvalResult::Error)
-            }
+            _ => Err(self.rt_err_kind(
+                "TypeError",
+                format!("{ctx}: argument must be a non-negative integer"),
+            )),
         }
     }
 
@@ -566,8 +563,9 @@ impl super::Evaluator {
         let len = match self.resolve(arr_ref) {
             Some(ObjectData::Array { elements, .. }) => elements.len(),
             _ => {
-                eprintln!("❌ ERROR: {}: argument must be an array", ctx);
-                return Err(EvalResult::Error);
+                return Err(
+                    self.rt_err_kind("TypeError", format!("{ctx}: argument must be an array"))
+                );
             }
         };
         self.ensure_gpu_buffer_elements(ctx, len)?;
@@ -586,8 +584,10 @@ impl super::Evaluator {
                 OwnedValue::Integer(i) => out.push(i as f64),
                 OwnedValue::Decimal(d) => out.push(d),
                 _ => {
-                    eprintln!("❌ ERROR: {}: all array elements must be numeric", ctx);
-                    return Err(EvalResult::Error);
+                    return Err(self.rt_err_kind(
+                        "TypeError",
+                        format!("{ctx}: all array elements must be numeric"),
+                    ));
                 }
             }
         }

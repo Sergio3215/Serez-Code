@@ -496,7 +496,10 @@ impl super::Evaluator {
                 }
             }
 
-            other => self.rt_err_kind("TypeError", format!("Unknown Memory method '{}'", other)),
+            other => self.rt_err_kind(
+                "ReferenceError",
+                format!("Unknown Memory method '{}'", other),
+            ),
         }
     }
 
@@ -506,10 +509,7 @@ impl super::Evaluator {
         match self.eval_expression(expr) {
             EvalResult::Value(r) => match self.resolve(r).cloned() {
                 Some(ObjectData::Integer(n)) => Ok(n),
-                _ => {
-                    eprintln!("❌ ERROR: Memory handle must be an integer");
-                    Err(EvalResult::Error)
-                }
+                _ => Err(self.rt_err_kind("TypeError", "Memory handle must be an integer")),
             },
             EvalResult::Throw(v) => Err(EvalResult::Throw(v)),
             other => Err(other),
@@ -520,14 +520,11 @@ impl super::Evaluator {
         match self.eval_expression(expr) {
             EvalResult::Value(r) => match self.resolve(r).cloned() {
                 Some(ObjectData::Integer(n)) if n >= 0 => Ok(n as usize),
-                Some(ObjectData::Integer(n)) => {
-                    eprintln!("❌ ERROR: Memory size/offset cannot be negative, got {}", n);
-                    Err(EvalResult::Error)
-                }
-                _ => {
-                    eprintln!("❌ ERROR: Memory size/offset must be an integer");
-                    Err(EvalResult::Error)
-                }
+                Some(ObjectData::Integer(n)) => Err(self.rt_err_kind(
+                    "RangeError",
+                    format!("Memory size/offset cannot be negative, got {n}"),
+                )),
+                _ => Err(self.rt_err_kind("TypeError", "Memory size/offset must be an integer")),
             },
             EvalResult::Throw(v) => Err(EvalResult::Throw(v)),
             other => Err(other),

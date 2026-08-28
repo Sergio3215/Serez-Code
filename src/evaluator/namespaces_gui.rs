@@ -5827,7 +5827,11 @@ impl super::Evaluator {
         dot_call: &ast::DotCallExpression,
     ) -> Option<(i64, i64, i64, i64, u32)> {
         if dot_call.arguments.len() != 5 {
-            eprintln!("❌ ERROR: Gui.fillRect(x, y, w, h, color) requires 5 arguments");
+            let given = dot_call.arguments.len();
+            let _ = self.rt_err_kind(
+                "TypeError",
+                format!("Gui.fillRect(x, y, w, h, color) requires 5 arguments, got {given}"),
+            );
             return None;
         }
         let x = self.gui_int_arg(&dot_call.arguments[0]);
@@ -5840,7 +5844,7 @@ impl super::Evaluator {
                 Some((x, y, w, h, (c as u32) & 0x00FF_FFFF))
             }
             _ => {
-                eprintln!("❌ ERROR: Gui.fillRect requires 5 integers");
+                let _ = self.rt_err_kind("TypeError", "Gui.fillRect requires 5 integers");
                 None
             }
         }

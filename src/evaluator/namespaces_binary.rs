@@ -272,7 +272,7 @@ impl super::Evaluator {
             }
 
             _ => self.rt_err_kind(
-                "TypeError",
+                "ReferenceError",
                 format!("Unknown Binary method '{}'", dot_call.method),
             ),
         }
@@ -293,8 +293,11 @@ impl super::Evaluator {
 
     fn require_one_int(&mut self, args: &[ast::Expression], ctx: &str) -> Result<i64, EvalResult> {
         if args.len() != 1 {
-            eprintln!("❌ ERROR: {}(n) requires 1 argument", ctx);
-            return Err(EvalResult::Error);
+            let given = args.len();
+            return Err(self.rt_err_kind(
+                "TypeError",
+                format!("{ctx}(n) requires 1 argument, got {given}"),
+            ));
         }
         let r = match self.eval_expression(&args[0]) {
             EvalResult::Value(r) => r,
@@ -303,10 +306,7 @@ impl super::Evaluator {
         };
         match self.resolve(r) {
             Some(ObjectData::Integer(n)) => Ok(*n),
-            _ => {
-                eprintln!("❌ ERROR: {}: argument must be an integer", ctx);
-                Err(EvalResult::Error)
-            }
+            _ => Err(self.rt_err_kind("TypeError", format!("{ctx}: argument must be an integer"))),
         }
     }
 
@@ -319,8 +319,9 @@ impl super::Evaluator {
         let elems = match self.resolve(r) {
             Some(ObjectData::Array { elements, .. }) => elements.clone(),
             _ => {
-                eprintln!("❌ ERROR: {}: argument must be a byte array", ctx);
-                return Err(EvalResult::Error);
+                return Err(
+                    self.rt_err_kind("TypeError", format!("{ctx}: argument must be a byte array"))
+                );
             }
         };
         let mut bytes = Vec::with_capacity(elems.len());
@@ -328,8 +329,10 @@ impl super::Evaluator {
             match elem {
                 OwnedValue::Integer(b) => bytes.push(b as u8),
                 _ => {
-                    eprintln!("❌ ERROR: {}: all elements must be integers", ctx);
-                    return Err(EvalResult::Error);
+                    return Err(self.rt_err_kind(
+                        "TypeError",
+                        format!("{ctx}: all elements must be integers"),
+                    ));
                 }
             }
         }

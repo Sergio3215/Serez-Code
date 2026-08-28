@@ -454,7 +454,7 @@ impl super::Evaluator {
 
             _ => {
                 let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown Terminal method '{}'", m))
+                self.rt_err_kind("ReferenceError", format!("Unknown Terminal method '{}'", m))
             }
         }
     }
@@ -683,7 +683,7 @@ impl super::Evaluator {
 
             _ => {
                 let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown OS method '{}'", m))
+                self.rt_err_kind("ReferenceError", format!("Unknown OS method '{}'", m))
             }
         }
     }
@@ -750,7 +750,7 @@ impl super::Evaluator {
 
             _ => {
                 let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown Env method '{}'", m))
+                self.rt_err_kind("ReferenceError", format!("Unknown Env method '{}'", m))
             }
         }
     }
@@ -793,7 +793,7 @@ impl super::Evaluator {
 
             _ => {
                 let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown Time method '{}'", m))
+                self.rt_err_kind("ReferenceError", format!("Unknown Time method '{}'", m))
             }
         }
     }
@@ -842,7 +842,7 @@ impl super::Evaluator {
 
             _ => {
                 let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown System method '{}'", m))
+                self.rt_err_kind("ReferenceError", format!("Unknown System method '{}'", m))
             }
         }
     }

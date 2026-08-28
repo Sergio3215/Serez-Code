@@ -645,7 +645,10 @@ impl super::Evaluator {
             _ => 0,
         };
         if need == 0 {
-            return self.rt_err(format!("Regex has no method '{}'", method));
+            return self.rt_err_kind(
+                "ReferenceError",
+                format!("Regex has no method '{}'", method),
+            );
         }
         if dot_call.arguments.len() != need {
             return self.rt_err(format!("Regex.{} requires {} arguments", method, need));
@@ -786,7 +789,10 @@ impl super::Evaluator {
                 result.push_str(&slice(&text, last, text.len()));
                 EvalResult::Value(self.alloc(ObjectData::Str(result)))
             }
-            _ => self.rt_err(format!("Regex has no method '{}'", method)),
+            _ => self.rt_err_kind(
+                "ReferenceError",
+                format!("Regex has no method '{}'", method),
+            ),
         }
     }
 }

@@ -7,6 +7,30 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Native namespace validation is structured, and `kind` finally means one thing
+
+- GPU, Binary, Memory, Tensor, Crypto and Gui validated their arguments by
+  printing to stderr and returning an untyped sentinel. They now report
+  catchable `TypeError` (`SZ4002`), with `RangeError` (`SZ4000`) for a negative
+  Memory size or offset and `IndexOutOfBounds` (`SZ4003`) for a Tensor index
+  outside its dimension.
+- **Breaking, deliberate:** twelve native namespaces reported an unknown member
+  as `TypeError` while arrays, strings, dicts, sets, dec, enums, Random,
+  DateTime and Task all reported `ReferenceError`. `e.kind` therefore could not
+  tell "there is no such member" from "you called it wrongly". Math, File,
+  JSON, Media, Memory, Binary, GPU, Regex, Socket, OS, Env, Time, Terminal and
+  System now all report `ReferenceError` (`SZ4001`).
+
+  Ecosystem sweep: no official package inspects these kinds, and none uses
+  Media at all. One core test, `tests/unit_media.sz`, pinned the old
+  `TypeError` and was updated. Per `spec/compatibility.md` this qualifies as a
+  breaking change that may ship in a minor release.
+- Three failures are still delivered as sentinel values and are now documented
+  in `spec/errors.md` rather than changed: `Socket.recvWsFrame` returns `null`
+  (which `serez-http` and `serez-strike` both branch on), `OS.spawn` returns
+  `-1`, and `Task.reply` outside a worker warns and continues. Each needs a
+  compatibility decision first.
+
 ### Exact-decimal (`dec`) methods are structured, and the runner stops colliding
 
 - Every `dec` method and the static `Dec` namespace validated by printing to
