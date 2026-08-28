@@ -184,6 +184,21 @@ An unknown `Set` member previously reported `TypeError`, which made Set the only
 collection whose `kind` could not separate "no such member" from "called
 wrongly". It now matches every other type.
 
+Core expression diagnostics use the same channel. A typed parameter or declared
+return type that a value does not satisfy, an array or dict literal whose
+element violates its own declared type, an entry literal or object patch used
+outside the position it is valid in, a dot call on a type that has no methods,
+`&` applied to something that is not a named variable and dereferencing a
+non-pointer are recoverable `TypeError` / `SZ4002`. An unknown enum variant, a
+method on an enum variant that does not exist, taking the address of an
+undeclared variable and a dangling pointer are recoverable `ReferenceError` /
+`SZ4001`.
+
+The call stack that a typed-parameter failure used to print as a side effect now
+travels in the payload's `stack`, so an embedder reads frames instead of
+scraping stderr. `break`/`continue` escaping a call is a recoverable generic
+`RuntimeError` / `SZ4000`.
+
 ## Recoverable and fatal runtime errors
 
 Structured does not imply catchable. Runtime failures carry the same public

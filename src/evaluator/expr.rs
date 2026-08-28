@@ -440,20 +440,22 @@ impl super::Evaluator {
                     } // default will be used
                     let arg_ref = arg_refs[i];
                     if let Some(expected_type) = &param.type_name {
-                        let actual_data = self.resolve(arg_ref).unwrap();
-                        let is_valid = type_matches(expected_type.as_str(), actual_data);
-                        if !is_valid {
-                            eprintln!(
-                                "❌ TYPE ERROR: Parameter '{}' expected '{}' but received '{}'.",
-                                param.name,
-                                expected_type,
-                                actual_data.type_name()
+                        // Classify before raising: `resolve` holds an immutable
+                        // borrow that must end before a diagnostic is recorded.
+                        let mismatch = match self.resolve(arg_ref) {
+                            Some(data) if type_matches(expected_type.as_str(), data) => None,
+                            Some(data) => Some(data.type_name().to_string()),
+                            None => Some("null".to_string()),
+                        };
+                        if let Some(actual) = mismatch {
+                            let message = format!(
+                                "Parameter '{}' expected '{}' but received '{}'",
+                                param.name, expected_type, actual
                             );
-                            self.print_call_stack();
                             self.scopes.pop();
                             self.call_depth -= 1;
                             self.call_stack.pop();
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TypeError", message);
                         }
                     }
                 }
@@ -541,9 +543,7 @@ impl super::Evaluator {
                         | EvalResult::Continue
                         | EvalResult::BreakLabel(_)
                         | EvalResult::ContinueLabel(_) => {
-                            eprintln!(
-                                "❌ ERROR: 'break'/'continue' cannot be used outside of a loop"
-                            );
+                            self.rt_err("'break'/'continue' cannot be used outside of a loop");
                             early_error = true;
                             break;
                         }
@@ -596,15 +596,16 @@ impl super::Evaluator {
                 let result_ref = self.plant(owned);
 
                 if let Some(expected_ret) = &return_type {
-                    let actual_data = self.resolve(result_ref).unwrap();
-                    let is_valid = type_matches(expected_ret.as_str(), actual_data);
-                    if !is_valid {
-                        eprintln!(
-                            "❌ TYPE ERROR: Function expected to return '{}' but returned another type.",
-                            expected_ret
+                    let mismatch = match self.resolve(result_ref) {
+                        Some(data) if type_matches(expected_ret.as_str(), data) => None,
+                        Some(data) => Some(data.type_name().to_string()),
+                        None => Some("null".to_string()),
+                    };
+                    if let Some(actual) = mismatch {
+                        let message = format!(
+                            "Function expected to return '{expected_ret}' but returned '{actual}'"
                         );
-                        self.print_call_stack();
-                        return EvalResult::Error;
+                        return self.rt_err_kind("TypeError", message);
                     }
                 }
 
@@ -640,14 +641,16 @@ impl super::Evaluator {
                     match self.eval_expression(el) {
                         EvalResult::Value(r) => {
                             if let Some(ref et) = arr.element_type {
-                                let data = self.resolve(r).unwrap();
-                                if !type_matches(et, data) {
-                                    eprintln!(
-                                        "❌ TYPE ERROR: Array declared as [{}] but element has type '{}'",
-                                        et,
-                                        data.type_name()
+                                let mismatch = match self.resolve(r) {
+                                    Some(data) if type_matches(et, data) => None,
+                                    Some(data) => Some(data.type_name().to_string()),
+                                    None => Some("null".to_string()),
+                                };
+                                if let Some(actual) = mismatch {
+                                    let message = format!(
+                                        "Array declared as [{et}] but element has type '{actual}'"
                                     );
-                                    return EvalResult::Error;
+                                    return self.rt_err_kind("TypeError", message);
                                 }
                             }
                             let owned = self.extract(r);
@@ -785,25 +788,31 @@ impl super::Evaluator {
                     };
 
                     if dict_lit.key_type != "any" {
-                        let kd = self.resolve(key_ref).unwrap();
-                        let valid = type_matches(&dict_lit.key_type, kd);
-                        if !valid {
-                            eprintln!(
-                                "❌ TYPE ERROR: Dict key does not match declared key type '{}'",
-                                dict_lit.key_type
+                        let mismatch = match self.resolve(key_ref) {
+                            Some(data) if type_matches(&dict_lit.key_type, data) => None,
+                            Some(data) => Some(data.type_name().to_string()),
+                            None => Some("null".to_string()),
+                        };
+                        if let Some(actual) = mismatch {
+                            let declared = dict_lit.key_type.clone();
+                            let message = format!(
+                                "Dict key does not match declared key type '{declared}', got '{actual}'"
                             );
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TypeError", message);
                         }
                     }
                     if dict_lit.value_type != "any" {
-                        let vd = self.resolve(val_ref).unwrap();
-                        let valid = type_matches(&dict_lit.value_type, vd);
-                        if !valid {
-                            eprintln!(
-                                "❌ TYPE ERROR: Dict value does not match declared value type '{}'",
-                                dict_lit.value_type
+                        let mismatch = match self.resolve(val_ref) {
+                            Some(data) if type_matches(&dict_lit.value_type, data) => None,
+                            Some(data) => Some(data.type_name().to_string()),
+                            None => Some("null".to_string()),
+                        };
+                        if let Some(actual) = mismatch {
+                            let declared = dict_lit.value_type.clone();
+                            let message = format!(
+                                "Dict value does not match declared value type '{declared}', got '{actual}'"
                             );
-                            return EvalResult::Error;
+                            return self.rt_err_kind("TypeError", message);
                         }
                     }
 
@@ -817,12 +826,10 @@ impl super::Evaluator {
                 }))
             }
 
-            Expression::EntryLiteral(_, _) => {
-                eprintln!(
-                    "❌ ERROR: Entry literal {{k,v}} is only valid as an argument to a dict method"
-                );
-                EvalResult::Error
-            }
+            Expression::EntryLiteral(_, _) => self.rt_err_kind(
+                "TypeError",
+                "Entry literal {k,v} is only valid as an argument to a dict method",
+            ),
 
             Expression::DotCall(dot_call) => {
                 // super.method(args) — dispatch to parent class method
@@ -909,11 +916,9 @@ impl super::Evaluator {
                                 variant,
                             }));
                         }
-                        eprintln!(
-                            "❌ ERROR: '{}' is not a variant of enum '{}'",
-                            dot_call.method, name
-                        );
-                        return EvalResult::Error;
+                        let message =
+                            format!("'{}' is not a variant of enum '{}'", dot_call.method, name);
+                        return self.rt_err_kind("ReferenceError", message);
                     }
                     // ── Static method call: ClassName.method(args) ───────────────
                     if let Some(class) = self.class_registry.get(name).cloned() {
@@ -1130,8 +1135,7 @@ impl super::Evaluator {
                 let obj_data = match self.resolve(obj_ref) {
                     Some(d) => d.clone(),
                     None => {
-                        eprintln!("❌ ERROR: Invalid reference in dot call");
-                        return EvalResult::Error;
+                        return self.rt_err_kind("ReferenceError", "Invalid reference in dot call");
                     }
                 };
 
@@ -1206,8 +1210,9 @@ impl super::Evaluator {
                             let s = format!("{}.{}", enum_name, variant);
                             EvalResult::Value(self.alloc(ObjectData::Str(s)))
                         } else {
-                            eprintln!("❌ ERROR: Enum variant has no method '{}'", dot_call.method);
-                            EvalResult::Error
+                            let message =
+                                format!("Enum variant has no method '{}'", dot_call.method);
+                            self.rt_err_kind("ReferenceError", message)
                         }
                     }
 
@@ -1218,11 +1223,9 @@ impl super::Evaluator {
                     }
 
                     _ => {
-                        eprintln!(
-                            "❌ ERROR: '.' method call not supported for type '{}'",
-                            obj_data.type_name()
-                        );
-                        EvalResult::Error
+                        let actual = obj_data.type_name().to_string();
+                        let message = format!("'.' method call not supported for type '{actual}'");
+                        self.rt_err_kind("TypeError", message)
                     }
                 };
 
@@ -1253,12 +1256,10 @@ impl super::Evaluator {
                 self.rt_err_kind("ReferenceError", message)
             }
 
-            Expression::ObjectPatch(_) => {
-                eprintln!(
-                    "❌ ERROR: Object patch '{{field: val}}' is only valid in an assignment context"
-                );
-                EvalResult::Error
-            }
+            Expression::ObjectPatch(_) => self.rt_err_kind(
+                "TypeError",
+                "Object patch '{field: val}' is only valid in an assignment context",
+            ),
 
             Expression::Ternary(ternary) => {
                 let cond_ref = match self.eval_expression(&ternary.condition) {
@@ -1416,17 +1417,14 @@ impl super::Evaluator {
             Expression::AddressOf(inner) => {
                 if let Expression::Identifier(name) = inner.as_ref() {
                     if self.lookup_var(name).is_none() {
-                        eprintln!(
-                            "❌ ERROR: Cannot take address of undeclared variable '{}'",
-                            name
-                        );
-                        return EvalResult::Error;
+                        let message =
+                            format!("Cannot take address of undeclared variable '{name}'");
+                        return self.rt_err_kind("ReferenceError", message);
                     }
                     let ptr = ObjectData::Ptr(name.clone());
                     EvalResult::Value(self.alloc(ptr))
                 } else {
-                    eprintln!("❌ ERROR: '&' can only be applied to a named variable");
-                    EvalResult::Error
+                    self.rt_err_kind("TypeError", "'&' can only be applied to a named variable")
                 }
             }
 
@@ -1439,14 +1437,11 @@ impl super::Evaluator {
                     Some(ObjectData::Ptr(name)) => match self.lookup_var(&name) {
                         Some(r) => EvalResult::Value(r),
                         None => {
-                            eprintln!("❌ ERROR: Dangling pointer to '{}'", name);
-                            EvalResult::Error
+                            let message = format!("Dangling pointer to '{name}'");
+                            self.rt_err_kind("ReferenceError", message)
                         }
                     },
-                    _ => {
-                        eprintln!("❌ ERROR: Cannot dereference a non-pointer value");
-                        EvalResult::Error
-                    }
+                    _ => self.rt_err_kind("TypeError", "Cannot dereference a non-pointer value"),
                 }
             }
 

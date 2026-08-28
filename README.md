@@ -4104,8 +4104,8 @@ sz script.sz > output.txt 2> errors.txt
 | `❌ ERROR: Division by zero` | `/` with zero on the right |
 | `❌ ERROR: Modulus operator by zero` | `%` with zero on the right |
 | `❌ ERROR: Integer overflow` | Arithmetic result exceeds `i64` range |
-| `❌ TYPE ERROR: Parameter 'p' expected 'T'` | Runtime type mismatch on a typed parameter |
-| `❌ TYPE ERROR: Function expected to return 'T'` | Return value type does not match declared return type |
+| `❌ ERROR [SZ4002]: Parameter 'p' expected 'T' but received 'U'` | Runtime type mismatch on a typed parameter |
+| `❌ ERROR [SZ4002]: Function expected to return 'T' but returned 'U'` | Return value type does not match declared return type |
 | `❌ TYPE ERROR [line L:C]: ...` | Static checker caught a type error before execution |
 | `❌ FLASH SCOPE ERROR: 'return' outside function` | `return` used at the top level |
 | `❌ PARSER ERROR: Expected ...` | Syntax error — the parser describes the missing token |

@@ -1798,6 +1798,130 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
+fn core_expression_diagnostics_are_structured_and_catchable() {
+    // These are the diagnostics an ordinary program hits: a wrong argument, a
+    // wrong return, a literal that violates its own declared type. Every one of
+    // them used to print to stderr and return an untyped sentinel, so none was
+    // catchable and none could be classified without reading English.
+    let cases = [
+        (
+            r#"fn int f(int n) { return n; } f("x");"#,
+            "SZ4002",
+            "TypeError",
+            "Parameter 'n' expected 'int' but received 'string'",
+        ),
+        (
+            r#"fn int f() { return "s"; } f();"#,
+            "SZ4002",
+            "TypeError",
+            "expected to return 'int' but returned 'string'",
+        ),
+        (
+            r#"let a [int] = [1, "x"];"#,
+            "SZ4002",
+            "TypeError",
+            "Array declared as [int] but element has type 'string'",
+        ),
+        (
+            r#"let d <string, int> = ({1, 2});"#,
+            "SZ4002",
+            "TypeError",
+            "Dict key does not match declared key type 'string'",
+        ),
+        (
+            r#"let d <string, int> = ({"a", "b"});"#,
+            "SZ4002",
+            "TypeError",
+            "Dict value does not match declared value type 'int'",
+        ),
+        (
+            "enum E { A } E.B();",
+            "SZ4001",
+            "ReferenceError",
+            "'B' is not a variant of enum 'E'",
+        ),
+        (
+            "enum E { A } let v = E.A; v.nope();",
+            "SZ4001",
+            "ReferenceError",
+            "Enum variant has no method 'nope'",
+        ),
+        (
+            "true.nope();",
+            "SZ4002",
+            "TypeError",
+            "'.' method call not supported for type 'bool'",
+        ),
+        (
+            "let p = &nosuchvar;",
+            "SZ4001",
+            "ReferenceError",
+            "Cannot take address of undeclared variable 'nosuchvar'",
+        ),
+        (
+            "let p = &(1 + 2);",
+            "SZ4002",
+            "TypeError",
+            "'&' can only be applied to a named variable",
+        ),
+        (
+            "let x = 5; let d = *x;",
+            "SZ4002",
+            "TypeError",
+            "Cannot dereference a non-pointer value",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected a structured diagnostic, got {other:?}"),
+        }
+    }
+
+    // Catchable, and the program keeps running afterwards.
+    let caught = r#"
+        fn int doble(int n) { return n * 2; }
+        let caughtCount = 0;
+        try { doble("x"); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { let bad [int] = [1, "x"]; }
+        catch (e) { if (e.code == "SZ4002") { caughtCount++; } }
+        try { let p = &nosuchvar; }
+        catch (e) { if (e.code == "SZ4001") { caughtCount++; } }
+        if (caughtCount != 3) { throw "core diagnostics were not catchable"; }
+        if (doble(21) != 42) { throw "the evaluator did not recover"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn a_typed_parameter_failure_still_reports_the_call_stack() {
+    // The stack used to be printed by a side-effecting `print_call_stack()`
+    // call next to the eprintln. It now travels in the structured payload, so
+    // an embedder gets the frames instead of having to scrape stderr.
+    let src = r#"
+        fn int doble(int n) { return n * 2; }
+        fn int outer(string s) { return doble(s); }
+        outer("hola");
+    "#;
+    match evaluate(src) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4002");
+            assert!(
+                error.stack.iter().any(|frame| frame.name == "outer"),
+                "the failing call's caller must appear in the stack: {error:?}"
+            );
+        }
+        other => panic!("expected a structured diagnostic, got {other:?}"),
+    }
+}
+
+#[test]
 fn dict_and_set_failures_are_structured_and_catchable() {
     let cases = [
         (

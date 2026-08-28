@@ -7,6 +7,23 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Core expression diagnostics are structured and catchable
+
+- The diagnostics an ordinary program actually hits — a wrong argument type, a
+  wrong return type, an array or dict literal violating its own declared type,
+  a dot call on a type with no methods, an unknown enum variant, a bad `&` or
+  `*` — were the last common ones still printing to stderr and returning an
+  untyped sentinel. None of them was catchable, and none carried a code.
+- All fourteen now use the structured channel: `TypeError` (`SZ4002`) for the
+  type failures, `ReferenceError` (`SZ4001`) for the ones that name something
+  that does not exist.
+- The call stack a typed-parameter failure printed as a side effect now travels
+  in the error payload's `stack`, so an embedder reads frames instead of
+  scraping stderr. Uncaught, the terminal output is unchanged: the same
+  `called from …` lines with the source excerpt and caret.
+- Five `resolve(...).unwrap()` calls on the user-input path were replaced with
+  explicit handling while migrating them.
+
 ### `sz install` no longer fails on a declared minimum runtime
 
 - `serez-ui` declares `"serez-code": ">= 9.17.0"` in `dependencies` to state the
