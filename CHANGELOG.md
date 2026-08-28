@@ -7,6 +7,34 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Four more contracts audited; `DateField` was described around, never stated
+
+- `spec/strings.md` (27 claims), `spec/random.md` (18), `spec/control-flow.md`
+  (11), `spec/variables.md` (12) and the string/operator half of
+  `spec/lexical-grammar.md` all checked against the running binary. **All clean.**
+  Among the things that held rather than merely being asserted: `"x".padStart(4,
+  "ab")` is `"babx"`, `slice` clamps `i64::MIN` instead of indexing native
+  memory, an unknown escape keeps its backslash so a Windows path survives,
+  `Random.int` covers the full `i64` domain, `Random.shuffle` does not mutate its
+  input, a `for-in` closure per iteration keeps its own value, and a failed
+  destructuring pattern declares none of its bindings.
+- **`spec/datetime.md` had two gaps**, both of them the facts a caller trips
+  over. Every construction, range, leap-year, clamping and failure claim held,
+  but the document never said what a `DateField` *is* to the program:
+
+      let m = DateTime.from(2026, 1, 31).month();
+      type_of(m)      // "int"                 — there is no "DateField" type name
+      m.toString()    // "1"                   — a field reads as its value
+      m.add(1)        // 2026-02-28T00:00:00   — and returns a DateTime, not a field
+
+  `add`/`reduce`/`remove` returning a **`DateTime`** is the point of the type — a
+  number that remembers the instant it came from — and it was the one thing the
+  section describing them did not say. Both facts are now written down, with the
+  January-31 clamp shown, and `spec/types.md`'s `type_of` table gained the two
+  rows it was missing. Pinned by
+  `a_datefield_reports_as_an_int_and_its_arithmetic_returns_a_datetime`.
+- No behaviour changed.
+
 ### Constructor chaining reaches one level, not the whole hierarchy
 
 - `spec/classes.md` said each constructor in a multi-level chain "must itself

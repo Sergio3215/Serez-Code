@@ -49,6 +49,32 @@ units shift the instant; month/year arithmetic is calendar-based and clamps the
 day to the last valid day of the target month. `value`, `toInt` and `toString`
 take no arguments.
 
+**`add`/`reduce`/`remove` return a `DateTime`, not a `DateField`.** That is the
+point of the type: a field is a number that remembers the instant it came from,
+so arithmetic on it produces a new instant rather than a new number.
+
+```serez
+let m = DateTime.from(2026, 1, 31).month();
+m.toString();        // "1"                    — the field reads as its value
+m.add(1);            // 2026-02-28T00:00:00    — and adds as a calendar month
+```
+
+Note the clamp in that example: January 31 plus one month is February 28, not an
+invalid February 31.
+
+A `DateField` also reports itself as an **`int`**, not as a `DateField`:
+
+| Expression | Result |
+| --- | --- |
+| `type_of(field)` | `"int"` |
+| `field is int` | `true` |
+| `field is DateTime` | `false` |
+| `field * 2` | an ordinary `int` product |
+| passing it to an `int` parameter | accepted |
+
+There is no `"DateField"` type name to test against. Introspection sees an
+integer; only the `add`/`reduce`/`remove` members reveal the retained instant.
+
 ## Calls and failures
 
 Arity is validated before argument expressions are evaluated. A rejected call

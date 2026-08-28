@@ -161,6 +161,8 @@ Interface fields are checked when the instance is built and never again. See
 | a lambda or function | `function` |
 | an instance of `C` | `C` |
 | a variant of `enum P` | `P` |
+| a `DateTime` | `DateTime` |
+| a `DateField` | **`int`** — see `datetime.md` |
 
 `is` uses the same matching table as a parameter: `1 is decimal` is `false`,
 `1m is decimal` is `false`, everything `is any`, and a subclass `is` only its

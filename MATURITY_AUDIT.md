@@ -262,7 +262,10 @@ stale; `ls spec/` is the inventory.
 - `packages.md` — typed manifest fields, resolution order, package-contained
   paths, archive limits and the explicit supply-chain/atomicity gaps.
 - `lexical-grammar.md` — token forms, Unicode behavior, comment/string rules and
-  the stable `SZ1001`–`SZ1004` failure modes.
+  the stable `SZ1001`–`SZ1004` failure modes, plus the 50 reserved words.
+  **Audited: clean**, including that an unknown escape keeps its backslash (so a
+  Windows path survives), single-quoted strings are literal, `r"…"` is raw, and
+  `..` is two dots while `...` is spread.
 - `variables.md` — normative declaration destructuring, accepted sources,
   missing-value behavior and `SZ4002` failures. **Audited: clean on all twelve
   claims**, including that nested patterns really are a parse error and that a
@@ -293,10 +296,20 @@ stale; `ls spec/` is the inventory.
   key/value types and the stable dict failure modes.
 - `sets.md` — construction, value equality and compound elements, the method
   table, and the stable Set failure modes.
-- `strings.md` — the character model and the built-in string methods.
+- `strings.md` — the character model and the built-in string methods. **Audited:
+  clean on all twenty-seven claims**, including scalar-vs-grapheme length, the
+  historical padding order (`"x".padStart(4, "ab")` is `"babx"`), `i64::MIN`
+  clamping in `slice`, and the four-way failure classification.
 - `datetime.md` — `DateTime`/`DateField` values, their permissions and formats.
+  Audited: every construction, range, leap-year, clamping and failure claim held.
+  Two facts it described around but never stated are now written down, both of
+  them the ones a caller trips over: a `DateField` reports as an **`int`** (there
+  is no `"DateField"` type name to test against), and `add`/`reduce`/`remove`
+  return a **`DateTime`**, not another field.
 - `random.md` — the deterministic generator, its reproducibility contract and
-  the fact that it is not security-grade entropy.
+  the fact that it is not security-grade entropy. **Audited: clean on all
+  eighteen claims**, including the full `int` domain, the state shared with
+  `Math.random()`, `shuffle` not mutating its input, and every failure class.
 - `tasks.md` — worker runtime ownership, isolation and messaging.
 - `cli.md` — what the `sz` executable accepts, what it writes to stdout versus
   stderr, and what it returns.
@@ -346,18 +359,22 @@ changes where the remaining risk is:
 | `limits.md` | five enforced ceilings undocumented; one measurement stale |
 | `classes.md` | one claim wrong — implicit chaining reaches one level, not the hierarchy |
 | README code | five examples did not parse; one contradicted the same file |
+| `datetime.md` | two facts undocumented — `DateField` introspection and what its arithmetic returns |
 | `packages.md` | clean |
 | `functions.md` | clean |
 | `control-flow.md` | clean |
 | `variables.md` | clean |
+| `strings.md` | clean |
+| `random.md` | clean |
+| `lexical-grammar.md` | clean |
 
 The defects clustered in documents making *many* claims with *little* test
 backing. Where a document was already pinned by tests — `packages.md` has 30 unit
 tests behind it — it held. That is the argument for the rule this section already
 states: a rule goes in `spec/` only once it is pointed at a conformance test.
 
-Still unaudited by this method: `tasks.md`, `datetime.md`, `random.md`,
-`strings.md`, `compiler.md`, `cli.md`, `compatibility.md`.
+Still unaudited by this method: `tasks.md`, `compiler.md`, `cli.md`,
+`compatibility.md`.
 
 ### P3/P4 — performance and features
 

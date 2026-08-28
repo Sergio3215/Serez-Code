@@ -3110,3 +3110,38 @@ fn implicit_constructor_chaining_reaches_exactly_one_level() {
         other => panic!("explicit super() must chain, got {other:?}"),
     }
 }
+
+#[test]
+fn a_datefield_reports_as_an_int_and_its_arithmetic_returns_a_datetime() {
+    // Two facts spec/datetime.md described around but never stated, and both
+    // are the ones a caller trips over. A DateField is introspected as an
+    // `int` — there is no "DateField" type name to test against — and
+    // add/reduce/remove return a **DateTime**, not another field. That is the
+    // point of the type: a number that remembers the instant it came from, so
+    // arithmetic on it produces a new instant.
+    let src = r#"
+        let d = DateTime.from(2026, 1, 31);
+        let m = d.month();
+
+        if (type_of(d) != "DateTime") { throw "DateTime reports as " + type_of(d); }
+        if (type_of(m) != "int") { throw "DateField reports as " + type_of(m); }
+        if (!(m is int)) { throw "a DateField must satisfy int"; }
+        if (m is DateTime) { throw "a DateField must not satisfy DateTime"; }
+
+        if (m.toString() != "1") { throw "a field reads as its value, got " + m.toString(); }
+        if (m * 2 != 2) { throw "a field must multiply as an int"; }
+
+        let shifted = m.add(1);
+        if (type_of(shifted) != "DateTime") {
+            throw "add() must return a DateTime, got " + type_of(shifted);
+        }
+        // January 31 plus one calendar month clamps to the last valid day.
+        if (shifted.day() != 28 || shifted.month() != 2) {
+            throw "month arithmetic must clamp the day, got " + shifted.iso();
+        }
+    "#;
+    match evaluate(src) {
+        ProgramOutcome::Value(_) => {}
+        other => panic!("the DateField contract must hold, got {other:?}"),
+    }
+}
