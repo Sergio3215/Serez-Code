@@ -20,7 +20,7 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo check` | PASS, one Rust warning (`namespaces_gui.rs:851`, unused assignment) |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
 | `cargo test --all-targets` | PASS, 244 tests (148 library, 33 LSP binary, 9 frontend robustness, 54 runtime outcome) |
-| Serez test runner | PASS, 465 files/groups; 0 failed; 0 skipped |
+| Serez test runner | PASS, 471 files/groups; 0 failed; 0 skipped |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
 The ecosystem row is the compatibility evidence for the frontend depth ceiling
@@ -74,7 +74,7 @@ files are `namespaces_gui.rs` (6,036), `parser.rs` (3,880),
 | GUI / media | medium | architecture, portability | GUI is the largest subsystem and shares evaluator state; audio is a default feature and needs platform packages. | Move state behind capability services; keep GUI behavior covered by `serez-ui` canary tests. |
 | GPU / Tensor / Autodiff | high | resource robustness | Large native surfaces have explicit caps and broad tests, but share evaluator state; compiler parity is incomplete. Tensor construction now checks shape multiplication and the 10M-element cap. Every GPU creation path and matmul output enforces a real 256 MiB per-buffer ceiling with checked dimension products. Malformed `.szw` metadata is checked before allocation. | Add aggregate runtime budgets; move numeric services and the format contract out of evaluator internals. |
 | Random | critical | crash bug fixed, semantic/security contract | **Resolved.** `Random.int(i64::MIN, i64::MAX)` overflowed its inclusive-width calculation and panicked the debug host; wide ranges were also truncated to 31 bits. Width arithmetic is now overflow-safe, wide draws cover the complete integer domain, established small-range seeded sequences remain compatible, and all Random/shape validation is structured. The LCG remains deliberately predictable and is not cryptographic entropy. | Keep seeded compatibility and full-domain regressions; use `Crypto.randomBytes` for secrets and treat any future generator replacement as compatibility-impacting. See `spec/random.md`. |
-| CLI | medium | DX | CLI, eval, REPL and package commands have tests and mostly coherent exit behavior. Human diagnostics are coupled to printed strings/emojis. | Define exit-code and stdout/stderr contracts; offer machine-readable diagnostics without changing defaults. |
+| CLI | medium | DX; missing `--help` fixed | **Partly resolved.** `sz --help` did not exist — it fell through to `Unknown flag` on stderr with exit 1, so the command surface was undiscoverable without reading `main.rs`. It now prints usage on stdout with exit 0, with `-h` and `sz help` as aliases, and the two dead-end usage errors point at it. `spec/cli.md` states the exit-code and stream contract, verified against the binary. | Machine-readable (`--json`) diagnostics and finer exit codes remain unspecified and are listed as such in `spec/cli.md`. |
 | REPL | medium | semantic consistency | State and recovery tests pass, but REPL and file execution need a declared parity contract. | Add multiline/parser/error/exit behavior tests and document deliberate differences. |
 | LSP | medium | tooling consistency | LSP reconstructs symbols from partial frontend information and duplicates builtin knowledge. Diagnostics now carry the frontend's stable `SZ2xxx`/`SZ3xxx` code in the standard LSP `code` field, so a client no longer has to match on wording. | Consume the same structured diagnostics and generated capability metadata as CLI/runtime. |
 | Package manager | high | supply-chain/security | Strict 1 MiB JSON manifests, identifier/path containment, canonical `bin` targets, ZIP traversal/symlink checks and archive expansion limits now have Rust regressions. Installation is still non-atomic and packages have no lockfile, integrity/signature policy or minimum-runtime field. | Add staging plus atomic replacement, then specify integrity, yanks and runtime/spec constraints without changing resolution silently. |
@@ -264,7 +264,7 @@ Proposed public tiers:
   reserved `serez-code` minimum-runtime key, and the known gaps.
 
 Still to write: `syntax.md`, `values.md`, `types.md`, `operators.md`,
-`scopes.md` and `modules.md`.
+`scopes.md` and `modules.md`. `cli.md` and `compatibility.md` are now written.
 The remaining sections of variables and control flow also need expansion. All
 of these describe semantics that are load-bearing for the whole ecosystem, so
 each rule has to be checked

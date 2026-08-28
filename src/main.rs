@@ -35,6 +35,52 @@ fn read_stdin() -> Option<String> {
     }
 }
 
+/// Usage text for `sz --help`.
+///
+/// Printed on **stdout** with exit code 0: asking for help is not an error, and
+/// a tool that answers `sz --help` on stderr with exit 1 cannot be piped into a
+/// pager or checked by a script. `sz` with no arguments starts the REPL, so the
+/// only way to discover the surface was to read the source.
+fn print_help() {
+    println!(
+        "\
+Serez-Code v{version}
+
+USAGE
+  sz <file.sz|file.szx>          Run a program
+  sz --check <file>              Type-check and report, without running
+  sz --watch <file>              Re-run the file whenever it changes
+  sz --eval \"<code>\"             Run a snippet (no manifest, lockdown on)
+  sz --eval -                    Read the snippet from stdin
+  sz                             Start the REPL
+  sz --version                   Print the version
+  sz --help                      Print this message
+
+PACKAGES
+  sz init [--y]                  Create serez.json in this directory
+  sz install [<pkg>[@<ver>]]     Install one package, or every dependency
+  sz uninstall <pkg>             Remove a package
+  sz update [<pkg>]              Update one package, or all of them
+  sz info <pkg>                  Show a package's manifest
+  sz run <script> [args...]      Run a script from serez.json
+  sz publish                     Publish this package to the registry
+  sz unpublish <pkg>@<ver>       Remove a published version
+  sz logout                      Forget the stored registry credentials
+
+  -g, --global                   Apply the package command to the global store
+
+EXIT CODES
+  0   success
+  1   usage error, failed subcommand, parse error, type error,
+      runtime error, or uncaught exception
+
+Diagnostics go to stderr and carry a stable code (SZ1xxx lexer, SZ2xxx parser,
+SZ3xxx types, SZ4xxx runtime, SZ5xxx modules, SZ6xxx permissions and limits,
+SZ7xxx compiler). Match on the code, never on the wording.",
+        version = env!("CARGO_PKG_VERSION")
+    );
+}
+
 /// Process entry point. Returns the exit code: 0 on success, non-zero on any
 /// usage error, subcommand failure, parse error, or uncaught runtime exception.
 fn run() -> i32 {
@@ -148,6 +194,11 @@ fn run() -> i32 {
             return 0;
         }
 
+        if args.iter().any(|a| a == "--help" || a == "-h") || args[1] == "help" {
+            print_help();
+            return 0;
+        }
+
         // ── `sz --eval "<code>"` / `sz --eval -` ──────────────────────────────
         // Runs a snippet with no file behind it: no serez.json, so no permissions,
         // and lockdown on. Handled before the flag loop below because its argument
@@ -176,7 +227,10 @@ fn run() -> i32 {
             } else if arg == "--watch" {
                 is_watch = true;
             } else if arg.starts_with("--") {
-                eprintln!("❌ ERROR: Unknown flag '{}'", arg);
+                eprintln!(
+                    "❌ ERROR: Unknown flag '{}'. Run `sz --help` for usage.",
+                    arg
+                );
                 return 1;
             } else if file_path.is_empty() {
                 file_path = arg.clone();
@@ -184,7 +238,10 @@ fn run() -> i32 {
         }
 
         if file_path.is_empty() {
-            eprintln!("❌ ERROR: You must provide a .sz file to execute or check.");
+            eprintln!(
+                "❌ ERROR: You must provide a .sz file to execute or check. \
+                 Run `sz --help` for usage."
+            );
             return 1;
         }
 

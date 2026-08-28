@@ -593,8 +593,20 @@ Write-Host "═══ CLI Tests ════════════════
 if ($runAll -or $cli) {
     Run-CLI-Test "cli: --version prints version"       @("--version") `
                  -expectOut "Serez-Code v"
+    Run-CLI-Test "cli: --help prints usage on stdout"  @("--help") `
+                 -expectOut "USAGE"
+    Run-CLI-Test "cli: -h is accepted"                 @("-h") `
+                 -expectOut "USAGE"
+    Run-CLI-Test "cli: help subcommand is accepted"    @("help") `
+                 -expectOut "USAGE"
+    Run-CLI-Test "cli: --help documents the exit codes" @("--help") `
+                 -expectOut "EXIT CODES"
     Run-CLI-Test "cli: unknown flag reports error"     @("--unknown-flag") `
                  -expectErr "Unknown flag"
+    Run-CLI-Test "cli: unknown flag points at --help"  @("--unknown-flag") `
+                 -expectErr "sz --help"
+    Run-CLI-Test "cli: no file argument points at --help" @("--check") `
+                 -expectErr "sz --help"
     Run-CLI-Test "cli: non-.sz file rejected"          @("readme.txt") `
                  -expectErr ".sz extension"
     $noSz = "`"$(Join-Path $testsDir 'this_file_does_not_exist.sz')`""

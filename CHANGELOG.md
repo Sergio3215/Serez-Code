@@ -7,6 +7,22 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `sz --help` exists, and the CLI contract is written down
+
+- `sz --help` was not implemented. It fell through to `Unknown flag '--help'`
+  on stderr with exit 1, so the only way to discover the command surface was to
+  read `main.rs`. It now prints usage on **stdout** with exit **0** — asking for
+  help is not an error, and a tool that answers on stderr cannot be piped into
+  a pager or checked by a script. `-h` and `sz help` do the same.
+- The two usage errors that used to be dead ends — an unknown flag and a
+  missing file argument — now point at `sz --help`.
+- `spec/cli.md` is new: exit codes, which stream carries what, every flag and
+  subcommand, the lockdown rules for `--eval`, and an explicit list of what is
+  *not* specified (no `--json` output, no finer exit codes, no locale promise).
+  Everything in it was checked against the running binary.
+- Seven CLI tests in both runners cover the help output, its aliases, and the
+  hints on the usage errors.
+
 ### Native namespace validation is structured, and `kind` finally means one thing
 
 - GPU, Binary, Memory, Tensor, Crypto and Gui validated their arguments by

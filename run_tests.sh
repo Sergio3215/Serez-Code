@@ -320,7 +320,13 @@ echo ""
 echo "${CYAN}═══ CLI Tests ════════════════════════════════${RESET}"
 if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     run_cli_test "cli: --version prints version" "Serez-Code v" "" "" "" --version
+    run_cli_test "cli: --help prints usage on stdout" "USAGE" "" "" "" --help
+    run_cli_test "cli: -h is accepted" "USAGE" "" "" "" -h
+    run_cli_test "cli: help subcommand is accepted" "USAGE" "" "" "" help
+    run_cli_test "cli: --help documents the exit codes" "EXIT CODES" "" "" "" --help
     run_cli_test "cli: unknown flag reports error" "" "Unknown flag" "" "" --unknown-flag
+    run_cli_test "cli: unknown flag points at --help" "" "sz --help" "" "" --unknown-flag
+    run_cli_test "cli: no file argument points at --help" "" "sz --help" "" "" --check
     run_cli_test "cli: non-.sz file rejected" "" ".sz extension" "" "" readme.txt
     run_cli_test "cli: missing .sz file reports error" "" "ERROR reading file" "" "" \
         "$TESTS_DIR/this_file_does_not_exist.sz"
