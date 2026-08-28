@@ -259,6 +259,10 @@ stale; `ls spec/` is the inventory.
   permission manifest, `unsafe`, lockdown and OS isolation, and stating plainly
   that there is no sandbox.
 - `compiler.md` — the accepted subset of the experimental AOT pipeline.
+  **Audited: clean.** Its atomicity claim — never a partial program with an
+  unsupported construct replaced by `null` — is what `unwrap_err()` in
+  `unsupported_expression_returns_sz7002_instead_of_null_hir` actually proves,
+  and the diagnostic-accumulation claim has its own test.
 - `packages.md` — typed manifest fields, resolution order, package-contained
   paths, archive limits and the explicit supply-chain/atomicity gaps.
 - `lexical-grammar.md` — token forms, Unicode behavior, comment/string rules and
@@ -310,7 +314,11 @@ stale; `ls spec/` is the inventory.
   the fact that it is not security-grade entropy. **Audited: clean on all
   eighteen claims**, including the full `int` domain, the state shared with
   `Math.random()`, `shuffle` not mutating its input, and every failure class.
-- `tasks.md` — worker runtime ownership, isolation and messaging.
+- `tasks.md` — worker runtime ownership, isolation and messaging. **Audited:
+  clean**, including that a later failure wins over an earlier provisional
+  `reply` so a caller cannot observe a premature success, that the last of
+  several replies wins, the `ERROR: ` prefix on a failed poll, and the two
+  documented permissive fallbacks outside a worker.
 - `cli.md` — what the `sz` executable accepts, what it writes to stdout versus
   stderr, and what it returns.
 - `compatibility.md` — the two version numbers, the classes of change, what a
@@ -367,14 +375,23 @@ changes where the remaining risk is:
 | `strings.md` | clean |
 | `random.md` | clean |
 | `lexical-grammar.md` | clean |
+| `tasks.md` | clean |
+| `compiler.md` | clean |
 
 The defects clustered in documents making *many* claims with *little* test
 backing. Where a document was already pinned by tests — `packages.md` has 30 unit
 tests behind it — it held. That is the argument for the rule this section already
 states: a rule goes in `spec/` only once it is pointed at a conformance test.
 
-Still unaudited by this method: `tasks.md`, `compiler.md`, `cli.md`,
-`compatibility.md`.
+Every document making falsifiable behavioural claims has now been checked.
+`cli.md` is pinned by the runner's 33 CLI/`--eval`/REPL/`--check` cases rather
+than by a separate pass, and `compatibility.md` states process and policy — it
+has nothing to probe, only to be followed, which the constructor-type-check
+sweep in this cycle did.
+
+Six documents were clean on first reading; four needed correction. The four
+were also the four making the largest number of claims per line of test
+backing.
 
 ### P3/P4 — performance and features
 

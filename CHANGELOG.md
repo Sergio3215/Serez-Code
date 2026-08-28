@@ -7,6 +7,25 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The specification audit is complete
+
+- `spec/tasks.md` and `spec/compiler.md` checked, both clean. tasks: a later
+  failure wins over an earlier provisional `reply` so a caller cannot observe a
+  premature success, the last of several replies wins, an unknown task id is
+  `SZ4001` for both `poll` and `isDone`, the `ERROR: ` prefix survives, and the
+  two documented permissive fallbacks outside a worker behave exactly as the
+  document admits they do. compiler: its atomicity claim — never a partial
+  program with an unsupported construct replaced by `null` — is precisely what
+  `unwrap_err()` proves in the test named after it.
+- **Every document making falsifiable behavioural claims has now been checked
+  against the running binary.** Ten were clean; four needed correcting, and
+  those four were also the ones making the most claims per line of test backing:
+  `security.md`, `limits.md`, `classes.md` and the README's code.
+- `cli.md` is pinned by the runner's 33 CLI/`--eval`/REPL/`--check` cases rather
+  than by a separate pass. `compatibility.md` states process, not behaviour —
+  there is nothing in it to probe, only something to follow, which the
+  constructor type-check sweep in this cycle did.
+
 ### Four more contracts audited; `DateField` was described around, never stated
 
 - `spec/strings.md` (27 claims), `spec/random.md` (18), `spec/control-flow.md`
