@@ -23,12 +23,44 @@ cargo test --all-targets
 .\run_ecosystem.ps1 -only serez-ui # the canary that exercises the most semantics
 ```
 
+On Unix the same three layers are `./run_tests.sh` and `./run_ecosystem.sh`,
+with `--unit`, `--e2e`, `--security`, `--cli`, `--ai`, `--filter` and
+`--generate` matching the PowerShell switches.
+
 Layers 1 and 2 run in CI on Windows, Linux and macOS. Layer 3 is local: it needs
 the sibling package checkouts, and running floating external code in CI is a
 trust decision that has not been made yet.
 
-**Result:** 459 tests · 0 failures in layer 2, plus 224 Rust tests in layer 1
-(144 library, 33 LSP-binary, 8 frontend-robustness and 39 runtime-outcome tests).
+**Result:** 461 tests · 0 failures in layer 2, plus 228 Rust tests in layer 1
+(144 library, 33 LSP-binary, 8 frontend-robustness and 43 runtime-outcome tests).
+
+### Platform parity
+
+`run_tests.ps1` and `run_tests.sh` must execute the same logical suite. A
+platform that reports PASS because it ran fewer tests is not a quality gate, and
+CI runs the Unix runner on two of its three jobs.
+
+Both runners must cover: E2E golden files, unit files, error files, security
+files, the runner-integrity fixture, AI files, the embedded Rust module suites,
+CLI flags, `--eval` including every lockdown check, the REPL, `--check`, and the
+package-manager commands (`install`, `uninstall`, `init`, `run`, local
+`./packages/` resolution). Both build and exercise the **release** binary, which
+is what users get; the debug profile is covered by `cargo test` in layer 1.
+
+Both also assert that an embedded `cargo test <filter>` actually ran tests.
+`cargo test` exits 0 when a filter matches nothing, so a renamed module would
+otherwise report PASS while asserting nothing. The runners print the count they
+observed.
+
+Two differences are deliberate and are not defects:
+
+- `run_tests.ps1` requires PowerShell 7 or newer. It uses `??`, which Windows
+  PowerShell 5.1 cannot parse; CI runs it under `pwsh`.
+- `run_tests.sh` is a Unix runner. Running it through an emulation layer on
+  Windows fails on path translation, not on the language.
+
+When a category is added to one runner, it must be added to the other in the
+same change, or the difference recorded here with its reason.
 
 The sections below catalogue a selection of layer 2, not every file in `tests/`.
 `run_tests.ps1` is the authority on what exists and what passes.
@@ -53,7 +85,9 @@ Two suites are separate integration tests:
   default-expression propagation through every call path, structured and
   catchable class/interface construction, inheritance, `super`, member and
   property-dispatch validation, Random validation/full-domain integer draws,
-  String validation/propagation/padding ceilings, Task API/lifecycle/lockdown inheritance,
+  String validation/propagation/padding ceilings, Array validation/propagation/
+  sort atomicity, the shared argument helpers that Array, Crypto and Regex use,
+  Task API/lifecycle/lockdown inheritance,
   structured-but-fatal resource ceilings, and the detailed frontend/runtime
   pipeline result.
 

@@ -558,12 +558,22 @@ if ($runAll -or $unit) {
         @{ filter = "evaluator::namespaces_gui::css::tests";  label = "css nativo: condiciones and/or/not + bloques @when/@else" }
     )) {
         Push-Location $root
-        $cargoOut = cargo test $mod.filter --quiet 2>&1
+        $cargoOut = cargo test $mod.filter 2>&1
         $cargoOk  = $LASTEXITCODE -eq 0
         Pop-Location
-        if ($cargoOk) {
-            Write-Host "[PASS] $($mod.label)" -ForegroundColor Green
+        # `cargo test <filter>` exits 0 when the filter matches nothing, so a
+        # renamed or misspelled module would report PASS while asserting
+        # nothing. Require that tests actually ran.
+        $ran = 0
+        $cargoOut | ForEach-Object {
+            if ($_ -match 'test result: ok\. (\d+) passed') { $ran += [int]$Matches[1] }
+        }
+        if ($cargoOk -and $ran -gt 0) {
+            Write-Host "[PASS] $($mod.label) ($ran tests)" -ForegroundColor Green
             $script:pass++
+        } elseif ($cargoOk) {
+            Write-Host "[FAIL] $($mod.label) — filter '$($mod.filter)' matched no tests" -ForegroundColor Red
+            $script:fail++
         } else {
             Write-Host "[FAIL] $($mod.label)" -ForegroundColor Red
             $cargoOut | Where-Object { $_ -match "FAILED|panicked|error" } |
