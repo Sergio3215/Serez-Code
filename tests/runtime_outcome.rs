@@ -1798,6 +1798,52 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
+fn callback_and_patch_dispatch_diagnostics_are_structured() {
+    let cases = [
+        (
+            "[1].map(fn(a, b, c) { return a; });",
+            "SZ4002",
+            "TypeError",
+            "Callback expected 3 argument(s), got 2",
+        ),
+        (
+            r#"interface P { edad: int; } let p = new P({edad: 1}); p = {edad: "x"};"#,
+            "SZ4002",
+            "TypeError",
+            "Field 'edad' expects 'int' but got 'string'",
+        ),
+        (
+            "let x = 5; x = {edad: 1};",
+            "SZ4002",
+            "TypeError",
+            "is not an interface instance",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected a structured diagnostic, got {other:?}"),
+        }
+    }
+
+    // Catchable, and the interface instance is left as it was.
+    let caught = r#"
+        interface P { edad: int; }
+        let p = new P({edad: 1});
+        let caught = false;
+        try { p = {edad: "x"}; } catch (e) { caught = e.code == "SZ4002"; }
+        if (!caught) { throw "patch type failure was not catchable"; }
+        if (p.edad != 1) { throw "a rejected patch must not change the instance"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
 fn a_value_too_deep_to_copy_stops_the_program_instead_of_truncating_it() {
     // `extract` bounds its own recursion at MAX_VALUE_DEPTH. Past that it
     // replaced the subtree with null, printed one line per truncated site and

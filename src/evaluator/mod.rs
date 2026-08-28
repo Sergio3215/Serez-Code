@@ -1722,11 +1722,9 @@ impl Evaluator {
         let method = match self.find_method(class_name, method_name) {
             Some(m) => m,
             None => {
-                eprintln!(
-                    "❌ ERROR: no operator overload '{}' on class '{}'",
-                    method_name, class_name
-                );
-                return EvalResult::Error;
+                let message =
+                    format!("no operator overload '{method_name}' on class '{class_name}'");
+                return self.rt_err_kind("ReferenceError", message);
             }
         };
 
@@ -1776,10 +1774,10 @@ impl Evaluator {
                 | EvalResult::Continue
                 | EvalResult::BreakLabel(_)
                 | EvalResult::ContinueLabel(_) => {
-                    eprintln!(
-                        "❌ RUNTIME ERROR: break/continue used outside a loop in operator method '{}'.",
-                        method_name
+                    let message = format!(
+                        "break/continue used outside a loop in operator method '{method_name}'"
                     );
+                    self.rt_err(message);
                     error = true;
                     break;
                 }
@@ -1828,12 +1826,12 @@ impl Evaluator {
                     parameters.len()
                 };
                 if arg_vals.len() < required || arg_vals.len() > max_pos {
-                    eprintln!(
-                        "❌ ERROR: Callback expected {} argument(s), got {}",
+                    let message = format!(
+                        "Callback expected {} argument(s), got {}",
                         parameters.len(),
                         arg_vals.len()
                     );
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", message);
                 }
                 self.scopes.push();
                 self.call_depth += 1;
@@ -1909,13 +1907,12 @@ impl Evaluator {
                         | EvalResult::Continue
                         | EvalResult::BreakLabel(_)
                         | EvalResult::ContinueLabel(_) => {
-                            eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
                             self.call_depth -= 1;
                             self.scopes.pop();
                             if let Some(prev) = prev_exec_class.clone() {
                                 self.executing_class = prev;
                             }
-                            return EvalResult::Error;
+                            return self.rt_err("break/continue used outside a loop");
                         }
                     }
                 }
@@ -1933,10 +1930,7 @@ impl Evaluator {
                 self.scopes.pop();
                 EvalResult::Value(self.plant(owned))
             }
-            _ => {
-                eprintln!("❌ ERROR: Callback is not a function");
-                EvalResult::Error
-            }
+            _ => self.rt_err_kind("TypeError", "Callback is not a function"),
         }
     }
 

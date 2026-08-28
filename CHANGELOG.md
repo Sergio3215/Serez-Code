@@ -7,6 +7,21 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Callback, class-dispatch and object-patch diagnostics are structured
+
+- Callback arity and shape (`Callback expected N argument(s)`, `Callback is not
+  a function`), a missing operator overload, `super.m()` with no `this` in
+  scope, an object patch on an undeclared variable or a non-interface value,
+  and an interface field patched with the wrong type were all stderr prints
+  returning an untyped sentinel. They are now structured and catchable —
+  `TypeError` (`SZ4002`) or `ReferenceError` (`SZ4001`).
+- `break`/`continue` escaping a class method, an operator method or a callback
+  is a recoverable generic `RuntimeError` (`SZ4000`) instead of a bare print.
+- A patch rejected on type leaves the instance unchanged; that is now covered.
+- `classes.rs` and the evaluator's dispatch machinery no longer print any
+  diagnostic. The prints remaining in `mod.rs` are the boundary renderers that
+  turn a structured payload into terminal output, which is their job.
+
 ### A value too deep to copy no longer corrupts itself and reports success
 
 - `extract` bounds its own recursion at 500 levels. Past that it replaced the

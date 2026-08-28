@@ -248,7 +248,7 @@ impl super::Evaluator {
                     | EvalResult::Continue
                     | EvalResult::BreakLabel(_)
                     | EvalResult::ContinueLabel(_) => {
-                        eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                        self.rt_err("break/continue used outside a loop");
                         body_error = true;
                         break;
                     }
@@ -547,7 +547,7 @@ impl super::Evaluator {
                 | EvalResult::Continue
                 | EvalResult::BreakLabel(_)
                 | EvalResult::ContinueLabel(_) => {
-                    eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                    self.rt_err("break/continue used outside a loop");
                     error = true;
                     break;
                 }
@@ -619,11 +619,8 @@ impl super::Evaluator {
         let this_ref = match self.scopes.lookup("this") {
             Some(r) => r,
             None => {
-                eprintln!(
-                    "❌ ERROR: super.{}() called with no 'this' in scope",
-                    dot_call.method
-                );
-                return EvalResult::Error;
+                let message = format!("super.{}() called with no 'this' in scope", dot_call.method);
+                return self.rt_err_kind("TypeError", message);
             }
         };
 
@@ -733,7 +730,7 @@ impl super::Evaluator {
                 | EvalResult::Continue
                 | EvalResult::BreakLabel(_)
                 | EvalResult::ContinueLabel(_) => {
-                    eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                    self.rt_err("break/continue used outside a loop");
                     error = true;
                     break;
                 }
@@ -764,11 +761,8 @@ impl super::Evaluator {
         let obj_ref = match self.lookup_var(var_name) {
             Some(r) => r,
             None => {
-                eprintln!(
-                    "❌ ERROR: Undeclared variable '{}' in object patch",
-                    var_name
-                );
-                return EvalResult::Error;
+                let message = format!("Undeclared variable '{var_name}' in object patch");
+                return self.rt_err_kind("ReferenceError", message);
             }
         };
 
@@ -787,16 +781,19 @@ impl super::Evaluator {
                 };
                 if let Some(ref schema_fields) = schema {
                     if let Some(iface_field) = schema_fields.iter().find(|f| f.name == field_name) {
-                        if let Some(actual) = self.resolve(val_ref) {
-                            if !type_matches(&iface_field.type_name, actual) {
-                                eprintln!(
-                                    "❌ TYPE ERROR: Field '{}' expects '{}' but got '{}'",
-                                    field_name,
-                                    iface_field.type_name,
-                                    actual.type_name()
-                                );
-                                return EvalResult::Error;
-                            }
+                        // Classify before raising: `resolve` holds an immutable
+                        // borrow that must end before a diagnostic is recorded.
+                        let mismatch = match self.resolve(val_ref) {
+                            Some(actual) if type_matches(&iface_field.type_name, actual) => None,
+                            Some(actual) => Some(actual.type_name().to_string()),
+                            None => None,
+                        };
+                        if let Some(actual) = mismatch {
+                            let expected = iface_field.type_name.clone();
+                            let message = format!(
+                                "Field '{field_name}' expects '{expected}' but got '{actual}'"
+                            );
+                            return self.rt_err_kind("TypeError", message);
                         }
                     }
                 }
@@ -819,11 +816,9 @@ impl super::Evaluator {
             }
             EvalResult::Value(self.null_ref)
         } else {
-            eprintln!(
-                "❌ ERROR: '{}' is not an interface instance — cannot use patch syntax",
-                var_name
-            );
-            EvalResult::Error
+            let message =
+                format!("'{var_name}' is not an interface instance — cannot use patch syntax");
+            self.rt_err_kind("TypeError", message)
         }
     }
 
@@ -1126,7 +1121,7 @@ impl super::Evaluator {
                 | EvalResult::Continue
                 | EvalResult::BreakLabel(_)
                 | EvalResult::ContinueLabel(_) => {
-                    eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
+                    self.rt_err("break/continue used outside a loop");
                     error = true;
                     break;
                 }
