@@ -17,6 +17,7 @@ cargo test --all-targets
 .\run_tests.ps1 -e2e               # E2E + error tests only
 .\run_tests.ps1 -filter "switch"   # filter by name
 .\run_tests.ps1 -generate          # regenerate .expected (after language changes)
+.\run_tests.ps1 -json report.json  # also write a machine-readable report
 
 # 3. The ecosystem, as real consumers of the language
 .\run_ecosystem.ps1                # every official package checked out alongside
@@ -24,15 +25,65 @@ cargo test --all-targets
 ```
 
 On Unix the same three layers are `./run_tests.sh` and `./run_ecosystem.sh`,
-with `--unit`, `--e2e`, `--security`, `--cli`, `--ai`, `--filter` and
-`--generate` matching the PowerShell switches.
+with `--unit`, `--e2e`, `--security`, `--cli`, `--ai`, `--filter`, `--json`
+and `--generate` matching the PowerShell switches.
 
 Layers 1 and 2 run in CI on Windows, Linux and macOS. Layer 3 is local: it needs
 the sibling package checkouts, and running floating external code in CI is a
 trust decision that has not been made yet.
 
-**Result:** 461 tests · 0 failures in layer 2, plus 228 Rust tests in layer 1
-(144 library, 33 LSP-binary, 8 frontend-robustness and 43 runtime-outcome tests).
+Exact counts are not written down here — they went stale the moment they were,
+and a number in a document breaks no build. `cargo test --all-targets` and
+`.\run_tests.ps1 -json report.json` report the real ones; the report's
+`totals` and `categories` are the machine-readable form.
+
+### Machine-readable report
+
+`-json <path>` / `--json <path>` writes the run as JSON beside the terminal
+output. CI produces one per platform and uploads it as an artifact, including
+when the suite fails — a failing run is the one worth reading per test rather
+than by scrolling a log.
+
+```json
+{
+  "schema": "serez-conformance/1",
+  "runner": "run_tests.ps1",
+  "platform": "windows",
+  "core": "Serez-Code v9.17.0",
+  "startedAt": "2026-08-28T17:00:00Z",
+  "filter": "",
+  "totals": { "passed": 473, "failed": 0, "skipped": 0 },
+  "categories": { "unit": { "passed": 160, "failed": 0, "skipped": 0 } },
+  "tests": [
+    { "name": "unit_modules", "category": "unit", "status": "pass",
+      "detail": "Results: 9 passed, 0 failed, 9 total" }
+  ]
+}
+```
+
+Categories are the terminal sections: `runner-integrity`, `e2e`, `unit`,
+`error`, `security`, `ai`, `rust`, `cli`, `eval`, `repl`, `check`,
+`package-manager`. `status` is `pass`, `fail` or `skip`, and `detail` carries
+the reason for a failure or the framework's own summary line for a pass.
+
+Both runners record every counted outcome and then **check the record against
+the counters**, failing the run when they disagree. A site that increments a
+counter without recording would otherwise produce a report quietly missing
+tests that ran.
+
+### Fixtures the runners require
+
+The suite loads `tests/lib/`, `tests/packages/`, `tests/runner_fixtures/` and
+the Serez-source standard library in `std/`. All four were excluded by
+`.gitignore` for a long time — `*.sz` is ignored repository-wide and
+`!tests/*.sz` only un-ignores the top level — so a fresh clone had none of
+them and eight test files failed with `ModuleNotFound`, which points at the
+language rather than at the checkout.
+
+They are tracked now, both runners refuse to start when one is missing, and
+`runner_fixtures_are_tracked_by_git` in `tests/frontend_robustness.rs` fails
+if a fixture exists on disk but not in git. **Anything a test loads has to be
+tracked, and a new fixture tree needs its own `!` line in `.gitignore`.**
 
 ### Platform parity
 

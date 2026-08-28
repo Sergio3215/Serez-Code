@@ -8,6 +8,7 @@
 #   .\run_tests.ps1 -security          # only run security tests (sec_*.sz + unit_sec_*.sz)
 #   .\run_tests.ps1 -cli               # only run CLI flag, REPL, and --check mode tests
 #   .\run_tests.ps1 -ai                # only run AI/ML training tests (ai_*.sz)
+#   .\run_tests.ps1 -json report.json  # also write a machine-readable report
 #
 # ── Test types ────────────────────────────────────────────────────────────────
 #
@@ -274,10 +275,12 @@ param(
     [switch]$e2e       = $false,
     [switch]$security  = $false,
     [switch]$cli       = $false,
-    [switch]$ai        = $false
+    [switch]$ai        = $false,
+    [string]$json      = ""
 )
 
 $ErrorActionPreference = "Stop"
+$startedAt = Get-Date
 $root       = $PSScriptRoot
 $testsDir   = Join-Path $root "tests"
 $framework  = Join-Path $testsDir "framework.sz"
@@ -333,6 +336,29 @@ $pass = 0
 $fail = 0
 $skip = 0
 
+# Every counted outcome is also recorded, so the run can be read by something
+# other than a human scrolling a terminal. `-json <path>` writes it out; with
+# no path the list is still built and used for the self-check below, which is
+# what keeps the recorder honest: if a site increments a counter without
+# recording, the totals stop matching and the run fails.
+$script:results  = New-Object System.Collections.Generic.List[object]
+$script:category = "startup"
+
+function Add-Result([string]$status, [string]$label, [string]$detail = "") {
+    switch ($status) {
+        "pass" { $script:pass++ }
+        "fail" { $script:fail++ }
+        "skip" { $script:skip++ }
+        default { throw "Add-Result: unknown status '$status'" }
+    }
+    $script:results.Add([ordered]@{
+        name     = $label
+        category = $script:category
+        status   = $status
+        detail   = $detail
+    })
+}
+
 function Invoke-Sz([string]$runFile) {
     $outFile = [System.IO.Path]::GetTempFileName()
     $errFile = [System.IO.Path]::GetTempFileName()
@@ -377,10 +403,10 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
         $hasError = ($stderr | Where-Object { $_ -match "^❌" }).Count -gt 0
         if ($result.exitCode -ne 0 -and $hasError) {
             Write-Host "[PASS] $label" -ForegroundColor Green
-            $script:pass++
+            Add-Result "pass" $label
         } else {
             Write-Host "[FAIL] $label — expected non-zero exit and an error diagnostic (exit $($result.exitCode))" -ForegroundColor Red
-            $script:fail++
+            Add-Result "fail" $label "expected non-zero exit and an error diagnostic (exit $($result.exitCode))"
         }
         return
     }
@@ -393,7 +419,7 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
         if ($null -eq $reason) {
             Write-Host "[PASS] $label" -ForegroundColor Green
             if ($summary) { Write-Host "       $summary" -ForegroundColor Gray }
-            $script:pass++
+            Add-Result "pass" $label "$summary"
         } else {
             Write-Host "[FAIL] $label — $reason" -ForegroundColor Red
             $failures | ForEach-Object { Write-Host "       $_" -ForegroundColor Yellow }
@@ -402,7 +428,7 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
                     Write-Host "       $_" -ForegroundColor Yellow
                 }
             }
-            $script:fail++
+            Add-Result "fail" $label $reason
         }
         return
     }
@@ -413,7 +439,7 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
         $stderr | Select-Object -First 3 | ForEach-Object {
             Write-Host "       $_" -ForegroundColor Yellow
         }
-        $script:fail++
+        Add-Result "fail" $label "process exited with code $($result.exitCode)"
         return
     }
 
@@ -426,7 +452,7 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
 
     if (-not (Test-Path $expectedFile)) {
         Write-Host "[SKIP] $label (no .expected file — run with -generate to create)" -ForegroundColor Yellow
-        $script:skip++
+        Add-Result "skip" $label "no .expected file"
         return
     }
 
@@ -439,14 +465,14 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
     $diff = Compare-Object $expected $actual
     if ($null -eq $diff) {
         Write-Host "[PASS] $label" -ForegroundColor Green
-        $script:pass++
+        Add-Result "pass" $label
     } else {
         Write-Host "[FAIL] $label" -ForegroundColor Red
         $diff | ForEach-Object {
             $arrow = if ($_.SideIndicator -eq "<=") { "expected:" } else { "  actual:" }
             Write-Host "       $arrow $($_.InputObject)" -ForegroundColor Yellow
         }
-        $script:fail++
+        Add-Result "fail" $label "stdout differs from the golden file"
     }
 }
 
@@ -490,12 +516,13 @@ function Run-CLI-Test([string]$label, [string[]]$binArgs, [string]$expectOut = "
     if ($expectErr -ne "" -and $r.stderr -notmatch [regex]::Escape($expectErr)) {
         $ok = $false; $reason = "stderr missing '$expectErr'"
     }
-    if ($ok) { Write-Host "[PASS] $label" -ForegroundColor Green; $script:pass++ }
-    else     { Write-Host "[FAIL] $label — $reason" -ForegroundColor Red; $script:fail++ }
+    if ($ok) { Write-Host "[PASS] $label" -ForegroundColor Green; Add-Result "pass" $label }
+    else     { Write-Host "[FAIL] $label — $reason" -ForegroundColor Red; Add-Result "fail" $label $reason }
 }
 
 # The runner itself must reject a unit program that aborts before summary().
 Write-Host "═══ Test Runner Integrity ════════════════════" -ForegroundColor Cyan
+$script:category = "runner-integrity"
 $runnerFixture = Join-Path $testsDir "runner_fixtures\unit_abort_before_summary.sz"
 $fw = Get-Content $framework -Raw
 $src = Get-Content $runnerFixture -Raw
@@ -504,10 +531,10 @@ $runnerProbe = Invoke-Sz $tempFile
 $runnerReason = Get-UnitFailureReason $runnerProbe
 if ($null -ne $runnerReason -and $runnerProbe.exitCode -ne 0) {
     Write-Host "[PASS] runner rejects abort before summary" -ForegroundColor Green
-    $pass++
+    Add-Result "pass" "runner rejects abort before summary"
 } else {
     Write-Host "[FAIL] runner accepted abort before summary" -ForegroundColor Red
-    $fail++
+    Add-Result "fail" "runner rejects abort before summary" "the runner accepted a suite that aborted before summary()"
 }
 Write-Host ""
 
@@ -515,6 +542,7 @@ Write-Host ""
 $runAll  = -not $unit -and -not $e2e -and -not $security -and -not $cli -and -not $ai
 
 Write-Host "═══ E2E Tests ════════════════════════════════" -ForegroundColor Cyan
+$script:category = "e2e"
 if ($runAll -or $e2e) {
     Get-ChildItem $testsDir -Filter "*.sz" |
         Where-Object { $_.Name -match "^\d{2}_" } |
@@ -527,6 +555,7 @@ if ($runAll -or $e2e) {
 
 Write-Host ""
 Write-Host "═══ Unit Tests ═══════════════════════════════" -ForegroundColor Cyan
+$script:category = "unit"
 if ($runAll -or $unit) {
     Get-ChildItem $testsDir -Filter "unit_*.sz" |
         Where-Object { $_.Name -notmatch "^unit_sec_" } |
@@ -543,6 +572,7 @@ if ($runAll -or $unit) {
 
 Write-Host ""
 Write-Host "═══ Error Tests ══════════════════════════════" -ForegroundColor Cyan
+$script:category = "error"
 if ($runAll -or $e2e) {
     Get-ChildItem $testsDir -Filter "err_*.sz" | Sort-Object Name | ForEach-Object {
         $label = $_.BaseName
@@ -552,6 +582,7 @@ if ($runAll -or $e2e) {
 
 Write-Host ""
 Write-Host "═══ Security Tests ═══════════════════════════" -ForegroundColor Cyan
+$script:category = "security"
 if ($runAll -or $security) {
     # sec_*.sz — must emit ❌ (runtime error tests)
     Get-ChildItem $testsDir -Filter "sec_*.sz" | Sort-Object Name | ForEach-Object {
@@ -568,6 +599,7 @@ if ($runAll -or $security) {
 # ── AI Tests ──────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "═══ AI Tests ═════════════════════════════════" -ForegroundColor Cyan
+$script:category = "ai"
 if ($runAll -or $ai) {
     # ai_*.sz — framework-based tests for AI/ML training loops and autodiff behavior
     Get-ChildItem $testsDir -Filter "ai_*.sz" | Sort-Object Name | ForEach-Object {
@@ -579,11 +611,16 @@ if ($runAll -or $ai) {
 # ── Rust Unit Tests ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "═══ Rust Unit Tests ══════════════════════════" -ForegroundColor Cyan
+$script:category = "rust"
 if ($runAll -or $unit) {
     foreach ($mod in @(
         @{ filter = "package_manager::tests";                 label = "package_manager unit tests" },
         @{ filter = "evaluator::namespaces_gui::css::tests";  label = "css nativo: condiciones and/or/not + bloques @when/@else" }
     )) {
+        # -filter applies here too. run_tests.sh already skipped these under a
+        # filter while this runner ran them regardless, so a filtered run
+        # reported different totals on the two platforms.
+        if ($filter -and $mod.label -notlike "*$filter*") { continue }
         Push-Location $root
         $cargoOut = cargo test $mod.filter 2>&1
         $cargoOk  = $LASTEXITCODE -eq 0
@@ -597,15 +634,15 @@ if ($runAll -or $unit) {
         }
         if ($cargoOk -and $ran -gt 0) {
             Write-Host "[PASS] $($mod.label) ($ran tests)" -ForegroundColor Green
-            $script:pass++
+            Add-Result "pass" $mod.label "$ran tests"
         } elseif ($cargoOk) {
             Write-Host "[FAIL] $($mod.label) — filter '$($mod.filter)' matched no tests" -ForegroundColor Red
-            $script:fail++
+            Add-Result "fail" $mod.label "filter '$($mod.filter)' matched no tests"
         } else {
             Write-Host "[FAIL] $($mod.label)" -ForegroundColor Red
             $cargoOut | Where-Object { $_ -match "FAILED|panicked|error" } |
                 ForEach-Object { Write-Host "       $_" -ForegroundColor Yellow }
-            $script:fail++
+            Add-Result "fail" $mod.label "cargo test reported failures"
         }
     }
 }
@@ -613,6 +650,7 @@ if ($runAll -or $unit) {
 # ── CLI Tests ─────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "═══ CLI Tests ════════════════════════════════" -ForegroundColor Cyan
+$script:category = "cli"
 if ($runAll -or $cli) {
     Run-CLI-Test "cli: --version prints version"       @("--version") `
                  -expectOut "Serez-Code v"
@@ -651,6 +689,7 @@ if ($runAll -or $cli) {
 # these cover the door, not the interpreter.
 Write-Host ""
 Write-Host "═══ --eval Tests ═════════════════════════════" -ForegroundColor Cyan
+$script:category = "eval"
 if ($runAll -or $cli) {
     Run-CLI-Test "eval: runs a snippet from argv"       @("--eval", "`"out 2+3;`"") `
                  -expectOut "5"
@@ -701,6 +740,7 @@ if ($runAll -or $cli) {
 # ── REPL Tests ────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "═══ REPL Tests ═══════════════════════════════" -ForegroundColor Cyan
+$script:category = "repl"
 if ($runAll -or $cli) {
     Run-CLI-Test "repl: arithmetic output"              @() `
                  -expectOut "5"        -stdinContent "out 2+3;"
@@ -718,6 +758,7 @@ if ($runAll -or $cli) {
 # ── --check Mode Tests ────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "═══ --check Mode Tests ═══════════════════════" -ForegroundColor Cyan
+$script:category = "check"
 if ($runAll -or $cli) {
     $chk    = "`"$(Join-Path $testsDir '01_basic.sz')`""
     $noChk  = "`"$(Join-Path $testsDir 'no_such_check_file.sz')`""
@@ -732,6 +773,7 @@ if ($runAll -or $cli) {
 # ── Package Manager CLI Tests ─────────────────────────────────────────────────
 Write-Host ""
 Write-Host "═══ Package Manager Tests ════════════════════" -ForegroundColor Cyan
+$script:category = "package-manager"
 if ($runAll -or $cli) {
     $tmpProject = Join-Path $env:TEMP "sz_pkg_test_$(Get-Random)"
     New-Item -ItemType Directory -Force $tmpProject | Out-Null
@@ -792,10 +834,10 @@ if ($runAll -or $cli) {
         $initJson = Get-Content (Join-Path $tmpInit "serez.json") -Raw -ErrorAction SilentlyContinue
         if ($initJson -and $initJson -match '"name"' -and $initJson -match '"scripts"' -and $initJson -match '"dev"') {
             Write-Host "[PASS] $initLabel" -ForegroundColor Green
-            $script:pass++
+            Add-Result "pass" $initLabel
         } else {
             Write-Host "[FAIL] $initLabel" -ForegroundColor Red
-            $script:fail++
+            Add-Result "fail" $initLabel "serez.json is missing name/scripts/dev"
         }
     }
 
@@ -828,13 +870,17 @@ if ($runAll -or $cli) {
         "fn int localAdd(int a, int b) { return a + b; }`nlet LOCAL_VERSION = `"local-only@1.0.0`";" -NoNewline
     Set-Content (Join-Path $tmpLP "test.sz") `
         "import `"local-only`"; out localAdd(3, 4); out localAdd(-1, 5); out LOCAL_VERSION;" -NoNewline
-    $lpResult = Invoke-Binary @("`"$(Join-Path $tmpLP 'test.sz')`"") "" $tmpLP
-    if ($lpResult.stdout -match "7" -and $lpResult.stdout -match "4" -and $lpResult.stdout -match "local-only") {
+    $lpLabel = "pkg: import resolves from ./packages/ (not SEREZ_PACKAGES)"
+    $lpSkip  = ($filter -and $lpLabel -notlike "*$filter*")
+    $lpResult = if ($lpSkip) { $null } else { Invoke-Binary @("`"$(Join-Path $tmpLP 'test.sz')`"") "" $tmpLP }
+    if ($lpSkip) {
+        # filtered out — run_tests.sh skips it the same way
+    } elseif ($lpResult.stdout -match "7" -and $lpResult.stdout -match "4" -and $lpResult.stdout -match "local-only") {
         Write-Host "[PASS] pkg: import resolves from ./packages/ (not SEREZ_PACKAGES)" -ForegroundColor Green
-        $script:pass++
+        Add-Result "pass" "pkg: import resolves from ./packages/ (not SEREZ_PACKAGES)"
     } else {
         Write-Host "[FAIL] pkg: import resolves from ./packages/ — stdout: $($lpResult.stdout)" -ForegroundColor Red
-        $script:fail++
+        Add-Result "fail" "pkg: import resolves from ./packages/ (not SEREZ_PACKAGES)" "stdout: $($lpResult.stdout)"
     }
     Remove-Item $tmpLP -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -845,5 +891,42 @@ Write-Host "══════════════════════�
 Write-Host "TOTAL: $pass passed  $fail failed  $skip skipped" -ForegroundColor $(if ($fail -gt 0) { "Red" } else { "Green" })
 
 if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -ErrorAction SilentlyContinue }
+
+# The recorder must agree with the counters. A site that increments without
+# recording would silently produce a report missing tests that ran — the same
+# class of defect as a suite that cannot find its fixtures.
+$recorded = $script:results.Count
+$counted  = $pass + $fail + $skip
+if ($recorded -ne $counted) {
+    Write-Host "Runner defect: $counted outcomes counted but $recorded recorded." -ForegroundColor Red
+    exit 1
+}
+
+if ($json -ne "") {
+    $byCategory = [ordered]@{}
+    foreach ($group in $script:results | Group-Object { $_.category }) {
+        $byCategory[$group.Name] = [ordered]@{
+            passed  = @($group.Group | Where-Object { $_.status -eq "pass" }).Count
+            failed  = @($group.Group | Where-Object { $_.status -eq "fail" }).Count
+            skipped = @($group.Group | Where-Object { $_.status -eq "skip" }).Count
+        }
+    }
+    $versionLine = (& $binary "--version") 2>&1 | Select-Object -First 1
+    # Built by index assignment rather than as one literal: nesting an ordered
+    # dictionary or a list inside an `[ordered]@{...}` literal fails with
+    # "Argument types do not match" on this PowerShell.
+    $report = [ordered]@{}
+    $report["schema"]     = "serez-conformance/1"
+    $report["runner"]     = "run_tests.ps1"
+    $report["platform"]   = "windows"
+    $report["core"]       = "$versionLine".Trim()
+    $report["startedAt"]  = $startedAt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $report["filter"]     = $filter
+    $report["totals"]     = [ordered]@{ passed = $pass; failed = $fail; skipped = $skip }
+    $report["categories"] = $byCategory
+    $report["tests"]      = $script:results.ToArray()
+    $report | ConvertTo-Json -Depth 6 | Set-Content -Path $json -Encoding UTF8
+    Write-Host "Report written to $json" -ForegroundColor Cyan
+}
 
 exit $(if ($fail -gt 0) { 1 } else { 0 })

@@ -9,6 +9,7 @@
 #   ./run_tests.sh --security          # only security tests
 #   ./run_tests.sh --cli               # only CLI, --eval, REPL and --check tests
 #   ./run_tests.sh --ai                # only AI/ML training tests (ai_*.sz)
+#   ./run_tests.sh --json report.json  # also write a machine-readable report
 #
 # This runner and run_tests.ps1 must execute the same logical suite. Any
 # deliberate difference belongs in TESTS.md with the reason; a platform that
@@ -32,6 +33,7 @@ ONLY_E2E=0
 ONLY_SECURITY=0
 ONLY_CLI=0
 ONLY_AI=0
+JSON_OUT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --security|-s) ONLY_SECURITY=1; shift ;;
         --cli|-c)      ONLY_CLI=1; shift ;;
         --ai)          ONLY_AI=1; shift ;;
+        --json|-j)     JSON_OUT="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -65,6 +68,33 @@ else
 fi
 
 PASS=0 FAIL=0 SKIP=0
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Every counted outcome is also recorded, so the run can be read by something
+# other than a human scrolling a terminal. `--json <path>` writes it out; the
+# record is kept either way and the self-check at the end compares its line
+# count against the counters, which is what keeps the recorder honest.
+# A file rather than an array: some outcomes are counted inside a subshell,
+# where an array assignment would be lost.
+RESULTS_TSV="$(mktemp)"
+CATEGORY="startup"
+
+# record <pass|fail|skip> <label> [detail]
+record() {
+    case "$1" in
+        pass) PASS=$((PASS + 1)) ;;
+        fail) FAIL=$((FAIL + 1)) ;;
+        skip) SKIP=$((SKIP + 1)) ;;
+        *) echo "record: unknown status '$1'" >&2; exit 1 ;;
+    esac
+    printf '%s\t%s\t%s\t%s\n' "$1" "$CATEGORY" "$2" "${3-}" >> "$RESULTS_TSV"
+}
+
+# Minimal JSON string escaping: backslash, quote, tab and any stray control
+# character. Labels and details are ours, so this is the whole surface.
+json_str() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g' -e 's/\r//g'
+}
 
 # ── Fixture preflight ──────────────────────────────────────────────────────────
 # These trees are loaded by the import/export, package and runner-integrity
@@ -124,10 +154,10 @@ run_test() {
     if [[ "$is_err" == "1" ]]; then
         if [[ "$exit_code" -ne 0 ]] && echo "$stderr_out" | grep -q "❌"; then
             echo "${GREEN}[PASS]${RESET} $label"
-            PASS=$((PASS + 1))
+            record pass "$label"
         else
             echo "${RED}[FAIL]${RESET} $label — expected non-zero exit and an error diagnostic (exit $exit_code)"
-            FAIL=$((FAIL + 1))
+            record fail "$label" "expected non-zero exit and an error diagnostic (exit $exit_code)"
         fi
         return
     fi
@@ -140,7 +170,7 @@ run_test() {
         if [[ "$exit_code" -eq 0 && -z "$failures" && -n "$summary" ]]; then
             echo "${GREEN}[PASS]${RESET} $label"
             echo "${GRAY}       $summary${RESET}"
-            PASS=$((PASS + 1))
+            record pass "$label" "$summary"
         else
             local reason="framework reported failures"
             [[ "$exit_code" -ne 0 ]] && reason="process exited with code $exit_code"
@@ -149,7 +179,7 @@ run_test() {
             while IFS= read -r line; do
                 echo "${YELLOW}       $line${RESET}"
             done <<< "$failures"
-            FAIL=$((FAIL + 1))
+            record fail "$label" "$reason"
         fi
         return
     fi
@@ -159,7 +189,7 @@ run_test() {
         head -n 3 "$TEMP_ERR" | while IFS= read -r line; do
             echo "${YELLOW}       $line${RESET}"
         done
-        FAIL=$((FAIL + 1))
+        record fail "$label" "process exited with code $exit_code"
         return
     fi
 
@@ -172,7 +202,7 @@ run_test() {
 
     if [[ ! -f "$expected" ]]; then
         echo "${YELLOW}[SKIP]${RESET} $label (no .expected — run with --generate to create)"
-        SKIP=$((SKIP + 1))
+        record skip "$label" "no .expected file"
         return
     fi
 
@@ -182,7 +212,7 @@ run_test() {
 
     if [[ "$actual" == "$expected_content" ]]; then
         echo "${GREEN}[PASS]${RESET} $label"
-        PASS=$((PASS + 1))
+        record pass "$label"
     else
         echo "${RED}[FAIL]${RESET} $label"
         diff <(echo "$expected_content") <(echo "$actual") | grep "^[<>]" | \
@@ -193,22 +223,23 @@ run_test() {
                 echo "${YELLOW}         actual: ${diffline:2}${RESET}"
             fi
         done
-        FAIL=$((FAIL + 1))
+        record fail "$label" "stdout differs from the golden file"
     fi
 }
 
 # The runner itself must reject a unit program that aborts before summary().
 echo "${CYAN}═══ Test Runner Integrity ════════════════════${RESET}"
+CATEGORY="runner-integrity"
 { cat "$FRAMEWORK"; printf '\n'; cat "$TESTS_DIR/runner_fixtures/unit_abort_before_summary.sz"; } > "$TEMP_SZ"
 "$BINARY" "$TEMP_SZ" >"$TEMP_OUT" 2>"$TEMP_ERR"
 runner_exit=$?
 runner_summary=$(grep "^Results:" "$TEMP_OUT" | tail -1 || true)
 if [[ "$runner_exit" -ne 0 && -z "$runner_summary" ]]; then
     echo "${GREEN}[PASS]${RESET} runner rejects abort before summary"
-    PASS=$((PASS + 1))
+    record pass "runner rejects abort before summary"
 else
     echo "${RED}[FAIL]${RESET} runner accepted abort before summary"
-    FAIL=$((FAIL + 1))
+    record fail "runner rejects abort before summary" "the runner accepted a suite that aborted before summary()"
 fi
 echo ""
 
@@ -218,6 +249,7 @@ RUN_ALL=0
 
 # ── E2E Tests ─────────────────────────────────────────────────────────────────
 echo "${CYAN}═══ E2E Tests ════════════════════════════════${RESET}"
+CATEGORY="e2e"
 if [[ "$RUN_ALL" == "1" || "$ONLY_E2E" == "1" ]]; then
     for f in "$TESTS_DIR"/[0-9][0-9]_*.sz; do
         [[ -f "$f" ]] || continue
@@ -229,6 +261,7 @@ fi
 # ── Unit Tests ────────────────────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ Unit Tests ═══════════════════════════════${RESET}"
+CATEGORY="unit"
 if [[ "$RUN_ALL" == "1" || "$ONLY_UNIT" == "1" ]]; then
     for f in "$TESTS_DIR"/unit_*.sz; do
         [[ -f "$f" ]] || continue
@@ -245,6 +278,7 @@ fi
 # ── Error Tests ───────────────────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ Error Tests ══════════════════════════════${RESET}"
+CATEGORY="error"
 if [[ "$RUN_ALL" == "1" || "$ONLY_E2E" == "1" ]]; then
     for f in "$TESTS_DIR"/err_*.sz; do
         [[ -f "$f" ]] || continue
@@ -256,6 +290,7 @@ fi
 # ── Security Tests ────────────────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ Security Tests ═══════════════════════════${RESET}"
+CATEGORY="security"
 if [[ "$RUN_ALL" == "1" || "$ONLY_SECURITY" == "1" ]]; then
     for f in "$TESTS_DIR"/sec_*.sz; do
         [[ -f "$f" ]] || continue
@@ -273,6 +308,7 @@ fi
 # ai_*.sz — framework-based tests for AI/ML training loops and autodiff behavior
 echo ""
 echo "${CYAN}═══ AI Tests ═════════════════════════════════${RESET}"
+CATEGORY="ai"
 if [[ "$RUN_ALL" == "1" || "$ONLY_AI" == "1" ]]; then
     for f in "$TESTS_DIR"/ai_*.sz; do
         [[ -f "$f" ]] || continue
@@ -284,6 +320,7 @@ fi
 # ── Rust Unit Tests ───────────────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ Rust Unit Tests ══════════════════════════${RESET}"
+CATEGORY="rust"
 if [[ "$RUN_ALL" == "1" || "$ONLY_UNIT" == "1" ]]; then
     while IFS='|' read -r mod_filter mod_label; do
         [[ -n "$FILTER" && "$mod_label" != *"$FILTER"* ]] && continue
@@ -297,13 +334,13 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_UNIT" == "1" ]]; then
               | awk '{ s += $1 } END { print s + 0 }')
         if [[ "$cargo_ok" -eq 0 && "$ran" -gt 0 ]]; then
             echo "${GREEN}[PASS]${RESET} $mod_label ($ran tests)"
-            PASS=$((PASS + 1))
+            record pass "$mod_label" "$ran tests"
         elif [[ "$cargo_ok" -eq 0 ]]; then
             echo "${RED}[FAIL]${RESET} $mod_label — filter '$mod_filter' matched no tests"
-            FAIL=$((FAIL + 1))
+            record fail "$mod_label" "filter '$mod_filter' matched no tests"
         else
             echo "${RED}[FAIL]${RESET} $mod_label"
-            FAIL=$((FAIL + 1))
+            record fail "$mod_label" "cargo test reported failures"
         fi
     done <<'RUST_MODULES'
 package_manager::tests|package_manager unit tests
@@ -336,15 +373,16 @@ run_cli_test() {
     fi
 
     if [[ "$ok" == "1" ]]; then
-        echo "${GREEN}[PASS]${RESET} $label"; PASS=$((PASS + 1))
+        echo "${GREEN}[PASS]${RESET} $label"; record pass "$label"
     else
-        echo "${RED}[FAIL]${RESET} $label — $reason"; FAIL=$((FAIL + 1))
+        echo "${RED}[FAIL]${RESET} $label — $reason"; record fail "$label" "$reason"
     fi
 }
 
 # ── CLI Tests ─────────────────────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ CLI Tests ════════════════════════════════${RESET}"
+CATEGORY="cli"
 if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     run_cli_test "cli: --version prints version" "Serez-Code v" "" "" "" --version
     run_cli_test "cli: --help prints usage on stdout" "USAGE" "" "" "" --help
@@ -371,6 +409,7 @@ fi
 # these cover the door, not the interpreter.
 echo ""
 echo "${CYAN}═══ --eval Tests ═════════════════════════════${RESET}"
+CATEGORY="eval"
 if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     run_cli_test "eval: runs a snippet from argv" "5" "" "" "" --eval 'out 2+3;'
     run_cli_test "eval: reads the snippet from stdin" "100" "" $'let x = 10;\nout x * x;' "" --eval -
@@ -408,6 +447,7 @@ fi
 # ── REPL Tests ────────────────────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ REPL Tests ═══════════════════════════════${RESET}"
+CATEGORY="repl"
 if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     run_cli_test "repl: arithmetic output" "5" "" 'out 2+3;' ""
     run_cli_test "repl: string output" "hello" "" 'out "hello";' ""
@@ -421,6 +461,7 @@ fi
 # ── --check Mode Tests ────────────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ --check Mode Tests ═══════════════════════${RESET}"
+CATEGORY="check"
 if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     run_cli_test "check: Flash Scope Criticality header" "Flash Scope Criticality" "" "" "" \
         --check "$TESTS_DIR/01_basic.sz"
@@ -433,6 +474,7 @@ fi
 # ── Package Manager CLI Tests ─────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ Package Manager Tests ════════════════════${RESET}"
+CATEGORY="package-manager"
 if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     TMP_PROJECT="$(mktemp -d)"
     printf '%s' '{"name":"test-project","version":"1.0.0","dependencies":{"test-pkg":"1.0.0"}}' \
@@ -486,9 +528,9 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     if [[ -z "$FILTER" || "$INIT_LABEL" == *"$FILTER"* ]]; then
         INIT_JSON=$(cat "$TMP_INIT/serez.json" 2>/dev/null || true)
         if [[ "$INIT_JSON" == *'"name"'* && "$INIT_JSON" == *'"scripts"'* && "$INIT_JSON" == *'"dev"'* ]]; then
-            echo "${GREEN}[PASS]${RESET} $INIT_LABEL"; PASS=$((PASS + 1))
+            echo "${GREEN}[PASS]${RESET} $INIT_LABEL"; record pass "$INIT_LABEL"
         else
-            echo "${RED}[FAIL]${RESET} $INIT_LABEL"; FAIL=$((FAIL + 1))
+            echo "${RED}[FAIL]${RESET} $INIT_LABEL"; record fail "$INIT_LABEL" "serez.json is missing name/scripts/dev"
         fi
     fi
 
@@ -520,10 +562,10 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
         out=$(cd "$TMP_LP" && "$BINARY" test.sz 2>"$TEMP_ERR" || true)
         if [[ "$out" == *"7"* && "$out" == *"4"* && "$out" == *"local-only"* ]]; then
             echo "${GREEN}[PASS]${RESET} $LP_LABEL"
-            PASS=$((PASS + 1))
+            record pass "$LP_LABEL"
         else
             echo "${RED}[FAIL]${RESET} $LP_LABEL — out: $out"
-            FAIL=$((FAIL + 1))
+            record fail "$LP_LABEL" "out: $out"
         fi
     fi
     rm -rf "$TMP_LP"
@@ -536,5 +578,56 @@ echo ""
 echo "${CYAN}═══════════════════════════════════════════════${RESET}"
 COLOR=$([[ "$FAIL" -gt 0 ]] && echo "$RED" || echo "$GREEN")
 echo "${COLOR}TOTAL: $PASS passed  $FAIL failed  $SKIP skipped${RESET}"
+
+# The record must agree with the counters. A site that increments without
+# recording would silently produce a report missing tests that ran — the same
+# class of defect as a suite that cannot find its fixtures.
+RECORDED=$(wc -l < "$RESULTS_TSV" | tr -d '[:space:]')
+COUNTED=$((PASS + FAIL + SKIP))
+if [[ "$RECORDED" != "$COUNTED" ]]; then
+    echo "${RED}Runner defect: $COUNTED outcomes counted but $RECORDED recorded.${RESET}"
+    rm -f "$RESULTS_TSV"
+    exit 1
+fi
+
+if [[ -n "$JSON_OUT" ]]; then
+    CORE_VERSION=$("$BINARY" --version 2>/dev/null | head -1 | tr -d '\r')
+    {
+        printf '{\n'
+        printf '  "schema": "serez-conformance/1",\n'
+        printf '  "runner": "run_tests.sh",\n'
+        printf '  "platform": "%s",\n' "$(json_str "$(uname -s)")"
+        printf '  "core": "%s",\n' "$(json_str "$CORE_VERSION")"
+        printf '  "startedAt": "%s",\n' "$STARTED_AT"
+        printf '  "filter": "%s",\n' "$(json_str "$FILTER")"
+        printf '  "totals": { "passed": %d, "failed": %d, "skipped": %d },\n' "$PASS" "$FAIL" "$SKIP"
+        printf '  "categories": {'
+        first=1
+        while IFS= read -r cat; do
+            [[ -z "$cat" ]] && continue
+            cp=$(awk -F'\t' -v c="$cat" '$2==c && $1=="pass"' "$RESULTS_TSV" | wc -l | tr -d '[:space:]')
+            cf=$(awk -F'\t' -v c="$cat" '$2==c && $1=="fail"' "$RESULTS_TSV" | wc -l | tr -d '[:space:]')
+            cs=$(awk -F'\t' -v c="$cat" '$2==c && $1=="skip"' "$RESULTS_TSV" | wc -l | tr -d '[:space:]')
+            [[ "$first" == "0" ]] && printf ','
+            first=0
+            printf '\n    "%s": { "passed": %d, "failed": %d, "skipped": %d }' \
+                   "$(json_str "$cat")" "$cp" "$cf" "$cs"
+        done < <(cut -f2 "$RESULTS_TSV" | sort -u)
+        printf '\n  },\n'
+        printf '  "tests": ['
+        first=1
+        while IFS=$'\t' read -r st cat name detail; do
+            [[ -z "$st" ]] && continue
+            [[ "$first" == "0" ]] && printf ','
+            first=0
+            printf '\n    { "name": "%s", "category": "%s", "status": "%s", "detail": "%s" }' \
+                   "$(json_str "$name")" "$(json_str "$cat")" "$st" "$(json_str "$detail")"
+        done < "$RESULTS_TSV"
+        printf '\n  ]\n}\n'
+    } > "$JSON_OUT"
+    echo "${CYAN}Report written to $JSON_OUT${RESET}"
+fi
+
+rm -f "$RESULTS_TSV"
 
 [[ "$FAIL" -gt 0 ]] && exit 1 || exit 0

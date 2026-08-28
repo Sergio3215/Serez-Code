@@ -43,9 +43,19 @@ jobs:
       - name: Serez conformance, regression, error-path, security and CLI tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\run_tests.ps1
+        run: .\run_tests.ps1 -json conformance-${{ matrix.os }}.json
 
       - name: Serez conformance, regression, error-path, security and CLI tests (Unix)
         if: runner.os != 'Windows'
         shell: bash
-        run: ./run_tests.sh
+        run: ./run_tests.sh --json conformance-${{ matrix.os }}.json
+
+      # Uploaded even when the suite fails — a failing run is exactly the one
+      # worth reading per test rather than by scrolling the log.
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-${{ matrix.os }}
+          path: conformance-${{ matrix.os }}.json
+          if-no-files-found: warn
