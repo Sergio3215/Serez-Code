@@ -719,6 +719,28 @@ if ($runAll -or $cli) {
     $env:SEREZ_REGISTRY = ""
     Remove-Item $tmpProject -Recurse -Force -ErrorAction SilentlyContinue
 
+    # ── runtime requirement ───────────────────────────────────────────────────
+    # `serez-code` in "dependencies" declares the minimum runtime, not a package
+    # to fetch. serez-ui declares it; before the key was reserved, `sz install`
+    # in that project failed on the space and the '>' in ">= 9.17.0".
+    $tmpFloor = Join-Path $env:TEMP "sz_floor_test_$(Get-Random)"
+    New-Item -ItemType Directory -Force $tmpFloor | Out-Null
+
+    Set-Content (Join-Path $tmpFloor "serez.json") `
+        '{"name":"floor-ok","version":"1.0.0","dependencies":{"serez-code":">= 0.1.0"}}' -NoNewline
+    Run-CLI-Test "cli: satisfied runtime requirement installs cleanly" @("install") `
+                 -expectOut "runtime requirement satisfied" -workDir $tmpFloor
+
+    Set-Content (Join-Path $tmpFloor "serez.json") `
+        '{"name":"floor-bad","version":"1.0.0","dependencies":{"serez-code":">= 999.0.0"}}' -NoNewline
+    Run-CLI-Test "cli: unsatisfiable runtime requirement is reported" @("install") `
+                 -expectErr "requires Serez Code >= 999.0.0" -workDir $tmpFloor
+
+    Run-CLI-Test "cli: the runtime is not an installable package" @("install", "serez-code") `
+                 -expectErr "is the runtime" -workDir $tmpFloor
+
+    Remove-Item $tmpFloor -Recurse -Force -ErrorAction SilentlyContinue
+
     # ── sz init tests ─────────────────────────────────────────────────────────
     $tmpInit = Join-Path $env:TEMP "sz_init_test_$(Get-Random)"
     New-Item -ItemType Directory -Force $tmpInit | Out-Null

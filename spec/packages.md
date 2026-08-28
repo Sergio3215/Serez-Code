@@ -19,7 +19,7 @@ The public fields have these types:
 | `version` | yes | Non-empty string. Publishing and installation apply the version rules below. |
 | `description` | no | String; defaults to `""`. |
 | `author` | no | String; defaults to `""`. |
-| `dependencies` | no | Object whose values are strings; defaults to `{}`. |
+| `dependencies` | no | Object whose values are strings; defaults to `{}`. The key `serez-code` is reserved: it declares the minimum runtime and is checked, never fetched. See `compatibility.md`. |
 | `permissions` | no | Array of strings; defaults to `[]`. See `security.md`. |
 | `scripts` | no | Object mapping command names to shell-command strings; defaults to `{}`. |
 | `bin` | no | Object mapping command names to portable package-relative `.sz` paths; defaults to `{}`. |
@@ -42,6 +42,12 @@ Resolved and explicit versions use the same rule and may additionally contain
 or inserted into a registry URL. Version strings are currently identifiers, not
 SemVer ranges; dependency resolution does not implement caret, tilde or inequality
 constraints.
+
+The one exception is the reserved `serez-code` key, which is not resolved as a
+package at all. It states the minimum runtime, accepts `">= X.Y.Z"`, `"> X.Y.Z"`,
+`"= X.Y.Z"` and a bare `"X.Y.Z"`, and is compared against the running runtime by
+`sz install`. Caret and tilde ranges are rejected there too. `sz install
+serez-code` is refused with a message explaining why. See `compatibility.md`.
 
 ## Resolution and installation
 

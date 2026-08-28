@@ -424,6 +424,27 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     unset SEREZ_REGISTRY
     rm -rf "$TMP_PROJECT"
 
+    # ── runtime requirement ───────────────────────────────────────────────────
+    # `serez-code` in "dependencies" declares the minimum runtime, not a package
+    # to fetch. serez-ui declares it; before the key was reserved, `sz install`
+    # in that project failed on the space and the '>' in ">= 9.17.0".
+    TMP_FLOOR="$(mktemp -d)"
+
+    printf '%s' '{"name":"floor-ok","version":"1.0.0","dependencies":{"serez-code":">= 0.1.0"}}' \
+        > "$TMP_FLOOR/serez.json"
+    run_cli_test "cli: satisfied runtime requirement installs cleanly" \
+        "runtime requirement satisfied" "" "" "$TMP_FLOOR" install
+
+    printf '%s' '{"name":"floor-bad","version":"1.0.0","dependencies":{"serez-code":">= 999.0.0"}}' \
+        > "$TMP_FLOOR/serez.json"
+    run_cli_test "cli: unsatisfiable runtime requirement is reported" \
+        "" "requires Serez Code >= 999.0.0" "" "$TMP_FLOOR" install
+
+    run_cli_test "cli: the runtime is not an installable package" \
+        "" "is the runtime" "" "$TMP_FLOOR" install serez-code
+
+    rm -rf "$TMP_FLOOR"
+
     # ── sz init ───────────────────────────────────────────────────────────────
     TMP_INIT="$(mktemp -d)"
     run_cli_test "cli: sz init --y creates serez.json" "Created serez.json" "" "" "$TMP_INIT" init --y

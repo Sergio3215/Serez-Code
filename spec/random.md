@@ -11,7 +11,8 @@ seeds are valid. The state is shared with `Math.random()` in the same evaluator.
 
 Given the same seed and the same ordered sequence of calls, an evaluator must
 produce the same results. A change to that seeded sequence is
-compatibility-impacting and requires the normal deprecation/versioning process.
+compatibility-impacting and requires the deprecation/versioning process in
+`compatibility.md`.
 In particular, the established sequence for integer ranges whose inclusive
 width is at most 2³¹ is preserved.
 

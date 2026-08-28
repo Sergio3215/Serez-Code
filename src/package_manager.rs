@@ -703,7 +703,12 @@ pub fn update_all(global: bool) -> Result<(), String> {
         println!("No dependencies to update.");
         return Ok(());
     }
-    let names: Vec<String> = manifest.dependencies.keys().cloned().collect();
+    let names: Vec<String> = manifest
+        .dependencies
+        .keys()
+        .filter(|name| name.as_str() != RUNTIME_DEPENDENCY_KEY)
+        .cloned()
+        .collect();
     for name in names {
         if let Err(e) = update_package(&name, false) {
             eprintln!("⚠ {}: {}", name, e);
@@ -723,10 +728,21 @@ pub fn install_all() -> Result<(), String> {
         return Ok(());
     }
 
+    let mut installed = 0usize;
     for (name, version) in &manifest.dependencies {
+        if name == RUNTIME_DEPENDENCY_KEY {
+            check_runtime_requirement(version)?;
+            continue;
+        }
         let spec = format!("{}@{}", name, version);
         // Don't rewrite the manifest: these deps already come from it. Local.
         install_package(&spec, false, false)?;
+        installed += 1;
+    }
+    if installed == 0 {
+        // The manifest was not empty, but every entry was the runtime
+        // requirement. Saying so beats exiting 0 with no output at all.
+        println!("No packages to install — runtime requirement satisfied.");
     }
     Ok(())
 }
@@ -1768,9 +1784,100 @@ fn create_package_directories(dest: &Path, relative: &Path) -> Result<(), String
     Ok(())
 }
 
+// ── Runtime requirement ───────────────────────────────────────────────────────
+
+/// A dependency under this name declares the **minimum runtime**, not a package
+/// to fetch. There is no package by this name — it is the interpreter running
+/// the manifest — so installing it could never succeed.
+///
+/// Before this was reserved, `serez-ui`'s documented `"serez-code": ">= 9.17.0"`
+/// made `sz install` fail outright: the value went through the package-version
+/// identifier rules, which reject spaces and `>`. The one official package that
+/// followed the advice was the one whose install was broken.
+pub const RUNTIME_DEPENDENCY_KEY: &str = "serez-code";
+
+/// Parse a runtime requirement into (comparison-is-strict, [major, minor, patch]).
+///
+/// Accepted forms are the ones the ecosystem actually writes: `">= X.Y.Z"`,
+/// `"> X.Y.Z"`, `"= X.Y.Z"` and a bare `"X.Y.Z"`, which means the same as `>=`.
+/// Whitespace around the operator is optional. Full SemVer ranges (caret, tilde,
+/// unions) are deliberately not accepted: promising them would imply a resolver
+/// that does not exist. See spec/compatibility.md.
+fn parse_runtime_requirement(spec: &str) -> Result<(bool, [u64; 3]), String> {
+    let trimmed = spec.trim();
+    let (strict, rest) = if let Some(rest) = trimmed.strip_prefix(">=") {
+        (false, rest)
+    } else if let Some(rest) = trimmed.strip_prefix('>') {
+        (true, rest)
+    } else if let Some(rest) = trimmed.strip_prefix('=') {
+        (false, rest)
+    } else {
+        (false, trimmed)
+    };
+    parse_version_triple(rest.trim()).map(|triple| (strict, triple))
+}
+
+/// Parse `X.Y.Z` (or `X.Y`, or `X`) into three numbers. Any build or pre-release
+/// suffix after the patch number is ignored for comparison.
+fn parse_version_triple(value: &str) -> Result<[u64; 3], String> {
+    let core = value.split(['-', '+']).next().unwrap_or("").trim();
+    if core.is_empty() {
+        return Err(format!("'{}' is not a version", value));
+    }
+    let mut triple = [0u64; 3];
+    for (i, part) in core.split('.').enumerate() {
+        if i >= 3 {
+            return Err(format!(
+                "'{}' has more than three version components",
+                value
+            ));
+        }
+        triple[i] = part
+            .parse::<u64>()
+            .map_err(|_| format!("'{}' is not a version", value))?;
+    }
+    Ok(triple)
+}
+
+/// Fail when the running runtime does not satisfy a declared requirement.
+pub fn check_runtime_requirement(spec: &str) -> Result<(), String> {
+    let running_raw = env!("CARGO_PKG_VERSION");
+    let (strict, required) = parse_runtime_requirement(spec).map_err(|reason| {
+        format!(
+            "Invalid \"{}\" requirement: {}. Use \">= X.Y.Z\" or \"X.Y.Z\".",
+            RUNTIME_DEPENDENCY_KEY, reason
+        )
+    })?;
+    let running = parse_version_triple(running_raw)
+        .map_err(|reason| format!("Cannot read the running runtime version: {}", reason))?;
+
+    let satisfied = if strict {
+        running > required
+    } else {
+        running >= required
+    };
+    if satisfied {
+        return Ok(());
+    }
+    Err(format!(
+        "This project requires Serez Code {} but the runtime is {}. Update the runtime, \
+         or lower the \"{}\" requirement in serez.json.",
+        spec.trim(),
+        running_raw,
+        RUNTIME_DEPENDENCY_KEY
+    ))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn parse_pkg_spec(spec: &str) -> Result<(String, Option<String>), String> {
+    if spec == RUNTIME_DEPENDENCY_KEY || spec.starts_with(&format!("{}@", RUNTIME_DEPENDENCY_KEY)) {
+        return Err(format!(
+            "'{}' is the runtime, not an installable package. Declare it in \"dependencies\" \
+             as a minimum version (for example \">= 9.17.0\") and it will be checked, not fetched.",
+            RUNTIME_DEPENDENCY_KEY
+        ));
+    }
     let (name, version) = if let Some(idx) = spec.find('@') {
         (&spec[..idx], Some(&spec[idx + 1..]))
     } else {
@@ -2307,5 +2414,91 @@ mod tests {
         let m = SerezManifest::parse(&out).unwrap();
         assert!(!m.dependencies.contains_key("a"));
         assert_eq!(m.dependencies["b"], "2.0.0");
+    }
+    // ── Runtime requirement ───────────────────────────────────────────────────
+
+    #[test]
+    fn runtime_requirement_accepts_the_forms_the_ecosystem_writes() {
+        assert_eq!(
+            parse_runtime_requirement(">= 9.17.0").unwrap(),
+            (false, [9, 17, 0])
+        );
+        assert_eq!(
+            parse_runtime_requirement(">=9.17.0").unwrap(),
+            (false, [9, 17, 0])
+        );
+        assert_eq!(
+            parse_runtime_requirement("> 9.17.0").unwrap(),
+            (true, [9, 17, 0])
+        );
+        assert_eq!(
+            parse_runtime_requirement("= 9.17.0").unwrap(),
+            (false, [9, 17, 0])
+        );
+        // A bare version means the same as ">=".
+        assert_eq!(
+            parse_runtime_requirement("9.17.0").unwrap(),
+            (false, [9, 17, 0])
+        );
+        // Short forms and suffixes are tolerated.
+        assert_eq!(
+            parse_runtime_requirement("9.17").unwrap(),
+            (false, [9, 17, 0])
+        );
+        assert_eq!(parse_runtime_requirement("9").unwrap(), (false, [9, 0, 0]));
+        assert_eq!(
+            parse_runtime_requirement(">= 9.17.0-rc1").unwrap(),
+            (false, [9, 17, 0])
+        );
+    }
+
+    #[test]
+    fn runtime_requirement_rejects_what_it_cannot_honour() {
+        // Ranges a resolver would have to implement are refused rather than
+        // silently reinterpreted as something narrower.
+        for spec in ["^9.17.0", "~9.17.0", ">= 9.x", "", "abc", "9.17.0.1"] {
+            assert!(
+                parse_runtime_requirement(spec).is_err(),
+                "'{spec}' must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_requirement_compares_against_the_running_version() {
+        let running = env!("CARGO_PKG_VERSION");
+        // The version that is running always satisfies ">=" and "=".
+        assert!(check_runtime_requirement(&format!(">= {running}")).is_ok());
+        assert!(check_runtime_requirement(running).is_ok());
+        // And never satisfies a strictly greater requirement.
+        assert!(check_runtime_requirement(&format!("> {running}")).is_err());
+
+        assert!(check_runtime_requirement(">= 0.1.0").is_ok());
+        let err = check_runtime_requirement(">= 999.0.0").unwrap_err();
+        assert!(err.contains("999.0.0"), "{err}");
+        assert!(err.contains(running), "{err}");
+
+        let bad = check_runtime_requirement("^9.0.0").unwrap_err();
+        assert!(bad.contains("serez-code"), "{bad}");
+    }
+
+    #[test]
+    fn the_runtime_is_not_an_installable_package() {
+        // serez-ui declares `"serez-code": ">= 9.17.0"` to state a minimum
+        // runtime. Before this key was reserved, `sz install` in that project
+        // pushed the value through the package-version identifier rules and
+        // failed on the space and the '>'.
+        let err = parse_pkg_spec("serez-code").unwrap_err();
+        assert!(err.contains("is the runtime"), "{err}");
+        let err = parse_pkg_spec("serez-code@>= 9.17.0").unwrap_err();
+        assert!(err.contains("is the runtime"), "{err}");
+
+        // Ordinary packages are unaffected.
+        assert_eq!(
+            parse_pkg_spec("serez-ui@4.36.0").unwrap(),
+            ("serez-ui".to_string(), Some("4.36.0".to_string()))
+        );
+        // And so is a package whose name merely starts with the reserved one.
+        assert!(parse_pkg_spec("serez-code-extras@1.0.0").is_ok());
     }
 }

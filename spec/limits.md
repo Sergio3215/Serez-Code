@@ -7,7 +7,8 @@ refuses, a loop that does not end. A limit turns that into something with a
 message, a position and an exit code.
 
 A limit is part of the language contract. Raising one is compatible. Lowering
-one is compatibility-impacting and normally follows the deprecation policy; an
+one is compatibility-impacting and follows the deprecation policy in
+`compatibility.md`; an
 exception is a crash-prevention correction when the advertised value cannot be
 enforced safely. Such a correction must have a regression and a changelog entry.
 

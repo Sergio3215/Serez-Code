@@ -7,6 +7,29 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `sz install` no longer fails on a declared minimum runtime
+
+- `serez-ui` declares `"serez-code": ">= 9.17.0"` in `dependencies` to state the
+  oldest runtime it supports. `sz install` treated that like any other package
+  and pushed the value through the package-version identifier rules, which
+  reject spaces and `>`. Running `sz install` in a `serez-ui` project therefore
+  failed outright — the one official package that followed the documented
+  advice was the one whose install was broken.
+- `serez-code` is now a reserved key in `dependencies`: it declares the minimum
+  runtime, is compared against the running version, and is never fetched. There
+  is no package by that name — it is the interpreter reading the manifest.
+- Accepted forms are `">= X.Y.Z"`, `"> X.Y.Z"`, `"= X.Y.Z"` and a bare `"X.Y.Z"`.
+  Caret and tilde ranges are rejected rather than silently narrowed: package
+  versions elsewhere are identifiers, not ranges, and accepting `^9.17.0` would
+  imply a resolver that does not exist.
+- `sz install serez-code` is refused with a message explaining what to write
+  instead. An unsatisfied requirement names both versions and what to do.
+- `spec/compatibility.md` is new: the versioning and deprecation policy that
+  `spec/limits.md` and `spec/random.md` already referenced but that did not
+  exist. It records the rule actually in force — including that `9.4.0` shipped
+  a breaking change in a minor release after an ecosystem sweep found no
+  affected code — rather than a stricter SemVer the history contradicts.
+
 ### Dict and Set stop accepting calls they cannot honour
 
 - `new Set(5)` silently produced an empty set: a non-array initialiser was

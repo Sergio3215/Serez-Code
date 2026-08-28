@@ -19,8 +19,8 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS, one Rust warning (`namespaces_gui.rs:851`, unused assignment) |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
-| `cargo test --all-targets` | PASS, 230 tests (144 library, 33 LSP binary, 8 frontend robustness, 45 runtime outcome) |
-| Serez test runner | PASS, 462 files/groups; 0 failed; 0 skipped |
+| `cargo test --all-targets` | PASS, 234 tests (148 library, 33 LSP binary, 8 frontend robustness, 45 runtime outcome) |
+| Serez test runner | PASS, 465 files/groups; 0 failed; 0 skipped |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
 The ecosystem row is the compatibility evidence for the frontend depth ceiling
@@ -83,7 +83,7 @@ files are `namespaces_gui.rs` (6,036), `parser.rs` (3,880),
 | CI | high | quality gate, platform parity fixed | CI previously ran only build/check. It now runs format, check, Clippy, Rust tests and the full Serez runner on Windows/Linux/macOS. **Resolved:** the two runners were not the same suite — `run_tests.sh` ran no CLI, `--eval`, REPL or `--check` tests, no AI files and one of two Rust module suites, and it built the debug binary while `run_tests.ps1` built release, so the platforms exercised different overflow semantics. Both now cover the same categories against the release binary, and each asserts that an embedded `cargo test <filter>` actually ran something. UI/HTTP/AI/AgentAI pass locally but are not executed as floating external code in this workflow. | Add isolated, commit-pinned ecosystem canaries after reviewing their CI trust boundary; add artifact summaries. |
 | Releases | medium | release integrity | Tag builds are cross-platform, publish checksums and now depend on format/check/Clippy/Rust/Serez verification plus exact tag-to-Cargo-version matching. Ecosystem and changelog/spec compatibility are not yet automated. | Add isolated ecosystem evidence and validate changelog/spec compatibility before publication. |
 | Documentation | high | trust / DX | Documentation is extensive but mixes normative contracts, implementation notes and historical behavior. One public section called permissions a default sandbox despite explicit caveats elsewhere. | Split normative `spec/` from guides and internals; test runnable examples. |
-| Versioning | high | compatibility | Runtime is 9.17.0. Only `serez-ui` declares a core floor (`>= 9.17.0`); most official packages declare no language/runtime requirement. | Version the language specification separately and require compatible runtime/spec ranges in official manifests. |
+| Versioning | high | bug (fixed), compatibility | Runtime is 9.17.0. **Resolved:** the documented core-floor declaration was not merely unenforced, it was actively broken — `sz install` in a `serez-ui` project failed because `"serez-code": ">= 9.17.0"` went through the package-version identifier rules. The key is now reserved, checked against the running runtime and never fetched, with Rust and CLI regressions on both platforms. `spec/compatibility.md` states the policy that `limits.md` and `random.md` already referenced. **Remaining:** the other seven official packages declare no minimum, and there is still no separate language-specification version. | Adopt the floor across the official manifests, then decide whether a separate spec version earns its keep. |
 
 ## Confirmed public contracts that must not change silently
 
@@ -224,7 +224,7 @@ Proposed public tiers:
 
 ### P3 — normative specification and documentation
 
-`spec/` exists and holds seventeen documents so far:
+`spec/` exists and holds eighteen documents so far:
 
 - `errors.md` — diagnostic code ranges, what is emitted today, and the public
   shape of a caught runtime error.
@@ -255,9 +255,12 @@ Proposed public tiers:
   key/value types and the stable dict failure modes.
 - `sets.md` — construction, value equality and compound elements, the method
   table, and the stable Set failure modes.
+- `compatibility.md` — the two version numbers, the classes of change, what a
+  release does and does not promise, the three-step deprecation path, the
+  reserved `serez-code` minimum-runtime key, and the known gaps.
 
 Still to write: `syntax.md`, `values.md`, `types.md`, `operators.md`,
-`scopes.md`, `modules.md` and `compatibility.md`.
+`scopes.md` and `modules.md`.
 The remaining sections of variables and control flow also need expansion. All
 of these describe semantics that are load-bearing for the whole ecosystem, so
 each rule has to be checked
