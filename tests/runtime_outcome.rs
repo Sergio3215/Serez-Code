@@ -1798,6 +1798,56 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
+fn free_variables_in_a_function_resolve_dynamically() {
+    // Serez resolves a free variable by walking the whole scope stack, and a
+    // call pushes its frame onto that same stack rather than starting a fresh
+    // one. A callee therefore sees the *caller's* locals: this is dynamic
+    // scoping, not lexical, and it is not documented anywhere.
+    //
+    // This test pins the behavior rather than endorsing it. Changing it is a
+    // language-level decision recorded in MATURITY_AUDIT.md and spec/scopes.md;
+    // the point of pinning it is that the change cannot then happen by accident.
+    let src = r#"
+        fn string callee() { return secret; }
+        fn string first()  { let secret = "from-first";  return callee(); }
+        fn string second() { let secret = "from-second"; return callee(); }
+        if (first() != "from-first")   { throw "callee did not see first's local"; }
+        if (second() != "from-second") { throw "callee did not see second's local"; }
+    "#;
+    assert!(matches!(evaluate(src), ProgramOutcome::Value(_)));
+
+    // With the name bound nowhere on the stack it is still an error, so this is
+    // dynamic resolution and not an implicit global.
+    let orphan = r#"
+        fn string callee() { return secret; }
+        fn string orphan() { return callee(); }
+        orphan();
+    "#;
+    match evaluate(orphan) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4001", "{error:?}");
+            assert!(error.message.contains("secret"), "{error:?}");
+        }
+        other => panic!("an unbound free variable must still fail, got {other:?}"),
+    }
+
+    // Closures are separate machinery and are genuinely lexical: they capture a
+    // cell at creation and keep seeing it.
+    let closure = r#"
+        fn any counter() { let n = 0; return () => { n = n + 1; return n; }; }
+        let c = counter();
+        c(); c();
+        if (c() != 3) { throw "closure cell did not persist"; }
+
+        let captured = 10;
+        let read = () => { return captured; };
+        captured = 20;
+        if (read() != 20) { throw "closure must see the later write"; }
+    "#;
+    assert!(matches!(evaluate(closure), ProgramOutcome::Value(_)));
+}
+
+#[test]
 fn a_mutator_on_a_nested_receiver_writes_back() {
     // Receiver writeback covered `obj.field.push(x)` and `dict["k"].push(x)`,
     // but not an array index and not a chain. `a[0].push(x)` and

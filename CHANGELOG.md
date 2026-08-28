@@ -7,6 +7,22 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Scope and name resolution are written down, including one surprise
+
+- `spec/scopes.md` is new: block scoping and shadowing, globals being writable
+  from a function, no hoisting, closures capturing a cell (with a `for` counter
+  captured fresh per iteration), and the Flash Scope watermark model.
+- It records a property nothing documented: **a free variable inside a function
+  resolves dynamically.** A call pushes its frame onto the caller's scope stack
+  and lookup walks every frame, so a function sees the locals of whoever called
+  it — two callers give two different answers. It is not an implicit global: a
+  name bound nowhere still fails with `SZ4001`.
+- Nothing is changed. Making resolution lexical means a per-call scope stack and
+  explicit captured environments, which is a change to the core evaluation
+  model and could alter any ecosystem program that relies on it. It is pinned by
+  a regression test so it cannot change by accident in either direction, and
+  recorded in `MATURITY_AUDIT.md` as an open decision.
+
 ### A mutation through a nested receiver no longer disappears
 
 - `a[0].push(x)` did nothing. So did any chain deeper than one level:
