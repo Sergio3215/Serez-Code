@@ -1,0 +1,102 @@
+// Module system conformance. Every assertion here pins a rule written down in
+// spec/modules.md; the two failure modes (ModuleNotFound vs ImportError) are
+// pinned separately by tests/unit_sec_import.sz and tests/runtime_outcome.rs.
+//
+// Imports are process-global and run once, so ORDER MATTERS in this file:
+// everything below the imports observes the namespace they produced.
+
+// Declared before the module that also declares it, so the overwrite is visible.
+let mod_collide_name = "from-main";
+
+import "lib/mod_exports";
+
+// mod_leaf is never imported directly — only through mod_middle.
+import "lib/mod_middle";
+
+import "lib/mod_counter";
+let mod_counter_first = mod_counter_get();
+import "lib/mod_counter";
+let mod_counter_second = mod_counter_get();
+
+import "lib/mod_collide";
+import "lib/mod_pkg";
+import "lib/mod_cyc_a";
+import "lib/greet_noexport";
+
+// Deliberately imported from inside a function: this half-applies.
+fn void mod_load_scoped() { import "lib/mod_scoped"; }
+mod_load_scoped();
+
+fn bool mod_unbound(any read) {
+    try {
+        read();
+    } catch (e) {
+        return e.kind == "ReferenceError" && e.code == "SZ4001";
+    }
+    return false;
+}
+
+test("a module that exports exposes exactly what it exported", () => {
+    assert(mod_exports_value == "exported-let", "exported let is visible");
+    assert(mod_exports_visible() == "exported-fn", "exported fn is visible");
+    let instance = new ModExportsVisible();
+    assert(instance.tag == "exported-class", "exported class is visible");
+});
+
+test("a module that exports hides everything else it declared", () => {
+    assert(mod_unbound(() => { return mod_exports_secret; }),
+           "a non-exported let is gone");
+    assert(mod_unbound(() => { return mod_exports_hidden(); }),
+           "a non-exported fn is gone");
+    assert(mod_unbound(() => { return new ModExportsSecret(); }),
+           "a non-exported class is gone");
+});
+
+test("a module with no export at all exposes everything", () => {
+    // lib/greet_noexport.sz uses no `export` keyword, so both of its functions
+    // stay reachable. This is the compatibility path, not an oversight.
+    assert(pub_fn_result() == 42, "first fn is visible");
+    assert(priv_fn_result() == 99, "so is the one that looks private");
+});
+
+test("exports leak transitively through an intermediate module", () => {
+    assert(mod_middle_via() == "leaked-fn", "the intermediate's own export works");
+    // mod_leaf was never imported here, only by mod_middle. Its exports are
+    // visible anyway: cleanup only considers a module's own declarations.
+    assert(mod_leaf_fn() == "leaked-fn", "the leaf's exported fn leaked through");
+    assert(mod_leaf_marker == "leaked-let", "so did its exported let");
+    assert(mod_unbound(() => { return mod_leaf_private(); }),
+           "the leak carries exports, not everything");
+});
+
+test("a module runs once no matter how often it is imported", () => {
+    assert(mod_counter_first == 1, "the body ran on the first import");
+    assert(mod_counter_second == 1, "the second import was a no-op");
+});
+
+test("a module overwrites a name the importer already held", () => {
+    assert(mod_collide_name == "from-module", "the module's binding wins");
+});
+
+test("a directory resolves through its index.sz", () => {
+    assert(mod_pkg_marker == "index-resolved", "lib/mod_pkg found lib/mod_pkg/index.sz");
+});
+
+test("an import cycle terminates, with the second half seeing the first unfinished", () => {
+    assert(mod_cyc_a_read() == "set-by-a", "A finished executing");
+    assert(mod_cyc_b_saw == "unset", "B ran while A was still half-executed");
+});
+
+test("an import inside a function only half-applies", () => {
+    // The fn and the let went into the calling frame and left with it; the
+    // class lives in a registry and survived. This is why imports belong at
+    // the top level.
+    assert(mod_unbound(() => { return mod_scoped_fn(); }),
+           "the imported fn did not survive the frame");
+    assert(mod_unbound(() => { return mod_scoped_let; }),
+           "neither did the imported let");
+    let instance = new ModScopedClass();
+    assert(instance.tag == "scoped-class", "the class did survive");
+});
+
+summary();

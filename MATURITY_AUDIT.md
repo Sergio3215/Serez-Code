@@ -64,7 +64,7 @@ files are `namespaces_gui.rs` (6,036), `parser.rs` (3,880),
 | Dicts / Sets | medium | semantic inconsistency fixed, contract | **Resolved.** `new Set(5)` silently produced an empty set, every dict reader and the zero-argument Set methods ignored extra arguments, dict diagnostics were still stderr prints, and an unknown `Set` member reported `TypeError` while every other type reported `ReferenceError`. All are now structured and consistent, arity is rejected before arguments are evaluated, and a broken receiver is reported instead of answered with empty data. | Keep `spec/dicts.md` / `spec/sets.md` and the collection regressions. Compound Set elements never comparing equal is long-standing behavior, now documented rather than changed. |
 | Value copying | critical | silent corruption bug (fixed) | **Resolved.** `extract` bounds its recursion at 500 levels; past that it replaced the subtree with null, printed one line per truncated site and let the program **exit 0**. A program nesting containers deeply received corrupted data and no failure. It is now one fatal `ResourceError` / `SZ6002` at the next statement boundary, and the limit is documented in `spec/limits.md` beside the AST and call ceilings. | The truncation itself is still how the recursion terminates; removing it needs `extract` to return a `Result` across 84 call sites. Bounded and reported is the improvement; refactoring the signature remains open. |
 | Regions / arenas | high | correctness risk | Region promotion and scratch watermarks are central to value lifetime. Prior bugs included dangling refs and lost mutations. | Add invariants/property tests around promotion, nested containers, loop watermarks and returned closures. |
-| Modules / imports | high | security, compatibility; double-reporting fixed | Import state, current directory and export tracking live in `Evaluator`. Canonicalization prevents duplicate imports/cycles, while package and relative resolution have separate paths. **Partly resolved:** a missing import was reported twice (an `❌ ERROR:` from the import plus an `❌ UNCAUGHT EXCEPTION:` from the boundary); only the boundary reports it now. "Cannot find" and "found but cannot be loaded" are now different failures — the first keeps its historical catchable `ModuleNotFound:` exception, the second is `ImportError` / `SZ5002`. | Extract a module loader interface; specify resolution order, cache identity, cycles, exports and path boundaries in a `modules.md` that does not exist yet. |
+| Modules / imports | high | security, compatibility; double-reporting fixed, contract written | Import state, current directory and export tracking live in `Evaluator`. Canonicalization prevents duplicate imports/cycles, while package and relative resolution have separate paths. **Partly resolved:** a missing import was reported twice (an `❌ ERROR:` from the import plus an `❌ UNCAUGHT EXCEPTION:` from the boundary); only the boundary reports it now. "Cannot find" and "found but cannot be loaded" are now different failures — the first keeps its historical catchable `ModuleNotFound:` exception, the second is `ImportError` / `SZ5002`. `spec/modules.md` now freezes resolution order, cache identity, cycle behavior and export visibility, and records four hazards that were undocumented: exports **leak transitively** (cleanup only considers a module's own declarations, deliberately, because the strict version deleted a sibling component's class), a module **silently overwrites** a name the importer already held, an `import` inside a function or block **half-applies** (classes survive in registries, functions and `let`s leave with the frame), and a URL import has no integrity hash, pinning or cache expiry. `SZ5001` is reserved for `ModuleNotFound` and nothing emits it. | Pinned by `tests/unit_modules.sz` (9 cases) plus the existing `tests/unit_sec_import.sz` and `runtime_outcome.rs` failure-mode tests. Still open: extracting a module loader interface out of `Evaluator`, selective import/aliasing to make the flat namespace survivable, and a decision on whether a half-applying nested import should be an error instead. |
 | Optional compiler | high | correctness, compatibility | Checked AST-to-HIR lowering now returns atomically and reports `SZ7001`/`SZ7002` instead of mapping unsupported syntax to `Null` or no-op. Its 76 HIR/MIR/compiler tests now run in normal builds. LLVM emission remains experimental, feature-gated and absent from the CLI; parity is still unproven. | Keep the accepted subset in `spec/compiler.md`; require differential tests and explicit later-stage diagnostics before exposing a compile command. |
 | Filesystem | high | security contract | `File` does not require a permission in normal execution; lockdown blocks it. Delete/rename additionally require `unsafe`. Reads above 256 MiB are rejected before loading with fatal `SZ6002`. | Document manifest vs lockdown precisely; centralize path policy and test symlink/junction traversal on every OS. |
 | Permissions | high | security contract | Permissions are additive declarations and source can self-grant outside lockdown. They are not an isolation boundary. All guarded namespaces now use one fatal structured `SZ6001` check. | Keep the centralized check; enumerate every native operation and close uncovered capabilities only through an explicit compatibility process. |
@@ -229,7 +229,8 @@ Proposed public tiers:
 
 ### P3 — normative specification and documentation
 
-`spec/` exists and holds eighteen documents so far:
+`spec/` holds one document per area. No count is given here because it goes
+stale; `ls spec/` is the inventory.
 
 - `errors.md` — diagnostic code ranges, what is emitted today, and the public
   shape of a caught runtime error.
@@ -260,18 +261,35 @@ Proposed public tiers:
   key/value types and the stable dict failure modes.
 - `sets.md` — construction, value equality and compound elements, the method
   table, and the stable Set failure modes.
+- `strings.md` — the character model and the built-in string methods.
+- `datetime.md` — `DateTime`/`DateField` values, their permissions and formats.
+- `random.md` — the deterministic generator, its reproducibility contract and
+  the fact that it is not security-grade entropy.
+- `tasks.md` — worker runtime ownership, isolation and messaging.
+- `cli.md` — what the `sz` executable accepts, what it writes to stdout versus
+  stderr, and what it returns.
 - `compatibility.md` — the two version numbers, the classes of change, what a
   release does and does not promise, the three-step deprecation path, the
   reserved `serez-code` minimum-runtime key, and the known gaps.
+- `values.md` — assignment and argument passing copying for every type, the
+  receiver-writeback rule and what counts as a place, closures capturing the
+  variable rather than its value, and the equality and truthiness tables.
+- `scopes.md` — where a name comes from, including the dynamic resolution of
+  free variables in functions, which is recorded and pinned rather than changed.
+- `operators.md` — the accepted operand types per operator, precedence and
+  associativity, the fact that `&&`/`||` return an operand rather than a
+  boolean, `sizeof` taking a type rather than a value, and the overload table.
+- `modules.md` — what `import` executes, path resolution order, the
+  all-or-nothing export rule, transitive export leaking, silent name
+  collisions, run-once caching and cycle behavior, why imports belong at the
+  top level, and the two module failure modes.
 
-Still to write: `syntax.md`, `types.md`, `operators.md` and `modules.md`.
-`cli.md`, `compatibility.md`, `values.md` and `scopes.md` are now written.
-The remaining sections of variables and control flow also need expansion. All
-of these describe semantics that are load-bearing for the whole ecosystem, so
-each rule has to be checked
-against the implementation and pointed at a conformance test before it is
-written down — publishing a rule the implementation does not follow is worse
-than publishing nothing.
+Still to write: `syntax.md` and `types.md`. The remaining sections of variables
+and control flow also need expansion. All of these describe semantics that are
+load-bearing for the whole ecosystem, so each rule has to be checked against the
+implementation and pointed at a conformance test before it is written down —
+publishing a rule the implementation does not follow is worse than publishing
+nothing.
 
 ### P3/P4 — performance and features
 
