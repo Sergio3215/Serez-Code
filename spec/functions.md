@@ -59,9 +59,15 @@ caller. If it raises a runtime error, its structured payload and recoverability
 classification propagate unchanged. Neither case is converted to `null`, and
 the function or constructor body does not run.
 
+A **lambda cannot declare a default at all**: `(n = 1) => …` and
+`(int n = 1) => …` are parse errors, as is a type annotation on a lambda
+parameter. Defaults exist on `fn` declarations, on methods and on constructors.
+A function *value* therefore carries defaults only when it came from a named
+`fn`; see `syntax.md`.
+
 These rules apply consistently to:
 
-- ordinary function and function-value calls;
+- ordinary function calls, and calls through a value that holds a named `fn`;
 - native higher-order callbacks, including bound method references;
 - instance methods and constructors;
 - `super.method(...)` and `super(...)` constructor delegation.

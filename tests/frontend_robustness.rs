@@ -558,6 +558,10 @@ fn the_documented_grammar_is_what_the_parser_accepts() {
             "typed lambda parameter",
             "let f = (int a) => { return a; };",
         ),
+        (
+            "lambda parameter with a default",
+            "let f = (a = 1) => { return a; };",
+        ),
         ("scalar type on a let", "let x int = 5;"),
         ("nullable type on a let", "let n int? = null;"),
         ("class name as array element type", "let a [Base] = [];"),

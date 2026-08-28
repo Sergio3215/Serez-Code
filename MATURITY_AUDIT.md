@@ -269,6 +269,13 @@ stale; `ls spec/` is the inventory.
   copy behavior, array-pattern iteration and propagation.
 - `functions.md` — parameter ordering and arity, call-time default evaluation,
   rest collection and failure propagation across every invocation route.
+  Audited claim by claim and **held on every one** — the first document in this
+  pass to do so, including its own worked example, defaults reading an earlier
+  parameter and `this`, a later parameter being unbound, an explicit argument
+  suppressing the default's evaluation, and a `throw` in a default propagating
+  unchanged through functions, methods, constructors, `super()` and native
+  callbacks. One gap added: a lambda declares neither a type nor a default, so
+  a function value carries defaults only when it came from a named `fn`.
 - `classes.md` — construction targets, exact interface shapes, abstract/no-
   constructor rules, implicit chaining and stable recoverable `super`
   diagnostics.

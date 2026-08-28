@@ -110,15 +110,21 @@ carries no `SZ` code — one of the remaining unstructured diagnostics noted in
 Operator precedence, associativity and the accepted operand types are in
 `operators.md`.
 
-### A lambda parameter cannot be typed
+### A lambda parameter takes no type and no default
 
 ```serez
-let f = (int a) => { return a; };    // PARSE ERROR
+// parse-error-example: neither form is accepted on a lambda
+let f = (int a) => { return a; };    // PARSE ERROR — no type annotation
+let f = (a = 1) => { return a; };    // PARSE ERROR — no default
+```
+
+```serez
 let f = (a) => { return a; };        // fine
 let f = a => a * 2;                  // fine — one parameter needs no parens
 ```
 
-Annotations exist on `fn` declarations, not on lambdas. See `types.md`.
+Annotations and defaults exist on `fn` declarations, methods and constructors,
+not on lambdas. See `types.md` and `functions.md`.
 
 ### A dict literal needs a dict context
 
