@@ -44,6 +44,7 @@ fn runtime_error_code(kind: &str) -> &'static str {
         "DivisionByZero" => "SZ4004",
         "IOError" => "SZ4005",
         "ModuleNotFound" => "SZ5001",
+        "ImportError" => "SZ5002",
         "PermissionError" => "SZ6001",
         "ResourceError" => "SZ6002",
         "UnsafeError" => "SZ6003",

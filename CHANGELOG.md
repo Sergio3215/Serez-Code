@@ -7,6 +7,26 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Statement and import diagnostics are structured, and reported once
+
+- A missing import was reported **twice**. The module paths printed the failure
+  themselves and also threw it, so one bad import produced both
+  `❌ ERROR: ModuleNotFound: ...` and `❌ UNCAUGHT EXCEPTION: ModuleNotFound: ...`.
+  Only the program boundary reports it now.
+- Module loading now distinguishes two failures. A module that cannot be
+  *found* keeps its historical shape — a catchable user exception whose message
+  begins `ModuleNotFound:`, which `tests/unit_sec_import.sz` pins and which was
+  therefore deliberately left alone. A module that was found but cannot be
+  *loaded* (does not parse, `.szx` the translator cannot handle, unreadable) is
+  now `ImportError` (`SZ5002`), a new code in the previously near-empty `SZ5xxx`
+  range.
+- `yield` outside a generator, a non-pointer left side in `*ptr = val`, an
+  unresolved `for-in` source and a missing pointer target are structured and
+  catchable instead of stderr prints.
+- `use permissions` under lockdown is now `SecurityError` (`SZ6004`) and remains
+  **fatal**: it is a security gate, so `try/catch` must not be able to turn a
+  denied self-grant into ordinary control flow. Verified with a catch attempt.
+
 ### Core expression diagnostics are structured and catchable
 
 - The diagnostics an ordinary program actually hits — a wrong argument type, a

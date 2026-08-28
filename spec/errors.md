@@ -80,6 +80,7 @@ Current runtime mappings are:
 | `SZ4004` | `DivisionByZero` (division and modulo) |
 | `SZ4005` | `IOError` |
 | `SZ5001` | `ModuleNotFound` |
+| `SZ5002` | `ImportError` |
 | `SZ6001` | `PermissionError` |
 | `SZ6002` | `ResourceError` |
 | `SZ6003` | `UnsafeError` |
@@ -198,6 +199,25 @@ The call stack that a typed-parameter failure used to print as a side effect now
 travels in the payload's `stack`, so an embedder reads frames instead of
 scraping stderr. `break`/`continue` escaping a call is a recoverable generic
 `RuntimeError` / `SZ4000`.
+
+Statement-level diagnostics use the same channel: `yield` outside a generator
+and a non-pointer left side in `*ptr = val` are recoverable `TypeError` /
+`SZ4002`; an unresolved `for-in` source and a missing pointer target are
+recoverable `ReferenceError` / `SZ4001`. `use permissions` under lockdown is a
+security gate and is therefore structured **and fatal**: `SecurityError` /
+`SZ6004`, which `try/catch` cannot consume.
+
+Module loading distinguishes two failures. A module that cannot be *found* stays
+a catchable user exception whose message begins `ModuleNotFound:` — long-standing
+behavior that `tests/unit_sec_import.sz` pins, so it is deliberately unchanged.
+A module that was found but cannot be *loaded* — it does not parse, it is a
+`.szx` the translator cannot handle, or it cannot be read — is a recoverable
+`ImportError` / `SZ5002`.
+
+A missing import is now reported once. The module paths printed the failure
+themselves *and* threw it, so a single bad import produced two lines on stderr:
+an `❌ ERROR:` from the import and an `❌ UNCAUGHT EXCEPTION:` from the program
+boundary. Only the boundary reports it now.
 
 ## Recoverable and fatal runtime errors
 

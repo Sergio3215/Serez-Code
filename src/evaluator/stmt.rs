@@ -132,8 +132,10 @@ impl super::Evaluator {
                     self.yield_collector.as_mut().unwrap().push(owned);
                     EvalResult::Value(self.null_ref)
                 } else {
-                    eprintln!("❌ ERROR: 'yield' used outside of a generator function (fn*)");
-                    EvalResult::Error
+                    self.rt_err_kind(
+                        "TypeError",
+                        "'yield' used outside of a generator function (fn*)",
+                    )
                 }
             }
 
@@ -144,12 +146,12 @@ impl super::Evaluator {
                 // program would otherwise fail later with a confusing permission
                 // error on a line that looks properly declared.
                 if self.lockdown {
-                    eprintln!(
-                        "❌ ERROR: `use permissions` is not available here — this code is running \
+                    return self.fatal_err_kind(
+                        "SecurityError",
+                        "`use permissions` is not available here — this code is running \
                          without permissions and cannot grant itself any. Install Serez-Code to \
-                         run programs that use OS, File, Socket and the rest."
+                         run programs that use OS, File, Socket and the rest.",
                     );
-                    return EvalResult::Error;
                 }
                 for p in perms {
                     self.permissions.insert(p.clone());
@@ -175,8 +177,10 @@ impl super::Evaluator {
                 let var_name = match self.resolve(ptr_ref).cloned() {
                     Some(ObjectData::Ptr(name)) => name,
                     _ => {
-                        eprintln!("❌ ERROR: Left side of '*ptr = val' is not a pointer");
-                        return EvalResult::Error;
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Left side of '*ptr = val' is not a pointer",
+                        );
                     }
                 };
                 let val_ref = match self.eval_expression(value) {
@@ -195,8 +199,8 @@ impl super::Evaluator {
                     self.global_arena.update(existing_ref.index, new_data);
                     return EvalResult::Value(existing_ref);
                 }
-                eprintln!("❌ ERROR: Pointer target '{}' not found in scope", var_name);
-                EvalResult::Error
+                let message = format!("Pointer target '{var_name}' not found in scope");
+                self.rt_err_kind("ReferenceError", message)
             }
 
             Statement::While(while_stmt) => {
@@ -444,8 +448,8 @@ impl super::Evaluator {
                     Expression::Identifier(name) => match self.lookup_var(name) {
                         Some(r) => r,
                         None => {
-                            eprintln!("❌ ERROR: Variable not found: {}", name);
-                            return EvalResult::Error;
+                            let message = format!("Variable not found: {name}");
+                            return self.rt_err_kind("ReferenceError", message);
                         }
                     },
                     _ => match self.eval_expression(&target) {
@@ -1414,7 +1418,6 @@ impl super::Evaluator {
                 Ok(s) => s,
                 Err(e) => {
                     let msg = format!("ModuleNotFound: Cannot read cached module '{}': {}", url, e);
-                    eprintln!("❌ ERROR: {}", msg);
                     let msg_ref = self.alloc(ObjectData::Str(msg));
                     return EvalResult::Throw(msg_ref);
                 }
@@ -1433,14 +1436,12 @@ impl super::Evaluator {
                     Err(e) => {
                         let msg =
                             format!("ModuleNotFound: Cannot read response from '{}': {}", url, e);
-                        eprintln!("❌ ERROR: {}", msg);
                         let msg_ref = self.alloc(ObjectData::Str(msg));
                         return EvalResult::Throw(msg_ref);
                     }
                 },
                 Err(e) => {
                     let msg = format!("ModuleNotFound: Cannot fetch '{}': {}", url, e);
-                    eprintln!("❌ ERROR: {}", msg);
                     let msg_ref = self.alloc(ObjectData::Str(msg));
                     return EvalResult::Throw(msg_ref);
                 }
@@ -1478,13 +1479,10 @@ impl super::Evaluator {
         parser.set_source_name(module_name);
         let program = parser.parse_program();
         if parser.has_errors() {
-            eprintln!(
-                "❌ Import aborted: fix the parse errors in '{}' first.",
-                module_name
-            );
             self.current_module_exports = prev_exports;
             self.current_dir = prev_dir;
-            return EvalResult::Error;
+            let message = format!("Import aborted: fix the parse errors in '{module_name}' first");
+            return self.rt_err_kind("ImportError", message);
         }
         let result = self.eval_program(&program);
 
@@ -1602,7 +1600,6 @@ impl super::Evaluator {
             Some(c) => c,
             None => {
                 let msg = format!("ModuleNotFound: Cannot find module '{}'", path);
-                eprintln!("❌ ERROR: {}", msg);
                 let msg_ref = self.alloc(ObjectData::Str(msg));
                 return EvalResult::Throw(msg_ref);
             }
@@ -1621,23 +1618,21 @@ impl super::Evaluator {
             match crate::szx::translate_szx_to_string(&canonical) {
                 Some(s) => s,
                 None => {
-                    eprintln!(
-                        "❌ ERROR: could not translate JSX module '{}' (is serez-ui's translator present?)",
-                        canonical.display()
+                    let module = canonical.display().to_string();
+                    let message = format!(
+                        "Could not translate JSX module '{module}' \
+                         (is serez-ui's translator present?)"
                     );
-                    return EvalResult::Error;
+                    return self.rt_err_kind("ImportError", message);
                 }
             }
         } else {
             match std::fs::read_to_string(&canonical) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!(
-                        "❌ ERROR: Cannot read module '{}': {}",
-                        canonical.display(),
-                        e
-                    );
-                    return EvalResult::Error;
+                    let module = canonical.display().to_string();
+                    let message = format!("Cannot read module '{module}': {e}");
+                    return self.rt_err_kind("ImportError", message);
                 }
             }
         };
@@ -1667,13 +1662,10 @@ impl super::Evaluator {
         parser.set_source_name(module_name);
         let program = parser.parse_program();
         if parser.has_errors() {
-            eprintln!(
-                "❌ Import aborted: fix the parse errors in '{}' first.",
-                module_name
-            );
             self.current_module_exports = prev_exports;
             self.current_dir = prev_dir;
-            return EvalResult::Error;
+            let message = format!("Import aborted: fix the parse errors in '{module_name}' first");
+            return self.rt_err_kind("ImportError", message);
         }
 
         let result = self.eval_program(&program);

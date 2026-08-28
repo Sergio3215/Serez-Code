@@ -1798,6 +1798,99 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
+fn statement_level_diagnostics_are_structured() {
+    let cases = [
+        (
+            "fn int f() { yield 1; return 0; } f();",
+            "SZ4002",
+            "TypeError",
+            "'yield' used outside of a generator",
+        ),
+        (
+            // The `unsafe` gate fires first on a bare pointer write, so the
+            // type check below it is only reachable inside the block.
+            "let x = 5; unsafe { *x = 1; }",
+            "SZ4002",
+            "TypeError",
+            "Left side of '*ptr = val' is not a pointer",
+        ),
+        (
+            "for (let item in nosuchcollection) { out item; }",
+            "SZ4001",
+            "ReferenceError",
+            "Variable not found: nosuchcollection",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected a structured diagnostic, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_module_that_cannot_be_loaded_is_told_apart_from_one_that_is_missing() {
+    use std::io::Write;
+
+    let dir = std::env::temp_dir().join(format!("sz_import_slice_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+
+    // A module that exists but does not parse is SZ5002 — a different failure
+    // from "there is no such module", which stays a catchable user exception
+    // carrying "ModuleNotFound" (pinned by tests/unit_sec_import.sz).
+    let broken = dir.join("broken_module.sz");
+    let mut file = std::fs::File::create(&broken).expect("fixture must be writable");
+    writeln!(file, "let = ;").expect("fixture must be writable");
+    drop(file);
+
+    let import_path = broken.display().to_string().replace('\\', "/");
+    let src = format!("import \"{import_path}\";");
+    match evaluate(&src) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ5002", "{error:?}");
+            assert_eq!(error.kind, "ImportError", "{error:?}");
+            assert!(error.message.contains("parse errors"), "{error:?}");
+        }
+        other => panic!("expected SZ5002 for an unparsable module, got {other:?}"),
+    }
+
+    // Missing modules keep their historical shape.
+    match evaluate("import \"absolutely_nonexistent_xyz_module\";") {
+        ProgramOutcome::UncaughtException { message } => {
+            assert!(message.contains("ModuleNotFound"), "{message}");
+        }
+        other => panic!("a missing module must stay a user exception, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_file(&broken);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn a_missing_import_is_reported_once_not_twice() {
+    // The module paths printed the failure themselves and *also* threw it, so a
+    // single missing import produced two lines on stderr: an "❌ ERROR:" from
+    // the import and an "❌ UNCAUGHT EXCEPTION:" from the program boundary.
+    let detailed = run_source_detailed(
+        "import \"absolutely_nonexistent_xyz_module\";".to_string(),
+        "<runtime-outcome>",
+        RunOpts::default(),
+    );
+    assert_eq!(detailed.exit_code, 1);
+    assert!(
+        matches!(detailed.failure, Some(RunFailure::UncaughtException { .. })),
+        "a missing module stays a user exception: {:?}",
+        detailed.failure
+    );
+}
+
+#[test]
 fn core_expression_diagnostics_are_structured_and_catchable() {
     // These are the diagnostics an ordinary program hits: a wrong argument, a
     // wrong return, a literal that violates its own declared type. Every one of
