@@ -4099,8 +4099,8 @@ sz script.sz > output.txt 2> errors.txt
 | `❌ ERROR: Function expected N arguments, got M` | Arity mismatch at call site |
 | `❌ ERROR: Index out of bounds` | Array access outside `[0, len-1]` |
 | (dict: missing key → `null`) | Accessing a missing key in a dict returns `null`; use `??` for a default |
-| `❌ ERROR: Unknown dict method 'x'` | Calling an undefined method on a dict |
-| `❌ TYPE ERROR: Dict key/value type mismatch` | Adding an entry whose types violate the dict's annotation |
+| `❌ ERROR [SZ4001]: Unknown dict method 'x'` | Calling an undefined method on a dict. Sets and arrays use the same `SZ4001` shape. |
+| `❌ ERROR [SZ4002]: Dict key/value type mismatch on Add: expected 'T', got 'U'` | Adding an entry whose types violate the dict's annotation |
 | `❌ ERROR: Division by zero` | `/` with zero on the right |
 | `❌ ERROR: Modulus operator by zero` | `%` with zero on the right |
 | `❌ ERROR: Integer overflow` | Arithmetic result exceeds `i64` range |

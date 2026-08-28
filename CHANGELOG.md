@@ -7,6 +7,27 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Dict and Set stop accepting calls they cannot honour
+
+- `new Set(5)` silently produced an empty set: a non-array initialiser was
+  dropped on the floor. It is now a catchable `TypeError` (`SZ4002`).
+- Every dict reader (`keys`, `values`, `toList`, `toArray`, `length`,
+  `toString`) and the zero-argument Set methods (`size`, `toArray`, `clear`,
+  `toString`) ignored extra arguments. They now reject them, before evaluating
+  the arguments they are rejecting.
+- All remaining dict diagnostics moved off stderr prints onto the structured
+  channel, so `d.Add()` and a dict type mismatch are catchable and carry a code.
+- An unknown `Set` member reported `TypeError` while arrays, strings, Random,
+  DateTime and Task all reported `ReferenceError`. Set was the outlier; it now
+  reports `ReferenceError` (`SZ4001`) like the rest, so `e.kind` can be used to
+  tell "no such member" from "called wrongly".
+- A dict or Set method whose receiver is not a dict or Set now says so instead
+  of answering with empty data, which is how a dispatcher bug used to look.
+- Unchanged: insertion order, missing-key reads returning null, `Remove` of an
+  absent key staying a no-op, Set deduplication and compound-element behavior,
+  `add` returning the receiver, `delete` returning a bool, and both value
+  semantics. `spec/dicts.md` and `spec/sets.md` freeze the contracts.
+
 ### Array failures are structured, catchable and no longer silently ignored
 
 - Array was the last large public surface still reporting failures by printing

@@ -21,13 +21,30 @@ impl super::Evaluator {
         if let Some(init_expr) = init_arg {
             let arr_ref = match self.eval_expression(&init_expr) {
                 EvalResult::Value(r) => r,
-                _ => return EvalResult::Error,
+                other => return other,
             };
-            if let Some(ObjectData::Array {
-                elements: arr_elems,
-                ..
-            }) = self.resolve(arr_ref).cloned()
-            {
+            // A non-array initialiser used to be dropped on the floor, so
+            // `new Set(5)` quietly produced an empty set.
+            let initial = match self.resolve(arr_ref).cloned() {
+                Some(ObjectData::Array {
+                    elements: arr_elems,
+                    ..
+                }) => Some(arr_elems),
+                Some(other) => {
+                    let actual = other.type_name().to_string();
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("new Set(values): values must be an array, got '{actual}'"),
+                    );
+                }
+                None => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "new Set(values): values must be an array, got 'null'",
+                    );
+                }
+            };
+            if let Some(arr_elems) = initial {
                 // Hash-based dedup: O(N) instead of the old O(N²) pairwise scan.
                 // Elements without a fingerprint can never equal anything under
                 // obj_data_eq (compounds), so they are pushed unconditionally —
@@ -73,6 +90,27 @@ impl super::Evaluator {
         }
     }
 
+    /// Reject a Set call that takes no arguments but was given some. Checked
+    /// before anything is evaluated, so a rejected call runs no side effects.
+    fn set_no_args(&mut self, dot_call: &ast::DotCallExpression) -> Option<EvalResult> {
+        if dot_call.arguments.is_empty() {
+            return None;
+        }
+        let method = dot_call.method.as_str();
+        let given = dot_call.arguments.len();
+        Some(self.rt_err_kind(
+            "TypeError",
+            format!("Set.{method} expects 0 arguments, got {given}"),
+        ))
+    }
+
+    /// The receiver was dispatched here as a Set; if the slot says otherwise an
+    /// internal invariant broke. Reported rather than silently answered with an
+    /// empty result.
+    fn set_receiver_broken(&mut self, method: &str) -> EvalResult {
+        self.rt_err_kind("TypeError", format!("Set.{method}: receiver is not a Set"))
+    }
+
     /// All Set methods, dispatched from expr.rs BEFORE the generic dot-call
     /// clones the receiver: every method runs against the arena slot, so even
     /// `.size()` on a 20k-element set no longer pays an O(N) copy, mutations
@@ -84,17 +122,23 @@ impl super::Evaluator {
     ) -> EvalResult {
         match dot_call.method.as_str() {
             "size" => {
+                if let Some(error) = self.set_no_args(dot_call) {
+                    return error;
+                }
                 let n = match self.resolve(set_ref) {
                     Some(ObjectData::Set { elements, .. }) => elements.len() as i64,
-                    _ => 0,
+                    _ => return self.set_receiver_broken("size"),
                 };
                 EvalResult::Value(self.alloc(ObjectData::Integer(n)))
             }
 
             "toArray" => {
+                if let Some(error) = self.set_no_args(dot_call) {
+                    return error;
+                }
                 let items: Vec<OwnedValue> = match self.resolve(set_ref) {
                     Some(ObjectData::Set { elements, .. }) => elements.clone(),
-                    _ => Vec::new(),
+                    _ => return self.set_receiver_broken("toArray"),
                 };
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: None,
@@ -108,8 +152,7 @@ impl super::Evaluator {
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    other => return other,
                 };
                 let vd = self.extract(vr);
                 let key = set_key_str(&vd);
@@ -128,8 +171,7 @@ impl super::Evaluator {
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    other => return other,
                 };
                 let vd = self.extract(vr);
                 let key = set_key_str(&vd);
@@ -155,8 +197,7 @@ impl super::Evaluator {
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    other => return other,
                 };
                 let vd = self.extract(vr);
                 let key = set_key_str(&vd);
@@ -195,6 +236,9 @@ impl super::Evaluator {
             }
 
             "clear" => {
+                if let Some(error) = self.set_no_args(dot_call) {
+                    return error;
+                }
                 let arena = match set_ref.region {
                     RegionId::Global => &mut self.global_arena,
                     RegionId::Scoped => &mut self.scopes.arena,
@@ -211,8 +255,7 @@ impl super::Evaluator {
                 }
                 let or = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    other => return other,
                 };
                 let other_elems: Vec<OwnedValue> = match self.resolve(or) {
                     Some(ObjectData::Set { elements, .. }) => elements.clone(),
@@ -228,7 +271,7 @@ impl super::Evaluator {
                             elements.iter().filter_map(set_key_str).collect();
                         (elements.clone(), seen)
                     }
-                    _ => return EvalResult::Error,
+                    _ => return self.set_receiver_broken("union"),
                 };
                 for elem in other_elems {
                     match set_key_str(&elem) {
@@ -253,8 +296,7 @@ impl super::Evaluator {
                 }
                 let or = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    other => return other,
                 };
                 let other_keys: HashSet<String> = match self.resolve(or) {
                     Some(ObjectData::Set { elements, .. }) => {
@@ -267,7 +309,7 @@ impl super::Evaluator {
                 };
                 let self_elems: Vec<OwnedValue> = match self.resolve(set_ref) {
                     Some(ObjectData::Set { elements, .. }) => elements.clone(),
-                    _ => return EvalResult::Error,
+                    _ => return self.set_receiver_broken("intersection"),
                 };
                 // O(N+M). Fingerprint-less elements are dropped: obj_data_eq
                 // can never match a compound against anything in `other`, which
@@ -283,13 +325,19 @@ impl super::Evaluator {
             }
 
             "toString" => {
+                if let Some(error) = self.set_no_args(dot_call) {
+                    return error;
+                }
                 let s = self.display(set_ref);
                 EvalResult::Value(self.alloc(ObjectData::Str(s)))
             }
 
-            _ => {
-                let m = dot_call.method.clone();
-                self.rt_err_kind("TypeError", format!("Unknown Set method '{}'", m))
+            // ReferenceError, matching Array, String, Random, DateTime and Task.
+            // Set was the last collection reporting an unknown member as a
+            // TypeError, which made `e.kind` unusable for classifying it.
+            unknown => {
+                let message = format!("Unknown Set method '{unknown}'");
+                self.rt_err_kind("ReferenceError", message)
             }
         }
     }

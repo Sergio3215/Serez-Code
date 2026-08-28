@@ -1798,6 +1798,188 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
+fn dict_and_set_failures_are_structured_and_catchable() {
+    let cases = [
+        (
+            r#"let d <string, int> = ({"a", 1}); d.Add();"#,
+            "SZ4002",
+            "TypeError",
+            "Add expects",
+        ),
+        (
+            r#"let d <string, int> = ({"a", 1}); d.Add(1);"#,
+            "SZ4002",
+            "TypeError",
+            "entry literal",
+        ),
+        (
+            r#"let d <string, int> = ({"a", 1}); d.Add({1, 2});"#,
+            "SZ4002",
+            "TypeError",
+            "key type",
+        ),
+        (
+            r#"let d <string, int> = ({"a", 1}); d.Add({"b", "x"});"#,
+            "SZ4002",
+            "TypeError",
+            "value type",
+        ),
+        (
+            r#"let d <string, int> = ({"a", 1}); d.Remove();"#,
+            "SZ4002",
+            "TypeError",
+            "Remove expects",
+        ),
+        (
+            r#"let d <string, int> = ({"a", 1}); d.clear(1);"#,
+            "SZ4002",
+            "TypeError",
+            "0 arguments",
+        ),
+        (
+            r#"let d <string, int> = ({"a", 1}); d.keys(1);"#,
+            "SZ4002",
+            "TypeError",
+            "0 arguments",
+        ),
+        (
+            r#"let d <string, int> = ({"a", 1}); d.values(1);"#,
+            "SZ4002",
+            "TypeError",
+            "0 arguments",
+        ),
+        (
+            r#"let d <string, int> = ({"a", 1}); d.toArray(1);"#,
+            "SZ4002",
+            "TypeError",
+            "0 arguments",
+        ),
+        (
+            r#"let d <string, int> = ({"a", 1}); d.missing();"#,
+            "SZ4001",
+            "ReferenceError",
+            "Unknown dict method",
+        ),
+        ("new Set(5);", "SZ4002", "TypeError", "array"),
+        (
+            "let s = new Set([1]); s.size(1);",
+            "SZ4002",
+            "TypeError",
+            "0 arguments",
+        ),
+        (
+            "let s = new Set([1]); s.toArray(1);",
+            "SZ4002",
+            "TypeError",
+            "0 arguments",
+        ),
+        (
+            "let s = new Set([1]); s.clear(1);",
+            "SZ4002",
+            "TypeError",
+            "0 arguments",
+        ),
+        (
+            "let s = new Set([1]); s.missing();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown Set method",
+        ),
+        (
+            "let s = new Set([1]); s.union(5);",
+            "SZ4002",
+            "TypeError",
+            "Set argument",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected a structured collection error, got {other:?}"),
+        }
+    }
+
+    // Catchable, and the receiver still works afterwards.
+    let caught = r#"
+        let caughtCount = 0;
+        let d <string, int> = ({"a", 1});
+        try { d.Add(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { d.missing(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+        let s = new Set([1]);
+        try { s.missing(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+        if (caughtCount != 3) { throw "collection errors were not catchable"; }
+        d.Add({"b", 2});
+        if (d.keys().length() != 2) { throw "dict did not recover"; }
+        s.add(2);
+        if (s.size() != 2) { throw "set did not recover"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn dict_and_set_preserve_nested_outcomes_and_validate_arity_first() {
+    let runtime_cases = [
+        r#"let d <string, int> = ({"a", 1}); d.Add({"k", 1 / 0});"#,
+        r#"let d <string, int> = ({"a", 1}); d.Remove(1 / 0);"#,
+        "let s = new Set([1]); s.add(1 / 0);",
+        "let s = new Set([1]); s.has(1 / 0);",
+        "let s = new Set([1]); s.delete(1 / 0);",
+        "let s = new Set([1]); s.union(1 / 0);",
+        "let s = new Set([1]); s.intersection(1 / 0);",
+        "new Set(1 / 0);",
+    ];
+    for src in runtime_cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4004", "{src}");
+                assert_eq!(error.kind, "DivisionByZero", "{src}");
+            }
+            other => panic!("{src}: expected the nested runtime error, got {other:?}"),
+        }
+    }
+
+    let throw_cases = [
+        r#"fn string boom() { throw "coll-boom"; return ""; } let d <string, int> = ({"a", 1}); d.Remove(boom());"#,
+        r#"fn int boom() { throw "coll-boom"; return 0; } let d <string, int> = ({"a", 1}); d.Add({"k", boom()});"#,
+        r#"fn int boom() { throw "coll-boom"; return 0; } let s = new Set([1]); s.add(boom());"#,
+        r#"fn int boom() { throw "coll-boom"; return 0; } let s = new Set([1]); s.has(boom());"#,
+        r#"fn [int] boom() { throw "coll-boom"; return [1]; } new Set(boom());"#,
+    ];
+    for src in throw_cases {
+        assert!(
+            matches!(
+                evaluate(src),
+                ProgramOutcome::UncaughtException { message } if message == "coll-boom"
+            ),
+            "{src}: the user exception must survive"
+        );
+    }
+
+    // Arity is rejected before the arguments run.
+    let ordering = r#"
+        let touched = 0;
+        fn int touch() { touched++; return 1; }
+        let d <string, int> = ({"a", 1});
+        try { d.clear(touch()); } catch (e) {}
+        try { d.keys(touch()); } catch (e) {}
+        try { d.toArray(touch()); } catch (e) {}
+        let s = new Set([1]);
+        try { s.size(touch()); } catch (e) {}
+        try { s.clear(touch()); } catch (e) {}
+        if (touched != 0) { throw "collections evaluated arguments after an arity failure"; }
+    "#;
+    assert!(matches!(evaluate(ordering), ProgramOutcome::Value(_)));
+}
+
+#[test]
 fn shared_argument_helpers_preserve_nested_outcomes() {
     // `eval_str_arg` / `eval_int_arg` used to collapse every outcome that was
     // not a value into a bare `EvalResult::Error`, so a user `throw` raised

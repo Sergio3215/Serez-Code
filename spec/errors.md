@@ -173,6 +173,17 @@ The shared argument helpers used by Array, `Crypto.randomBytes` and `Regex.*`
 return the original outcome when evaluation does not yield a value, so a user
 `throw` inside an argument is no longer collapsed into a generic error.
 
+Dict and Set follow the same shape. Wrong arity on any method, an `Add`
+argument that is not an entry literal, a key or value rejected by a declared
+dict type, a non-array `new Set(values)` initialiser and a non-Set argument to
+`union`/`intersection` are recoverable `TypeError` / `SZ4002`; an unknown member
+is recoverable `ReferenceError` / `SZ4001`. Arity is rejected before arguments
+are evaluated. See `dicts.md` and `sets.md`.
+
+An unknown `Set` member previously reported `TypeError`, which made Set the only
+collection whose `kind` could not separate "no such member" from "called
+wrongly". It now matches every other type.
+
 ## Recoverable and fatal runtime errors
 
 Structured does not imply catchable. Runtime failures carry the same public

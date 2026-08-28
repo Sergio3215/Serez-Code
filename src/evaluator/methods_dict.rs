@@ -44,6 +44,27 @@ impl super::Evaluator {
     ///
     /// Every method here runs against the arena slot: reads clone only what they
     /// return, mutations happen in place, and the index stays warm.
+    /// Reject a dict call that takes no arguments but was given some. Checked
+    /// before anything is evaluated, so a rejected call runs no side effects.
+    fn dict_no_args(&mut self, dot_call: &ast::DotCallExpression) -> Option<EvalResult> {
+        if dot_call.arguments.is_empty() {
+            return None;
+        }
+        let method = dot_call.method.as_str();
+        let given = dot_call.arguments.len();
+        Some(self.rt_err_kind(
+            "TypeError",
+            format!("{method} expects 0 arguments, got {given}"),
+        ))
+    }
+
+    /// The receiver was dispatched here as a dict; if the slot says otherwise an
+    /// internal invariant broke. Reported rather than silently answered with an
+    /// empty result, which is how a dispatcher bug used to look like empty data.
+    fn dict_receiver_broken(&mut self, method: &str) -> EvalResult {
+        self.rt_err_kind("TypeError", format!("{method}: receiver is not a dict"))
+    }
+
     pub(super) fn eval_dict_method_slot(
         &mut self,
         dict_ref: ObjectRef,
@@ -54,9 +75,8 @@ impl super::Evaluator {
             "Remove" => self.dict_remove(dict_ref, dot_call),
 
             "RemoveAll" | "clear" => {
-                if !dot_call.arguments.is_empty() {
-                    eprintln!("❌ ERROR: {} expects no arguments", dot_call.method);
-                    return EvalResult::Error;
+                if let Some(error) = self.dict_no_args(dot_call) {
+                    return error;
                 }
                 let arena = match dict_ref.region {
                     RegionId::Global => &mut self.global_arena,
@@ -70,11 +90,14 @@ impl super::Evaluator {
 
             // Returns array of keys: [k1, k2, ...]
             "toList" | "keys" => {
+                if let Some(error) = self.dict_no_args(dot_call) {
+                    return error;
+                }
                 let keys: Vec<OwnedValue> = match self.resolve(dict_ref) {
                     Some(ObjectData::Dict { entries, .. }) => {
                         entries.iter().map(|(k, _)| k.clone()).collect()
                     }
-                    _ => Vec::new(),
+                    _ => return self.dict_receiver_broken("keys"),
                 };
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: None,
@@ -83,11 +106,14 @@ impl super::Evaluator {
             }
 
             "values" => {
+                if let Some(error) = self.dict_no_args(dot_call) {
+                    return error;
+                }
                 let vals: Vec<OwnedValue> = match self.resolve(dict_ref) {
                     Some(ObjectData::Dict { entries, .. }) => {
                         entries.iter().map(|(_, v)| v.clone()).collect()
                     }
-                    _ => Vec::new(),
+                    _ => return self.dict_receiver_broken("values"),
                 };
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: None,
@@ -97,6 +123,9 @@ impl super::Evaluator {
 
             // Returns 2-D array of entries: [[k1,v1],[k2,v2],...]
             "toArray" => {
+                if let Some(error) = self.dict_no_args(dot_call) {
+                    return error;
+                }
                 let pairs: Vec<OwnedValue> = match self.resolve(dict_ref) {
                     Some(ObjectData::Dict { entries, .. }) => entries
                         .iter()
@@ -105,7 +134,7 @@ impl super::Evaluator {
                             elements: vec![k.clone(), v.clone()],
                         })
                         .collect(),
-                    _ => Vec::new(),
+                    _ => return self.dict_receiver_broken("toArray"),
                 };
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: None,
@@ -116,22 +145,38 @@ impl super::Evaluator {
             // Reached only through a dict living somewhere the upstream length()
             // fast path does not cover; O(1) either way.
             "length" => {
+                if let Some(error) = self.dict_no_args(dot_call) {
+                    return error;
+                }
                 let n = match self.resolve(dict_ref) {
                     Some(ObjectData::Dict { entries, .. }) => entries.len() as i64,
-                    _ => 0,
+                    _ => return self.dict_receiver_broken("length"),
                 };
                 EvalResult::Value(self.alloc(ObjectData::Integer(n)))
             }
 
             "toString" => {
+                if let Some(error) = self.dict_no_args(dot_call) {
+                    return error;
+                }
                 let s = self.display(dict_ref);
                 EvalResult::Value(self.alloc(ObjectData::Str(s)))
             }
 
-            _ => {
-                eprintln!("❌ ERROR: Unknown dict method '{}'", dot_call.method);
-                EvalResult::Error
+            unknown => {
+                let message = format!("Unknown dict method '{unknown}'");
+                self.rt_err_kind("ReferenceError", message)
             }
+        }
+    }
+
+    /// Check a value against a dict's declared key/value type.
+    /// Returns the offending type name when the value does not belong.
+    fn dict_type_mismatch(&self, value: ObjectRef, declared: &str) -> Option<String> {
+        match self.resolve(value) {
+            Some(data) if type_matches(declared, data) => None,
+            Some(data) => Some(data.type_name().to_string()),
+            None => Some("null".to_string()),
         }
     }
 
@@ -140,26 +185,29 @@ impl super::Evaluator {
     /// same cost: one indexed probe, then an in-place write or a push.
     fn dict_add(&mut self, dict_ref: ObjectRef, dot_call: &ast::DotCallExpression) -> EvalResult {
         if dot_call.arguments.len() != 1 {
-            eprintln!("❌ ERROR: Add expects 1 argument {{key, value}}");
-            return EvalResult::Error;
+            let given = dot_call.arguments.len();
+            return self.rt_err_kind(
+                "TypeError",
+                format!("Add expects 1 argument {{key, value}}, got {given}"),
+            );
         }
         let (key_ref, val_ref) = match &dot_call.arguments[0] {
             ast::Expression::EntryLiteral(k_expr, v_expr) => {
                 let k = match self.eval_expression(k_expr) {
                     EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    other => return other,
                 };
                 let v = match self.eval_expression(v_expr) {
                     EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    other => return other,
                 };
                 (k, v)
             }
             _ => {
-                eprintln!("❌ ERROR: Add argument must be an entry literal {{key, value}}");
-                return EvalResult::Error;
+                return self.rt_err_kind(
+                    "TypeError",
+                    "Add: argument must be an entry literal {key, value}",
+                );
             }
         };
 
@@ -171,31 +219,32 @@ impl super::Evaluator {
                 value_type,
                 ..
             }) => (key_type.clone(), value_type.clone()),
-            _ => return EvalResult::Error,
+            _ => return self.dict_receiver_broken("Add"),
         };
 
         if key_type != "any" {
-            let kd = self.resolve(key_ref).unwrap();
-            if !type_matches(&key_type, kd) {
-                eprintln!(
-                    "❌ TYPE ERROR: Dict key type mismatch on Add (expected '{}')",
-                    key_type
+            if let Some(actual) = self.dict_type_mismatch(key_ref, &key_type) {
+                return self.rt_err_kind(
+                    "TypeError",
+                    format!("Dict key type mismatch on Add: expected '{key_type}', got '{actual}'"),
                 );
-                return EvalResult::Error;
             }
         }
         if value_type != "any" {
-            let vd = self.resolve(val_ref).unwrap();
-            if !type_matches(&value_type, vd) {
-                eprintln!(
-                    "❌ TYPE ERROR: Dict value type mismatch on Add (expected '{}')",
-                    value_type
+            if let Some(actual) = self.dict_type_mismatch(val_ref, &value_type) {
+                return self.rt_err_kind(
+                    "TypeError",
+                    format!(
+                        "Dict value type mismatch on Add: expected '{value_type}', got '{actual}'"
+                    ),
                 );
-                return EvalResult::Error;
             }
         }
 
-        let search_key = obj_data_to_key_str(self.resolve(key_ref).unwrap());
+        let search_key = match self.resolve(key_ref) {
+            Some(data) => obj_data_to_key_str(data),
+            None => return self.dict_receiver_broken("Add"),
+        };
         let owned_k = self.extract(key_ref);
         let owned_v = self.extract(val_ref);
 
@@ -237,15 +286,20 @@ impl super::Evaluator {
         dot_call: &ast::DotCallExpression,
     ) -> EvalResult {
         if dot_call.arguments.len() != 1 {
-            eprintln!("❌ ERROR: Remove expects 1 argument (key)");
-            return EvalResult::Error;
+            let given = dot_call.arguments.len();
+            return self.rt_err_kind(
+                "TypeError",
+                format!("Remove expects 1 argument (key), got {given}"),
+            );
         }
         let key_ref = match self.eval_expression(&dot_call.arguments[0]) {
             EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            other => return other,
         };
-        let search_key = obj_data_to_key_str(self.resolve(key_ref).unwrap());
+        let search_key = match self.resolve(key_ref) {
+            Some(data) => obj_data_to_key_str(data),
+            None => return self.dict_receiver_broken("Remove"),
+        };
 
         let arena = match dict_ref.region {
             RegionId::Global => &mut self.global_arena,

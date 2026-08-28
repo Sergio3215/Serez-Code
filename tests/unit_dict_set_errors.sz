@@ -1,0 +1,100 @@
+// Regression contract for Dict and Set validation and propagation.
+use permissions { }
+
+test("dict arity and types are structured", () => {
+    let caught = 0;
+    let d <string, int> = ({"a", 1});
+    try { d.Add(); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { d.Add(1); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { d.Add({1, 2}); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { d.Add({"b", "not an int"}); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { d.Remove(); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    assert(caught == 5, "dict validation must be catchable TypeError");
+});
+
+test("dict readers reject extra arguments", () => {
+    let caught = 0;
+    let d <string, int> = ({"a", 1});
+    try { d.keys(1); }   catch (e) { if (e.kind == "TypeError") { caught++; } }
+    try { d.values(1); } catch (e) { if (e.kind == "TypeError") { caught++; } }
+    try { d.toArray(1); } catch (e) { if (e.kind == "TypeError") { caught++; } }
+    try { d.clear(1); }  catch (e) { if (e.kind == "TypeError") { caught++; } }
+    assert(caught == 4, "a reader that takes no arguments must say so");
+});
+
+test("unknown collection members are ReferenceError", () => {
+    let caught = 0;
+    let d <string, int> = ({"a", 1});
+    try { d.notAMethod(); }
+    catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caught++; } }
+    let s = new Set([1]);
+    try { s.notAMethod(); }
+    catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caught++; } }
+    assert(caught == 2, "Set must classify unknown members like every other type");
+});
+
+test("new Set rejects a non-array initialiser", () => {
+    let caught = false;
+    try { let bad = new Set(5); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "a non-array initialiser must not produce an empty set");
+});
+
+test("Set arity is validated", () => {
+    let caught = 0;
+    let s = new Set([1, 2]);
+    try { s.size(1); }    catch (e) { if (e.kind == "TypeError") { caught++; } }
+    try { s.toArray(1); } catch (e) { if (e.kind == "TypeError") { caught++; } }
+    try { s.clear(1); }   catch (e) { if (e.kind == "TypeError") { caught++; } }
+    try { s.union(5); }   catch (e) { if (e.kind == "TypeError") { caught++; } }
+    assert(caught == 4, "Set validation must be catchable");
+});
+
+test("collections preserve nested errors and throws", () => {
+    let divided = false;
+    let s = new Set([1]);
+    try { s.add(1 / 0); }
+    catch (e) { divided = e.code == "SZ4004" && e.kind == "DivisionByZero"; }
+    fn int explode() { throw "coll-boom"; return 0; }
+    let thrown = false;
+    try { s.has(explode()); }
+    catch (e) { thrown = e == "coll-boom"; }
+    assert(divided, "nested runtime error must survive");
+    assert(thrown, "user throw must survive");
+});
+
+test("collections validate arity before side effects", () => {
+    let touched = 0;
+    fn int touch() { touched++; return 1; }
+    let d <string, int> = ({"a", 1});
+    try { d.clear(touch()); } catch (e) {}
+    try { d.keys(touch()); } catch (e) {}
+    let s = new Set([1]);
+    try { s.size(touch()); } catch (e) {}
+    assert(touched == 0, "invalid arity must not evaluate arguments");
+});
+
+test("collections recover after caught errors", () => {
+    let d <string, int> = ({"a", 1});
+    try { d.missing(); } catch (e) {}
+    d.Add({"b", 2});
+    assert(d.keys().length() == 2, "dict still works");
+
+    let s = new Set([1]);
+    try { s.missing(); } catch (e) {}
+    s.add(2);
+    assert(s.size() == 2, "set still works");
+});
+
+test("preserved behavior: Remove of a missing key is a no-op", () => {
+    let d <string, int> = ({"a", 1});
+    d.Remove("not-there");
+    assert(d.keys().length() == 1, "removing a missing key must stay a no-op");
+});
+
+summary();
