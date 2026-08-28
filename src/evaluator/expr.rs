@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use super::lvalue::PathStep;
 use super::{
     CallFrame, DefaultArgumentResult, EvalResult, StoredClass, format_decimal, json_parse,
     json_stringify_owned, obj_data_eq, obj_data_to_key_str, operator_to_method_name,
@@ -6,6 +7,28 @@ use super::{
 };
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
+
+/// Every spelling a built-in collection mutator answers to.
+///
+/// One list, because it was previously duplicated in two places and they drifted:
+/// the Set methods `add`/`delete` were missing from one while their aliases
+/// `remove`/`clear` were present, so `inst.someSet.add(x)` silently mutated a
+/// copy.
+const MUTATING_COLLECTION_OPS: &[&str] = &[
+    "push",
+    "pop",
+    "shift",
+    "unshift",
+    "sort",
+    "remove",
+    "reverse",
+    "add",
+    "delete",
+    "Add",
+    "Remove",
+    "RemoveAll",
+    "clear",
+];
 use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
@@ -52,26 +75,53 @@ impl super::Evaluator {
     ///
     /// The method list must name every spelling of a mutator, including the Set
     /// pair `add`/`delete` — the dict method `Add` is a different one.
+    /// Receiver writeback for the shapes the field and dict-slot special cases
+    /// do not reach: an array index (`a[0].push(x)`) and any chain deeper than
+    /// one level (`this.cache[l][h]["k"].push(x)`).
+    ///
+    /// Both used to mutate the copy planted by the read and then drop it — no
+    /// error, no effect. serez-agentai's `KVCache.store()` is the second shape,
+    /// so its cache never accumulated and `seqLen()` always answered 0.
+    ///
+    /// Consulted only when neither special case applies, so the paths they
+    /// already cover keep their exact cost: `resolve_lvalue_path` re-evaluates
+    /// the index expressions, which is not free.
+    fn nested_receiver_path(
+        &mut self,
+        dot_call: &ast::DotCallExpression,
+    ) -> Option<(ObjectRef, Vec<PathStep>)> {
+        if !MUTATING_COLLECTION_OPS.contains(&dot_call.method.as_str()) {
+            return None;
+        }
+        match dot_call.object.as_ref() {
+            // `a[0]`, `d["k"][0]`, `this.c[l][h]["k"]`, …
+            Expression::Index(_) => self.resolve_lvalue_path(dot_call.object.as_ref()),
+            // A one-level field read is handled by `writeback_ctx`; anything
+            // deeper reaches here.
+            Expression::DotCall(inner) if inner.arguments.is_empty() && !inner.has_parens => {
+                self.resolve_lvalue_path(dot_call.object.as_ref())
+            }
+            _ => None,
+        }
+    }
+
+    /// Store a mutated receiver back through a path taken before the call.
+    fn apply_nested_writeback(
+        &mut self,
+        path: Option<(ObjectRef, Vec<PathStep>)>,
+        obj_ref: ObjectRef,
+    ) {
+        if let Some((root, steps)) = path {
+            let updated = self.extract(obj_ref);
+            self.store_path(root, &steps, updated);
+        }
+    }
+
     fn dict_slot_ctx(
         &mut self,
         dot_call: &ast::DotCallExpression,
     ) -> Result<Option<(ObjectRef, String)>, EvalResult> {
-        const MUTATING_OPS: &[&str] = &[
-            "push",
-            "pop",
-            "shift",
-            "unshift",
-            "sort",
-            "remove",
-            "reverse",
-            "add",
-            "delete",
-            "Add",
-            "Remove",
-            "RemoveAll",
-            "clear",
-        ];
-        if !MUTATING_OPS.contains(&dot_call.method.as_str()) {
+        if !MUTATING_COLLECTION_OPS.contains(&dot_call.method.as_str()) {
             return Ok(None);
         }
         let Expression::Index(idx_expr) = dot_call.object.as_ref() else {
@@ -957,22 +1007,7 @@ impl super::Evaluator {
                 let writeback_ctx: Option<(Expression, String)> =
                     if let Expression::DotCall(inner) = dot_call.object.as_ref() {
                         if inner.arguments.is_empty() {
-                            const MUTATING: &[&str] = &[
-                                "push",
-                                "pop",
-                                "shift",
-                                "unshift",
-                                "sort",
-                                "remove",
-                                "reverse",
-                                "add",
-                                "delete",
-                                "Add",
-                                "Remove",
-                                "RemoveAll",
-                                "clear",
-                            ];
-                            if MUTATING.contains(&dot_call.method.as_str()) {
+                            if MUTATING_COLLECTION_OPS.contains(&dot_call.method.as_str()) {
                                 Some((*inner.object.clone(), inner.method.clone()))
                             } else {
                                 None
@@ -1006,6 +1041,11 @@ impl super::Evaluator {
                         Ok(c) => c,
                         Err(e) => return e,
                     };
+                    let nested = if writeback_ctx.is_none() && dict_ctx.is_none() {
+                        self.nested_receiver_path(dot_call)
+                    } else {
+                        None
+                    };
                     let result = self.eval_set_method_slot(obj_ref, dot_call);
                     if let Some((inner_obj_expr, field_name)) = writeback_ctx {
                         self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
@@ -1013,6 +1053,7 @@ impl super::Evaluator {
                     if let Some((dict_ref, key_str)) = dict_ctx {
                         self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
                     }
+                    self.apply_nested_writeback(nested, obj_ref);
                     return result;
                 }
 
@@ -1039,6 +1080,11 @@ impl super::Evaluator {
                     } else {
                         None
                     };
+                    let nested = if writeback_ctx.is_none() && dict_ctx.is_none() {
+                        self.nested_receiver_path(dot_call)
+                    } else {
+                        None
+                    };
                     let result = self.eval_dict_method_slot(obj_ref, dot_call);
                     if let Some((inner_obj_expr, field_name)) = writeback_ctx {
                         self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
@@ -1046,6 +1092,7 @@ impl super::Evaluator {
                     if let Some((dict_ref, key_str)) = dict_ctx {
                         self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
                     }
+                    self.apply_nested_writeback(nested, obj_ref);
                     return result;
                 }
 
@@ -1151,6 +1198,11 @@ impl super::Evaluator {
                     Ok(c) => c,
                     Err(e) => return e,
                 };
+                let nested_writeback = if writeback_ctx.is_none() && dict_writeback_ctx.is_none() {
+                    self.nested_receiver_path(dot_call)
+                } else {
+                    None
+                };
 
                 let result = match obj_data {
                     // ── Array methods ─────────────────────────────────────────
@@ -1168,6 +1220,7 @@ impl super::Evaluator {
                         if let Some((dict_ref, key_str)) = dict_writeback_ctx {
                             self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
                         }
+                        self.apply_nested_writeback(nested_writeback, obj_ref);
                         r
                     }
 

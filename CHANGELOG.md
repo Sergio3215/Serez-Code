@@ -7,6 +7,34 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A mutation through a nested receiver no longer disappears
+
+- `a[0].push(x)` did nothing. So did any chain deeper than one level:
+  `d["k"][0].push(x)`, `h.f[0].push(x)`, `this.cache[l][h]["k"].push(x)`. The
+  read planted a copy, the method mutated the copy, and the copy was dropped —
+  no error, no effect, no way to notice except by checking afterwards.
+- Receiver writeback covered exactly two shapes: `obj.field.mutate(x)` and
+  `dict["key"].mutate(x)` where the dict was a bare identifier. Everything else
+  fell through.
+- **This was a live bug in an official package.** `serez-agentai`'s
+  `KVCache.store()` is `this.cache[layer][head]["k"].push(k_vec)`. The cache
+  never accumulated and `seqLen()` always returned 0. Its own test suite passed,
+  because nothing covered that path.
+- Writeback now works through any assignable path — a variable, a field read,
+  an index, or any chain of them — reusing the same `resolve_lvalue_path` /
+  `store_path` machinery that nested assignment and `this`-mutating class
+  methods already used.
+- The two existing special cases are untouched and still take their optimized
+  paths; the general one is consulted only when neither applies, so the hot
+  `d["k"].push(x)` loop keeps its exact cost.
+- Unchanged: reading out of a container still copies. `let x = a[0]; x.push(2)`
+  mutates `x` alone. Writeback is about calling a mutator *on a place*, not
+  about making containers shared.
+- `spec/values.md` is new: assignment and argument passing copy for every type
+  including class and interface instances, the writeback rule and what counts
+  as a place, closures capturing the variable rather than its value, the
+  equality table (`[1,2] == [1,2]` is false) and the truthiness table.
+
 ### `sz --help` exists, and the CLI contract is written down
 
 - `sz --help` was not implemented. It fell through to `Unknown flag '--help'`

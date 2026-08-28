@@ -1798,6 +1798,73 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
+fn a_mutator_on_a_nested_receiver_writes_back() {
+    // Receiver writeback covered `obj.field.push(x)` and `dict["k"].push(x)`,
+    // but not an array index and not a chain. `a[0].push(x)` and
+    // `this.c[l][h]["k"].push(x)` mutated a copy and dropped it — no error, no
+    // effect. serez-agentai's KVCache.store() is exactly the second shape, so
+    // its cache never accumulated and seqLen() always answered 0.
+    let cases = [
+        // (source, expression that must be true afterwards)
+        ("let a = [[1]]; a[0].push(2);", "a[0].length() == 2"),
+        ("let a = [[1]]; a[0].unshift(0);", "a[0].length() == 2"),
+        ("let a = [[2, 1]]; a[0].sort();", "a[0][0] == 1"),
+        ("let a = [[1, 2]]; a[0].reverse();", "a[0][0] == 2"),
+        ("let a = [[1, 2]]; a[0].pop();", "a[0].length() == 1"),
+        (
+            r#"let d <string, any> = ({"k", [[1]]}); d["k"][0].push(2);"#,
+            r#"d["k"][0].length() == 2"#,
+        ),
+        (
+            r#"class H { public H() { this.f = [[1]]; } } let h = new H(); h.f[0].push(2);"#,
+            "h.f[0].length() == 2",
+        ),
+    ];
+
+    for (setup, check) in cases {
+        let src = format!("{setup} if (!({check})) {{ throw \"no writeback\"; }}");
+        match evaluate(&src) {
+            ProgramOutcome::Value(_) => {}
+            other => panic!("{setup}: mutation was dropped ({check}): {other:?}"),
+        }
+    }
+
+    // The shape serez-agentai/src/kvcache.sz uses, end to end.
+    let kvcache = r#"
+        class KVCache {
+            public KVCache() {
+                this.cache = [];
+                let entry <string, any> = ({"k", []}, {"v", []});
+                let layer = [entry];
+                this.cache.push(layer);
+            }
+            public void store(int layer, int head, int k) {
+                this.cache[layer][head]["k"].push(k);
+            }
+            public int seqLen(int layer, int head) {
+                return this.cache[layer][head]["k"].length();
+            }
+        }
+        let kv = new KVCache();
+        kv.store(0, 0, 11);
+        kv.store(0, 0, 22);
+        if (kv.seqLen(0, 0) != 2) { throw "KV cache did not accumulate"; }
+    "#;
+    assert!(matches!(evaluate(kvcache), ProgramOutcome::Value(_)));
+
+    // Reading a nested value into a binding still copies: writeback is about
+    // calling a mutator *on a place*, not about making containers shared.
+    let still_copies = r#"
+        let a = [[1]];
+        let taken = a[0];
+        taken.push(2);
+        if (a[0].length() != 1) { throw "a read must still copy"; }
+        if (taken.length() != 2) { throw "the copy must still be mutable"; }
+    "#;
+    assert!(matches!(evaluate(still_copies), ProgramOutcome::Value(_)));
+}
+
+#[test]
 fn every_type_reports_an_unknown_member_the_same_way() {
     // `kind` is only useful for classifying a failure if it means the same
     // thing everywhere. Twelve native namespaces reported an unknown member as

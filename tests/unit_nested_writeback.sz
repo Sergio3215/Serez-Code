@@ -1,0 +1,88 @@
+// Receiver writeback through a nested place. Before this, `a[0].push(x)` and
+// any chain deeper than one level mutated the copy planted by the read and
+// dropped it — no error, no effect.
+use permissions { }
+
+test("array index receiver writes back", () => {
+    let a = [[1]];
+    a[0].push(2);
+    assert(a[0].length() == 2, "push through an array index");
+
+    let b = [[2, 1]];
+    b[0].sort();
+    assert(b[0][0] == 1, "sort through an array index");
+
+    let c = [[1, 2]];
+    c[0].reverse();
+    assert(c[0][0] == 2, "reverse through an array index");
+
+    let d = [[1, 2]];
+    d[0].pop();
+    assert(d[0].length() == 1, "pop through an array index");
+});
+
+test("a chain deeper than one level writes back", () => {
+    let d <string, any> = ({"k", [[1]]});
+    d["k"][0].push(2);
+    assert(d["k"][0].length() == 2, "dict slot then array index");
+
+    class H { public H() { this.f = [[1]]; } }
+    let h = new H();
+    h.f[0].push(2);
+    assert(h.f[0].length() == 2, "field then array index");
+});
+
+test("sets and dicts nested in an array write back too", () => {
+    let a = [new Set([1])];
+    a[0].add(2);
+    assert(a[0].size() == 2, "set add through an array index");
+    a[0].delete(1);
+    assert(!a[0].has(1), "set delete through an array index");
+
+    let inner <string, int> = ({"x", 1});
+    let outer = [inner];
+    outer[0].Add({"y", 2});
+    assert(outer[0].keys().length() == 2, "dict Add through an array index");
+});
+
+test("the KVCache shape from serez-agentai accumulates", () => {
+    class KVCache {
+        public KVCache() {
+            this.cache = [];
+            let entry <string, any> = ({"k", []}, {"v", []});
+            let layer = [entry];
+            this.cache.push(layer);
+        }
+        public void store(int layer, int head, int k) {
+            this.cache[layer][head]["k"].push(k);
+        }
+        public int seqLen(int layer, int head) {
+            return this.cache[layer][head]["k"].length();
+        }
+    }
+    let kv = new KVCache();
+    kv.store(0, 0, 11);
+    kv.store(0, 0, 22);
+    assert(kv.seqLen(0, 0) == 2, "the cache must accumulate");
+});
+
+test("reading out of a container still copies", () => {
+    let a = [[1]];
+    let taken = a[0];
+    taken.push(2);
+    assert(a[0].length() == 1, "a read copies");
+    assert(taken.length() == 2, "and the copy is still mutable");
+});
+
+test("existing one-level writeback is unchanged", () => {
+    class H { public H() { this.items = [1]; } }
+    let h = new H();
+    h.items.push(2);
+    assert(h.items.length() == 2, "field receiver");
+
+    let d <string, any> = ({"list", [1]});
+    d["list"].push(2);
+    assert(d["list"].length() == 2, "dict slot receiver");
+});
+
+summary();
