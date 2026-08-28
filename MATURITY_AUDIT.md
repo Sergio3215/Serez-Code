@@ -290,13 +290,20 @@ stale; `ls spec/` is the inventory.
   declared type accepts at a call, the absence of numeric widening and of subtyping,
   where enforcement stops (bindings, field assignment, `[T]` parameters), `type_of`
   and `is`, and exactly how far the static checker reaches.
+- `syntax.md` — the statement and expression grammar: what parses, and the forms
+  that read as valid and do not (brace-less bodies, `for (x in …)` without the
+  `let`, a typed lambda parameter, a scalar annotation on a `let`, a JSON-style
+  object literal, trailing commas in three of seven list forms, nested block
+  comments).
 
-Still to write: `syntax.md`. The remaining sections of variables
-and control flow also need expansion. All of these describe semantics that are
-load-bearing for the whole ecosystem, so each rule has to be checked against the
-implementation and pointed at a conformance test before it is written down —
+Every planned document now exists. The remaining sections of variables and control
+flow still need expansion, and every rule added from here has to be checked against
+the implementation and pointed at a conformance test before it is written down —
 publishing a rule the implementation does not follow is worse than publishing
-nothing.
+nothing. Writing these documents has been the most productive bug-finding activity
+in this pass: the dynamic-scoping surprise, the nested-receiver data loss, the
+unenforced constructor types and the unusable enum parameters were all found by
+probing a claim rather than by reading code.
 
 ### P3/P4 — performance and features
 

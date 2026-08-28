@@ -528,3 +528,140 @@ fn runner_fixtures_are_tracked_by_git() {
         module_fixtures.len()
     );
 }
+
+/// The grammar frozen in `spec/syntax.md`, both halves.
+///
+/// A specification that says "this does not parse" is only a contract if
+/// something fails when it starts to. These are the forms that read as
+/// obviously valid and are not, alongside the ones they are usually confused
+/// with — pinned together so a parser change cannot quietly move a case from
+/// one column to the other.
+#[test]
+fn the_documented_grammar_is_what_the_parser_accepts() {
+    fn parses(src: &str) -> bool {
+        let lexer = Lexer::new(src.to_string());
+        let mut parser = Parser::new(lexer);
+        parser.set_source(src.lines().map(str::to_string).collect());
+        parser.set_source_name("<syntax>");
+        let _ = parser.parse_program();
+        !parser.has_errors()
+    }
+
+    // Forms spec/syntax.md records as rejected.
+    let rejected = [
+        ("brace-less if body", "if (true) out 1;"),
+        ("brace-less else body", "if (true) { } else out 1;"),
+        ("brace-less while body", "while (false) out 1;"),
+        ("brace-less for body", "for (let i = 0; i < 1; i++) out 1;"),
+        ("for-in without let", "for (item in [1]) { }"),
+        (
+            "typed lambda parameter",
+            "let f = (int a) => { return a; };",
+        ),
+        ("scalar type on a let", "let x int = 5;"),
+        ("nullable type on a let", "let n int? = null;"),
+        ("class name as array element type", "let a [Base] = [];"),
+        ("JSON-style object literal", "let d = {\"a\": 1};"),
+        ("trailing comma in an array literal", "let a = [1, 2,];"),
+        (
+            "trailing comma in call arguments",
+            "fn int f(int a) { return a; } f(1,);",
+        ),
+        (
+            "trailing comma in a parameter list",
+            "fn int f(int a,) { return a; }",
+        ),
+        (
+            "trailing comma in a dict literal",
+            "let d <string, int> = ({\"a\", 1},);",
+        ),
+        ("nested block comment", "/* a /* b */ c */ out 1;"),
+        ("sizeof over an expression", "out sizeof(5);"),
+    ];
+    for (what, src) in rejected {
+        assert!(
+            !parses(src),
+            "spec/syntax.md says this does not parse, but it does — {what}: {src}"
+        );
+    }
+
+    // The neighbouring forms that do parse. Half the value of the list above is
+    // that these keep working.
+    let accepted = [
+        ("if with a block", "if (true) { out 1; }"),
+        (
+            "else-if chain",
+            "if (false) { } else if (false) { } else { }",
+        ),
+        ("for-in with let", "for (let item in [1]) { }"),
+        ("classic for", "for (let i = 0; i < 1; i = i + 1) { }"),
+        (
+            "labeled break",
+            "outer: for (let i = 0; i < 2; i++) { break outer; }",
+        ),
+        ("labeled continue", "w: while (false) { continue w; }"),
+        ("untyped lambda parameter", "let f = (a) => { return a; };"),
+        ("bare single lambda parameter", "let f = a => a * 2;"),
+        ("typed array binding", "let a [int] = [1];"),
+        ("typed dict binding", "let d <string, int> = ({\"a\", 1});"),
+        (
+            "array destructuring with rest",
+            "let [a, ...rest] = [1, 2, 3];",
+        ),
+        (
+            "array destructuring trailing comma",
+            "let [a, b,] = [1, 2];",
+        ),
+        (
+            "dict destructuring",
+            "let d <string, int> = ({\"x\", 1}); let {x} = d;",
+        ),
+        (
+            "match with a trailing comma",
+            "let r = match 1 { 1 => \"a\", _ => \"b\", };",
+        ),
+        (
+            "match with a guard",
+            "let r = match 7 { n if n > 5 => \"big\", _ => \"small\" };",
+        ),
+        ("enum with a trailing comma", "enum E { A, B, }"),
+        ("switch without default", "switch (1) { case 1: { } }"),
+        (
+            "switch with multiple case values",
+            "switch (1) { case 1, 2: { } }",
+        ),
+        ("try/finally without catch", "try { } finally { }"),
+        ("generator declaration", "fn* int g() { yield 1; }"),
+        ("rest parameter", "fn int f(...rest) { return 1; }"),
+        ("default parameter", "fn int f(int a = 1) { return a; }"),
+        (
+            "spread at a call site",
+            "fn int f(...r) { return 1; } f(...[1, 2]);",
+        ),
+        (
+            "getter and setter",
+            "class C { public C() { this.v = 1; } \
+             public get int val() { return this.v; } \
+             public set val(int n) { this.v = n; } }",
+        ),
+        (
+            "declared field with a default",
+            "class C { n: int = 1; public C() { } }",
+        ),
+        ("interface declaration", "interface I { a: int; b: int; }"),
+        (
+            "nested declarations",
+            "fn int f() { class C { public C() { } } return 1; }",
+        ),
+        ("statements without semicolons", "let x = 1\nout x\n"),
+        ("sizeof over a type keyword", "out sizeof(int);"),
+        ("bare block", "{ let x = 1; }"),
+        ("empty program", ""),
+    ];
+    for (what, src) in accepted {
+        assert!(
+            parses(src),
+            "spec/syntax.md says this parses, but it does not — {what}: {src}"
+        );
+    }
+}

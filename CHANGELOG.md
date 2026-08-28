@@ -7,6 +7,26 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The grammar is written down, including what does not parse
+
+- `spec/syntax.md` is new: the statement and expression grammar, checked form by
+  form against the running binary. `lexical-grammar.md` already covered tokens;
+  this covers what they can be arranged into.
+- Half of it is the forms that read as obviously valid and are **not**, so they
+  stop being discovered one at a time: brace-less `if`/`while`/`for` bodies,
+  `for (item in …)` without the `let`, a typed lambda parameter, a scalar or
+  nullable annotation on a `let`, a class name as an array element type, a
+  JSON-style `{key: value}` literal, trailing commas in array literals, call
+  arguments, parameter lists and dict literals (but not in `match` arms, `enum`
+  variants or array destructuring), and nested block comments.
+- `the_documented_grammar_is_what_the_parser_accepts` in
+  `tests/frontend_robustness.rs` pins both columns — sixteen rejected forms and
+  thirty-two accepted ones — so a parser change cannot quietly move a case from
+  one to the other.
+- Also recorded: `return`/`break` outside their context report as
+  `❌ FLASH SCOPE ERROR` with no `SZ` code, one of the unstructured diagnostics
+  `errors.md` still lists.
+
 ### The type contract is written down, and two holes in it are closed
 
 - `spec/types.md` is new: the seven type keywords, where an annotation may
