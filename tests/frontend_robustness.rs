@@ -665,3 +665,175 @@ fn the_documented_grammar_is_what_the_parser_accepts() {
         );
     }
 }
+
+/// The reserved-word table in `spec/lexical-grammar.md` is the lexer's table.
+///
+/// `lexical-grammar.md` said keyword recognition was "exact and case-sensitive"
+/// and then never listed the keywords, so a reader had no way to know that
+/// `out`, `get` and `set` are unavailable as names. README.md used all three as
+/// identifiers. The list exists now; this keeps it honest, because a documented
+/// list that drifts is worse than none — it reads as authoritative.
+#[test]
+fn reserved_words_match_the_lexer() {
+    use serez_code::token::{TokenType, lookup_ident};
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc = std::fs::read_to_string(root.join("spec").join("lexical-grammar.md"))
+        .expect("spec/lexical-grammar.md must be readable");
+
+    let section = doc
+        .split("## Reserved words")
+        .nth(1)
+        .expect("spec/lexical-grammar.md must have a Reserved words section")
+        .split("\n## ")
+        .next()
+        .unwrap();
+
+    let mut documented: Vec<String> = Vec::new();
+    for line in section.lines() {
+        let line = line.trim();
+        if !line.starts_with('|') || line.contains("---") {
+            continue;
+        }
+        for cell in line.split('|') {
+            let cell = cell.trim();
+            if let Some(word) = cell.strip_prefix('`').and_then(|c| c.strip_suffix('`')) {
+                documented.push(word.to_string());
+            }
+        }
+    }
+    documented.sort();
+    documented.dedup();
+
+    // Every documented word must really be a keyword.
+    for word in &documented {
+        assert!(
+            !matches!(lookup_ident(word), TokenType::Ident),
+            "spec/lexical-grammar.md lists `{word}` as reserved, but the lexer \
+             treats it as an ordinary identifier"
+        );
+    }
+
+    // And every keyword must be documented. The lexer's table is the source of
+    // truth; this reads it back out of the one place that has it.
+    let table = std::fs::read_to_string(root.join("src").join("token.rs"))
+        .expect("src/token.rs must be readable");
+    let body = table
+        .split("pub fn lookup_ident")
+        .nth(1)
+        .expect("lookup_ident must exist");
+    let mut actual: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if !line.contains("=> TokenType::") {
+            continue;
+        }
+        if let Some(word) = line.split('"').nth(1) {
+            if word.chars().all(|c| c.is_ascii_lowercase()) && !word.is_empty() {
+                actual.push(word.to_string());
+            }
+        }
+        if line.starts_with('_') {
+            break;
+        }
+    }
+    actual.sort();
+    actual.dedup();
+
+    let missing: Vec<&String> = actual.iter().filter(|w| !documented.contains(w)).collect();
+    assert!(
+        missing.is_empty(),
+        "these keywords are not in spec/lexical-grammar.md's Reserved words \
+         table: {missing:?}"
+    );
+    assert_eq!(
+        documented.len(),
+        actual.len(),
+        "the documented table and the lexer disagree\n  documented: {documented:?}\n  lexer: {actual:?}"
+    );
+
+    // The count in the prose has to move with the table.
+    let count_line = format!("These {} words are keywords", actual.len());
+    assert!(
+        section.contains(&count_line),
+        "spec/lexical-grammar.md must say \"{count_line}\""
+    );
+}
+
+/// Every `serez` example in README.md parses, unless it says it should not.
+///
+/// The README is what people copy. Nothing checked it, and five examples had
+/// drifted into syntax the language does not accept: a dict literal without an
+/// annotated binding, `fn any get()` (a keyword), `while cond {` without
+/// parentheses, `public abstract decimal area();` — which the README's own
+/// Known Gotchas section already said was unsupported — and `let name: string`.
+///
+/// A block that is *meant* to be invalid opts out with a first-line comment
+/// `// parse-error-example: <why>`. The marker is explicit rather than inferred
+/// from a ⚠️ in the text, because one of the broken blocks carried a ⚠️ for an
+/// unrelated reason and would have been skipped for the wrong one.
+#[test]
+fn readme_serez_examples_parse() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme =
+        std::fs::read_to_string(root.join("README.md")).expect("README.md must be readable");
+
+    let lines: Vec<&str> = readme.lines().collect();
+    let mut blocks: Vec<(usize, String)> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim() == "```serez" {
+            let start = i + 2; // 1-based line of the first content line
+            let mut j = i + 1;
+            let mut buf: Vec<&str> = Vec::new();
+            while j < lines.len() && lines[j].trim() != "```" {
+                buf.push(lines[j]);
+                j += 1;
+            }
+            blocks.push((start, buf.join("\n")));
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    assert!(
+        blocks.len() > 150,
+        "expected the README to still carry its examples, found {}",
+        blocks.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    for (line, src) in &blocks {
+        if src.contains("parse-error-example") {
+            continue;
+        }
+        checked += 1;
+        let lexer = serez_code::lexer::Lexer::new(src.clone());
+        let mut parser = serez_code::parser::Parser::new(lexer);
+        parser.set_source(src.lines().map(str::to_string).collect());
+        parser.set_source_name("<readme>");
+        let _ = parser.parse_program();
+        if parser.has_errors() {
+            let first = parser
+                .take_errors()
+                .first()
+                .map(|e| e.message.clone())
+                .unwrap_or_default();
+            failures.push(format!("README.md:{line}: {first}"));
+        }
+    }
+
+    assert!(
+        checked > 150,
+        "almost every block opted out of parsing; that is not the intent ({checked} checked)"
+    );
+    assert!(
+        failures.is_empty(),
+        "README examples that do not parse — fix the example, or mark the block \
+         with a first-line `// parse-error-example: <why>` if being invalid is \
+         the point:\n{}",
+        failures.join("\n")
+    );
+}

@@ -33,6 +33,34 @@ This is the implementation's Unicode contract, not ASCII-only normalization.
 Serez does not currently normalize canonically equivalent identifiers, so tools
 must preserve the spelling in source.
 
+## Reserved words
+
+These 50 words are keywords. Recognition is exact and case-sensitive, and a
+keyword can never be used as an identifier — not as a variable, a function, a
+parameter, a class or a field. `let out = 1;` and `fn any get() { }` are parse
+errors, not shadowing.
+
+| | | | | | |
+| --- | --- | --- | --- | --- | --- |
+| `abstract` | `any` | `bool` | `break` | `case` | `catch` |
+| `class` | `const` | `continue` | `dec` | `decimal` | `default` |
+| `do` | `else` | `enum` | `export` | `false` | `finally` |
+| `fn` | `for` | `get` | `if` | `import` | `in` |
+| `int` | `interface` | `is` | `let` | `match` | `native` |
+| `new` | `null` | `out` | `private` | `public` | `return` |
+| `sealed` | `set` | `sizeof` | `static` | `string` | `switch` |
+| `throw` | `true` | `try` | `unsafe` | `use` | `void` |
+| `while` | `yield` |  |  |  |  |
+
+Three of these are easy to reach for by accident because they read like ordinary
+names: **`out`** (the output statement) and **`get`** / **`set`** (the getter and
+setter forms in a class body). `README.md` used all three as identifiers until
+this list existed.
+
+The list is kept in step with `lookup_ident` by `reserved_words_match_the_lexer`
+in `tests/frontend_robustness.rs`: adding a keyword without adding it here fails
+that test.
+
 ## Numeric literals
 
 ### Decimal integers and floating point

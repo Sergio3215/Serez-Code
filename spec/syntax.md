@@ -42,6 +42,18 @@ here rather than left to be discovered.
 
 Semicolons are **optional**. A statement ends at a newline just as well.
 
+### A keyword is never an identifier
+
+The 50 reserved words are listed in `lexical-grammar.md`. None of them can
+name a variable, function, parameter, class or field. Three read like
+ordinary names and are reached for by accident — `out`, `get` and `set`:
+
+```serez
+// parse-error-example: keywords cannot be identifiers
+let out = compute();          // PARSE ERROR — `out` is the output statement
+fn any get() { return 1; }    // PARSE ERROR — `get` opens a getter
+```
+
 ### Braces are mandatory
 
 `if`, `else`, `while`, `for` and `do` take a **block**, never a single

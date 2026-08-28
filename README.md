@@ -292,7 +292,9 @@ Array and object patterns are available on `let` and `const` declarations:
 
 ```serez
 let [head, _, ...tail] = [1, 2, 3, 4];
-let {name, age: years} = ({"name", "Ana"}, {"age", 30});
+
+let person <string, any> = ({"name", "Ana"}, {"age", 30});
+let {name, age: years} = person;
 ```
 
 Array holes create no binding, missing positions become `null`, and the final
@@ -1571,8 +1573,8 @@ from a variable yields a copy (value semantics), and there is nowhere for the
 write to go back to.
 
 ```serez
-fn any get() { return [1, 2]; }
-// get()[0] = 99;             // ❌ ERROR: InvalidAssignTarget (the result is a copy)
+fn any pair() { return [1, 2]; }
+// pair()[0] = 99;            // ❌ ERROR: InvalidAssignTarget (the result is a copy)
 ```
 
 #### Arrays from functions
@@ -2350,11 +2352,11 @@ let v = Tensor.zeros([128, 64])
 
 // Training loop
 let step = 0
-while step < 1000 {
+while (step < 1000) {
     step++
     Autodiff.tape()
-    let out = x.matmul(w).broadcastAdd(b).relu()
-    let loss = Autodiff.crossEntropyLoss(out, targets)
+    let logits = x.matmul(w).broadcastAdd(b).relu()
+    let loss = Autodiff.crossEntropyLoss(logits, targets)
     Autodiff.backward(loss)
 
     let grad_w = Autodiff.gradient(w)
@@ -2572,8 +2574,8 @@ out Crypto.ed25519Verify(kp["public"], "alterado", sig);   // false
 
 **Event objects returned by `Terminal.readEvent()`:**
 
-```serez
-// Key event
+```text
+// Key event — shapes, not Serez source
 { type: "key", code: "a", modifiers: ["ctrl"] }
 
 // Mouse event
@@ -3513,7 +3515,12 @@ abstract class Shape {
     public Shape(string name) {
         this.name = name;
     }
-    public abstract decimal area();   // abstract method — no body required
+    // Abstract method *declarations* (no body) are not supported. Give the
+    // base a default that throws, and override it in each subclass.
+    public decimal area() {
+        throw "area() not implemented in " + this.name;
+        return 0.0;
+    }
     public string describe() {
         return "{this.name}: area={this.area()}";
     }
@@ -3621,8 +3628,8 @@ let f = obj.privateHelper;   // ❌ ERROR: Method 'privateHelper' is private and
 
 This is what makes the parent→child callback pattern work in `serez-ui`: the parent passes the method, the child invokes it.
 
-```serez
-<TaskRow onPick={this.pick} />                    // parent: a reference
+```jsx
+<TaskRow onPick={this.pick} />                    // parent: a reference (.szx)
 <Button onClick={this.props.onPick}>Pick</Button> // child: invokes it
 ```
 
@@ -3668,11 +3675,11 @@ Reads a line from stdin and returns it as a `string`. Strips the trailing newlin
 - Called with a `string` argument: prints the prompt first (no newline), then reads.
 
 ```serez
-let name: string = readLine("What is your name? ");
+let name = readLine("What is your name? ");
 out "Hello, {name}!";
 
-let raw: string = readLine();
-let n: int = parseInt(raw);
+let raw = readLine();
+let n = parseInt(raw);
 ```
 
 ---
@@ -4115,6 +4122,7 @@ sz script.sz > output.txt 2> errors.txt
 The parser recovers from errors and continues parsing remaining statements. This means multiple errors can be reported in one run, each pointing to a different line:
 
 ```serez
+// parse-error-example: a parse error is the point of the example
 let x = ;       // ← parse error here
 let y = 10;     // this line still parses correctly
 out y;          // and this executes
@@ -4163,6 +4171,7 @@ Any `{` starts an interpolation expression. Use `\{`/`\}` for literal braces, or
 **raw string** `r"…"` to disable interpolation entirely:
 
 ```serez
+// parse-error-example: the last line is deliberately unclosed
 out "Score: {score}";      // ✅ interpolation
 out "Empty dict: \{\}";    // ✅ literal braces → Empty dict: {}
 out r"Empty dict: {}";     // ✅ raw string → Empty dict: {}
@@ -4174,6 +4183,7 @@ out "Block: {";            // ❌ parse error — unclosed interpolation
 Escape sequences inside `{…}` expressions are not supported. Extract the value to a variable instead:
 
 ```serez
+// parse-error-example: shows the escape sequence that breaks interpolation
 // ⚠️ This breaks the parser:
 out "Names: {arr.join(\", \")}";
 
@@ -4187,6 +4197,7 @@ out "Names: {arr.join(sep)}";
 Enum variants have their own type. Annotating a parameter as `string` when passing an enum value causes a type error:
 
 ```serez
+// parse-error-example: uses ... as elision, and shows a wrong annotation
 enum Priority { Low, High }
 
 fn add(string p) { ... }   // ⚠️ type error when called with Priority.High
@@ -4200,6 +4211,7 @@ reserved. Declaring a type with one of those names is a **parse error**, not a
 warning:
 
 ```serez
+// parse-error-example: the reserved name is the point of the example
 class Task { … }       // ❌ 'Task' is a reserved system namespace
 class TaskItem { … }   // ✅ rename it
 ```
@@ -4214,6 +4226,7 @@ or `TaskList` are fine.
 Abstract method *declarations* (no body) are not supported. Provide a default throwing body instead:
 
 ```serez
+// parse-error-example: shows the unsupported abstract declaration
 // ⚠️ Not supported:
 public abstract decimal area();
 

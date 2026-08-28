@@ -7,6 +7,44 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Every README example is parse-checked, and five had drifted
+
+- `readme_serez_examples_parse` extracts all 198 ```serez blocks from README.md
+  and parses each one. The README is what people copy; nothing checked it.
+- **Five examples did not parse.** A dict literal without an annotated binding;
+  `fn any get()` and `let out = …`, both using reserved words as names;
+  `while step < 1000 {` without parentheses; `let name: string = readLine(…)`,
+  a scalar annotation on a binding, which the language has never accepted; and
+  `public abstract decimal area();`, an abstract method declaration.
+- The last one is the worst kind of documentation defect: the README's own
+  **Known Gotchas** section already said "Abstract method *declarations* (no
+  body) are not supported" and showed that exact line as the ⚠️ example. The
+  feature section a thousand lines earlier presented it as working. All five are
+  fixed, and the abstract-class example now uses the throwing default the gotcha
+  recommends — verified by running it, output included.
+- Two blocks were not Serez source and are re-fenced: a `Terminal.readEvent()`
+  shape illustration (`text`) and a JSX snippet (`jsx`, it is `.szx`).
+- Six blocks are invalid **on purpose** and now say so with a first-line
+  `// parse-error-example: <why>` comment. The marker is explicit rather than
+  inferred from the ⚠️/❌ the prose already uses, because one genuinely broken
+  block carried a ❌ for an unrelated reason and would have been skipped for the
+  wrong one. It also tells a reader which blocks are deliberately broken, which
+  previously took reading the surrounding prose.
+
+### The reserved words are written down
+
+- `spec/lexical-grammar.md` said keyword recognition was "exact and
+  case-sensitive" and then never listed the keywords. All 50 are now in a table.
+  A keyword can never be an identifier — `let out = 1;` and `fn any get() { }`
+  are parse errors, not shadowing — and three of them read like ordinary names
+  and get reached for by accident: **`out`**, **`get`** and **`set`**. README.md
+  used all three.
+- `reserved_words_match_the_lexer` reads the table back out of the document and
+  compares it with `lookup_ident`, including the count in the prose, so adding a
+  keyword without documenting it fails a test. A documented list that drifts is
+  worse than none, because it reads as authoritative.
+- `spec/syntax.md` cross-references the rule where people meet it.
+
 ### The limits document is audited: five ceilings were missing, one figure was stale
 
 - Every number in `spec/limits.md` checked against its constant in the source.
