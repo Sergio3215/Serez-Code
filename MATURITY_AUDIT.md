@@ -264,9 +264,16 @@ stale; `ls spec/` is the inventory.
 - `lexical-grammar.md` — token forms, Unicode behavior, comment/string rules and
   the stable `SZ1001`–`SZ1004` failure modes.
 - `variables.md` — normative declaration destructuring, accepted sources,
-  missing-value behavior and `SZ4002` failures.
+  missing-value behavior and `SZ4002` failures. **Audited: clean on all twelve
+  claims**, including that nested patterns really are a parse error and that a
+  failed pattern declares none of its bindings.
 - `control-flow.md` — the audited `for-in` subset: accepted iterables, snapshot/
-  copy behavior, array-pattern iteration and propagation.
+  copy behavior, array-pattern iteration and propagation. **Audited: clean on
+  all eleven claims** — array elements yielded as copies, strings by Unicode
+  scalar, dict keys in insertion order, a non-iterable rejected as `SZ4002`,
+  the iterable evaluated exactly once, mutation during the body not changing
+  the traversal, a closure per iteration keeping its own value, the three
+  array-pattern rules, and a throw from the iterable propagating unchanged.
 - `functions.md` — parameter ordering and arity, call-time default evaluation,
   rest collection and failure propagation across every invocation route.
   Audited claim by claim and **held on every one** — the first document in this
@@ -326,6 +333,31 @@ nothing. Writing these documents has been the most productive bug-finding activi
 in this pass: the dynamic-scoping surprise, the nested-receiver data loss, the
 unenforced constructor types and the unusable enum parameters were all found by
 probing a claim rather than by reading code.
+
+#### What auditing the specification has produced
+
+Every document with concrete, falsifiable claims has now been checked against the
+running binary rather than re-read. The result is worth recording because it
+changes where the remaining risk is:
+
+| Document | Result |
+| --- | --- |
+| `security.md` | one claim wrong — a lockdown gate documented as catchable is fatal |
+| `limits.md` | five enforced ceilings undocumented; one measurement stale |
+| `classes.md` | one claim wrong — implicit chaining reaches one level, not the hierarchy |
+| README code | five examples did not parse; one contradicted the same file |
+| `packages.md` | clean |
+| `functions.md` | clean |
+| `control-flow.md` | clean |
+| `variables.md` | clean |
+
+The defects clustered in documents making *many* claims with *little* test
+backing. Where a document was already pinned by tests — `packages.md` has 30 unit
+tests behind it — it held. That is the argument for the rule this section already
+states: a rule goes in `spec/` only once it is pointed at a conformance test.
+
+Still unaudited by this method: `tasks.md`, `datetime.md`, `random.md`,
+`strings.md`, `compiler.md`, `cli.md`, `compatibility.md`.
 
 ### P3/P4 — performance and features
 
