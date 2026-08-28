@@ -1798,6 +1798,113 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
+fn exact_decimal_method_failures_are_structured_and_catchable() {
+    let cases = [
+        (
+            "let d = 1.5m; d.round();",
+            "SZ4002",
+            "TypeError",
+            "takes 1 or 2 arguments",
+        ),
+        (
+            "let d = 1.5m; d.round(99);",
+            "SZ4000",
+            "RangeError",
+            "scale must be 0..=28",
+        ),
+        (
+            r#"let d = 1.5m; d.round(2, "nope");"#,
+            "SZ4000",
+            "RangeError",
+            "unknown rounding mode 'nope'",
+        ),
+        (
+            r#"let d = 1.5m; d.round("x");"#,
+            "SZ4002",
+            "TypeError",
+            "scale must be an int",
+        ),
+        (
+            "let d = 1.5m; d.nope();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown dec method",
+        ),
+        (
+            "let d = 1.5m; d.min();",
+            "SZ4002",
+            "TypeError",
+            "requires 1 argument",
+        ),
+        (
+            r#"let d = 1.5m; d.min("x");"#,
+            "SZ4002",
+            "TypeError",
+            "must be a dec or an int",
+        ),
+        ("Dec.parse();", "SZ4002", "TypeError", "requires 1 argument"),
+        (
+            r#"Dec.parse("zzz");"#,
+            "SZ4000",
+            "RangeError",
+            "invalid decimal",
+        ),
+        (
+            "Dec.fromInt(1);",
+            "SZ4002",
+            "TypeError",
+            "requires 2 integers",
+        ),
+        (
+            "Dec.fromInt(1, 99);",
+            "SZ4000",
+            "RangeError",
+            "scale must be 0..=28",
+        ),
+        (
+            "Dec.nope();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown Dec method",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected a structured dec diagnostic, got {other:?}"),
+        }
+    }
+
+    // Nested outcomes survive argument evaluation.
+    match evaluate("let d = 1.5m; d.round(1 / 0);") {
+        ProgramOutcome::RuntimeError(error) => assert_eq!(error.code, "SZ4004"),
+        other => panic!("expected the nested runtime error, got {other:?}"),
+    }
+    assert!(matches!(
+        evaluate(r#"fn int boom() { throw "dec-boom"; return 0; } let d = 1.5m; d.round(boom());"#),
+        ProgramOutcome::UncaughtException { message } if message == "dec-boom"
+    ));
+
+    // Valid results are unchanged.
+    let valid = r#"
+        let d = 1.555m;
+        if (d.round(2).toString() != "1.56") { throw "round changed"; }
+        if (Dec.fromInt(155, 2).toString() != "1.55") { throw "fromInt changed"; }
+        if (Dec.parse("3.14").toString() != "3.14") { throw "parse changed"; }
+        if ((2.5m).min(1.5m).toString() != "1.5") { throw "min changed"; }
+        let caught = false;
+        try { d.nope(); } catch (e) { caught = e.code == "SZ4001"; }
+        if (!caught) { throw "dec errors were not catchable"; }
+    "#;
+    assert!(matches!(evaluate(valid), ProgramOutcome::Value(_)));
+}
+
+#[test]
 fn callback_and_patch_dispatch_diagnostics_are_structured() {
     let cases = [
         (

@@ -282,7 +282,11 @@ $root       = $PSScriptRoot
 $testsDir   = Join-Path $root "tests"
 $framework  = Join-Path $testsDir "framework.sz"
 $binary     = Join-Path $root "target\release\sz.exe"
-$tempFile   = Join-Path $testsDir "~unit_temp.sz"
+# Unique per run. A fixed name meant two runs on the same checkout — or one
+# lingering handle from a previous run — collided on Set-Content and aborted the
+# whole suite mid-way with "used by another process". run_tests.sh already
+# suffixed with $$; this is the same fix.
+$tempFile   = Join-Path $testsDir "~unit_temp_$PID.sz"
 
 # Expose project root as SEREZ_HOME so `import "std/..."` resolves correctly
 $env:SEREZ_HOME = $root

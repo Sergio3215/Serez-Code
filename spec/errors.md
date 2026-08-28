@@ -185,6 +185,13 @@ An unknown `Set` member previously reported `TypeError`, which made Set the only
 collection whose `kind` could not separate "no such member" from "called
 wrongly". It now matches every other type.
 
+Exact-decimal (`dec`) methods and the static `Dec` namespace use the same
+channel: arity and argument types are recoverable `TypeError` / `SZ4002`; a
+scale outside 0..=28, an unknown rounding mode and an unparseable literal are
+recoverable `RangeError` / `SZ4000`; `toInt`/`toDecimal` overflow is `Overflow`;
+an unknown member is recoverable `ReferenceError` / `SZ4001`. Every built-in
+type's methods — string, array, dict, set and dec — now report this way.
+
 Core expression diagnostics use the same channel. A typed parameter or declared
 return type that a value does not satisfy, an array or dict literal whose
 element violates its own declared type, an entry literal or object patch used

@@ -7,6 +7,26 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Exact-decimal (`dec`) methods are structured, and the runner stops colliding
+
+- Every `dec` method and the static `Dec` namespace validated by printing to
+  stderr and returning an untyped sentinel: arity, scale range, rounding mode,
+  argument types, `toInt`/`toDecimal` overflow and unknown members. All are now
+  catchable and coded — `TypeError` (`SZ4002`) for arity and argument types,
+  `RangeError` (`SZ4000`) for a scale outside 0..=28, an unknown rounding mode
+  and an unparseable literal, `Overflow` for the two conversions, and
+  `ReferenceError` (`SZ4001`) for an unknown member.
+- The three `dec` argument helpers collapsed every non-value outcome into a bare
+  error, so a user `throw` inside `d.round(boom())` was lost. They now propagate
+  it and name the call that rejected a wrong type.
+- With this, every built-in type's methods — string, array, dict, set and dec —
+  report through the structured channel.
+- `run_tests.ps1` wrote its scratch file to a fixed `tests/~unit_temp.sz`. A
+  lingering handle from an earlier run aborted a whole suite mid-way with
+  "used by another process" and no TOTAL line. It is now per-process, matching
+  what `run_tests.sh` already did, and both names are gitignored so a crashed
+  run cannot leave one behind in the repository.
+
 ### Callback, class-dispatch and object-patch diagnostics are structured
 
 - Callback arity and shape (`Callback expected N argument(s)`, `Callback is not

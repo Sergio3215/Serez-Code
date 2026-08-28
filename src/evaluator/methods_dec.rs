@@ -39,32 +39,36 @@ impl super::Evaluator {
         match method {
             "round" | "setScale" | "truncate" => {
                 if dot_call.arguments.is_empty() || dot_call.arguments.len() > 2 {
-                    eprintln!(
-                        "❌ ERROR: dec.{}(n [, mode]) takes 1 or 2 arguments",
-                        method
+                    let given = dot_call.arguments.len();
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("dec.{method}(n [, mode]) takes 1 or 2 arguments, got {given}"),
                     );
-                    return EvalResult::Error;
                 }
-                let n = match self.dec_arg_int(&dot_call.arguments[0]) {
-                    Ok(v) if v >= 0 && v <= 28 => v as u32,
-                    Ok(_) => {
-                        eprintln!("❌ ERROR: dec.{} scale must be 0..=28", method);
-                        return EvalResult::Error;
+                let n = match self.dec_arg_int(&dot_call.arguments[0], method, "scale") {
+                    Ok(v) if (0..=28).contains(&v) => v as u32,
+                    Ok(out_of_range) => {
+                        return self.rt_err_kind(
+                            "RangeError",
+                            format!("dec.{method}: scale must be 0..=28, got {out_of_range}"),
+                        );
                     }
                     Err(e) => return e,
                 };
                 let strategy = if method == "truncate" {
                     RoundingStrategy::ToZero
                 } else if dot_call.arguments.len() == 2 {
-                    match self.dec_arg_str(&dot_call.arguments[1]) {
+                    match self.dec_arg_str(&dot_call.arguments[1], method, "mode") {
                         Ok(s) => match rounding_strategy(&s) {
                             Some(st) => st,
                             None => {
-                                eprintln!(
-                                    "❌ ERROR: unknown rounding mode '{}' (half-even|half-up|down|up|floor|ceil)",
-                                    s
+                                return self.rt_err_kind(
+                                    "RangeError",
+                                    format!(
+                                        "unknown rounding mode '{s}' \
+                                         (half-even|half-up|down|up|floor|ceil)"
+                                    ),
                                 );
-                                return EvalResult::Error;
                             }
                         },
                         Err(e) => return e,
@@ -104,25 +108,22 @@ impl super::Evaluator {
             "toString" => EvalResult::Value(self.alloc(ObjectData::Str(d.to_string()))),
             "toInt" => match d.trunc().to_i64() {
                 Some(i) => EvalResult::Value(self.alloc(ObjectData::Integer(i))),
-                None => {
-                    eprintln!("❌ ERROR: dec.toInt() out of i64 range");
-                    EvalResult::Error
-                }
+                None => self.rt_err_kind("Overflow", "dec.toInt() out of i64 range"),
             },
             "toDecimal" => match d.to_f64() {
                 Some(f) => EvalResult::Value(self.alloc(ObjectData::Decimal(f))),
-                None => {
-                    eprintln!("❌ ERROR: dec.toDecimal() not representable as f64");
-                    EvalResult::Error
-                }
+                None => self.rt_err_kind("Overflow", "dec.toDecimal() not representable as f64"),
             },
             // min / max take one dec (or int) argument.
             "min" | "max" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: dec.{}(other) requires 1 argument", method);
-                    return EvalResult::Error;
+                    let given = dot_call.arguments.len();
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("dec.{method}(other) requires 1 argument, got {given}"),
+                    );
                 }
-                let other = match self.dec_arg_dec(&dot_call.arguments[0]) {
+                let other = match self.dec_arg_dec(&dot_call.arguments[0], method, "other") {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
@@ -134,8 +135,8 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Dec(out)))
             }
             other => {
-                eprintln!("❌ ERROR: Unknown dec method '{}'", other);
-                EvalResult::Error
+                let message = format!("Unknown dec method '{other}'");
+                self.rt_err_kind("ReferenceError", message)
             }
         }
     }
@@ -145,10 +146,13 @@ impl super::Evaluator {
         match dot_call.method.as_str() {
             "parse" => {
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Dec.parse(string) requires 1 argument");
-                    return EvalResult::Error;
+                    let given = dot_call.arguments.len();
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Dec.parse(string) requires 1 argument, got {given}"),
+                    );
                 }
-                let s = match self.dec_arg_str(&dot_call.arguments[0]) {
+                let s = match self.dec_arg_str(&dot_call.arguments[0], "Dec.parse", "value") {
                     Ok(s) => s,
                     Err(e) => return e,
                 };
@@ -160,25 +164,30 @@ impl super::Evaluator {
                 match parsed {
                     Some(d) => EvalResult::Value(self.alloc(ObjectData::Dec(d))),
                     None => {
-                        eprintln!("❌ ERROR: Dec.parse: invalid decimal '{}'", s);
-                        EvalResult::Error
+                        let message = format!("Dec.parse: invalid decimal '{s}'");
+                        self.rt_err_kind("RangeError", message)
                     }
                 }
             }
             "fromInt" => {
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Dec.fromInt(value, scale) requires 2 integers");
-                    return EvalResult::Error;
+                    let given = dot_call.arguments.len();
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Dec.fromInt(value, scale) requires 2 integers, got {given}"),
+                    );
                 }
-                let value = match self.dec_arg_int(&dot_call.arguments[0]) {
+                let value = match self.dec_arg_int(&dot_call.arguments[0], "Dec.fromInt", "value") {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                let scale = match self.dec_arg_int(&dot_call.arguments[1]) {
-                    Ok(v) if v >= 0 && v <= 28 => v as u32,
-                    Ok(_) => {
-                        eprintln!("❌ ERROR: Dec.fromInt scale must be 0..=28");
-                        return EvalResult::Error;
+                let scale = match self.dec_arg_int(&dot_call.arguments[1], "Dec.fromInt", "scale") {
+                    Ok(v) if (0..=28).contains(&v) => v as u32,
+                    Ok(out_of_range) => {
+                        return self.rt_err_kind(
+                            "RangeError",
+                            format!("Dec.fromInt: scale must be 0..=28, got {out_of_range}"),
+                        );
                     }
                     Err(e) => return e,
                 };
@@ -188,59 +197,70 @@ impl super::Evaluator {
             "MIN" => EvalResult::Value(self.alloc(ObjectData::Dec(Decimal::MIN))),
             "MAX_SCALE" => EvalResult::Value(self.alloc(ObjectData::Integer(28))),
             other => {
-                eprintln!(
-                    "❌ ERROR: Unknown Dec method '{}' (expected parse/fromInt/MAX/MIN/MAX_SCALE)",
-                    other
+                let message = format!(
+                    "Unknown Dec method '{other}' (expected parse/fromInt/MAX/MIN/MAX_SCALE)"
                 );
-                EvalResult::Error
+                self.rt_err_kind("ReferenceError", message)
             }
         }
     }
 
     // ── small argument helpers ────────────────────────────────────────────────
-    fn dec_arg_int(&mut self, e: &ast::Expression) -> Result<i64, EvalResult> {
+    fn dec_arg_int(
+        &mut self,
+        e: &ast::Expression,
+        context: &str,
+        parameter: &str,
+    ) -> Result<i64, EvalResult> {
         let r = match self.eval_expression(e) {
             EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
-            _ => return Err(EvalResult::Error),
+            other => return Err(other),
         };
         match self.resolve(r) {
             Some(ObjectData::Integer(n)) => Ok(*n),
-            _ => {
-                eprintln!("❌ ERROR: expected an integer argument");
-                Err(EvalResult::Error)
-            }
+            _ => Err(self.rt_err_kind(
+                "TypeError",
+                format!("{context}: {parameter} must be an int"),
+            )),
         }
     }
 
-    fn dec_arg_str(&mut self, e: &ast::Expression) -> Result<String, EvalResult> {
+    fn dec_arg_str(
+        &mut self,
+        e: &ast::Expression,
+        context: &str,
+        parameter: &str,
+    ) -> Result<String, EvalResult> {
         let r = match self.eval_expression(e) {
             EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
-            _ => return Err(EvalResult::Error),
+            other => return Err(other),
         };
         match self.resolve(r) {
             Some(ObjectData::Str(s)) => Ok(s.clone()),
-            _ => {
-                eprintln!("❌ ERROR: expected a string argument");
-                Err(EvalResult::Error)
-            }
+            _ => Err(self.rt_err_kind(
+                "TypeError",
+                format!("{context}: {parameter} must be a string"),
+            )),
         }
     }
 
-    fn dec_arg_dec(&mut self, e: &ast::Expression) -> Result<Decimal, EvalResult> {
+    fn dec_arg_dec(
+        &mut self,
+        e: &ast::Expression,
+        context: &str,
+        parameter: &str,
+    ) -> Result<Decimal, EvalResult> {
         let r = match self.eval_expression(e) {
             EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
-            _ => return Err(EvalResult::Error),
+            other => return Err(other),
         };
         match self.resolve(r) {
             Some(ObjectData::Dec(d)) => Ok(*d),
             Some(ObjectData::Integer(n)) => Ok(Decimal::from(*n)),
-            _ => {
-                eprintln!("❌ ERROR: expected a dec (or int) argument");
-                Err(EvalResult::Error)
-            }
+            _ => Err(self.rt_err_kind(
+                "TypeError",
+                format!("{context}: {parameter} must be a dec or an int"),
+            )),
         }
     }
 }

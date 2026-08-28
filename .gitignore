@@ -31,3 +31,7 @@ vscode-serez/node_modules/
 MEMORIA_SESION_WORKERS.md
 fuzz_parser.py
 documentacion-internal-082026.md
+
+# Per-run scratch file both test runners write next to the tests. A crashed run
+# used to leave one behind as an untracked file in the repository.
+tests/~unit_temp*.sz
