@@ -408,3 +408,33 @@ fn required_parameters_cannot_follow_defaults() {
         "a rest parameter followed by another parameter must report a diagnostic; got {invalid_rest:?}"
     );
 }
+
+/// The README release badge and the DEVELOPMENT status table state the runtime
+/// version by hand. Both had drifted six releases behind `Cargo.toml` — README
+/// said 9.11.0 while the crate said 9.17.0 — and nothing noticed, because a
+/// stale number in a document breaks no build.
+///
+/// This is the cheapest possible guard: the two places that name the version
+/// have to name the one that is actually shipping.
+#[test]
+fn docs_versions_match_the_crate() {
+    let version = env!("CARGO_PKG_VERSION");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let readme =
+        std::fs::read_to_string(root.join("README.md")).expect("README.md must be readable");
+    let badge = format!("badge/release-v{version}-");
+    assert!(
+        readme.contains(&badge),
+        "README.md release badge must say v{version}; \
+         update the shields.io badge on the title block"
+    );
+
+    let development = std::fs::read_to_string(root.join("DEVELOPMENT.md"))
+        .expect("DEVELOPMENT.md must be readable");
+    let row = format!("| Version | {version} (`Cargo.toml`) |");
+    assert!(
+        development.contains(&row),
+        "DEVELOPMENT.md project-status table must say {version}"
+    );
+}

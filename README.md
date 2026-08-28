@@ -6,7 +6,7 @@
 
 No garbage collector. No runtime to install. Instant memory cleanup via **Flash Scopes**.
 
-[![Release](https://img.shields.io/badge/release-v9.11.0-blue?style=flat-square)](https://github.com/Sergio3215/serez-code/releases/latest)
+[![Release](https://img.shields.io/badge/release-v9.17.0-blue?style=flat-square)](https://github.com/Sergio3215/serez-code/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![No GC](https://img.shields.io/badge/memory-no%20GC-green?style=flat-square)]()
 

@@ -33,11 +33,11 @@ assumes you are going to touch `src/`.
 
 | Metric | Value |
 |---|---|
-| Version | 9.11.0 (`Cargo.toml`) |
-| Rust files | 55 (`src/`) |
-| Parser size | ~136 KB |
-| Evaluator size (all submodules) | ~1.2 MB |
-| Test files `.sz` | 402 (`tests/`) |
+| Version | 9.17.0 (`Cargo.toml`) |
+| Rust files | 60 (`src/`) |
+| Parser size | ~152 KB |
+| Evaluator size (all submodules) | ~1.5 MB |
+| Test files `.sz` | 446 (`tests/`) |
 | VS Code extension | v1.9.0 |
 | Binaries | `sz` (CLI) and `sz-lsp` (Language Server) |
 | Release platforms | Windows (MSI + .exe), Linux x64 (static), macOS ARM64 and Intel |
@@ -45,6 +45,12 @@ assumes you are going to touch `src/`.
 > The number of passing tests is deliberately not recorded here: it goes stale
 > the moment a test is added. Run `.\run_tests.ps1` / `./run_tests.sh` for the
 > real number at any given time.
+>
+> The version above and the README release badge are checked against
+> `Cargo.toml` by `docs_versions_match_the_crate` in
+> `tests/frontend_robustness.rs`, because both had drifted six releases behind
+> before anything noticed. The remaining figures are approximate and are
+> refreshed when they are noticeably wrong.
 
 ---
 
