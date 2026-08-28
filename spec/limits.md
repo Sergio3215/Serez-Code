@@ -42,6 +42,7 @@ structure at runtime rather than spell it out.
 | Limit | Value | Behavior on breach |
 | --- | --- | --- |
 | Call depth | 512 frames | Fatal `ResourceError` (`SZ6002`). |
+| Value nesting depth | 500 levels | Fatal `ResourceError` (`SZ6002`). |
 | String repetition | 10,000,000 repetitions | Fatal `ResourceError` (`SZ6002`). |
 | Padded string result | 10,000,000 Unicode scalar values | Fatal `ResourceError` (`SZ6002`) before result allocation. |
 | Tensor element count | 10,000,000 `f64` elements | Fatal `ResourceError` (`SZ6002`). |
@@ -55,6 +56,13 @@ structure at runtime rather than spell it out.
 | Task argument, reply or stored worker error | 1 MiB | Larger messages become `SZ6002`; worker error text is bounded before retention. |
 | Task worker source | 16 MiB | Worker enters failed state before parsing. |
 | Retained Task records, per runtime | 256 | Oldest terminal record is evicted; active workers remain. |
+
+Value nesting bounds how deeply *data* may nest, which a program reaches by
+nesting containers rather than by nesting code — `v = [v]` in a loop. It is
+separate from AST depth and from call depth. Exceeding it used to replace the
+subtree with null, print one line per truncated site and let the program finish
+with exit 0, so the caller received a corrupted value and no failure. It is now
+one fatal diagnostic at the next statement boundary.
 
 Call depth bounds recursion in the program being run: 512 nested Serez frames,
 including ordinary functions, methods, `super`, native collection callbacks and

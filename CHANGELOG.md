@@ -7,6 +7,24 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A value too deep to copy no longer corrupts itself and reports success
+
+- `extract` bounds its own recursion at 500 levels. Past that it replaced the
+  subtree with `null`, printed `❌ ERROR: Maximum nesting depth (500) exceeded`
+  once per truncated site, and let the program **run to completion and exit 0**.
+  A program that nested containers deeply — `v = [v]` in a loop — therefore got
+  silently corrupted data, a flooded stderr and a success exit code.
+- It is now a single fatal `ResourceError` (`SZ6002`) raised at the next
+  statement boundary, with a non-zero exit. Fatal rather than catchable: the
+  value has already lost a subtree, so a handler that carried on would be
+  working with corrupted data.
+- The limit was also undocumented. `spec/limits.md` now lists it beside the AST
+  and call-depth ceilings and explains how it differs from both.
+- `extract` takes `&self` and is called from 84 sites, so it records the
+  truncation through a flag rather than raising the error itself. That keeps the
+  fix to two guards and one checkpoint instead of a signature change across the
+  evaluator.
+
 ### Statement and import diagnostics are structured, and reported once
 
 - A missing import was reported **twice**. The module paths printed the failure

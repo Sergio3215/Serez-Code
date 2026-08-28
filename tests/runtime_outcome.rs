@@ -1798,6 +1798,52 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
+fn a_value_too_deep_to_copy_stops_the_program_instead_of_truncating_it() {
+    // `extract` bounds its own recursion at MAX_VALUE_DEPTH. Past that it
+    // replaced the subtree with null, printed one line per truncated site and
+    // let the program run to completion: corrupted data, flooded stderr, exit 0.
+    let src = r#"
+        fn any nest(int n) {
+            let v = [1];
+            for (let i = 0; i < n; i = i + 1) { v = [v]; }
+            return v;
+        }
+        let deep = nest(600);
+        out deep;
+    "#;
+    match evaluate(src) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ6002", "{error:?}");
+            assert_eq!(error.kind, "ResourceError", "{error:?}");
+            assert!(error.message.contains("500"), "{error:?}");
+        }
+        other => panic!("a value too deep to copy must fail, got {other:?}"),
+    }
+
+    // Fatal, not catchable: the value has already lost a subtree, so a handler
+    // that carried on would be working with corrupted data.
+    let attempt_to_catch = r#"
+        fn any nest(int n) {
+            let v = [1];
+            for (let i = 0; i < n; i = i + 1) { v = [v]; }
+            return v;
+        }
+        try { let deep = nest(600); } catch (e) { out "caught"; }
+        out "kept going";
+    "#;
+    assert!(
+        matches!(evaluate(attempt_to_catch), ProgramOutcome::RuntimeError(_)),
+        "a resource ceiling must cross try/catch"
+    );
+
+    // Ordinary nesting is untouched.
+    match evaluate("let a = [[[[1]]]]; a;") {
+        ProgramOutcome::Value(_) => {}
+        other => panic!("shallow nesting must still work, got {other:?}"),
+    }
+}
+
+#[test]
 fn statement_level_diagnostics_are_structured() {
     let cases = [
         (

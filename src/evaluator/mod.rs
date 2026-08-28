@@ -36,6 +36,15 @@ mod svg;
 /// the interpreter a 64 MB stack, which is what makes this many frames survivable.
 pub(crate) const MAX_CALL_DEPTH: usize = 512;
 
+/// How deeply a *value* may nest before `extract` refuses to copy it.
+///
+/// This is not the call or AST ceiling: it bounds the recursion that copies a
+/// value out of an arena, which a program reaches by nesting containers rather
+/// than by nesting code. Exceeding it used to replace the subtree with null,
+/// print one line per truncated site and let the program finish successfully —
+/// a corrupted value, a flooded stderr and exit 0.
+pub(crate) const MAX_VALUE_DEPTH: usize = 500;
+
 fn runtime_error_code(kind: &str) -> &'static str {
     match kind {
         "ReferenceError" => "SZ4001",
@@ -282,6 +291,12 @@ pub struct Evaluator {
     /// While non-zero, structured diagnostics are captured by a program outcome
     /// and rendered once by its caller instead of at the point of failure.
     diagnostic_capture_depth: usize,
+    /// Set when `extract` hit [`MAX_VALUE_DEPTH`] and replaced a subtree with
+    /// null. `extract` takes `&self` — it is called from 84 sites, many of them
+    /// while another borrow is live — so it cannot raise a diagnostic itself.
+    /// It records the fact here and [`Self::value_depth_overflow`] turns it into
+    /// a fatal error at the next statement boundary.
+    value_depth_exceeded: std::cell::Cell<bool>,
     // ── Writeback de receptores anidados ──────────────────────────────────────
     // (clase, método) → ¿el cuerpo puede escribir en `this`? Lo llena
     // `method_mutates_self` (lvalue.rs) la primera vez que se consulta un
@@ -540,6 +555,7 @@ impl Evaluator {
             error_generation: 0,
             try_depth: 0,
             diagnostic_capture_depth: 0,
+            value_depth_exceeded: std::cell::Cell::new(false),
             mutator_cache: HashMap::new(),
             super_cache: HashMap::new(),
         }
@@ -1033,9 +1049,8 @@ impl Evaluator {
     }
 
     fn extract_inner_owned(&self, owned: OwnedValue, depth: usize) -> OwnedValue {
-        const MAX_DEPTH: usize = 500;
-        if depth > MAX_DEPTH {
-            eprintln!("❌ ERROR: Maximum nesting depth ({}) exceeded", MAX_DEPTH);
+        if depth > MAX_VALUE_DEPTH {
+            self.value_depth_exceeded.set(true);
             return OwnedValue::Null;
         }
         match owned {
@@ -1077,9 +1092,8 @@ impl Evaluator {
     }
 
     fn extract_inner(&self, obj_ref: ObjectRef, depth: usize) -> OwnedValue {
-        const MAX_DEPTH: usize = 500;
-        if depth > MAX_DEPTH {
-            eprintln!("❌ ERROR: Maximum nesting depth ({}) exceeded", MAX_DEPTH);
+        if depth > MAX_VALUE_DEPTH {
+            self.value_depth_exceeded.set(true);
             return OwnedValue::Null;
         }
         match self.resolve(obj_ref) {
@@ -1423,6 +1437,24 @@ impl Evaluator {
     /// returned to the caller instead of being printed at the failure site. This
     /// makes the same result usable by the CLI, tests and future tooling without
     /// changing the internal `EvalResult` carrier all at once.
+    /// Turn a recorded `extract` truncation into a fatal diagnostic.
+    ///
+    /// Fatal rather than catchable: the value has already lost a subtree, so
+    /// letting a program catch this and carry on would hand it corrupted data.
+    /// It joins the other resource ceilings under `ResourceError` / `SZ6002`.
+    fn value_depth_overflow(&mut self) -> Option<EvalResult> {
+        if !self.value_depth_exceeded.replace(false) {
+            return None;
+        }
+        Some(self.fatal_err_kind(
+            "ResourceError",
+            format!(
+                "Value nests deeper than {MAX_VALUE_DEPTH} levels; copying it would \
+                 silently drop everything below that depth"
+            ),
+        ))
+    }
+
     pub fn eval_program_outcome(&mut self, program: &Program) -> ProgramOutcome {
         let starting_error_generation = self.error_generation;
         self.diagnostic_capture_depth += 1;

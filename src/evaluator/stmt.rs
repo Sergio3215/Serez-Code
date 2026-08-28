@@ -11,7 +11,18 @@ use std::io::{self, Write};
 use std::rc::Rc;
 
 impl super::Evaluator {
+    /// Every statement passes through here, which makes it the one place that
+    /// can notice a value `extract` had to truncate and stop the program before
+    /// it acts on the corrupted result.
     pub(super) fn eval_statement(&mut self, stmt: &Statement) -> EvalResult {
+        let result = self.eval_statement_inner(stmt);
+        match self.value_depth_overflow() {
+            Some(overflow) => overflow,
+            None => result,
+        }
+    }
+
+    fn eval_statement_inner(&mut self, stmt: &Statement) -> EvalResult {
         match stmt {
             Statement::Let(let_stmt) => {
                 let val_ref = match self.eval_expression(&let_stmt.value) {
