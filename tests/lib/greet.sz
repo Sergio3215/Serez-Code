@@ -1,0 +1,13 @@
+// greet.sz — module with explicit exports
+
+export let greet_calls = 0;
+
+export fn string greet(string name) {
+    greet_calls = greet_calls + 1;
+    return "Hello, " + name + "!";
+}
+
+// Private — not exported
+fn string internal_format(string name) {
+    return "[" + name + "]";
+}

@@ -1,0 +1,8 @@
+{
+  "name": "test-project",
+  "version": "1.0.0",
+  "dependencies": {
+    "math-helpers": "1.0.0",
+    "string-tools": "1.0.0"
+  }
+}

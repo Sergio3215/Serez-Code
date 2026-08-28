@@ -1,0 +1,54 @@
+// std/result.sz — Result/Option pattern for explicit error handling
+
+export public class Ok {
+    public Ok(any value) {
+        this.value = value;
+        this.isOk = true;
+        this.isErr = false;
+    }
+    public any unwrap() { return this.value; }
+    public any unwrapOr(any default_val) { return this.value; }
+    public string toString() { return "Ok(" + this.value + ")"; }
+}
+
+export public class Err {
+    public Err(any error) {
+        this.error = error;
+        this.isOk = false;
+        this.isErr = true;
+    }
+    public any unwrap() { throw "Called unwrap() on Err: " + this.error; }
+    public any unwrapOr(any default_val) { return default_val; }
+    public string toString() { return "Err(" + this.error + ")"; }
+}
+
+export public class Option {
+    public Option(any value) {
+        if (value == null) {
+            this.hasValue = false;
+            this.value = null;
+        } else {
+            this.hasValue = true;
+            this.value = value;
+        }
+    }
+    public bool isSome() { return this.hasValue; }
+    public bool isNone() { return !this.hasValue; }
+    public any unwrap() {
+        if (!this.hasValue) { throw "Called unwrap() on None Option"; }
+        return this.value;
+    }
+    public any unwrapOr(any default_val) {
+        if (!this.hasValue) { return default_val; }
+        return this.value;
+    }
+    public string toString() {
+        if (this.hasValue) { return "Some(" + this.value + ")"; }
+        return "None";
+    }
+}
+
+export fn any some(any value) { return new Option(value); }
+export fn any none() { return new Option(null); }
+export fn any ok(any value) { return new Ok(value); }
+export fn any err(any error) { return new Err(error); }

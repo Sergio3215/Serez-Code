@@ -1,0 +1,4 @@
+// mod_collide.sz — declares a name the importer already holds.
+// Pins that the module's binding overwrites it, with no diagnostic.
+
+export let mod_collide_name = "from-module";

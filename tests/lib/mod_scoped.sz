@@ -1,0 +1,11 @@
+// mod_scoped.sz — imported from inside a function body, which half-applies:
+// the function and the `let` go with the frame, the class survives in the
+// registry. See spec/modules.md, "`import` belongs at the top level".
+
+export let mod_scoped_let = "scoped-let";
+
+export fn string mod_scoped_fn() { return "scoped-fn"; }
+
+export class ModScopedClass {
+    public ModScopedClass() { this.tag = "scoped-class"; }
+}

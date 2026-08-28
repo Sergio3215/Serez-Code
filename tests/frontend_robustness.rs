@@ -438,3 +438,93 @@ fn docs_versions_match_the_crate() {
         "DEVELOPMENT.md project-status table must say {version}"
     );
 }
+
+/// The conformance runners load fixture trees that `.gitignore` used to swallow.
+///
+/// `.gitignore` excludes `*.sz`, `*.json` and friends repository-wide and then
+/// un-ignores specific paths. `!tests/*.sz` covers only the top level, so
+/// `tests/lib/`, `tests/packages/`, `tests/runner_fixtures/` and the whole
+/// Serez-source `std/` library were never committed. Every checkout that was not this working tree — CI included —
+/// ran the import, export, package and runner-integrity tests against files
+/// that did not exist, and got `ModuleNotFound` instead of a result.
+///
+/// The runners now refuse to start when a fixture is missing, which makes the
+/// symptom legible. This test attacks the cause: a fixture that exists on disk
+/// but is not tracked is exactly the state that produced the bug, and nothing
+/// else notices it.
+///
+/// Skipped when git is unavailable or this is not a checkout (a source tarball,
+/// a vendored build): the invariant is about the repository, so with no
+/// repository there is nothing to assert.
+#[test]
+fn runner_fixtures_are_tracked_by_git() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let output = match std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "--",
+            "tests/lib",
+            "tests/packages",
+            "tests/runner_fixtures",
+            "std",
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return, // no git, or not a checkout — nothing to assert
+    };
+
+    let tracked: std::collections::HashSet<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    // Not an exhaustive list on purpose: these are the ones whose absence
+    // silently turned a language test into a "module not found" failure.
+    let required = [
+        "tests/lib/greet.sz",
+        "tests/lib/greet_noexport.sz",
+        "tests/lib/math_utils.sz",
+        "tests/packages/serez.json",
+        "tests/packages/math-helpers/index.sz",
+        "tests/packages/string-tools/index.sz",
+        "tests/runner_fixtures/unit_abort_before_summary.sz",
+        // The Serez-source standard library. Twelve test files import it
+        // through SEREZ_HOME, and it is shipped library source, not a
+        // fixture: 476 lines that existed only in working trees.
+        "std/collections.sz",
+        "std/iter.sz",
+        "std/math.sz",
+        "std/result.sz",
+        "std/string.sz",
+    ];
+
+    let missing: Vec<&str> = required
+        .iter()
+        .copied()
+        .filter(|path| !tracked.contains(*path))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "these fixtures exist for the runners but are not tracked by git, so a \
+         fresh clone will not have them: {missing:?}. Check .gitignore — the \
+         `*.sz` / `*.json` rules need an explicit `!` for each fixture tree."
+    );
+
+    // Everything the module conformance suite imports must travel with it too.
+    let module_fixtures: Vec<&String> = tracked
+        .iter()
+        .filter(|path| path.starts_with("tests/lib/mod_"))
+        .collect();
+    assert!(
+        module_fixtures.len() >= 8,
+        "tests/unit_modules.sz imports eight tests/lib/mod_* fixtures; git tracks \
+         {}: {module_fixtures:?}",
+        module_fixtures.len()
+    );
+}

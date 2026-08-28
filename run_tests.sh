@@ -66,6 +66,33 @@ fi
 
 PASS=0 FAIL=0 SKIP=0
 
+# ── Fixture preflight ──────────────────────────────────────────────────────────
+# These trees are loaded by the import/export, package and runner-integrity
+# tests. They were excluded by .gitignore for a long time, so a fresh clone had
+# none of them and eight tests failed with "ModuleNotFound" — a message that
+# points at the language, not at the missing checkout. Fail here instead.
+REQUIRED_FIXTURES=(
+    "tests/lib/greet.sz|unit_sec_import, unit_import, 46_import_e2e"
+    "tests/lib/math_utils.sz|unit_import, unit_export, 47_export_e2e, sec_export"
+    "tests/packages/serez.json|unit_packages, 55_packages_e2e (via SEREZ_PACKAGES)"
+    "tests/runner_fixtures/unit_abort_before_summary.sz|runner integrity check"
+    "std/result.sz|unit_stdlib_*, 48_stdlib_e2e (via SEREZ_HOME)"
+    "std/iter.sz|unit_stdlib_iter, unit_generators, 50_generators_e2e"
+)
+missing_fixtures=()
+for entry in "${REQUIRED_FIXTURES[@]}"; do
+    path="${entry%%|*}"
+    [[ -f "$ROOT/$path" ]] || missing_fixtures+=("$entry")
+done
+if (( ${#missing_fixtures[@]} > 0 )); then
+    echo "${RED}Missing test fixtures — this checkout cannot produce a valid result:${RESET}"
+    for entry in "${missing_fixtures[@]}"; do
+        echo "${YELLOW}  ${entry%%|*}  (needed by ${entry#*|})${RESET}"
+    done
+    echo "${RED}These files must be tracked in git. Check .gitignore.${RESET}"
+    exit 1
+fi
+
 # ── Build ──────────────────────────────────────────────────────────────────────
 echo "${CYAN}Building...${RESET}"
 if ! cargo build --release --manifest-path "$ROOT/Cargo.toml" 2>&1; then

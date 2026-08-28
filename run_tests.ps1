@@ -293,6 +293,29 @@ $env:SEREZ_HOME = $root
 # Expose tests/packages as SEREZ_PACKAGES so package tests can import local packages
 $env:SEREZ_PACKAGES = Join-Path $root "tests\packages"
 
+# ── Fixture preflight ─────────────────────────────────────────────────────────
+# These trees are loaded by the import/export, package and runner-integrity
+# tests. They were excluded by `.gitignore` for a long time, so a fresh clone
+# had none of them and eight tests failed with "ModuleNotFound" — a message that
+# points at the language, not at the missing checkout. Fail here instead.
+$requiredFixtures = @(
+    @{ Path = "tests/lib/greet.sz";        Used = "unit_sec_import, unit_import, 46_import_e2e" },
+    @{ Path = "tests/lib/math_utils.sz";   Used = "unit_import, unit_export, 47_export_e2e, sec_export" },
+    @{ Path = "tests/packages/serez.json"; Used = "unit_packages, 55_packages_e2e (via SEREZ_PACKAGES)" },
+    @{ Path = "tests/runner_fixtures/unit_abort_before_summary.sz"; Used = "runner integrity check" },
+    @{ Path = "std/result.sz";             Used = "unit_stdlib_*, 48_stdlib_e2e (via SEREZ_HOME)" },
+    @{ Path = "std/iter.sz";               Used = "unit_stdlib_iter, unit_generators, 50_generators_e2e" }
+)
+$missingFixtures = @($requiredFixtures | Where-Object { -not (Test-Path (Join-Path $root $_.Path)) })
+if ($missingFixtures.Count -gt 0) {
+    Write-Host "Missing test fixtures — this checkout cannot produce a valid result:" -ForegroundColor Red
+    $missingFixtures | ForEach-Object {
+        Write-Host "  $($_.Path)  (needed by $($_.Used))" -ForegroundColor Yellow
+    }
+    Write-Host "These files must be tracked in git. Check .gitignore." -ForegroundColor Red
+    exit 1
+}
+
 # ── Build first ───────────────────────────────────────────────────────────────
 Write-Host "Building..." -ForegroundColor Cyan
 Push-Location $root

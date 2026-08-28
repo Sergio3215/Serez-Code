@@ -1,0 +1,8 @@
+// mod_counter.sz — a module whose top-level statements have a visible effect,
+// exported so the importer can observe how many times the body ran.
+
+export let mod_counter_runs = 0;
+
+mod_counter_runs = mod_counter_runs + 1;
+
+export fn int mod_counter_get() { return mod_counter_runs; }

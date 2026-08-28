@@ -1,0 +1,8 @@
+// mod_middle.sz — imports a sibling and exports only its own name.
+// Pins that a nested import's names are NOT cleaned up: exports leak
+// transitively. See spec/modules.md, "Only the module's own declarations
+// are candidates for removal".
+
+import "./mod_leaf.sz";
+
+export fn string mod_middle_via() { return mod_leaf_fn(); }

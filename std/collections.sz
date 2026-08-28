@@ -1,0 +1,82 @@
+// std/collections.sz — Stack, Queue, Deque
+
+export public class Stack {
+    public Stack() {
+        this.items = [];
+        this.count = 0;
+    }
+    public void push(any item) {
+        this.items.push(item);
+        this.count = this.count + 1;
+    }
+    public any pop() {
+        if (this.count == 0) { throw "Stack underflow"; }
+        this.count = this.count - 1;
+        return this.items.pop();
+    }
+    public any peek() {
+        if (this.count == 0) { throw "Stack is empty"; }
+        return this.items[this.count - 1];
+    }
+    public int size() { return this.count; }
+    public bool isEmpty() { return this.count == 0; }
+    public void clear() { this.items = []; this.count = 0; }
+}
+
+export public class Queue {
+    public Queue() {
+        this.items = [];
+        this.count = 0;
+    }
+    public void enqueue(any item) {
+        this.items.push(item);
+        this.count = this.count + 1;
+    }
+    public any dequeue() {
+        if (this.count == 0) { throw "Queue underflow"; }
+        this.count = this.count - 1;
+        return this.items.shift();
+    }
+    public any front() {
+        if (this.count == 0) { throw "Queue is empty"; }
+        return this.items[0];
+    }
+    public int size() { return this.count; }
+    public bool isEmpty() { return this.count == 0; }
+    public void clear() { this.items = []; this.count = 0; }
+}
+
+export public class Deque {
+    public Deque() {
+        this.items = [];
+        this.count = 0;
+    }
+    public void pushFront(any item) {
+        this.items.unshift(item);
+        this.count = this.count + 1;
+    }
+    public void pushBack(any item) {
+        this.items.push(item);
+        this.count = this.count + 1;
+    }
+    public any popFront() {
+        if (this.count == 0) { throw "Deque underflow"; }
+        this.count = this.count - 1;
+        return this.items.shift();
+    }
+    public any popBack() {
+        if (this.count == 0) { throw "Deque underflow"; }
+        this.count = this.count - 1;
+        return this.items.pop();
+    }
+    public any front() {
+        if (this.count == 0) { throw "Deque is empty"; }
+        return this.items[0];
+    }
+    public any back() {
+        if (this.count == 0) { throw "Deque is empty"; }
+        return this.items[this.count - 1];
+    }
+    public int size() { return this.count; }
+    public bool isEmpty() { return this.count == 0; }
+}

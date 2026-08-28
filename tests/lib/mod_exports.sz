@@ -1,0 +1,17 @@
+// mod_exports.sz — a module that uses `export`, so only exports survive.
+// Fixture for tests/unit_modules.sz. See spec/modules.md.
+
+export let mod_exports_value = "exported-let";
+
+export fn string mod_exports_visible() { return "exported-fn"; }
+
+export class ModExportsVisible {
+    public ModExportsVisible() { this.tag = "exported-class"; }
+}
+
+// Not exported — removed when this module finishes loading.
+let mod_exports_secret = "hidden-let";
+fn string mod_exports_hidden() { return "hidden-fn"; }
+class ModExportsSecret {
+    public ModExportsSecret() { this.tag = "hidden-class"; }
+}

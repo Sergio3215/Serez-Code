@@ -1,0 +1,3 @@
+// mod_pkg/index.sz — resolved by `import "lib/mod_pkg"`, with no file name.
+
+export let mod_pkg_marker = "index-resolved";

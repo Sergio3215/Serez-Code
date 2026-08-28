@@ -1,0 +1,4 @@
+// Module with NO export keyword — everything stays accessible (backwards compat)
+
+fn int pub_fn_result() { return 42; }
+fn int priv_fn_result() { return 99; }

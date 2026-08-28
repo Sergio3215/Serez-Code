@@ -1,0 +1,18 @@
+// math-helpers package — basic numeric utilities
+
+export fn int clamp(int n, int lo, int hi) {
+    if (n < lo) { return lo; }
+    if (n > hi) { return hi; }
+    return n;
+}
+
+export fn decimal lerp(decimal a, decimal b, decimal t) {
+    return a + (b - a) * t;
+}
+
+export fn int factorial(int n) {
+    if (n <= 1) { return 1; }
+    return n * factorial(n - 1);
+}
+
+export let PI_APPROX = 3.14159;

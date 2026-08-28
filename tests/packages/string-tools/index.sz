@@ -1,0 +1,27 @@
+// string-tools package — string utilities
+
+export fn string repeat(string s, int n) {
+    let result = "";
+    let i = 0;
+    while (i < n) {
+        result = result + s;
+        i = i + 1;
+    }
+    return result;
+}
+
+export fn bool isPalindrome(string s) {
+    let low = 0;
+    let high = s.length() - 1;
+    while (low < high) {
+        if (s[low] != s[high]) { return false; }
+        low = low + 1;
+        high = high - 1;
+    }
+    return true;
+}
+
+export fn string capitalize(string s) {
+    if (s.length() == 0) { return s; }
+    return s[0].upper() + s.substring(1);
+}

@@ -14,7 +14,17 @@ ANALISIS_MEMORIA_RENDIMIENTO.md
 *.vsix
 /.claude/
 !tests/*.sz
+# Fixture trees the conformance runners load. `!tests/*.sz` only un-ignores the
+# top level, so these stayed untracked: a fresh clone had no tests/lib, and the
+# import, export, package and runner-integrity tests failed with ModuleNotFound.
 !tests/registry/**
+!tests/lib/**
+!tests/packages/**
+!tests/runner_fixtures/**
+# The Serez-source standard library that `import "std/..."` resolves to, via
+# SEREZ_HOME. Twelve test files load it and `*.sz` was swallowing all of it,
+# so 476 lines of shipped library source lived only in working trees.
+!std/**
 !apps/*.sz
 !benchmarks/*.sz
 !vscode-serez/themes/*.json

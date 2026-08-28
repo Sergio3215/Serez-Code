@@ -1,0 +1,10 @@
+// mod_leaf.sz — only ever imported through mod_middle.sz, never directly.
+// Whatever it exports becoming visible to mod_middle's importer is the
+// transitive leak documented in spec/modules.md.
+
+export let mod_leaf_marker = "leaked-let";
+
+export fn string mod_leaf_fn() { return "leaked-fn"; }
+
+// Not exported: the leak carries exports, not everything.
+fn string mod_leaf_private() { return "not-leaked"; }

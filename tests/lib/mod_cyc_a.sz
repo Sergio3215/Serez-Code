@@ -1,0 +1,10 @@
+// mod_cyc_a.sz — one half of an import cycle. Pins that the cycle terminates
+// and that the other half observes this module half-executed.
+
+export let mod_cyc_a_val = "unset";
+
+import "./mod_cyc_b.sz";
+
+mod_cyc_a_val = "set-by-a";
+
+export fn string mod_cyc_a_read() { return mod_cyc_a_val; }

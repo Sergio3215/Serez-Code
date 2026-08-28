@@ -1,0 +1,108 @@
+// std/string.sz — String utilities
+
+export fn string padStart(string s, int totalLen, string pad) {
+    if (s.length() >= totalLen || pad.length() == 0) { return s; }
+    let result = s;
+    while (result.length() < totalLen) {
+        result = pad + result;
+    }
+    if (result.length() > totalLen) {
+        result = result.substring(result.length() - totalLen);
+    }
+    return result;
+}
+
+export fn string padEnd(string s, int totalLen, string pad) {
+    if (s.length() >= totalLen || pad.length() == 0) { return s; }
+    let result = s;
+    while (result.length() < totalLen) {
+        result = result + pad;
+    }
+    if (result.length() > totalLen) {
+        result = result.substring(0, totalLen);
+    }
+    return result;
+}
+
+export fn string strRepeat(string s, int n) {
+    if (n <= 0) { return ""; }
+    let result = "";
+    let i = 0;
+    while (i < n) {
+        result = result + s;
+        i = i + 1;
+    }
+    return result;
+}
+
+export fn string capitalize(string s) {
+    if (s.length() == 0) { return s; }
+    return s.substring(0, 1).toUpperCase() + s.substring(1).toLowerCase();
+}
+
+export fn string titleCase(string s) {
+    let words = s.split(" ");
+    let result = [];
+    for (let i = 0; i < words.length(); i = i + 1) {
+        result.push(capitalize(words[i]));
+    }
+    return result.join(" ");
+}
+
+export fn bool isDigit(string ch) {
+    return ch >= "0" && ch <= "9";
+}
+
+export fn bool isAlpha(string ch) {
+    return (ch >= "A" && ch <= "Z") || (ch >= "a" && ch <= "z");
+}
+
+export fn bool isAlphaNumeric(string ch) {
+    return isDigit(ch) || isAlpha(ch);
+}
+
+export fn [string] words(string s) {
+    let raw = s.trim().split(" ");
+    let result = [];
+    for (let i = 0; i < raw.length(); i = i + 1) {
+        let w = raw[i].trim();
+        if (w.length() > 0) { result.push(w); }
+    }
+    return result;
+}
+
+export fn [string] lines(string s) {
+    return s.split("\n");
+}
+
+export fn string reverseStr(string s) {
+    let chars = [];
+    for (let ch in s) { chars.push(ch); }
+    let result = "";
+    let i = chars.length() - 1;
+    while (i >= 0) {
+        result = result + chars[i];
+        i = i - 1;
+    }
+    return result;
+}
+
+export fn bool isPalindrome(string s) {
+    let low = s.toLowerCase();
+    return low == reverseStr(low);
+}
+
+export fn int countOccurrences(string s, string sub) {
+    if (sub.length() == 0) { return 0; }
+    let count = 0;
+    let pos = s.indexOf(sub);
+    while (pos != -1) {
+        count = count + 1;
+        let after = pos + sub.length();
+        if (after >= s.length()) { break; }
+        pos = s.substring(after).indexOf(sub);
+        if (pos == -1) { break; }
+        pos = pos + after;
+    }
+    return count;
+}

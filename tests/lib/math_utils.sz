@@ -1,0 +1,31 @@
+// math_utils.sz — exportable module
+
+export const PI = 3.14159265358979;
+
+export fn decimal circle_area(decimal r) {
+    return PI * r * r;
+}
+
+export fn decimal clamp(decimal val, decimal lo, decimal hi) {
+    if (val < lo) { return lo; }
+    if (val > hi) { return hi; }
+    return val;
+}
+
+export fn int factorial(int n) {
+    if (n <= 1) { return 1; }
+    return n * factorial(n - 1);
+}
+
+// Private helper — NOT exported
+fn decimal deg_to_rad(decimal deg) {
+    return deg * PI / 180.0;
+}
+
+export public class Counter {
+    public Counter() {
+        this.count = 0;
+    }
+    public void inc() { this.count = this.count + 1; }
+    public int value() { return this.count; }
+}

@@ -1,0 +1,8 @@
+// mod_cyc_b.sz — the other half of the cycle. Its top-level read of A's value
+// happens while A is still half-executed.
+
+import "./mod_cyc_a.sz";
+
+export let mod_cyc_b_saw = mod_cyc_a_val;
+
+export fn string mod_cyc_b_read() { return mod_cyc_b_saw; }
