@@ -34,15 +34,20 @@ use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, W
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::pump_events::EventLoopExtPumpEvents;
-use winit::window::{CursorIcon, CustomCursor, Icon, UserAttentionType, Window, WindowId, WindowLevel};
+use winit::window::{
+    CursorIcon, CustomCursor, Icon, UserAttentionType, Window, WindowId, WindowLevel,
+};
 
+use cosmic_text::{
+    Attrs, Buffer as TextBuffer, Color as TextColor, Family, FontSystem, Metrics, Shaping,
+    Style as FontStyle, SwashCache, Weight,
+};
 use softbuffer::{Context, Surface};
-use cosmic_text::{Attrs, Buffer as TextBuffer, Color as TextColor, Family, FontSystem, Metrics, Shaping, Style as FontStyle, SwashCache, Weight};
 
+use super::EvalResult;
+use super::svg;
 use crate::ast::{self};
 use crate::region::{ObjectData, OwnedValue};
-use super::svg;
-use super::EvalResult;
 
 // ── Estado compartido entre el hilo intérprete y el hilo main ─────────────────────
 
@@ -66,13 +71,13 @@ struct InputSnapshot {
     chars_typed: String,
     scroll_x: i64,
     scroll_y: i64,
-    focused: bool,          // ¿la ventana tiene foco? (WindowEvent::Focused)
-    mouse_in: bool,         // ¿el cursor está sobre la ventana? (CursorEntered/Left)
-    mouse_back: bool,       // botón "atrás" del mouse (MouseButton::Back)
-    mouse_fwd: bool,        // botón "adelante" del mouse (MouseButton::Forward)
+    focused: bool,                     // ¿la ventana tiene foco? (WindowEvent::Focused)
+    mouse_in: bool,                    // ¿el cursor está sobre la ventana? (CursorEntered/Left)
+    mouse_back: bool,                  // botón "atrás" del mouse (MouseButton::Back)
+    mouse_fwd: bool,                   // botón "adelante" del mouse (MouseButton::Forward)
     dropped_files: Vec<String>, // archivos soltados este frame (DroppedFile) — consumido por frame
-    ime_preedit: String,    // composición IME en curso (Ime::Preedit), "" si no hay
-    hovered_files: Vec<String>,        // archivos arrastrados SOBRE la ventana (antes de soltar) — nivel
+    ime_preedit: String,        // composición IME en curso (Ime::Preedit), "" si no hay
+    hovered_files: Vec<String>, // archivos arrastrados SOBRE la ventana (antes de soltar) — nivel
     touches: Vec<(u64, u8, i32, i32)>, // toques este frame: (id, fase 0=start/1=move/2=end/3=cancel, x, y)
     pinch_delta: f64,                  // gesto de pinch/zoom acumulado este frame
 }
@@ -81,11 +86,11 @@ struct InputSnapshot {
 /// recolectan al abrir la ventana y cuando cambia el factor de escala.
 #[derive(Clone, Default)]
 struct MonitorInfo {
-    x: i32,      // posición física de la esquina sup-izquierda
+    x: i32, // posición física de la esquina sup-izquierda
     y: i32,
-    w: u32,      // resolución física
+    w: u32, // resolución física
     h: u32,
-    scale: f64,  // factor de escala (HiDPI)
+    scale: f64,   // factor de escala (HiDPI)
     name: String, // nombre del monitor ("" si no disponible)
 }
 
@@ -109,7 +114,11 @@ fn collect_monitors(win: &Window) -> Vec<MonitorInfo> {
 
 /// Comandos del intérprete → hilo main.
 enum GuiCmd {
-    Open { title: String, w: u32, h: u32 },
+    Open {
+        title: String,
+        w: u32,
+        h: u32,
+    },
     Close,
     SetTitle(String),
     SetCursor(String),
@@ -122,21 +131,36 @@ enum GuiCmd {
     SetPosition(i32, i32),
     SetDecorations(bool),
     SetMaxSize(u32, u32),
-    DragWindow,                       // mover ventana borderless (winit::drag_window)
+    DragWindow, // mover ventana borderless (winit::drag_window)
     SetAlwaysOnTop(bool),
     SetMinimized(bool),
-    RequestAttention(bool),           // flash de taskbar
+    RequestAttention(bool), // flash de taskbar
     SetCursorVisible(bool),
     SetWindowIcon(Vec<u8>, u32, u32), // rgba, w, h (vacío = quitar ícono)
     SetCustomCursor(Vec<u8>, u32, u32, u32, u32), // rgba, w, h, hotspot_x, hotspot_y (rgba vacío = cursor por defecto)
     // Diálogo de archivo nativo (rfd) — ejecutado por el hilo main; el resultado
     // vuelve por SharedInner.dialog_result / dialog_seq (handshake como present).
-    FileDialog { save: bool, filter_name: String, filter_exts: Vec<String>, default_name: String },
+    FileDialog {
+        save: bool,
+        filter_name: String,
+        filter_exts: Vec<String>,
+        default_name: String,
+    },
     // ── Multi-ventana (aditivo): ventanas EXTRA con id ≥ 1; la ventana clásica
     //    de Gui.open es la id 0 y conserva su protocolo intacto. ──
-    OpenExtra { id: u32, title: String, w: u32, h: u32 },
-    CloseExtra { id: u32 },
-    SetTitleExtra { id: u32, title: String },
+    OpenExtra {
+        id: u32,
+        title: String,
+        w: u32,
+        h: u32,
+    },
+    CloseExtra {
+        id: u32,
+    },
+    SetTitleExtra {
+        id: u32,
+        title: String,
+    },
 }
 
 /// Estado compartido de UNA ventana extra (id ≥ 1). Protocolo de present
@@ -175,12 +199,12 @@ struct SharedInner {
     open_failed: bool,
     win_w: usize,
     win_h: usize,
-    win_x: i32,               // posición outer de la ventana (refrescada cada present)
+    win_x: i32, // posición outer de la ventana (refrescada cada present)
     win_y: i32,
     monitors: Vec<MonitorInfo>, // monitores conectados (cacheado, refrescado por el main)
-    scale_factor: f64,        // HiDPI: factor de escala del monitor (winit)
-    input_epoch: u64,         // sube en cada evento de input (para idleWait)
-    dialog_seq: u64,          // handshake de FileDialog (main → interp)
+    scale_factor: f64,          // HiDPI: factor de escala del monitor (winit)
+    input_epoch: u64,           // sube en cada evento de input (para idleWait)
+    dialog_seq: u64,            // handshake de FileDialog (main → interp)
     dialog_done: u64,
     dialog_result: Option<String>,
     input: InputSnapshot,
@@ -243,7 +267,11 @@ pub struct GuiHost {
 
 impl GuiHost {
     pub fn new() -> Self {
-        GuiHost { inner: Mutex::new(SharedInner::new()), cv: Condvar::new(), proxy: Mutex::new(None) }
+        GuiHost {
+            inner: Mutex::new(SharedInner::new()),
+            cv: Condvar::new(),
+            proxy: Mutex::new(None),
+        }
     }
     /// Despierta el bucle de eventos del hilo main (si hay proxy instalado).
     fn wake_main(&self) {
@@ -285,26 +313,80 @@ struct ImageData {
 // dibujo interpretado cada frame.
 
 enum SceneNodeKind {
-    Rect { w: i32, h: i32 },
-    RectAlpha { w: i32, h: i32, alpha: u32 },
-    RectOutline { w: i32, h: i32 },
-    RoundRect { w: i32, h: i32, radius: i32 },
-    RoundRectOutline { w: i32, h: i32, radius: i32 },
-    Circle { r: i32 },
-    Line { x2: i32, y2: i32 },
-    Polygon { points: Vec<i32> },
-    Polyline { points: Vec<i32>, width: i32 },
+    Rect {
+        w: i32,
+        h: i32,
+    },
+    RectAlpha {
+        w: i32,
+        h: i32,
+        alpha: u32,
+    },
+    RectOutline {
+        w: i32,
+        h: i32,
+    },
+    RoundRect {
+        w: i32,
+        h: i32,
+        radius: i32,
+    },
+    RoundRectOutline {
+        w: i32,
+        h: i32,
+        radius: i32,
+    },
+    Circle {
+        r: i32,
+    },
+    Line {
+        x2: i32,
+        y2: i32,
+    },
+    Polygon {
+        points: Vec<i32>,
+    },
+    Polyline {
+        points: Vec<i32>,
+        width: i32,
+    },
     // `alpha` (0–255): opacidad del texto (el motor de primitivos propaga la
     // `opacity` del subárbol); 255 = opaco (la API manual siempre emite 255).
-    Text { text: String, px: i32, font: String, style: u8, spacing: i32, alpha: u32 },
+    Text {
+        text: String,
+        px: i32,
+        font: String,
+        style: u8,
+        spacing: i32,
+        alpha: u32,
+    },
     // Gradiente lineal c1 (color del nodo) → c2; vertical o horizontal.
-    GradientRect { w: i32, h: i32, c2: u32, vertical: bool },
+    GradientRect {
+        w: i32,
+        h: i32,
+        c2: u32,
+        vertical: bool,
+    },
     // Sombra difusa rectangular (box-shadow): núcleo translúcido + anillos.
-    Shadow { w: i32, h: i32, blur: i32, alpha: u32 },
-    Image { handle: i64, w: i32, h: i32, alpha: u32, radius: i32 },
+    Shadow {
+        w: i32,
+        h: i32,
+        blur: i32,
+        alpha: u32,
+    },
+    Image {
+        handle: i64,
+        w: i32,
+        h: i32,
+        alpha: u32,
+        radius: i32,
+    },
     // Marcadores de clipping: se ejecutan en orden de dibujo (z, id), igual
     // que pushClip/popClip en modo inmediato.
-    ClipPush { w: i32, h: i32 },
+    ClipPush {
+        w: i32,
+        h: i32,
+    },
     ClipPop,
 }
 
@@ -351,7 +433,7 @@ use css::{css_color, parse_css};
 // El motor de primitivos (layout + CSS + emit de escena) vive en el submodulo
 // render; expone solo render_tree (entrada) y PrimRegion (para el dispatch).
 mod render;
-use render::{render_tree, PrimRegion};
+use render::{PrimRegion, render_tree};
 
 /// Tipografía a nivel intérprete (independiente de la ventana): carga de .ttf/.otf,
 /// familia actual y cache de glifos por (familia, char, escala). La familia 0 es la
@@ -388,7 +470,10 @@ impl GuiFonts {
 
     /// Activa una familia ("" / "default" / "monospace" = la default). false si no existe.
     fn set_family(&mut self, name: &str) -> bool {
-        if name.is_empty() || name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("monospace") {
+        if name.is_empty()
+            || name.eq_ignore_ascii_case("default")
+            || name.eq_ignore_ascii_case("monospace")
+        {
             self.current = 0;
             return true;
         }
@@ -438,9 +523,19 @@ impl GuiFonts {
             family_name = self.families[self.current as usize].clone();
             Attrs::new().family(Family::Name(&family_name))
         };
-        if style & 1 != 0 { attrs = attrs.weight(Weight::BOLD); }
-        if style & 2 != 0 { attrs = attrs.style(FontStyle::Italic); }
-        buf.set_text(&mut self.font_system, &ch.to_string(), &attrs, Shaping::Advanced, None);
+        if style & 1 != 0 {
+            attrs = attrs.weight(Weight::BOLD);
+        }
+        if style & 2 != 0 {
+            attrs = attrs.style(FontStyle::Italic);
+        }
+        buf.set_text(
+            &mut self.font_system,
+            &ch.to_string(),
+            &attrs,
+            Shaping::Advanced,
+            None,
+        );
         buf.shape_until_scroll(&mut self.font_system, false);
         // Advance real (suma de anchos de layout); la familia default fija la rejilla.
         let mut adv = 0.0f32;
@@ -595,18 +690,18 @@ pub struct GuiState {
     next_image: i64,
     clipboard: Option<arboard::Clipboard>,
     input: InputSnapshot,
-    open_time: std::time::Instant,   // para Gui.time()
-    scale_factor: f64,               // HiDPI (refrescado en present desde el main)
-    win_x: i32,                      // posición outer de la ventana (refrescada en present)
+    open_time: std::time::Instant, // para Gui.time()
+    scale_factor: f64,             // HiDPI (refrescado en present desde el main)
+    win_x: i32,                    // posición outer de la ventana (refrescada en present)
     win_y: i32,
-    monitors: Vec<MonitorInfo>,      // monitores conectados (refrescados en present)
+    monitors: Vec<MonitorInfo>, // monitores conectados (refrescados en present)
     // ── Multi-ventana ──
-    current_win: u32,                    // ventana seleccionada (0 = la de Gui.open)
-    bg_windows: HashMap<u32, WinSlot>,   // ventanas NO seleccionadas
-    next_win_id: u32,                    // ids para Gui.openWindow (≥ 1)
+    current_win: u32,                  // ventana seleccionada (0 = la de Gui.open)
+    bg_windows: HashMap<u32, WinSlot>, // ventanas NO seleccionadas
+    next_win_id: u32,                  // ids para Gui.openWindow (≥ 1)
     // ── Modo retenido ──
-    scene: Vec<SceneNode>,               // nodos persistentes (una escena, se
-                                         // dibuja sobre la ventana seleccionada)
+    scene: Vec<SceneNode>, // nodos persistentes (una escena, se
+    // dibuja sobre la ventana seleccionada)
     next_node: i64,
     scene_dirty: bool,
     // Clip activo del motor de primitivos DURANTE renderTree (scratch, no por-ventana:
@@ -658,7 +753,17 @@ impl GuiState {
     fn scene_add(&mut self, kind: SceneNodeKind, x: i32, y: i32, color: u32) -> i64 {
         let id = self.next_node;
         self.next_node += 1;
-        self.scene.push(SceneNode { id, kind, x, y, color, z: 0, visible: true, clip: None, tr: None });
+        self.scene.push(SceneNode {
+            id,
+            kind,
+            x,
+            y,
+            color,
+            z: 0,
+            visible: true,
+            clip: None,
+            tr: None,
+        });
         self.scene_dirty = true;
         id
     }
@@ -666,28 +771,50 @@ impl GuiState {
     /// Dibuja un nodo con transform afín (rotate/scale) por inverse-mapping. Los
     /// rellenos (rect/roundrect/imagen/texto) se muestrean pixel a pixel; los
     /// contornos/líneas se dibujan transformando sus vértices. Origen y matriz en px.
-    fn draw_node_transformed(&mut self, fonts: &mut GuiFonts, n: &SceneNode, tr: (f32, f32, f32, f32, f32)) {
+    fn draw_node_transformed(
+        &mut self,
+        fonts: &mut GuiFonts,
+        n: &SceneNode,
+        tr: (f32, f32, f32, f32, f32),
+    ) {
         let (theta, sx, sy, ox, oy) = tr;
         let (co, si) = (theta.cos(), theta.sin());
         // Forward M = R(theta)·S ; screen = origin + M·(local - origin).
-        let m00 = co * sx; let m01 = -si * sy;
-        let m10 = si * sx; let m11 = co * sy;
+        let m00 = co * sx;
+        let m01 = -si * sy;
+        let m10 = si * sx;
+        let m11 = co * sy;
         let det = m00 * m11 - m01 * m10;
-        if det.abs() < 0.000001 { return; }
+        if det.abs() < 0.000001 {
+            return;
+        }
         let (i00, i01, i10, i11) = (m11 / det, -m01 / det, -m10 / det, m00 / det);
 
         // Bounds locales del nodo (x0,y0,x1,y1) y despacho.
-        let nx = n.x as f32; let ny = n.y as f32;
+        let nx = n.x as f32;
+        let ny = n.y as f32;
         // Contornos / líneas / círculo: transformar vértices y dibujar recto.
         match &n.kind {
             SceneNodeKind::RectOutline { w, h } | SceneNodeKind::RoundRectOutline { w, h, .. } => {
                 let fx = |lx: f32, ly: f32| ox + m00 * (lx - ox) + m01 * (ly - oy);
                 let fy = |lx: f32, ly: f32| oy + m10 * (lx - ox) + m11 * (ly - oy);
-                let cs = [(nx, ny), (nx + *w as f32, ny), (nx + *w as f32, ny + *h as f32), (nx, ny + *h as f32)];
+                let cs = [
+                    (nx, ny),
+                    (nx + *w as f32, ny),
+                    (nx + *w as f32, ny + *h as f32),
+                    (nx, ny + *h as f32),
+                ];
                 let mut k = 0;
                 while k < 4 {
-                    let a = cs[k]; let b = cs[(k + 1) % 4];
-                    self.draw_line(fx(a.0, a.1) as i32, fy(a.0, a.1) as i32, fx(b.0, b.1) as i32, fy(b.0, b.1) as i32, n.color);
+                    let a = cs[k];
+                    let b = cs[(k + 1) % 4];
+                    self.draw_line(
+                        fx(a.0, a.1) as i32,
+                        fy(a.0, a.1) as i32,
+                        fx(b.0, b.1) as i32,
+                        fy(b.0, b.1) as i32,
+                        n.color,
+                    );
                     k += 1;
                 }
                 return;
@@ -695,12 +822,23 @@ impl GuiState {
             SceneNodeKind::Line { x2, y2 } => {
                 let fx = |lx: f32, ly: f32| ox + m00 * (lx - ox) + m01 * (ly - oy);
                 let fy = |lx: f32, ly: f32| oy + m10 * (lx - ox) + m11 * (ly - oy);
-                self.draw_line(fx(nx, ny) as i32, fy(nx, ny) as i32, fx(*x2 as f32, *y2 as f32) as i32, fy(*x2 as f32, *y2 as f32) as i32, n.color);
+                self.draw_line(
+                    fx(nx, ny) as i32,
+                    fy(nx, ny) as i32,
+                    fx(*x2 as f32, *y2 as f32) as i32,
+                    fy(*x2 as f32, *y2 as f32) as i32,
+                    n.color,
+                );
                 return;
             }
             SceneNodeKind::Circle { r } => {
                 let scl = (sx.abs() + sy.abs()) / 2.0;
-                self.fill_circle((ox + m00 * (nx - ox) + m01 * (ny - oy)) as i32, (oy + m10 * (nx - ox) + m11 * (ny - oy)) as i32, ((*r as f32) * scl) as i32, n.color);
+                self.fill_circle(
+                    (ox + m00 * (nx - ox) + m01 * (ny - oy)) as i32,
+                    (oy + m10 * (nx - ox) + m11 * (ny - oy)) as i32,
+                    ((*r as f32) * scl) as i32,
+                    n.color,
+                );
                 return;
             }
             _ => {}
@@ -712,39 +850,79 @@ impl GuiState {
         let mut tcells: Vec<(i32, i32, u8)> = Vec::new();
         let mut tw = 0i32;
         match &n.kind {
-            SceneNodeKind::Rect { w, h } | SceneNodeKind::RectAlpha { w, h, .. }
+            SceneNodeKind::Rect { w, h }
+            | SceneNodeKind::RectAlpha { w, h, .. }
             | SceneNodeKind::RoundRect { w, h, .. } => {
-                lx0 = nx; ly0 = ny; lx1 = nx + *w as f32; ly1 = ny + *h as f32;
+                lx0 = nx;
+                ly0 = ny;
+                lx1 = nx + *w as f32;
+                ly1 = ny + *h as f32;
             }
             SceneNodeKind::Image { w, h, .. } => {
-                let (dw, dh) = if *w > 0 && *h > 0 { (*w, *h) } else {
-                    match self.images.get(match &n.kind { SceneNodeKind::Image { handle, .. } => handle, _ => &0 }) {
-                        Some(im) => (im.w as i32, im.h as i32), None => return,
+                let (dw, dh) = if *w > 0 && *h > 0 {
+                    (*w, *h)
+                } else {
+                    match self.images.get(match &n.kind {
+                        SceneNodeKind::Image { handle, .. } => handle,
+                        _ => &0,
+                    }) {
+                        Some(im) => (im.w as i32, im.h as i32),
+                        None => return,
                     }
                 };
-                lx0 = nx; ly0 = ny; lx1 = nx + dw as f32; ly1 = ny + dh as f32;
+                lx0 = nx;
+                ly0 = ny;
+                lx1 = nx + dw as f32;
+                ly1 = ny + dh as f32;
             }
-            SceneNodeKind::Text { text, px, font, style, spacing, .. } => {
+            SceneNodeKind::Text {
+                text,
+                px,
+                font,
+                style,
+                spacing,
+                ..
+            } => {
                 let prev = fonts.current;
-                if !font.is_empty() { fonts.set_family(font); }
+                if !font.is_empty() {
+                    fonts.set_family(font);
+                }
                 let (cells, w) = Self::text_cells(fonts, text, *px, *style, *spacing);
                 fonts.current = prev;
-                tcells = cells; tw = w;
-                lx0 = nx; ly0 = ny; lx1 = nx + tw as f32; ly1 = ny + (*px as f32);
+                tcells = cells;
+                tw = w;
+                lx0 = nx;
+                ly0 = ny;
+                lx1 = nx + tw as f32;
+                ly1 = ny + (*px as f32);
             }
-            _ => { return; }  // gradient/shadow/polygon transformados: no soportado
+            _ => {
+                return;
+            } // gradient/shadow/polygon transformados: no soportado
         }
 
         // BBox destino: transformar las 4 esquinas locales.
         let fx = |lx: f32, ly: f32| ox + m00 * (lx - ox) + m01 * (ly - oy);
         let fy = |lx: f32, ly: f32| oy + m10 * (lx - ox) + m11 * (ly - oy);
         let corners = [(lx0, ly0), (lx1, ly0), (lx1, ly1), (lx0, ly1)];
-        let mut minx = f32::MAX; let mut miny = f32::MAX;
-        let mut maxx = f32::MIN; let mut maxy = f32::MIN;
+        let mut minx = f32::MAX;
+        let mut miny = f32::MAX;
+        let mut maxx = f32::MIN;
+        let mut maxy = f32::MIN;
         for c in corners.iter() {
             let (px_, py_) = (fx(c.0, c.1), fy(c.0, c.1));
-            if px_ < minx { minx = px_; } if px_ > maxx { maxx = px_; }
-            if py_ < miny { miny = py_; } if py_ > maxy { maxy = py_; }
+            if px_ < minx {
+                minx = px_;
+            }
+            if px_ > maxx {
+                maxx = px_;
+            }
+            if py_ < miny {
+                miny = py_;
+            }
+            if py_ > maxy {
+                maxy = py_;
+            }
         }
         let (cx0, cy0, cx1, cy1) = self.clip;
         let x0 = (minx.floor() as i32).max(cx0).max(0);
@@ -755,12 +933,23 @@ impl GuiState {
         // Coverage map de texto para lookup O(1).
         let mut tcov: HashMap<(i32, i32), u8> = HashMap::new();
         if !tcells.is_empty() {
-            for (gx, gy, a) in tcells.iter() { tcov.insert((*gx, *gy), *a); }
+            for (gx, gy, a) in tcells.iter() {
+                tcov.insert((*gx, *gy), *a);
+            }
         }
-        let radius = match &n.kind { SceneNodeKind::RoundRect { radius, .. } => *radius as f32, _ => 0.0 };
-        let node_alpha = match &n.kind { SceneNodeKind::RectAlpha { alpha, .. } => *alpha, _ => 255 };
+        let radius = match &n.kind {
+            SceneNodeKind::RoundRect { radius, .. } => *radius as f32,
+            _ => 0.0,
+        };
+        let node_alpha = match &n.kind {
+            SceneNodeKind::RectAlpha { alpha, .. } => *alpha,
+            _ => 255,
+        };
         let is_text = !tcov.is_empty() || matches!(n.kind, SceneNodeKind::Text { .. });
-        let img_handle = match &n.kind { SceneNodeKind::Image { handle, .. } => *handle, _ => -1 };
+        let img_handle = match &n.kind {
+            SceneNodeKind::Image { handle, .. } => *handle,
+            _ => -1,
+        };
         let nr = ((n.color >> 16) & 0xff) as u8;
         let ng = ((n.color >> 8) & 0xff) as u8;
         let nb = (n.color & 0xff) as u8;
@@ -770,19 +959,40 @@ impl GuiState {
             let mut xx = x0;
             while xx < x1 {
                 // 2×2 supersampling para AA de bordes.
-                let mut acc_a: u32 = 0; let mut sr: u32 = 0; let mut sg: u32 = 0; let mut sb: u32 = 0; let mut ns: u32 = 0;
+                let mut acc_a: u32 = 0;
+                let mut sr: u32 = 0;
+                let mut sg: u32 = 0;
+                let mut sb: u32 = 0;
+                let mut ns: u32 = 0;
                 let subs = [(0.25f32, 0.25f32), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
                 for (dxs, dys) in subs.iter() {
-                    let sxp = xx as f32 + dxs; let syp = yy as f32 + dys;
+                    let sxp = xx as f32 + dxs;
+                    let syp = yy as f32 + dys;
                     let lx = ox + i00 * (sxp - ox) + i01 * (syp - oy);
                     let ly = oy + i10 * (sxp - ox) + i11 * (syp - oy);
-                    if lx < lx0 || lx >= lx1 || ly < ly0 || ly >= ly1 { continue; }
+                    if lx < lx0 || lx >= lx1 || ly < ly0 || ly >= ly1 {
+                        continue;
+                    }
                     if radius > 0.0 {
                         // Fuera de las esquinas redondeadas → descartar.
-                        let rx = if lx - lx0 < radius { lx0 + radius } else if lx1 - lx > radius { lx } else { lx1 - radius };
-                        let ry = if ly - ly0 < radius { ly0 + radius } else if ly1 - ly > radius { ly } else { ly1 - radius };
+                        let rx = if lx - lx0 < radius {
+                            lx0 + radius
+                        } else if lx1 - lx > radius {
+                            lx
+                        } else {
+                            lx1 - radius
+                        };
+                        let ry = if ly - ly0 < radius {
+                            ly0 + radius
+                        } else if ly1 - ly > radius {
+                            ly
+                        } else {
+                            ly1 - radius
+                        };
                         let (ddx, ddy) = (lx - rx, ly - ry);
-                        if ddx * ddx + ddy * ddy > radius * radius { continue; }
+                        if ddx * ddx + ddy * ddy > radius * radius {
+                            continue;
+                        }
                     }
                     if img_handle >= 0 {
                         if let Some(im) = self.images.get(&img_handle) {
@@ -790,18 +1000,32 @@ impl GuiState {
                             let v = ((ly - ly0) / (ly1 - ly0) * im.h as f32) as i32;
                             if u >= 0 && v >= 0 && (u as usize) < im.w && (v as usize) < im.h {
                                 let p = im.px[(v as usize) * im.w + u as usize];
-                                sr += (p >> 16) & 0xff; sg += (p >> 8) & 0xff; sb += p & 0xff; ns += 1; acc_a += 255;
+                                sr += (p >> 16) & 0xff;
+                                sg += (p >> 8) & 0xff;
+                                sb += p & 0xff;
+                                ns += 1;
+                                acc_a += 255;
                             }
                         }
                     } else if is_text {
                         let key = ((lx - nx).round() as i32, (ly - ny).round() as i32);
-                        if let Some(a) = tcov.get(&key) { sr += nr as u32; sg += ng as u32; sb += nb as u32; ns += 1; acc_a += *a as u32; }
+                        if let Some(a) = tcov.get(&key) {
+                            sr += nr as u32;
+                            sg += ng as u32;
+                            sb += nb as u32;
+                            ns += 1;
+                            acc_a += *a as u32;
+                        }
                     } else {
-                        sr += nr as u32; sg += ng as u32; sb += nb as u32; ns += 1; acc_a += node_alpha;
+                        sr += nr as u32;
+                        sg += ng as u32;
+                        sb += nb as u32;
+                        ns += 1;
+                        acc_a += node_alpha;
                     }
                 }
                 if ns > 0 {
-                    let a = acc_a / 4;   // cobertura media sobre 4 subpíxeles
+                    let a = acc_a / 4; // cobertura media sobre 4 subpíxeles
                     let (rr, gg, bb) = ((sr / ns) as u8, (sg / ns) as u8, (sb / ns) as u8);
                     self.blend(xx, yy, rr, gg, bb, a.min(255));
                 }
@@ -813,7 +1037,13 @@ impl GuiState {
 
     /// Celdas de cobertura (x,y,alpha) de `text` relativas al origen (0,0), + ancho.
     /// Réplica del avance de pen de draw_text_alpha, pero acumulando en vez de pintar.
-    fn text_cells(fonts: &mut GuiFonts, text: &str, px: i32, style: u8, spacing: i32) -> (Vec<(i32, i32, u8)>, i32) {
+    fn text_cells(
+        fonts: &mut GuiFonts,
+        text: &str,
+        px: i32,
+        style: u8,
+        spacing: i32,
+    ) -> (Vec<(i32, i32, u8)>, i32) {
         let px = px.max(1);
         let glyph_style = style & 0b11;
         let fam = fonts.current;
@@ -821,15 +1051,31 @@ impl GuiState {
         let mut pen = 0i32;
         let mut first = true;
         for ch in text.chars() {
-            if !first { pen += spacing; }
+            if !first {
+                pen += spacing;
+            }
             first = false;
-            if ch.is_control() { if fam == 0 { pen += px; } continue; }
-            if ch == ' ' && fam == 0 { pen += px; continue; }
+            if ch.is_control() {
+                if fam == 0 {
+                    pen += px;
+                }
+                continue;
+            }
+            if ch == ' ' && fam == 0 {
+                pen += px;
+                continue;
+            }
             fonts.ensure_glyph(ch, px, glyph_style);
             if let Some(gl) = fonts.glyphs.get(&(fam, ch, px, glyph_style)) {
-                if ch != ' ' { for (gx, gy, a) in gl.cells.iter() { out.push((pen + *gx, *gy, *a)); } }
+                if ch != ' ' {
+                    for (gx, gy, a) in gl.cells.iter() {
+                        out.push((pen + *gx, *gy, *a));
+                    }
+                }
                 pen += gl.advance;
-            } else if fam == 0 { pen += px; }
+            } else if fam == 0 {
+                pen += px;
+            }
         }
         (out, pen)
     }
@@ -859,7 +1105,10 @@ impl GuiState {
             // Clip por-nodo (motor de primitivos): recorta este nodo a su rect propio,
             // intersecado con el clip del stack. Los marcadores ClipPush/ClipPop mutan
             // el clip del stack de forma persistente, así que NO se envuelven aquí.
-            let is_clip_marker = matches!(n.kind, SceneNodeKind::ClipPush { .. } | SceneNodeKind::ClipPop);
+            let is_clip_marker = matches!(
+                n.kind,
+                SceneNodeKind::ClipPush { .. } | SceneNodeKind::ClipPop
+            );
             let saved_clip = self.clip;
             if !is_clip_marker {
                 if let Some((cx0, cy0, cx1, cy1)) = n.clip {
@@ -893,7 +1142,8 @@ impl GuiState {
                 SceneNodeKind::Circle { r } => self.fill_circle(n.x, n.y, *r, n.color),
                 SceneNodeKind::Line { x2, y2 } => self.draw_line(n.x, n.y, *x2, *y2, n.color),
                 SceneNodeKind::Polygon { points } => {
-                    let pts: Vec<(i32, i32)> = points.chunks(2)
+                    let pts: Vec<(i32, i32)> = points
+                        .chunks(2)
                         .filter(|c| c.len() == 2)
                         .map(|c| (c[0], c[1]))
                         .collect();
@@ -902,18 +1152,36 @@ impl GuiState {
                 SceneNodeKind::Polyline { points, width } => {
                     let mut i = 0;
                     while i + 3 < points.len() {
-                        self.draw_thick_line(points[i], points[i + 1], points[i + 2], points[i + 3], *width, n.color);
+                        self.draw_thick_line(
+                            points[i],
+                            points[i + 1],
+                            points[i + 2],
+                            points[i + 3],
+                            *width,
+                            n.color,
+                        );
                         i += 2;
                     }
                 }
-                SceneNodeKind::Text { text, px, font, style, spacing, alpha } => {
+                SceneNodeKind::Text {
+                    text,
+                    px,
+                    font,
+                    style,
+                    spacing,
+                    alpha,
+                } => {
                     if font.is_empty() {
-                        self.draw_text_alpha(fonts, n.x, n.y, text, *px, n.color, *style, *spacing, *alpha);
+                        self.draw_text_alpha(
+                            fonts, n.x, n.y, text, *px, n.color, *style, *spacing, *alpha,
+                        );
                     } else {
                         // Fuente por nodo: fijar y restaurar la familia actual.
                         let prev = fonts.current;
                         fonts.set_family(font);
-                        self.draw_text_alpha(fonts, n.x, n.y, text, *px, n.color, *style, *spacing, *alpha);
+                        self.draw_text_alpha(
+                            fonts, n.x, n.y, text, *px, n.color, *style, *spacing, *alpha,
+                        );
                         fonts.current = prev;
                     }
                 }
@@ -923,9 +1191,18 @@ impl GuiState {
                 SceneNodeKind::Shadow { w, h, blur, alpha } => {
                     self.fill_shadow(n.x, n.y, *w, *h, *blur, n.color, *alpha);
                 }
-                SceneNodeKind::Image { handle, w, h, alpha, radius } => {
-                    if *w > 0 && *h > 0 { self.draw_image_scaled(n.x, n.y, *handle, *w, *h, *alpha, *radius); }
-                    else { self.draw_image(n.x, n.y, *handle, *radius); }
+                SceneNodeKind::Image {
+                    handle,
+                    w,
+                    h,
+                    alpha,
+                    radius,
+                } => {
+                    if *w > 0 && *h > 0 {
+                        self.draw_image_scaled(n.x, n.y, *handle, *w, *h, *alpha, *radius);
+                    } else {
+                        self.draw_image(n.x, n.y, *handle, *radius);
+                    }
                 }
                 SceneNodeKind::ClipPush { w, h } => {
                     self.clip_stack.push(self.clip);
@@ -937,8 +1214,12 @@ impl GuiState {
                     self.clip = (nx0, ny0, nx1.max(nx0), ny1.max(ny0));
                 }
                 SceneNodeKind::ClipPop => {
-                    self.clip = self.clip_stack.pop()
-                        .unwrap_or((0, 0, self.width as i32, self.height as i32));
+                    self.clip = self.clip_stack.pop().unwrap_or((
+                        0,
+                        0,
+                        self.width as i32,
+                        self.height as i32,
+                    ));
                 }
             }
             // Restaura el clip del stack tras un nodo dibujable (el clip por-nodo era
@@ -1017,7 +1298,10 @@ impl GuiState {
         let want = {
             let e = match g.extra.get_mut(&id) {
                 Some(e) => e,
-                None => { self.open = false; return; }
+                None => {
+                    self.open = false;
+                    return;
+                }
             };
             e.canvas.clear();
             e.canvas.extend_from_slice(&self.canvas);
@@ -1064,7 +1348,7 @@ impl GuiState {
         let want = g.present_seq;
         host.cv.notify_all();
         drop(g);
-        host.wake_main();   // saca al pump de su espera larga → sirve el frame ya
+        host.wake_main(); // saca al pump de su espera larga → sirve el frame ya
         let mut g = host.inner.lock().unwrap();
         while g.done_seq < want && g.window_open && !g.should_close {
             g = host.cv.wait(g).unwrap();
@@ -1176,29 +1460,52 @@ impl GuiState {
     /// `style` es bitfield: bit0=bold, bit1=italic (afectan al glifo), bit2=subrayado,
     /// bit3=tachado (decoraciones: líneas dibujadas sobre el ancho del texto, NO afectan
     /// la forma del glifo ni la caché). `letter_spacing` = px extra entre caracteres.
-    fn draw_text(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, px: i32, rgb: u32, style: u8, letter_spacing: i32) {
+    fn draw_text(
+        &mut self,
+        fonts: &mut GuiFonts,
+        x: i32,
+        y: i32,
+        text: &str,
+        px: i32,
+        rgb: u32,
+        style: u8,
+        letter_spacing: i32,
+    ) {
         self.draw_text_alpha(fonts, x, y, text, px, rgb, style, letter_spacing, 255);
     }
 
     /// draw_text con opacidad (0–255): multiplica la cobertura de cada glifo.
     /// Lo usa el motor de primitivos para propagar `opacity` al texto. `px` = tamaño
     /// real en píxeles (rejilla monospace = px/char; API scale-based pasa 8*scale).
-    fn draw_text_alpha(&mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &str, px: i32, rgb: u32, style: u8, letter_spacing: i32, alpha: u32) {
+    fn draw_text_alpha(
+        &mut self,
+        fonts: &mut GuiFonts,
+        x: i32,
+        y: i32,
+        text: &str,
+        px: i32,
+        rgb: u32,
+        style: u8,
+        letter_spacing: i32,
+        alpha: u32,
+    ) {
         let alpha = alpha.min(255);
-        if alpha == 0 { return; }
+        if alpha == 0 {
+            return;
+        }
         let px = px.max(1);
         let r = ((rgb >> 16) & 0xff) as u8;
         let g = ((rgb >> 8) & 0xff) as u8;
         let b = (rgb & 0xff) as u8;
-        let glyph_style = style & 0b11;          // solo bold/italic cambian el glifo
+        let glyph_style = style & 0b11; // solo bold/italic cambian el glifo
         let underline = style & 0b100 != 0;
-        let strike    = style & 0b1000 != 0;
+        let strike = style & 0b1000 != 0;
         let fam = fonts.current;
         let mut pen = x;
         let mut first = true;
         for ch in text.chars() {
             if !first {
-                pen += letter_spacing;           // espaciado entre caracteres (no antes del 1º)
+                pen += letter_spacing; // espaciado entre caracteres (no antes del 1º)
             }
             first = false;
             if ch.is_control() {
@@ -1251,7 +1558,9 @@ impl GuiState {
     /// 1px hacia afuera con alpha decreciente (falloff cuadrático — aproximación
     /// razonable del blur gaussiano, sin costo de convolución).
     fn fill_shadow(&mut self, x: i32, y: i32, w: i32, h: i32, blur: i32, color: u32, alpha: u32) {
-        if w <= 0 || h <= 0 { return; }
+        if w <= 0 || h <= 0 {
+            return;
+        }
         let r = ((color >> 16) & 0xff) as u8;
         let g = ((color >> 8) & 0xff) as u8;
         let b = (color & 0xff) as u8;
@@ -1310,10 +1619,10 @@ impl GuiState {
 
     /// Rectángulo de solo contorno (1px, clipeado).
     fn draw_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
-        self.fill_rect(x,         y,         w,     1,     color);
-        self.fill_rect(x,         y + h - 1, w,     1,     color);
-        self.fill_rect(x,         y + 1,     1,     h - 2, color);
-        self.fill_rect(x + w - 1, y + 1,     1,     h - 2, color);
+        self.fill_rect(x, y, w, 1, color);
+        self.fill_rect(x, y + h - 1, w, 1, color);
+        self.fill_rect(x, y + 1, 1, h - 2, color);
+        self.fill_rect(x + w - 1, y + 1, 1, h - 2, color);
     }
 
     /// Contorno de rect redondeado (1px, esquinas antialiased). Reusa la distancia AA
@@ -1325,10 +1634,10 @@ impl GuiState {
             return;
         }
         // Lados rectos (sin las esquinas).
-        self.fill_rect(x + r,     y,         w - 2 * r, 1,         color);
-        self.fill_rect(x + r,     y + h - 1, w - 2 * r, 1,         color);
-        self.fill_rect(x,         y + r,     1,         h - 2 * r, color);
-        self.fill_rect(x + w - 1, y + r,     1,         h - 2 * r, color);
+        self.fill_rect(x + r, y, w - 2 * r, 1, color);
+        self.fill_rect(x + r, y + h - 1, w - 2 * r, 1, color);
+        self.fill_rect(x, y + r, 1, h - 2 * r, color);
+        self.fill_rect(x + w - 1, y + r, 1, h - 2 * r, color);
         // Esquinas: banda AA de ~1px a distancia `r` del centro del arco.
         let cr = ((color >> 16) & 0xff) as u8;
         let cg = ((color >> 8) & 0xff) as u8;
@@ -1345,9 +1654,9 @@ impl GuiState {
                 let inner = (rf - 1.0 - dist + 0.5).clamp(0.0, 1.0);
                 let a = ((outer - inner) * 255.0) as u32;
                 if a > 0 {
-                    self.blend(x + dx,         y + dy,         cr, cg, cb, a);
-                    self.blend(x + w - 1 - dx, y + dy,         cr, cg, cb, a);
-                    self.blend(x + dx,         y + h - 1 - dy, cr, cg, cb, a);
+                    self.blend(x + dx, y + dy, cr, cg, cb, a);
+                    self.blend(x + w - 1 - dx, y + dy, cr, cg, cb, a);
+                    self.blend(x + dx, y + h - 1 - dy, cr, cg, cb, a);
                     self.blend(x + w - 1 - dx, y + h - 1 - dy, cr, cg, cb, a);
                 }
                 dx += 1;
@@ -1358,7 +1667,9 @@ impl GuiState {
 
     /// Círculo relleno antialiased (scanline + AA en el borde).
     fn fill_circle(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
-        if r <= 0 { return; }
+        if r <= 0 {
+            return;
+        }
         let cr = ((color >> 16) & 0xff) as u8;
         let cg = ((color >> 8) & 0xff) as u8;
         let cb = (color & 0xff) as u8;
@@ -1370,7 +1681,9 @@ impl GuiState {
                 let dist = ((dx * dx + dy * dy) as f32).sqrt();
                 let cov = (rf - dist + 0.5).clamp(0.0, 1.0);
                 let a = (cov * 255.0) as u32;
-                if a > 0 { self.blend(cx + dx, cy + dy, cr, cg, cb, a); }
+                if a > 0 {
+                    self.blend(cx + dx, cy + dy, cr, cg, cb, a);
+                }
                 dx += 1;
             }
             dy += 1;
@@ -1393,16 +1706,26 @@ impl GuiState {
         let (mut x, mut y) = (x0, y0);
         loop {
             self.fill_circle(x, y, r, color);
-            if x == x1 && y == y1 { break; }
+            if x == x1 && y == y1 {
+                break;
+            }
             let e2 = 2 * err;
-            if e2 >= dy { err += dy; x += sx; }
-            if e2 <= dx { err += dx; y += sy; }
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
         }
     }
 
     /// Contorno de círculo de 1px (midpoint), respetando el clip.
     fn draw_circle(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
-        if r <= 0 { return; }
+        if r <= 0 {
+            return;
+        }
         let mut x = r;
         let mut y = 0;
         let mut err = 1 - r;
@@ -1428,7 +1751,9 @@ impl GuiState {
     /// Relleno sólido de un polígono arbitrario (regla par-impar, scanline).
     /// `pts` = vértices en orden; el último se cierra con el primero.
     fn fill_polygon(&mut self, pts: &[(i32, i32)], color: u32) {
-        if pts.len() < 3 { return; }
+        if pts.len() < 3 {
+            return;
+        }
         let (cx0, cy0, cx1, cy1) = self.clip;
         let mut ymin = i32::MAX;
         let mut ymax = i32::MIN;
@@ -1474,11 +1799,27 @@ impl GuiState {
     /// r: 1 en el interior y los lados rectos, AA en las esquinas, →0 fuera del arco.
     /// Espeja la distancia AA de `fill_round_rect`. Se usa para redondear imágenes.
     fn round_cov(&self, px: i32, py: i32, w: i32, h: i32, r: i32) -> f32 {
-        if r <= 0 { return 1.0; }
+        if r <= 0 {
+            return 1.0;
+        }
         let r = r.min(w / 2).min(h / 2);
-        if r <= 0 { return 1.0; }
-        let cdx = if px < r { px } else if px >= w - r { w - 1 - px } else { return 1.0; };
-        let cdy = if py < r { py } else if py >= h - r { h - 1 - py } else { return 1.0; };
+        if r <= 0 {
+            return 1.0;
+        }
+        let cdx = if px < r {
+            px
+        } else if px >= w - r {
+            w - 1 - px
+        } else {
+            return 1.0;
+        };
+        let cdy = if py < r {
+            py
+        } else if py >= h - r {
+            h - 1 - py
+        } else {
+            return 1.0;
+        };
         let rf = r as f32;
         let fx = rf - (cdx as f32 + 0.5);
         let fy = rf - (cdy as f32 + 0.5);
@@ -1498,7 +1839,9 @@ impl GuiState {
             while xx < iw as i32 {
                 let p = px[(yy as usize) * iw + xx as usize];
                 let mut a = (p >> 24) & 0xff;
-                if rad > 0 { a = (a as f32 * self.round_cov(xx, yy, iw as i32, ih as i32, rad)) as u32; }
+                if rad > 0 {
+                    a = (a as f32 * self.round_cov(xx, yy, iw as i32, ih as i32, rad)) as u32;
+                }
                 let r = ((p >> 16) & 0xff) as u8;
                 let g = ((p >> 8) & 0xff) as u8;
                 let b = (p & 0xff) as u8;
@@ -1511,13 +1854,24 @@ impl GuiState {
 
     /// Imagen escalada a (dw, dh) por muestreo de vecino más cercano, con alpha global
     /// extra (0–255) multiplicada sobre el alpha del pixel. dw/dh <= 0 → no dibuja.
-    fn draw_image_scaled(&mut self, x: i32, y: i32, handle: i64, dw: i32, dh: i32, galpha: u32, rad: i32) {
+    fn draw_image_scaled(
+        &mut self,
+        x: i32,
+        y: i32,
+        handle: i64,
+        dw: i32,
+        dh: i32,
+        galpha: u32,
+        rad: i32,
+    ) {
         let img = match self.images.get(&handle) {
             Some(im) => (im.w, im.h, im.px.clone()),
             None => return,
         };
         let (iw, ih, px) = img;
-        if dw <= 0 || dh <= 0 || iw == 0 || ih == 0 { return; }
+        if dw <= 0 || dh <= 0 || iw == 0 || ih == 0 {
+            return;
+        }
         let ga = galpha.min(255);
         let mut dy = 0;
         while dy < dh {
@@ -1527,7 +1881,9 @@ impl GuiState {
                 let sx = (dx as usize * iw) / dw as usize;
                 let p = px[sy.min(ih - 1) * iw + sx.min(iw - 1)];
                 let mut a = (((p >> 24) & 0xff) * ga) / 255;
-                if rad > 0 { a = (a as f32 * self.round_cov(dx, dy, dw, dh, rad)) as u32; }
+                if rad > 0 {
+                    a = (a as f32 * self.round_cov(dx, dy, dw, dh, rad)) as u32;
+                }
                 let r = ((p >> 16) & 0xff) as u8;
                 let g = ((p >> 8) & 0xff) as u8;
                 let b = (p & 0xff) as u8;
@@ -1541,9 +1897,15 @@ impl GuiState {
     /// Relleno con gradiente lineal entre dos colores 0xRRGGBB. vertical=true interpola
     /// de arriba (c1) a abajo (c2); false de izquierda a derecha. Respeta el clip.
     fn fill_gradient(&mut self, x: i32, y: i32, w: i32, h: i32, c1: u32, c2: u32, vertical: bool) {
-        if w <= 0 || h <= 0 { return; }
-        let r1 = ((c1 >> 16) & 0xff) as i32; let g1 = ((c1 >> 8) & 0xff) as i32; let b1 = (c1 & 0xff) as i32;
-        let r2 = ((c2 >> 16) & 0xff) as i32; let g2 = ((c2 >> 8) & 0xff) as i32; let b2 = (c2 & 0xff) as i32;
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        let r1 = ((c1 >> 16) & 0xff) as i32;
+        let g1 = ((c1 >> 8) & 0xff) as i32;
+        let b1 = (c1 & 0xff) as i32;
+        let r2 = ((c2 >> 16) & 0xff) as i32;
+        let g2 = ((c2 >> 8) & 0xff) as i32;
+        let b2 = (c2 & 0xff) as i32;
         let span = if vertical { h } else { w };
         let denom = (span - 1).max(1);
         let mut yy = 0;
@@ -1565,12 +1927,16 @@ impl GuiState {
     /// paneles esmerilados / sombras suaves. Coste O(w*h*radio); radio acotado.
     fn blur_region(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
         let (cx0, cy0, cx1, cy1) = self.clip;
-        let x0 = x.max(0).max(cx0); let y0 = y.max(0).max(cy0);
+        let x0 = x.max(0).max(cx0);
+        let y0 = y.max(0).max(cy0);
         let x1 = (x + w).min(self.width as i32).min(cx1);
         let y1 = (y + h).min(self.height as i32).min(cy1);
-        if x1 <= x0 || y1 <= y0 { return; }
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
         let rad = radius.clamp(1, 32);
-        let rw = (x1 - x0) as usize; let rh = (y1 - y0) as usize;
+        let rw = (x1 - x0) as usize;
+        let rh = (y1 - y0) as usize;
         // Extrae la región a buffers RGB.
         let mut rr = vec![0i32; rw * rh];
         let mut gg = vec![0i32; rw * rh];
@@ -1594,7 +1960,9 @@ impl GuiState {
                         let lo = i.saturating_sub(r);
                         let hi = (i + r).min(w - 1);
                         let mut sum = 0i32;
-                        for k in lo..=hi { sum += src[j * w + k]; }
+                        for k in lo..=hi {
+                            sum += src[j * w + k];
+                        }
                         out[j * w + i] = sum / (hi - lo + 1) as i32;
                     }
                 }
@@ -1604,7 +1972,9 @@ impl GuiState {
                         let lo = j.saturating_sub(r);
                         let hi = (j + r).min(h - 1);
                         let mut sum = 0i32;
-                        for k in lo..=hi { sum += src[k * w + i]; }
+                        for k in lo..=hi {
+                            sum += src[k * w + i];
+                        }
                         out[j * w + i] = sum / (hi - lo + 1) as i32;
                     }
                 }
@@ -1617,7 +1987,9 @@ impl GuiState {
         for j in 0..rh {
             let row = (y0 as usize + j) * self.width + x0 as usize;
             for i in 0..rw {
-                let p = ((rr[j * rw + i] as u32) << 16) | ((gg[j * rw + i] as u32) << 8) | bb[j * rw + i] as u32;
+                let p = ((rr[j * rw + i] as u32) << 16)
+                    | ((gg[j * rw + i] as u32) << 8)
+                    | bb[j * rw + i] as u32;
                 self.canvas[row + i] = p;
             }
         }
@@ -1720,18 +2092,18 @@ struct GuiMain {
     chars_typed: String,
     scroll_x: f32,
     scroll_y: f32,
-    focused: bool,              // nivel: ¿ventana enfocada?
-    cursor_in: bool,            // nivel: ¿cursor sobre la ventana?
-    mouse_back: bool,           // nivel: botón back
-    mouse_fwd: bool,            // nivel: botón forward
-    dropped_files: Vec<String>, // acumulador por frame: archivos soltados
-    ime_preedit: String,        // nivel: composición IME en curso
-    hovered_files: Vec<String>, // nivel: archivos arrastrados sobre la ventana
+    focused: bool,                     // nivel: ¿ventana enfocada?
+    cursor_in: bool,                   // nivel: ¿cursor sobre la ventana?
+    mouse_back: bool,                  // nivel: botón back
+    mouse_fwd: bool,                   // nivel: botón forward
+    dropped_files: Vec<String>,        // acumulador por frame: archivos soltados
+    ime_preedit: String,               // nivel: composición IME en curso
+    hovered_files: Vec<String>,        // nivel: archivos arrastrados sobre la ventana
     touches: Vec<(u64, u8, i32, i32)>, // acumulador por frame: toques
-    pinch_delta: f64,           // acumulador por frame: pinch/zoom
+    pinch_delta: f64,                  // acumulador por frame: pinch/zoom
     last_present: u64,
-    pending_input: bool,   // hubo input desde el último service → despertar idleWait
-    monitors_dirty: bool,  // pedir recolección de monitores (al abrir + ScaleFactorChanged)
+    pending_input: bool, // hubo input desde el último service → despertar idleWait
+    monitors_dirty: bool, // pedir recolección de monitores (al abrir + ScaleFactorChanged)
     // Cursor custom pendiente de aplicar: se crea en about_to_wait (necesita el
     // ActiveEventLoop). rgba vacío = restaurar cursor por defecto. None = nada pendiente.
     pending_cursor: Option<(Vec<u8>, u32, u32, u32, u32)>,
@@ -1835,11 +2207,17 @@ impl GuiMain {
         self.surface = Some(surface);
         self.window = Some(window);
         // Posición outer + monitores iniciales (recolectados antes de tomar el lock).
-        let (wx, wy) = self.window.as_ref()
+        let (wx, wy) = self
+            .window
+            .as_ref()
             .and_then(|w| w.outer_position().ok())
             .map(|p| (p.x, p.y))
             .unwrap_or((0, 0));
-        let mons = self.window.as_ref().map(|w| collect_monitors(w)).unwrap_or_default();
+        let mons = self
+            .window
+            .as_ref()
+            .map(|w| collect_monitors(w))
+            .unwrap_or_default();
         self.monitors_dirty = false;
         let mut g = self.host.inner.lock().unwrap();
         g.window_ready = true;
@@ -1860,11 +2238,15 @@ impl GuiMain {
             let attrs = Window::default_attributes()
                 .with_title(title)
                 .with_inner_size(LogicalSize::new(w as f64, h as f64));
-            let created = el.create_window(attrs).ok().map(Rc::new).and_then(|window| {
-                let context = Context::new(window.clone()).ok()?;
-                let surface = Surface::new(&context, window.clone()).ok()?;
-                Some((window, context, surface))
-            });
+            let created = el
+                .create_window(attrs)
+                .ok()
+                .map(Rc::new)
+                .and_then(|window| {
+                    let context = Context::new(window.clone()).ok()?;
+                    let surface = Surface::new(&context, window.clone()).ok()?;
+                    Some((window, context, surface))
+                });
             let mut g = self.host.inner.lock().unwrap();
             match created {
                 Some((window, context, surface)) => {
@@ -1877,14 +2259,20 @@ impl GuiMain {
                         e.win_h = size.height.max(1) as usize;
                     }
                     self.extra_ids.insert(window.id(), id);
-                    self.extras.insert(id, ExtraWin {
-                        window,
-                        _context: context,
-                        surface,
-                        accum: ExtraAccum { focused: true, ..ExtraAccum::default() },
-                        last_present: 0,
-                        close_requested: false,
-                    });
+                    self.extras.insert(
+                        id,
+                        ExtraWin {
+                            window,
+                            _context: context,
+                            surface,
+                            accum: ExtraAccum {
+                                focused: true,
+                                ..ExtraAccum::default()
+                            },
+                            last_present: 0,
+                            close_requested: false,
+                        },
+                    );
                 }
                 None => {
                     if let Some(e) = g.extra.get_mut(&id) {
@@ -1902,7 +2290,10 @@ impl GuiMain {
         for (id, win) in self.extras.iter_mut() {
             let shared = match g.extra.get_mut(id) {
                 Some(s) => s,
-                None => { to_drop.push(*id); continue; }
+                None => {
+                    to_drop.push(*id);
+                    continue;
+                }
             };
             // Cierre pedido por el usuario (X) o por el intérprete.
             if win.close_requested || shared.should_close || g.interp_done || !self.session_active {
@@ -1950,10 +2341,14 @@ impl GuiMain {
                     GuiCmd::Open { .. } => keep.push_back(cmd),
                     GuiCmd::Close => self.close_requested = true,
                     GuiCmd::SetTitle(t) => {
-                        if let Some(win) = &self.window { win.set_title(&t); }
+                        if let Some(win) = &self.window {
+                            win.set_title(&t);
+                        }
                     }
                     GuiCmd::SetCursor(c) => {
-                        if let Some(win) = &self.window { win.set_cursor(cursor_icon(&c)); }
+                        if let Some(win) = &self.window {
+                            win.set_cursor(cursor_icon(&c));
+                        }
                     }
                     GuiCmd::SetImePosition(x, y) => {
                         if let Some(win) = &self.window {
@@ -1966,20 +2361,32 @@ impl GuiMain {
                     }
                     GuiCmd::SetMinSize(w, h) => {
                         if let Some(win) = &self.window {
-                            let s = if w == 0 || h == 0 { None } else { Some(LogicalSize::new(w as f64, h as f64)) };
+                            let s = if w == 0 || h == 0 {
+                                None
+                            } else {
+                                Some(LogicalSize::new(w as f64, h as f64))
+                            };
                             win.set_min_inner_size(s);
                         }
                     }
                     GuiCmd::SetResizable(b) => {
-                        if let Some(win) = &self.window { win.set_resizable(b); }
+                        if let Some(win) = &self.window {
+                            win.set_resizable(b);
+                        }
                     }
                     GuiCmd::SetFullscreen(b) => {
                         if let Some(win) = &self.window {
-                            win.set_fullscreen(if b { Some(winit::window::Fullscreen::Borderless(None)) } else { None });
+                            win.set_fullscreen(if b {
+                                Some(winit::window::Fullscreen::Borderless(None))
+                            } else {
+                                None
+                            });
                         }
                     }
                     GuiCmd::SetMaximized(b) => {
-                        if let Some(win) = &self.window { win.set_maximized(b); }
+                        if let Some(win) = &self.window {
+                            win.set_maximized(b);
+                        }
                     }
                     GuiCmd::SetPosition(x, y) => {
                         if let Some(win) = &self.window {
@@ -1987,36 +2394,60 @@ impl GuiMain {
                         }
                     }
                     GuiCmd::SetDecorations(b) => {
-                        if let Some(win) = &self.window { win.set_decorations(b); }
+                        if let Some(win) = &self.window {
+                            win.set_decorations(b);
+                        }
                     }
                     GuiCmd::SetMaxSize(w, h) => {
                         if let Some(win) = &self.window {
-                            let s = if w == 0 || h == 0 { None } else { Some(LogicalSize::new(w as f64, h as f64)) };
+                            let s = if w == 0 || h == 0 {
+                                None
+                            } else {
+                                Some(LogicalSize::new(w as f64, h as f64))
+                            };
                             win.set_max_inner_size(s);
                         }
                     }
                     GuiCmd::DragWindow => {
-                        if let Some(win) = &self.window { let _ = win.drag_window(); }
+                        if let Some(win) = &self.window {
+                            let _ = win.drag_window();
+                        }
                     }
                     GuiCmd::SetAlwaysOnTop(b) => {
                         if let Some(win) = &self.window {
-                            win.set_window_level(if b { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal });
+                            win.set_window_level(if b {
+                                WindowLevel::AlwaysOnTop
+                            } else {
+                                WindowLevel::Normal
+                            });
                         }
                     }
                     GuiCmd::SetMinimized(b) => {
-                        if let Some(win) = &self.window { win.set_minimized(b); }
+                        if let Some(win) = &self.window {
+                            win.set_minimized(b);
+                        }
                     }
                     GuiCmd::RequestAttention(b) => {
                         if let Some(win) = &self.window {
-                            win.request_user_attention(if b { Some(UserAttentionType::Informational) } else { None });
+                            win.request_user_attention(if b {
+                                Some(UserAttentionType::Informational)
+                            } else {
+                                None
+                            });
                         }
                     }
                     GuiCmd::SetCursorVisible(b) => {
-                        if let Some(win) = &self.window { win.set_cursor_visible(b); }
+                        if let Some(win) = &self.window {
+                            win.set_cursor_visible(b);
+                        }
                     }
                     GuiCmd::SetWindowIcon(rgba, w, h) => {
                         if let Some(win) = &self.window {
-                            let icon = if rgba.is_empty() { None } else { Icon::from_rgba(rgba, w, h).ok() };
+                            let icon = if rgba.is_empty() {
+                                None
+                            } else {
+                                Icon::from_rgba(rgba, w, h).ok()
+                            };
                             win.set_window_icon(icon);
                         }
                     }
@@ -2025,8 +2456,14 @@ impl GuiMain {
                     GuiCmd::SetCustomCursor(rgba, w, h, hx, hy) => {
                         self.pending_cursor = Some((rgba, w, h, hx, hy));
                     }
-                    GuiCmd::FileDialog { save, filter_name, filter_exts, default_name } => {
-                        pending_dialog = Some((g.dialog_seq, save, filter_name, filter_exts, default_name));
+                    GuiCmd::FileDialog {
+                        save,
+                        filter_name,
+                        filter_exts,
+                        default_name,
+                    } => {
+                        pending_dialog =
+                            Some((g.dialog_seq, save, filter_name, filter_exts, default_name));
                     }
                     // multi-ventana
                     GuiCmd::OpenExtra { id, title, w, h } => {
@@ -2129,7 +2566,14 @@ impl GuiMain {
         self.service();
         let snap = {
             let g = self.host.inner.lock().unwrap();
-            (g.canvas.clone(), g.canvas_w, g.canvas_h, g.virtual_scroll_x, g.virtual_scroll_y, g.bg_color)
+            (
+                g.canvas.clone(),
+                g.canvas_w,
+                g.canvas_h,
+                g.virtual_scroll_x,
+                g.virtual_scroll_y,
+                g.bg_color,
+            )
         };
         if snap.1 > 0 && snap.2 > 0 {
             self.blit(&snap.0, snap.1, snap.2, snap.3, snap.4, snap.5);
@@ -2163,9 +2607,9 @@ impl GuiMain {
             mouse_fwd: self.mouse_fwd,
             dropped_files: std::mem::take(&mut self.dropped_files),
             ime_preedit: self.ime_preedit.clone(),
-            hovered_files: self.hovered_files.clone(),   // nivel: persiste mientras hay hover
-            touches: std::mem::take(&mut self.touches),  // per-frame
-            pinch_delta: self.pinch_delta,               // per-frame
+            hovered_files: self.hovered_files.clone(), // nivel: persiste mientras hay hover
+            touches: std::mem::take(&mut self.touches), // per-frame
+            pinch_delta: self.pinch_delta,             // per-frame
         };
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
@@ -2173,7 +2617,15 @@ impl GuiMain {
         snap
     }
 
-    fn blit(&mut self, canvas: &[u32], cw: usize, ch: usize, offset_x: i32, offset_y: i32, bg: u32) {
+    fn blit(
+        &mut self,
+        canvas: &[u32],
+        cw: usize,
+        ch: usize,
+        offset_x: i32,
+        offset_y: i32,
+        bg: u32,
+    ) {
         let window = match self.window.as_ref() {
             Some(w) => w,
             None => return,
@@ -2279,7 +2731,9 @@ impl ApplicationHandler for GuiMain {
             if let Some(win) = &self.window {
                 if rgba.is_empty() {
                     win.set_cursor(CursorIcon::Default);
-                } else if let Ok(src) = CustomCursor::from_rgba(rgba, w as u16, h as u16, hx as u16, hy as u16) {
+                } else if let Ok(src) =
+                    CustomCursor::from_rgba(rgba, w as u16, h as u16, hx as u16, hy as u16)
+                {
                     let cursor = event_loop.create_custom_cursor(src);
                     win.set_cursor(cursor);
                 }
@@ -2359,7 +2813,9 @@ impl ApplicationHandler for GuiMain {
                     WindowEvent::MouseWheel { delta, .. } => {
                         let (dx, dy) = match delta {
                             MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
-                            MouseScrollDelta::PixelDelta(p) => ((p.x as f32) / 12.0, (p.y as f32) / 12.0),
+                            MouseScrollDelta::PixelDelta(p) => {
+                                ((p.x as f32) / 12.0, (p.y as f32) / 12.0)
+                            }
                         };
                         acc.scroll_x += dx;
                         acc.scroll_y += dy;
@@ -2388,8 +2844,8 @@ impl ApplicationHandler for GuiMain {
             // loop: servirlos blitea el frame pendiente y libera el `present()`, que
             // re-renderiza al tamaño vivo. Re-blit del último canvas para no mostrar basura.
             WindowEvent::Resized(_) => {
-                self.pending_input = true;   // resize del usuario → despierta idleWait
-                self.service_and_repaint();  // re-blit: muestra contenido al nuevo tamaño ya
+                self.pending_input = true; // resize del usuario → despierta idleWait
+                self.service_and_repaint(); // re-blit: muestra contenido al nuevo tamaño ya
             }
             WindowEvent::RedrawRequested => {
                 // Lo dispara nuestro propio blit (surface.present postea WM_PAINT). Solo
@@ -2433,7 +2889,9 @@ impl ApplicationHandler for GuiMain {
                 self.pending_input = true;
                 match ime {
                     // Composición en curso (CJK): la guardamos para que serez-ui la pinte.
-                    Ime::Preedit(text, _) => { self.ime_preedit = text; }
+                    Ime::Preedit(text, _) => {
+                        self.ime_preedit = text;
+                    }
                     Ime::Commit(s) => {
                         self.ime_preedit.clear();
                         for c in s.chars() {
@@ -2475,17 +2933,13 @@ impl ApplicationHandler for GuiMain {
                     if !g.last_presented_canvas.is_empty() {
                         if dy != 0.0 {
                             let dpy = (-dy * 40.0) as i32;
-                            g.virtual_scroll_y = (g.virtual_scroll_y + dpy).clamp(
-                                0,
-                                (g.last_presented_h as i32 - g.win_h as i32).max(0),
-                            );
+                            g.virtual_scroll_y = (g.virtual_scroll_y + dpy)
+                                .clamp(0, (g.last_presented_h as i32 - g.win_h as i32).max(0));
                         }
                         if dx != 0.0 {
                             let dpx = (-dx * 40.0) as i32;
-                            g.virtual_scroll_x = (g.virtual_scroll_x + dpx).clamp(
-                                0,
-                                (g.last_presented_w as i32 - g.win_w as i32).max(0),
-                            );
+                            g.virtual_scroll_x = (g.virtual_scroll_x + dpx)
+                                .clamp(0, (g.last_presented_w as i32 - g.win_w as i32).max(0));
                         }
                         let canvas = g.last_presented_canvas.clone();
                         let cw = g.last_presented_w;
@@ -2515,7 +2969,7 @@ impl ApplicationHandler for GuiMain {
             }
             WindowEvent::DroppedFile(path) => {
                 self.pending_input = true;
-                self.hovered_files.clear();   // el drop termina el hover
+                self.hovered_files.clear(); // el drop termina el hover
                 self.dropped_files.push(path.to_string_lossy().into_owned());
             }
             WindowEvent::HoveredFile(path) => {
@@ -2527,8 +2981,8 @@ impl ApplicationHandler for GuiMain {
                 self.hovered_files.clear();
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                self.pending_input = true;   // service() relee win.scale_factor() y Resized ajusta el tamaño
-                self.monitors_dirty = true;  // pudo cambiar la config de pantallas → recolectar de nuevo
+                self.pending_input = true; // service() relee win.scale_factor() y Resized ajusta el tamaño
+                self.monitors_dirty = true; // pudo cambiar la config de pantallas → recolectar de nuevo
             }
             WindowEvent::Touch(t) => {
                 self.pending_input = true;
@@ -2538,7 +2992,8 @@ impl ApplicationHandler for GuiMain {
                     winit::event::TouchPhase::Ended => 2,
                     winit::event::TouchPhase::Cancelled => 3,
                 };
-                self.touches.push((t.id, code, t.location.x as i32, t.location.y as i32));
+                self.touches
+                    .push((t.id, code, t.location.x as i32, t.location.y as i32));
             }
             WindowEvent::PinchGesture { delta, .. } => {
                 self.pending_input = true;
@@ -2667,15 +3122,26 @@ fn key_name(key: &Key) -> Option<String> {
 
 /// Muestra un diálogo nativo de abrir/guardar archivo (rfd, bloqueante en el hilo
 /// main). Devuelve la ruta elegida o None si se canceló.
-fn run_file_dialog(save: bool, filter_name: &str, filter_exts: &[String], default_name: &str) -> Option<String> {
+fn run_file_dialog(
+    save: bool,
+    filter_name: &str,
+    filter_exts: &[String],
+    default_name: &str,
+) -> Option<String> {
     let mut dlg = rfd::FileDialog::new();
     if !filter_exts.is_empty() {
         let exts: Vec<&str> = filter_exts.iter().map(|s| s.as_str()).collect();
-        let name = if filter_name.is_empty() { "Archivos" } else { filter_name };
+        let name = if filter_name.is_empty() {
+            "Archivos"
+        } else {
+            filter_name
+        };
         dlg = dlg.add_filter(name, &exts);
     }
     if save {
-        if !default_name.is_empty() { dlg = dlg.set_file_name(default_name); }
+        if !default_name.is_empty() {
+            dlg = dlg.set_file_name(default_name);
+        }
         dlg.save_file().map(|p| p.to_string_lossy().to_string())
     } else {
         dlg.pick_file().map(|p| p.to_string_lossy().to_string())
@@ -2697,39 +3163,48 @@ fn cursor_icon(name: &str) -> CursorIcon {
 }
 
 impl super::Evaluator {
-
     // ── Gui ─────────────────────────────────────────────────────────────────────
 
     pub(super) fn eval_gui_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
-        if !self.permissions.contains("Gui") {
-            eprintln!(
-                "❌ ERROR: 'Gui' requires permission 'Gui' — declare it in serez.json \
-                 (\"permissions\": [\"Gui\", ...]) or with `use permissions {{ Gui }}`"
-            );
-            return EvalResult::Error;
+        if let Some(error) = self.require_permission("Gui", "Gui") {
+            return error;
         }
 
         match dot_call.method.as_str() {
-
             "open" => {
                 if dot_call.arguments.len() != 3 {
-                    return self.rt_err_kind("TypeError", "Gui.open(title, width, height) requires 3 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.open(title, width, height) requires 3 arguments",
+                    );
                 }
                 let title = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.open title must be a string"); }
+                    None => {
+                        return self.rt_err_kind("TypeError", "Gui.open title must be a string");
+                    }
                 };
                 let w = match self.gui_int_arg(&dot_call.arguments[1]) {
                     Some(v) if v > 0 => v as u32,
-                    _ => { return self.rt_err_kind("TypeError", "Gui.open width must be a positive integer"); }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.open width must be a positive integer");
+                    }
                 };
                 let h = match self.gui_int_arg(&dot_call.arguments[2]) {
                     Some(v) if v > 0 => v as u32,
-                    _ => { return self.rt_err_kind("TypeError", "Gui.open height must be a positive integer"); }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.open height must be a positive integer",
+                        );
+                    }
                 };
                 let host = match host() {
                     Some(h) => h.clone(),
-                    None => { return self.rt_err_kind("GuiError", "Gui.open: GUI host not initialized"); }
+                    None => {
+                        return self.rt_err_kind("GuiError", "Gui.open: GUI host not initialized");
+                    }
                 };
                 let (ww, wh) = {
                     let mut g = host.inner.lock().unwrap();
@@ -2756,26 +3231,48 @@ impl super::Evaluator {
             // principal abierta (Gui.open): su sesión mantiene vivo el event loop.
             "openWindow" => {
                 if dot_call.arguments.len() != 3 {
-                    return self.rt_err_kind("TypeError", "Gui.openWindow(title, width, height) requires 3 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.openWindow(title, width, height) requires 3 arguments",
+                    );
                 }
                 let title = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.openWindow title must be a string"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.openWindow title must be a string");
+                    }
                 };
                 let w = match self.gui_int_arg(&dot_call.arguments[1]) {
                     Some(v) if v > 0 => v as u32,
-                    _ => { return self.rt_err_kind("TypeError", "Gui.openWindow width must be a positive integer"); }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.openWindow width must be a positive integer",
+                        );
+                    }
                 };
                 let h = match self.gui_int_arg(&dot_call.arguments[2]) {
                     Some(v) if v > 0 => v as u32,
-                    _ => { return self.rt_err_kind("TypeError", "Gui.openWindow height must be a positive integer"); }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.openWindow height must be a positive integer",
+                        );
+                    }
                 };
                 if self.gui_state.is_none() {
-                    return self.rt_err_kind("GuiError", "Gui.openWindow: open the primary window first (Gui.open)");
+                    return self.rt_err_kind(
+                        "GuiError",
+                        "Gui.openWindow: open the primary window first (Gui.open)",
+                    );
                 }
                 let host = match host() {
                     Some(hh) => hh.clone(),
-                    None => { return self.rt_err_kind("GuiError", "Gui.openWindow: GUI host not initialized"); }
+                    None => {
+                        return self
+                            .rt_err_kind("GuiError", "Gui.openWindow: GUI host not initialized");
+                    }
                 };
                 let id = {
                     let st = self.gui_state.as_mut().unwrap();
@@ -2792,14 +3289,19 @@ impl super::Evaluator {
                     host.wake_main();
                     let mut g = host.inner.lock().unwrap();
                     loop {
-                        let (ready, failed) = g.extra.get(&id)
+                        let (ready, failed) = g
+                            .extra
+                            .get(&id)
                             .map(|e| (e.window_ready, e.open_failed))
                             .unwrap_or((false, true));
                         if ready || failed {
                             if failed {
                                 g.extra.remove(&id);
                                 drop(g);
-                                return self.rt_err_kind("GuiError", "Gui.openWindow: failed to create window");
+                                return self.rt_err_kind(
+                                    "GuiError",
+                                    "Gui.openWindow: failed to create window",
+                                );
                             }
                             break;
                         }
@@ -2809,23 +3311,26 @@ impl super::Evaluator {
                     (e.win_w.max(1), e.win_h.max(1))
                 };
                 let st = self.gui_state.as_mut().unwrap();
-                st.bg_windows.insert(id, WinSlot {
-                    open: true,
-                    canvas: vec![0u32; ww * wh],
-                    width: ww,
-                    height: wh,
-                    win_w: ww,
-                    win_h: wh,
-                    bg: 0,
-                    clip: (0, 0, ww as i32, wh as i32),
-                    clip_stack: Vec::new(),
-                    input: InputSnapshot::default(),
-                    scale_factor: st.scale_factor,
-                    win_x: 0,
-                    win_y: 0,
-                    scene: Vec::new(),
-                    scene_dirty: true,
-                });
+                st.bg_windows.insert(
+                    id,
+                    WinSlot {
+                        open: true,
+                        canvas: vec![0u32; ww * wh],
+                        width: ww,
+                        height: wh,
+                        win_w: ww,
+                        win_h: wh,
+                        bg: 0,
+                        clip: (0, 0, ww as i32, wh as i32),
+                        clip_stack: Vec::new(),
+                        input: InputSnapshot::default(),
+                        scale_factor: st.scale_factor,
+                        win_x: 0,
+                        win_y: 0,
+                        scene: Vec::new(),
+                        scene_dirty: true,
+                    },
+                );
                 EvalResult::Value(self.alloc(ObjectData::Integer(id as i64)))
             }
 
@@ -2833,18 +3338,27 @@ impl super::Evaluator {
             // (0 = la principal). Todas las primitivas existentes la respetan.
             "selectWindow" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.selectWindow(id) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.selectWindow(id) requires 1 argument");
                 }
                 let id = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(v) if v >= 0 => v as u32,
-                    _ => { return self.rt_err_kind("TypeError", "Gui.selectWindow id must be a non-negative integer"); }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.selectWindow id must be a non-negative integer",
+                        );
+                    }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => {
                         if st.switch_to(id) {
                             EvalResult::Value(self.null_ref)
                         } else {
-                            self.rt_err_kind("GuiError", &format!("Gui.selectWindow: unknown window id {}", id))
+                            self.rt_err_kind(
+                                "GuiError",
+                                &format!("Gui.selectWindow: unknown window id {}", id),
+                            )
                         }
                     }
                     None => self.rt_err_kind("GuiError", "Gui.selectWindow: no window open"),
@@ -2852,7 +3366,11 @@ impl super::Evaluator {
             }
 
             "currentWindow" => {
-                let id = self.gui_state.as_ref().map(|s| s.current_win as i64).unwrap_or(0);
+                let id = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.current_win as i64)
+                    .unwrap_or(0);
                 EvalResult::Value(self.alloc(ObjectData::Integer(id)))
             }
 
@@ -2860,15 +3378,23 @@ impl super::Evaluator {
             // seleccionada, la selección vuelve a la principal (0).
             "closeWindow" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.closeWindow(id) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.closeWindow(id) requires 1 argument");
                 }
                 let id = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(v) if v >= 1 => v as u32,
-                    _ => { return self.rt_err_kind("TypeError", "Gui.closeWindow id must be an integer >= 1"); }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.closeWindow id must be an integer >= 1",
+                        );
+                    }
                 };
                 let host = match host() {
                     Some(hh) => hh.clone(),
-                    None => { return self.rt_err_kind("GuiError", "Gui.closeWindow: no GUI host"); }
+                    None => {
+                        return self.rt_err_kind("GuiError", "Gui.closeWindow: no GUI host");
+                    }
                 };
                 if let Some(st) = self.gui_state.as_mut() {
                     if st.current_win == id {
@@ -2891,39 +3417,79 @@ impl super::Evaluator {
             "nodeRect" | "nodeCircle" | "nodeLine" | "nodeText" | "nodeTextPx" | "nodeImage" => {
                 let method = dot_call.method.as_str();
                 if self.gui_state.is_none() {
-                    return self.rt_err_kind("GuiError", &format!("Gui.{}: no window open", method));
+                    return self
+                        .rt_err_kind("GuiError", &format!("Gui.{}: no window open", method));
                 }
                 let node = match method {
                     "nodeRect" => {
                         if dot_call.arguments.len() != 5 {
-                            return self.rt_err_kind("TypeError", "Gui.nodeRect(x, y, w, h, color) requires 5 arguments");
+                            return self.rt_err_kind(
+                                "TypeError",
+                                "Gui.nodeRect(x, y, w, h, color) requires 5 arguments",
+                            );
                         }
-                        let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
+                        let a: Vec<Option<i64>> = dot_call
+                            .arguments
+                            .iter()
+                            .map(|e| self.gui_int_arg(e))
+                            .collect();
                         match (a[0], a[1], a[2], a[3], a[4]) {
-                            (Some(x), Some(y), Some(w), Some(h), Some(c)) =>
-                                Some((SceneNodeKind::Rect { w: w as i32, h: h as i32 }, x as i32, y as i32, (c as u32) & 0xFF_FFFF)),
+                            (Some(x), Some(y), Some(w), Some(h), Some(c)) => Some((
+                                SceneNodeKind::Rect {
+                                    w: w as i32,
+                                    h: h as i32,
+                                },
+                                x as i32,
+                                y as i32,
+                                (c as u32) & 0xFF_FFFF,
+                            )),
                             _ => None,
                         }
                     }
                     "nodeCircle" => {
                         if dot_call.arguments.len() != 4 {
-                            return self.rt_err_kind("TypeError", "Gui.nodeCircle(x, y, r, color) requires 4 arguments");
+                            return self.rt_err_kind(
+                                "TypeError",
+                                "Gui.nodeCircle(x, y, r, color) requires 4 arguments",
+                            );
                         }
-                        let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
+                        let a: Vec<Option<i64>> = dot_call
+                            .arguments
+                            .iter()
+                            .map(|e| self.gui_int_arg(e))
+                            .collect();
                         match (a[0], a[1], a[2], a[3]) {
-                            (Some(x), Some(y), Some(r), Some(c)) =>
-                                Some((SceneNodeKind::Circle { r: r as i32 }, x as i32, y as i32, (c as u32) & 0xFF_FFFF)),
+                            (Some(x), Some(y), Some(r), Some(c)) => Some((
+                                SceneNodeKind::Circle { r: r as i32 },
+                                x as i32,
+                                y as i32,
+                                (c as u32) & 0xFF_FFFF,
+                            )),
                             _ => None,
                         }
                     }
                     "nodeLine" => {
                         if dot_call.arguments.len() != 5 {
-                            return self.rt_err_kind("TypeError", "Gui.nodeLine(x1, y1, x2, y2, color) requires 5 arguments");
+                            return self.rt_err_kind(
+                                "TypeError",
+                                "Gui.nodeLine(x1, y1, x2, y2, color) requires 5 arguments",
+                            );
                         }
-                        let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
+                        let a: Vec<Option<i64>> = dot_call
+                            .arguments
+                            .iter()
+                            .map(|e| self.gui_int_arg(e))
+                            .collect();
                         match (a[0], a[1], a[2], a[3], a[4]) {
-                            (Some(x), Some(y), Some(x2), Some(y2), Some(c)) =>
-                                Some((SceneNodeKind::Line { x2: x2 as i32, y2: y2 as i32 }, x as i32, y as i32, (c as u32) & 0xFF_FFFF)),
+                            (Some(x), Some(y), Some(x2), Some(y2), Some(c)) => Some((
+                                SceneNodeKind::Line {
+                                    x2: x2 as i32,
+                                    y2: y2 as i32,
+                                },
+                                x as i32,
+                                y as i32,
+                                (c as u32) & 0xFF_FFFF,
+                            )),
                             _ => None,
                         }
                     }
@@ -2932,8 +3498,15 @@ impl super::Evaluator {
                         // arg = tamaño en píxeles literal (font-size real, cualquier px).
                         let is_px = method == "nodeTextPx";
                         if dot_call.arguments.len() != 5 {
-                            let sig = if is_px { "Gui.nodeTextPx(x, y, text, px, color)" } else { "Gui.nodeText(x, y, text, scale, color)" };
-                            return self.rt_err_kind("TypeError", &format!("{} requires 5 arguments", sig));
+                            let sig = if is_px {
+                                "Gui.nodeTextPx(x, y, text, px, color)"
+                            } else {
+                                "Gui.nodeText(x, y, text, scale, color)"
+                            };
+                            return self.rt_err_kind(
+                                "TypeError",
+                                &format!("{} requires 5 arguments", sig),
+                            );
                         }
                         let x = self.gui_int_arg(&dot_call.arguments[0]);
                         let y = self.gui_int_arg(&dot_call.arguments[1]);
@@ -2942,15 +3515,24 @@ impl super::Evaluator {
                         let c = self.gui_int_arg(&dot_call.arguments[4]);
                         match (x, y, t, s, c) {
                             (Some(x), Some(y), Some(t), Some(s), Some(c)) => {
-                                let px = if is_px { (s.max(1)) as i32 } else { (s.max(1) * 8) as i32 };
-                                Some((SceneNodeKind::Text {
-                                    text: t,
-                                    px,
-                                    font: String::new(),
-                                    style: 0,
-                                    spacing: 0,
-                                    alpha: 255,
-                                }, x as i32, y as i32, (c as u32) & 0xFF_FFFF))
+                                let px = if is_px {
+                                    (s.max(1)) as i32
+                                } else {
+                                    (s.max(1) * 8) as i32
+                                };
+                                Some((
+                                    SceneNodeKind::Text {
+                                        text: t,
+                                        px,
+                                        font: String::new(),
+                                        style: 0,
+                                        spacing: 0,
+                                        alpha: 255,
+                                    },
+                                    x as i32,
+                                    y as i32,
+                                    (c as u32) & 0xFF_FFFF,
+                                ))
                             }
                             _ => None,
                         }
@@ -2963,17 +3545,35 @@ impl super::Evaluator {
                             return self.rt_err_kind("TypeError", "Gui.nodeImage requires (x,y,imageId) | (x,y,imageId,w,h) | (x,y,imageId,w,h,alpha) | (x,y,imageId,w,h,alpha,radius)");
                         }
                         let mut a = [0i64; 7];
-                        a[3] = -1; a[4] = -1; a[5] = 255; a[6] = 0;   // w/h nativos, alpha opaco, sin radius
+                        a[3] = -1;
+                        a[4] = -1;
+                        a[5] = 255;
+                        a[6] = 0; // w/h nativos, alpha opaco, sin radius
                         let mut ok = true;
                         for i in 0..na {
                             match self.gui_int_arg(&dot_call.arguments[i]) {
                                 Some(v) => a[i] = v,
-                                None => { ok = false; }
+                                None => {
+                                    ok = false;
+                                }
                             }
                         }
                         if ok {
-                            Some((SceneNodeKind::Image { handle: a[2], w: a[3] as i32, h: a[4] as i32, alpha: (a[5].clamp(0, 255)) as u32, radius: a[6] as i32 }, a[0] as i32, a[1] as i32, 0))
-                        } else { None }
+                            Some((
+                                SceneNodeKind::Image {
+                                    handle: a[2],
+                                    w: a[3] as i32,
+                                    h: a[4] as i32,
+                                    alpha: (a[5].clamp(0, 255)) as u32,
+                                    radius: a[6] as i32,
+                                },
+                                a[0] as i32,
+                                a[1] as i32,
+                                0,
+                            ))
+                        } else {
+                            None
+                        }
                     }
                 };
                 match node {
@@ -2982,7 +3582,10 @@ impl super::Evaluator {
                         let id = st.scene_add(kind, x, y, color);
                         EvalResult::Value(self.alloc(ObjectData::Integer(id)))
                     }
-                    None => self.rt_err_kind("TypeError", &format!("Gui.{}: invalid argument types", method)),
+                    None => self.rt_err_kind(
+                        "TypeError",
+                        &format!("Gui.{}: invalid argument types", method),
+                    ),
                 }
             }
 
@@ -2990,7 +3593,11 @@ impl super::Evaluator {
             // nodeRoundRect(x,y,w,h,radius,color), nodeRectAlpha(x,y,w,h,color,alpha),
             // nodeRectOutline(x,y,w,h,color), nodePolygon(points,color),
             // nodePolyline(points,width,color), nodeClipPush(x,y,w,h), nodeClipPop()
-            "nodeRoundRect" | "nodeRectAlpha" | "nodeRectOutline" | "nodeRoundRectOutline" | "nodeClipPush" => {
+            "nodeRoundRect"
+            | "nodeRectAlpha"
+            | "nodeRectOutline"
+            | "nodeRoundRectOutline"
+            | "nodeClipPush" => {
                 let method = dot_call.method.as_str();
                 let want = match method {
                     "nodeRoundRect" | "nodeRectAlpha" | "nodeRoundRectOutline" => 6,
@@ -2998,37 +3605,64 @@ impl super::Evaluator {
                     _ => 4, // nodeClipPush
                 };
                 if dot_call.arguments.len() != want {
-                    return self.rt_err_kind("TypeError", &format!("Gui.{} requires {} arguments", method, want));
+                    return self.rt_err_kind(
+                        "TypeError",
+                        &format!("Gui.{} requires {} arguments", method, want),
+                    );
                 }
                 let mut vals = vec![0i64; want];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { return self.rt_err_kind("TypeError", &format!("Gui.{}: all arguments must be integers", method)); }
+                        None => {
+                            return self.rt_err_kind(
+                                "TypeError",
+                                &format!("Gui.{}: all arguments must be integers", method),
+                            );
+                        }
                     }
                 }
                 if self.gui_state.is_none() {
-                    return self.rt_err_kind("GuiError", &format!("Gui.{}: no window open", method));
+                    return self
+                        .rt_err_kind("GuiError", &format!("Gui.{}: no window open", method));
                 }
                 let (kind, color) = match method {
                     "nodeRoundRect" => (
-                        SceneNodeKind::RoundRect { w: vals[2] as i32, h: vals[3] as i32, radius: vals[4] as i32 },
+                        SceneNodeKind::RoundRect {
+                            w: vals[2] as i32,
+                            h: vals[3] as i32,
+                            radius: vals[4] as i32,
+                        },
                         (vals[5] as u32) & 0xFF_FFFF,
                     ),
                     "nodeRectAlpha" => (
-                        SceneNodeKind::RectAlpha { w: vals[2] as i32, h: vals[3] as i32, alpha: vals[5].clamp(0, 255) as u32 },
+                        SceneNodeKind::RectAlpha {
+                            w: vals[2] as i32,
+                            h: vals[3] as i32,
+                            alpha: vals[5].clamp(0, 255) as u32,
+                        },
                         (vals[4] as u32) & 0xFF_FFFF,
                     ),
                     "nodeRectOutline" => (
-                        SceneNodeKind::RectOutline { w: vals[2] as i32, h: vals[3] as i32 },
+                        SceneNodeKind::RectOutline {
+                            w: vals[2] as i32,
+                            h: vals[3] as i32,
+                        },
                         (vals[4] as u32) & 0xFF_FFFF,
                     ),
                     "nodeRoundRectOutline" => (
-                        SceneNodeKind::RoundRectOutline { w: vals[2] as i32, h: vals[3] as i32, radius: vals[4] as i32 },
+                        SceneNodeKind::RoundRectOutline {
+                            w: vals[2] as i32,
+                            h: vals[3] as i32,
+                            radius: vals[4] as i32,
+                        },
                         (vals[5] as u32) & 0xFF_FFFF,
                     ),
                     _ => (
-                        SceneNodeKind::ClipPush { w: vals[2] as i32, h: vals[3] as i32 },
+                        SceneNodeKind::ClipPush {
+                            w: vals[2] as i32,
+                            h: vals[3] as i32,
+                        },
                         0,
                     ),
                 };
@@ -3041,16 +3675,32 @@ impl super::Evaluator {
                 let method = dot_call.method.as_str();
                 let want = if method == "nodePolygon" { 2 } else { 3 };
                 if dot_call.arguments.len() != want {
-                    return self.rt_err_kind("TypeError", &format!("Gui.{} requires {} arguments", method, want));
+                    return self.rt_err_kind(
+                        "TypeError",
+                        &format!("Gui.{} requires {} arguments", method, want),
+                    );
                 }
                 let pts = match self.gui_int_vec_arg(&dot_call.arguments[0]) {
                     Some(p) => p.iter().map(|v| *v as i32).collect::<Vec<i32>>(),
-                    None => { return self.rt_err_kind("TypeError", &format!("Gui.{} points must be a flat int array [x0,y0,x1,y1,…]", method)); }
+                    None => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            &format!(
+                                "Gui.{} points must be a flat int array [x0,y0,x1,y1,…]",
+                                method
+                            ),
+                        );
+                    }
                 };
                 let (kind, color) = if method == "nodePolygon" {
                     let c = match self.gui_int_arg(&dot_call.arguments[1]) {
                         Some(v) => (v as u32) & 0xFF_FFFF,
-                        None => { return self.rt_err_kind("TypeError", "Gui.nodePolygon color must be an integer"); }
+                        None => {
+                            return self.rt_err_kind(
+                                "TypeError",
+                                "Gui.nodePolygon color must be an integer",
+                            );
+                        }
                     };
                     (SceneNodeKind::Polygon { points: pts }, c)
                 } else {
@@ -3058,10 +3708,18 @@ impl super::Evaluator {
                     let c = self.gui_int_arg(&dot_call.arguments[2]);
                     match (w, c) {
                         (Some(w), Some(c)) => (
-                            SceneNodeKind::Polyline { points: pts, width: w.max(1) as i32 },
+                            SceneNodeKind::Polyline {
+                                points: pts,
+                                width: w.max(1) as i32,
+                            },
                             (c as u32) & 0xFF_FFFF,
                         ),
-                        _ => { return self.rt_err_kind("TypeError", "Gui.nodePolyline requires (int[], int, int)"); }
+                        _ => {
+                            return self.rt_err_kind(
+                                "TypeError",
+                                "Gui.nodePolyline requires (int[], int, int)",
+                            );
+                        }
                     }
                 };
                 match self.gui_state.as_mut() {
@@ -3069,19 +3727,19 @@ impl super::Evaluator {
                         let id = st.scene_add(kind, 0, 0, color);
                         EvalResult::Value(self.alloc(ObjectData::Integer(id)))
                     }
-                    None => self.rt_err_kind("GuiError", &format!("Gui.{}: no window open", method)),
+                    None => {
+                        self.rt_err_kind("GuiError", &format!("Gui.{}: no window open", method))
+                    }
                 }
             }
 
-            "nodeClipPop" => {
-                match self.gui_state.as_mut() {
-                    Some(st) => {
-                        let id = st.scene_add(SceneNodeKind::ClipPop, 0, 0, 0);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(id)))
-                    }
-                    None => self.rt_err_kind("GuiError", "Gui.nodeClipPop: no window open"),
+            "nodeClipPop" => match self.gui_state.as_mut() {
+                Some(st) => {
+                    let id = st.scene_add(SceneNodeKind::ClipPop, 0, 0, 0);
+                    EvalResult::Value(self.alloc(ObjectData::Integer(id)))
                 }
-            }
+                None => self.rt_err_kind("GuiError", "Gui.nodeClipPop: no window open"),
+            },
 
             // Gui.nodeSet(id, prop, value): muta una propiedad de un nodo.
             // props int: x, y, w, h, r, x2, y2, color, z, scale, image, radius,
@@ -3089,74 +3747,171 @@ impl super::Evaluator {
             // props especiales: text/font (string), visible (bool), points (int[])
             "nodeSet" => {
                 if dot_call.arguments.len() != 3 {
-                    return self.rt_err_kind("TypeError", "Gui.nodeSet(id, prop, value) requires 3 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.nodeSet(id, prop, value) requires 3 arguments",
+                    );
                 }
                 let id = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(v) => v,
-                    None => { return self.rt_err_kind("TypeError", "Gui.nodeSet id must be an integer"); }
+                    None => {
+                        return self.rt_err_kind("TypeError", "Gui.nodeSet id must be an integer");
+                    }
                 };
                 let prop = match self.gui_str_arg(&dot_call.arguments[1]) {
                     Some(p) => p,
-                    None => { return self.rt_err_kind("TypeError", "Gui.nodeSet prop must be a string"); }
+                    None => {
+                        return self.rt_err_kind("TypeError", "Gui.nodeSet prop must be a string");
+                    }
                 };
                 // El tipo del valor depende de la prop.
-                enum V { I(i64), S(String), B(bool), P(Vec<i32>) }
+                enum V {
+                    I(i64),
+                    S(String),
+                    B(bool),
+                    P(Vec<i32>),
+                }
                 let value = match prop.as_str() {
                     "text" | "font" => self.gui_str_arg(&dot_call.arguments[2]).map(V::S),
                     "visible" => self.gui_bool_arg(&dot_call.arguments[2]).map(V::B),
-                    "points" => self.gui_int_vec_arg(&dot_call.arguments[2])
+                    "points" => self
+                        .gui_int_vec_arg(&dot_call.arguments[2])
                         .map(|p| V::P(p.iter().map(|v| *v as i32).collect())),
                     _ => self.gui_int_arg(&dot_call.arguments[2]).map(V::I),
                 };
                 let value = match value {
                     Some(v) => v,
-                    None => { return self.rt_err_kind("TypeError", &format!("Gui.nodeSet: wrong value type for prop '{}'", prop)); }
+                    None => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            &format!("Gui.nodeSet: wrong value type for prop '{}'", prop),
+                        );
+                    }
                 };
                 let st = match self.gui_state.as_mut() {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("GuiError", "Gui.nodeSet: no window open"); }
+                    None => {
+                        return self.rt_err_kind("GuiError", "Gui.nodeSet: no window open");
+                    }
                 };
                 let node = match st.scene.iter_mut().find(|n| n.id == id) {
                     Some(n) => n,
-                    None => { return self.rt_err_kind("GuiError", &format!("Gui.nodeSet: unknown node id {}", id)); }
+                    None => {
+                        return self.rt_err_kind(
+                            "GuiError",
+                            &format!("Gui.nodeSet: unknown node id {}", id),
+                        );
+                    }
                 };
                 let ok = match (&prop[..], &value, &mut node.kind) {
-                    ("x", V::I(v), _) => { node.x = *v as i32; true }
-                    ("y", V::I(v), _) => { node.y = *v as i32; true }
-                    ("color", V::I(v), _) => { node.color = (*v as u32) & 0xFF_FFFF; true }
-                    ("z", V::I(v), _) => { node.z = *v as i32; true }
-                    ("visible", V::B(v), _) => { node.visible = *v; true }
+                    ("x", V::I(v), _) => {
+                        node.x = *v as i32;
+                        true
+                    }
+                    ("y", V::I(v), _) => {
+                        node.y = *v as i32;
+                        true
+                    }
+                    ("color", V::I(v), _) => {
+                        node.color = (*v as u32) & 0xFF_FFFF;
+                        true
+                    }
+                    ("z", V::I(v), _) => {
+                        node.z = *v as i32;
+                        true
+                    }
+                    ("visible", V::B(v), _) => {
+                        node.visible = *v;
+                        true
+                    }
                     ("w", V::I(v), SceneNodeKind::Rect { w, .. })
                     | ("w", V::I(v), SceneNodeKind::RectAlpha { w, .. })
                     | ("w", V::I(v), SceneNodeKind::RectOutline { w, .. })
                     | ("w", V::I(v), SceneNodeKind::RoundRect { w, .. })
-                    | ("w", V::I(v), SceneNodeKind::ClipPush { w, .. }) => { *w = *v as i32; true }
+                    | ("w", V::I(v), SceneNodeKind::ClipPush { w, .. }) => {
+                        *w = *v as i32;
+                        true
+                    }
                     ("h", V::I(v), SceneNodeKind::Rect { h, .. })
                     | ("h", V::I(v), SceneNodeKind::RectAlpha { h, .. })
                     | ("h", V::I(v), SceneNodeKind::RectOutline { h, .. })
                     | ("h", V::I(v), SceneNodeKind::RoundRect { h, .. })
-                    | ("h", V::I(v), SceneNodeKind::ClipPush { h, .. }) => { *h = *v as i32; true }
-                    ("radius", V::I(v), SceneNodeKind::RoundRect { radius, .. }) => { *radius = *v as i32; true }
-                    ("alpha", V::I(v), SceneNodeKind::RectAlpha { alpha, .. }) => { *alpha = (*v).clamp(0, 255) as u32; true }
+                    | ("h", V::I(v), SceneNodeKind::ClipPush { h, .. }) => {
+                        *h = *v as i32;
+                        true
+                    }
+                    ("radius", V::I(v), SceneNodeKind::RoundRect { radius, .. }) => {
+                        *radius = *v as i32;
+                        true
+                    }
+                    ("alpha", V::I(v), SceneNodeKind::RectAlpha { alpha, .. }) => {
+                        *alpha = (*v).clamp(0, 255) as u32;
+                        true
+                    }
                     // Texto translúcido (opacity heredada del camino interpretado).
-                    ("alpha", V::I(v), SceneNodeKind::Text { alpha, .. }) => { *alpha = (*v).clamp(0, 255) as u32; true }
-                    ("r", V::I(v), SceneNodeKind::Circle { r }) => { *r = *v as i32; true }
-                    ("x2", V::I(v), SceneNodeKind::Line { x2, .. }) => { *x2 = *v as i32; true }
-                    ("y2", V::I(v), SceneNodeKind::Line { y2, .. }) => { *y2 = *v as i32; true }
-                    ("points", V::P(v), SceneNodeKind::Polygon { points }) => { *points = v.clone(); true }
-                    ("points", V::P(v), SceneNodeKind::Polyline { points, .. }) => { *points = v.clone(); true }
-                    ("width", V::I(v), SceneNodeKind::Polyline { width, .. }) => { *width = (*v).max(1) as i32; true }
-                    ("text", V::S(v), SceneNodeKind::Text { text, .. }) => { *text = v.clone(); true }
-                    ("scale", V::I(v), SceneNodeKind::Text { px, .. }) => { *px = ((*v).max(1) * 8) as i32; true }
-                    ("px", V::I(v), SceneNodeKind::Text { px, .. }) => { *px = (*v).max(1) as i32; true }
-                    ("font", V::S(v), SceneNodeKind::Text { font, .. }) => { *font = v.clone(); true }
-                    ("style", V::I(v), SceneNodeKind::Text { style, .. }) => { *style = (*v).clamp(0, 15) as u8; true }
-                    ("spacing", V::I(v), SceneNodeKind::Text { spacing, .. }) => { *spacing = *v as i32; true }
-                    ("image", V::I(v), SceneNodeKind::Image { handle, .. }) => { *handle = *v; true }
+                    ("alpha", V::I(v), SceneNodeKind::Text { alpha, .. }) => {
+                        *alpha = (*v).clamp(0, 255) as u32;
+                        true
+                    }
+                    ("r", V::I(v), SceneNodeKind::Circle { r }) => {
+                        *r = *v as i32;
+                        true
+                    }
+                    ("x2", V::I(v), SceneNodeKind::Line { x2, .. }) => {
+                        *x2 = *v as i32;
+                        true
+                    }
+                    ("y2", V::I(v), SceneNodeKind::Line { y2, .. }) => {
+                        *y2 = *v as i32;
+                        true
+                    }
+                    ("points", V::P(v), SceneNodeKind::Polygon { points }) => {
+                        *points = v.clone();
+                        true
+                    }
+                    ("points", V::P(v), SceneNodeKind::Polyline { points, .. }) => {
+                        *points = v.clone();
+                        true
+                    }
+                    ("width", V::I(v), SceneNodeKind::Polyline { width, .. }) => {
+                        *width = (*v).max(1) as i32;
+                        true
+                    }
+                    ("text", V::S(v), SceneNodeKind::Text { text, .. }) => {
+                        *text = v.clone();
+                        true
+                    }
+                    ("scale", V::I(v), SceneNodeKind::Text { px, .. }) => {
+                        *px = ((*v).max(1) * 8) as i32;
+                        true
+                    }
+                    ("px", V::I(v), SceneNodeKind::Text { px, .. }) => {
+                        *px = (*v).max(1) as i32;
+                        true
+                    }
+                    ("font", V::S(v), SceneNodeKind::Text { font, .. }) => {
+                        *font = v.clone();
+                        true
+                    }
+                    ("style", V::I(v), SceneNodeKind::Text { style, .. }) => {
+                        *style = (*v).clamp(0, 15) as u8;
+                        true
+                    }
+                    ("spacing", V::I(v), SceneNodeKind::Text { spacing, .. }) => {
+                        *spacing = *v as i32;
+                        true
+                    }
+                    ("image", V::I(v), SceneNodeKind::Image { handle, .. }) => {
+                        *handle = *v;
+                        true
+                    }
                     _ => false,
                 };
                 if !ok {
-                    return self.rt_err_kind("TypeError", &format!("Gui.nodeSet: prop '{}' does not apply to this node", prop));
+                    return self.rt_err_kind(
+                        "TypeError",
+                        &format!("Gui.nodeSet: prop '{}' does not apply to this node", prop),
+                    );
                 }
                 st.scene_dirty = true;
                 EvalResult::Value(self.null_ref)
@@ -3168,24 +3923,46 @@ impl super::Evaluator {
                 if dot_call.arguments.len() != 6 {
                     return self.rt_err_kind("TypeError", "Gui.nodeTransform(id, rotDeg, scaleXmille, scaleYmille, origX, origY) requires 6 arguments");
                 }
-                let a: Vec<Option<i64>> = dot_call.arguments.iter().map(|e| self.gui_int_arg(e)).collect();
+                let a: Vec<Option<i64>> = dot_call
+                    .arguments
+                    .iter()
+                    .map(|e| self.gui_int_arg(e))
+                    .collect();
                 let (id, rot, sxm, sym, ox, oy) = match (a[0], a[1], a[2], a[3], a[4], a[5]) {
-                    (Some(id), Some(r), Some(sx), Some(sy), Some(ox), Some(oy)) => (id, r, sx, sy, ox, oy),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.nodeTransform requires 6 integers"); }
+                    (Some(id), Some(r), Some(sx), Some(sy), Some(ox), Some(oy)) => {
+                        (id, r, sx, sy, ox, oy)
+                    }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.nodeTransform requires 6 integers");
+                    }
                 };
                 let st = match self.gui_state.as_mut() {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("GuiError", "Gui.nodeTransform: no window open"); }
+                    None => {
+                        return self.rt_err_kind("GuiError", "Gui.nodeTransform: no window open");
+                    }
                 };
                 let node = match st.scene.iter_mut().find(|n| n.id == id) {
                     Some(n) => n,
-                    None => { return self.rt_err_kind("GuiError", &format!("Gui.nodeTransform: unknown node id {}", id)); }
+                    None => {
+                        return self.rt_err_kind(
+                            "GuiError",
+                            &format!("Gui.nodeTransform: unknown node id {}", id),
+                        );
+                    }
                 };
                 if rot == 0 && sxm == 1000 && sym == 1000 {
                     node.tr = None;
                 } else {
                     let theta = (rot as f32) * std::f32::consts::PI / 180.0;
-                    node.tr = Some((theta, (sxm as f32) / 1000.0, (sym as f32) / 1000.0, ox as f32, oy as f32));
+                    node.tr = Some((
+                        theta,
+                        (sxm as f32) / 1000.0,
+                        (sym as f32) / 1000.0,
+                        ox as f32,
+                        oy as f32,
+                    ));
                 }
                 st.scene_dirty = true;
                 EvalResult::Value(self.null_ref)
@@ -3197,19 +3974,28 @@ impl super::Evaluator {
                 }
                 let id = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(v) => v,
-                    None => { return self.rt_err_kind("TypeError", "Gui.nodeDelete id must be an integer"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.nodeDelete id must be an integer");
+                    }
                 };
                 let existed = match self.gui_state.as_mut() {
                     Some(st) => {
                         let before = st.scene.len();
                         st.scene.retain(|n| n.id != id);
                         let removed = st.scene.len() != before;
-                        if removed { st.scene_dirty = true; }
+                        if removed {
+                            st.scene_dirty = true;
+                        }
                         removed
                     }
                     None => false,
                 };
-                EvalResult::Value(if existed { self.true_ref } else { self.false_ref })
+                EvalResult::Value(if existed {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                })
             }
 
             "sceneClear" => {
@@ -3221,7 +4007,11 @@ impl super::Evaluator {
             }
 
             "nodeCount" => {
-                let n = self.gui_state.as_ref().map(|s| s.scene.len() as i64).unwrap_or(0);
+                let n = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.scene.len() as i64)
+                    .unwrap_or(0);
                 EvalResult::Value(self.alloc(ObjectData::Integer(n)))
             }
 
@@ -3229,20 +4019,30 @@ impl super::Evaluator {
             // la ventana cambió de tamaño) y presenta. Devuelve true si redibujó.
             "renderScene" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.renderScene(bgColor) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.renderScene(bgColor) requires 1 argument");
                 }
                 let bg = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(v) => (v as u32) & 0xFF_FFFF,
-                    None => { return self.rt_err_kind("TypeError", "Gui.renderScene bgColor must be an integer 0xRRGGBB"); }
+                    None => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.renderScene bgColor must be an integer 0xRRGGBB",
+                        );
+                    }
                 };
                 let host = match host() {
                     Some(h) => h.clone(),
-                    None => { return self.rt_err_kind("GuiError", "Gui.renderScene: no GUI host"); }
+                    None => {
+                        return self.rt_err_kind("GuiError", "Gui.renderScene: no GUI host");
+                    }
                 };
                 if self.gui_state.is_none() {
                     return self.rt_err_kind("GuiError", "Gui.renderScene: no window open");
                 }
-                if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
+                if self.gui_fonts.is_none() {
+                    self.gui_fonts = Some(GuiFonts::new());
+                }
                 let fonts = self.gui_fonts.as_mut().unwrap();
                 let st = self.gui_state.as_mut().unwrap();
                 let redrew = st.scene_dirty || st.win_w != st.width || st.win_h != st.height;
@@ -3255,28 +4055,41 @@ impl super::Evaluator {
                     let id = st.current_win;
                     st.present_extra(&host, id);
                 }
-                EvalResult::Value(if redrew { self.true_ref } else { self.false_ref })
+                EvalResult::Value(if redrew {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                })
             }
 
             "isOpen" => {
                 let open = match self.gui_state.as_ref() {
                     None => false,
-                    Some(st) if st.current_win == 0 => host().map(|h| {
-                        let g = h.inner.lock().unwrap();
-                        g.window_open && !g.should_close
-                    }).unwrap_or(false),
-                    Some(st) => host().map(|h| {
-                        let g = h.inner.lock().unwrap();
-                        g.extra.get(&st.current_win)
-                            .map(|e| e.window_open && !e.should_close)
-                            .unwrap_or(false)
-                    }).unwrap_or(false),
+                    Some(st) if st.current_win == 0 => host()
+                        .map(|h| {
+                            let g = h.inner.lock().unwrap();
+                            g.window_open && !g.should_close
+                        })
+                        .unwrap_or(false),
+                    Some(st) => host()
+                        .map(|h| {
+                            let g = h.inner.lock().unwrap();
+                            g.extra
+                                .get(&st.current_win)
+                                .map(|e| e.window_open && !e.should_close)
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false),
                 };
                 EvalResult::Value(if open { self.true_ref } else { self.false_ref })
             }
 
             "size" => {
-                let (w, h) = self.gui_state.as_ref().map(|s| (s.win_w as i64, s.win_h as i64)).unwrap_or((0, 0));
+                let (w, h) = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| (s.win_w as i64, s.win_h as i64))
+                    .unwrap_or((0, 0));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
@@ -3284,7 +4097,12 @@ impl super::Evaluator {
             }
 
             "present" => {
-                let host = match host() { Some(h) => h.clone(), None => { return self.rt_err_kind("GuiError", "Gui.present: no GUI host"); } };
+                let host = match host() {
+                    Some(h) => h.clone(),
+                    None => {
+                        return self.rt_err_kind("GuiError", "Gui.present: no GUI host");
+                    }
+                };
                 match self.gui_state.as_mut() {
                     Some(st) => {
                         if st.current_win == 0 {
@@ -3295,7 +4113,7 @@ impl super::Evaluator {
                         }
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { self.rt_err_kind("GuiError", "Gui.present: no window open") }
+                    None => self.rt_err_kind("GuiError", "Gui.present: no window open"),
                 }
             }
 
@@ -3305,7 +4123,12 @@ impl super::Evaluator {
                 }
                 let color = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(v) => (v as u32) & 0x00FF_FFFF,
-                    None => { return self.rt_err_kind("TypeError", "Gui.clear color must be an integer 0xRRGGBB"); }
+                    None => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.clear color must be an integer 0xRRGGBB",
+                        );
+                    }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => {
@@ -3316,28 +4139,40 @@ impl super::Evaluator {
                             st.canvas = vec![color; st.width * st.height];
                         }
                         st.bg = color;
-                        for px in st.canvas.iter_mut() { *px = color; }
+                        for px in st.canvas.iter_mut() {
+                            *px = color;
+                        }
                         st.clip = (0, 0, st.width as i32, st.height as i32);
                         st.clip_stack.clear();
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { self.rt_err_kind("GuiError", "Gui.clear: no window open (call Gui.open first)") }
+                    None => self.rt_err_kind(
+                        "GuiError",
+                        "Gui.clear: no window open (call Gui.open first)",
+                    ),
                 }
             }
 
             "fillRect" => {
                 let (x, y, w, h, color) = match self.gui_rect_args(dot_call) {
-                    Some(v) => v, None => return EvalResult::Error,
+                    Some(v) => v,
+                    None => return EvalResult::Error,
                 };
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.fill_rect(x as i32, y as i32, w as i32, h as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.fillRect: no window open") }
+                    Some(st) => {
+                        st.fill_rect(x as i32, y as i32, w as i32, h as i32, color);
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.fillRect: no window open"),
                 }
             }
 
             "fillRectAlpha" => {
                 if dot_call.arguments.len() != 6 {
-                    return self.rt_err_kind("TypeError", "Gui.fillRectAlpha(x, y, w, h, color, alpha) requires 6 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.fillRectAlpha(x, y, w, h, color, alpha) requires 6 arguments",
+                    );
                 }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
@@ -3346,9 +4181,18 @@ impl super::Evaluator {
                 let c = self.gui_int_arg(&dot_call.arguments[4]);
                 let a = self.gui_int_arg(&dot_call.arguments[5]);
                 let (x, y, w, h, color, alpha) = match (x, y, w, h, c, a) {
-                    (Some(x), Some(y), Some(w), Some(h), Some(c), Some(a)) =>
-                        (x as i32, y as i32, w as i32, h as i32, (c as u32) & 0x00FF_FFFF, a.clamp(0, 255) as u32),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.fillRectAlpha requires 6 integers"); }
+                    (Some(x), Some(y), Some(w), Some(h), Some(c), Some(a)) => (
+                        x as i32,
+                        y as i32,
+                        w as i32,
+                        h as i32,
+                        (c as u32) & 0x00FF_FFFF,
+                        a.clamp(0, 255) as u32,
+                    ),
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.fillRectAlpha requires 6 integers");
+                    }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => {
@@ -3358,43 +4202,65 @@ impl super::Evaluator {
                         st.blend_rect(x, y, w, h, r, g, b, alpha);
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { self.rt_err_kind("GuiError", "Gui.fillRectAlpha: no window open") }
+                    None => self.rt_err_kind("GuiError", "Gui.fillRectAlpha: no window open"),
                 }
             }
 
             "setPixel" => {
                 if dot_call.arguments.len() != 3 {
-                    return self.rt_err_kind("TypeError", "Gui.setPixel(x, y, color) requires 3 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.setPixel(x, y, color) requires 3 arguments",
+                    );
                 }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
                 let c = self.gui_int_arg(&dot_call.arguments[2]);
                 let (x, y, color) = match (x, y, c) {
                     (Some(x), Some(y), Some(c)) => (x as i32, y as i32, (c as u32) & 0x00FF_FFFF),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.setPixel requires 3 integers"); }
+                    _ => {
+                        return self.rt_err_kind("TypeError", "Gui.setPixel requires 3 integers");
+                    }
                 };
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.put(x, y, color); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.setPixel: no window open") }
+                    Some(st) => {
+                        st.put(x, y, color);
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.setPixel: no window open"),
                 }
             }
 
             "drawLine" => {
                 if dot_call.arguments.len() != 5 {
-                    return self.rt_err_kind("TypeError", "Gui.drawLine(x0, y0, x1, y1, color) requires 5 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.drawLine(x0, y0, x1, y1, color) requires 5 arguments",
+                    );
                 }
                 let x0 = self.gui_int_arg(&dot_call.arguments[0]);
                 let y0 = self.gui_int_arg(&dot_call.arguments[1]);
                 let x1 = self.gui_int_arg(&dot_call.arguments[2]);
                 let y1 = self.gui_int_arg(&dot_call.arguments[3]);
-                let c  = self.gui_int_arg(&dot_call.arguments[4]);
+                let c = self.gui_int_arg(&dot_call.arguments[4]);
                 let (x0, y0, x1, y1, color) = match (x0, y0, x1, y1, c) {
-                    (Some(a), Some(b), Some(c), Some(d), Some(e)) => (a as i32, b as i32, c as i32, d as i32, (e as u32) & 0x00FF_FFFF),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.drawLine requires 5 integers"); }
+                    (Some(a), Some(b), Some(c), Some(d), Some(e)) => (
+                        a as i32,
+                        b as i32,
+                        c as i32,
+                        d as i32,
+                        (e as u32) & 0x00FF_FFFF,
+                    ),
+                    _ => {
+                        return self.rt_err_kind("TypeError", "Gui.drawLine requires 5 integers");
+                    }
                 };
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.draw_line(x0, y0, x1, y1, color); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.drawLine: no window open") }
+                    Some(st) => {
+                        st.draw_line(x0, y0, x1, y1, color);
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.drawLine: no window open"),
                 }
             }
 
@@ -3408,37 +4274,72 @@ impl super::Evaluator {
                 if n < 5 || n > 7 {
                     return self.rt_err_kind("TypeError", "Gui.drawText(x, y, text, scale, color [, style [, letterSpacing]]) requires 5 to 7 arguments");
                 }
-                let x     = self.gui_int_arg(&dot_call.arguments[0]);
-                let y     = self.gui_int_arg(&dot_call.arguments[1]);
-                let text  = self.gui_str_arg(&dot_call.arguments[2]);
+                let x = self.gui_int_arg(&dot_call.arguments[0]);
+                let y = self.gui_int_arg(&dot_call.arguments[1]);
+                let text = self.gui_str_arg(&dot_call.arguments[2]);
                 let scale = self.gui_int_arg(&dot_call.arguments[3]);
-                let c     = self.gui_int_arg(&dot_call.arguments[4]);
-                let style = if n >= 6 { self.gui_int_arg(&dot_call.arguments[5]).unwrap_or(0) } else { 0 };
-                let spacing = if n == 7 { self.gui_int_arg(&dot_call.arguments[6]).unwrap_or(0) } else { 0 };
+                let c = self.gui_int_arg(&dot_call.arguments[4]);
+                let style = if n >= 6 {
+                    self.gui_int_arg(&dot_call.arguments[5]).unwrap_or(0)
+                } else {
+                    0
+                };
+                let spacing = if n == 7 {
+                    self.gui_int_arg(&dot_call.arguments[6]).unwrap_or(0)
+                } else {
+                    0
+                };
                 let (x, y, text, scale, color) = match (x, y, text, scale, c) {
-                    (Some(x), Some(y), Some(t), Some(s), Some(c)) =>
-                        (x as i32, y as i32, t, s.max(1) as i32, (c as u32) & 0x00FF_FFFF),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.drawText requires (int, int, string, int, int [, int [, int]])"); }
+                    (Some(x), Some(y), Some(t), Some(s), Some(c)) => (
+                        x as i32,
+                        y as i32,
+                        t,
+                        s.max(1) as i32,
+                        (c as u32) & 0x00FF_FFFF,
+                    ),
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.drawText requires (int, int, string, int, int [, int [, int]])",
+                        );
+                    }
                 };
                 if self.gui_state.is_none() {
                     return self.rt_err_kind("GuiError", "Gui.drawText: no window open");
                 }
-                if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
+                if self.gui_fonts.is_none() {
+                    self.gui_fonts = Some(GuiFonts::new());
+                }
                 let fonts = self.gui_fonts.as_mut().unwrap();
                 let st = self.gui_state.as_mut().unwrap();
-                st.draw_text(fonts, x, y, &text, scale * 8, color, (style.clamp(0, 15)) as u8, spacing as i32);
+                st.draw_text(
+                    fonts,
+                    x,
+                    y,
+                    &text,
+                    scale * 8,
+                    color,
+                    (style.clamp(0, 15)) as u8,
+                    spacing as i32,
+                );
                 EvalResult::Value(self.null_ref)
             }
 
             "measureText" => {
                 if dot_call.arguments.len() != 2 {
-                    return self.rt_err_kind("TypeError", "Gui.measureText(text, scale) requires 2 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.measureText(text, scale) requires 2 arguments",
+                    );
                 }
-                let text  = self.gui_str_arg(&dot_call.arguments[0]);
+                let text = self.gui_str_arg(&dot_call.arguments[0]);
                 let scale = self.gui_int_arg(&dot_call.arguments[1]);
                 let (text, scale) = match (text, scale) {
                     (Some(t), Some(s)) => (t, s.max(1)),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.measureText requires (string, int)"); }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.measureText requires (string, int)");
+                    }
                 };
                 // Familia default → aritmética de rejilla (sin tocar FontSystem);
                 // familia custom → ancho real por advances (proporcional).
@@ -3458,13 +4359,19 @@ impl super::Evaluator {
             // texto (con leading) lo calcula el consumidor (px + interlínea).
             "measureTextPx" => {
                 if dot_call.arguments.len() != 2 {
-                    return self.rt_err_kind("TypeError", "Gui.measureTextPx(text, px) requires 2 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.measureTextPx(text, px) requires 2 arguments",
+                    );
                 }
                 let text = self.gui_str_arg(&dot_call.arguments[0]);
-                let px   = self.gui_int_arg(&dot_call.arguments[1]);
+                let px = self.gui_int_arg(&dot_call.arguments[1]);
                 let (text, px) = match (text, px) {
                     (Some(t), Some(p)) => (t, p.max(1)),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.measureTextPx requires (string, int)"); }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.measureTextPx requires (string, int)");
+                    }
                 };
                 let w = match self.gui_fonts.as_mut() {
                     Some(f) if f.current != 0 => f.measure(&text, px as i32),
@@ -3479,11 +4386,15 @@ impl super::Evaluator {
             // ── Motor de primitivos (Fase 0/1) ──────────────────────────────────
             "loadStylesheet" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.loadStylesheet(src) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.loadStylesheet(src) requires 1 argument");
                 }
                 let src = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.loadStylesheet src must be a string"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.loadStylesheet src must be a string");
+                    }
                 };
                 let mut sheet = parse_css(&src);
                 // Bloques `:font { alias: ruta.ttf; }`: se cargan acá (una vez por hoja)
@@ -3491,7 +4402,9 @@ impl super::Evaluator {
                 // Una ruta que no carga no es fatal: el alias queda sin mapear y el
                 // texto sale con la familia activa (mismo fallback que el intérprete).
                 for (alias, path) in sheet.font_decls.clone() {
-                    if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
+                    if self.gui_fonts.is_none() {
+                        self.gui_fonts = Some(GuiFonts::new());
+                    }
                     if let Some(family) = self.gui_fonts.as_mut().unwrap().load_font_file(&path) {
                         sheet.font_alias.push((alias, family));
                     }
@@ -3505,11 +4418,15 @@ impl super::Evaluator {
             // primitivo `svg` (["svg", [["src", handle],["width",W],["height",H]], []]).
             "loadSvg" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.loadSvg(srcOrPath) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.loadSvg(srcOrPath) requires 1 argument");
                 }
                 let arg = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.loadSvg argument must be a string"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.loadSvg argument must be a string");
+                    }
                 };
                 // Markup directo si empieza por '<'; si no, se trata como ruta de archivo.
                 let markup = if arg.trim_start().starts_with('<') {
@@ -3517,7 +4434,12 @@ impl super::Evaluator {
                 } else {
                     match std::fs::read_to_string(&arg) {
                         Ok(s) => s,
-                        Err(e) => { return self.rt_err_kind("IOError", format!("Gui.loadSvg: could not read '{}': {}", arg, e)); }
+                        Err(e) => {
+                            return self.rt_err_kind(
+                                "IOError",
+                                format!("Gui.loadSvg: could not read '{}': {}", arg, e),
+                            );
+                        }
                     }
                 };
                 match svg::parse(&markup) {
@@ -3526,7 +4448,10 @@ impl super::Evaluator {
                         let handle = self.gui_svgs.len() as i64; // 1-based
                         EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
                     }
-                    None => self.rt_err_kind("GuiError", "Gui.loadSvg: could not parse SVG (empty or unsupported)"),
+                    None => self.rt_err_kind(
+                        "GuiError",
+                        "Gui.loadSvg: could not parse SVG (empty or unsupported)",
+                    ),
                 }
             }
 
@@ -3534,7 +4459,10 @@ impl super::Evaluator {
             // (Array anidado [tag, [[prop,val]…], [hijo|texto…]]). Devuelve #regions.
             "renderTree" => {
                 if dot_call.arguments.len() < 4 || dot_call.arguments.len() > 5 {
-                    return self.rt_err_kind("TypeError", "Gui.renderTree(root, sheet, w, h[, ctx]) requires 4-5 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.renderTree(root, sheet, w, h[, ctx]) requires 4-5 arguments",
+                    );
                 }
                 let root_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(v) => v,
@@ -3545,7 +4473,9 @@ impl super::Evaluator {
                 let h = self.gui_int_arg(&dot_call.arguments[3]).unwrap_or(0) as i32;
                 let ctx: Vec<(String, String)> = if dot_call.arguments.len() >= 5 {
                     self.gui_read_ctx(&dot_call.arguments[4])
-                } else { Vec::new() };
+                } else {
+                    Vec::new()
+                };
                 if self.gui_state.is_none() {
                     return self.rt_err_kind("GuiError", "Gui.renderTree: no window open");
                 }
@@ -3562,17 +4492,40 @@ impl super::Evaluator {
                 {
                     let sheet_ref = if sheet_h >= 1 {
                         self.gui_stylesheets.get((sheet_h - 1) as usize)
-                    } else { None };
+                    } else {
+                        None
+                    };
                     let svgs_ref: &[svg::ParsedSvg] = &self.gui_svgs;
                     if let Some(ObjectData::Array { elements, .. }) = self.resolve(root_ref) {
                         if elements.len() >= 3 {
                             if let OwnedValue::Str(tag) = &elements[0] {
-                                let style = if let OwnedValue::Array { elements, .. } = &elements[1] { elements.as_slice() } else { &[] };
-                                let kids = if let OwnedValue::Array { elements, .. } = &elements[2] { elements.as_slice() } else { &[] };
+                                let style = if let OwnedValue::Array { elements, .. } = &elements[1]
+                                {
+                                    elements.as_slice()
+                                } else {
+                                    &[]
+                                };
+                                let kids = if let OwnedValue::Array { elements, .. } = &elements[2]
+                                {
+                                    elements.as_slice()
+                                } else {
+                                    &[]
+                                };
                                 // El motor arma el marco raíz (toda la ventana) y el
                                 // contexto internamente; acá solo se le pasan las piezas.
-                                render_tree(tag.as_str(), style, kids, w, h,
-                                    sheet_ref, svgs_ref, &ctx, &mut fonts, &mut st, &mut regions);
+                                render_tree(
+                                    tag.as_str(),
+                                    style,
+                                    kids,
+                                    w,
+                                    h,
+                                    sheet_ref,
+                                    svgs_ref,
+                                    &ctx,
+                                    &mut fonts,
+                                    &mut st,
+                                    &mut regions,
+                                );
                             }
                         }
                     }
@@ -3595,7 +4548,10 @@ impl super::Evaluator {
                         ],
                     });
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: arr }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: None,
+                    elements: arr,
+                }))
             }
 
             "loadFont" => {
@@ -3604,26 +4560,40 @@ impl super::Evaluator {
                 }
                 let path = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.loadFont path must be a string"); }
+                    None => {
+                        return self.rt_err_kind("TypeError", "Gui.loadFont path must be a string");
+                    }
                 };
-                if self.gui_fonts.is_none() { self.gui_fonts = Some(GuiFonts::new()); }
+                if self.gui_fonts.is_none() {
+                    self.gui_fonts = Some(GuiFonts::new());
+                }
                 match self.gui_fonts.as_mut().unwrap().load_font_file(&path) {
                     Some(family) => EvalResult::Value(self.alloc(ObjectData::Str(family))),
-                    None => { self.rt_err_kind("GuiError", format!("Gui.loadFont: could not load font file '{}'", path)) }
+                    None => self.rt_err_kind(
+                        "GuiError",
+                        format!("Gui.loadFont: could not load font file '{}'", path),
+                    ),
                 }
             }
 
             "setFont" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.setFont(family) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.setFont(family) requires 1 argument");
                 }
                 let name = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.setFont family must be a string"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.setFont family must be a string");
+                    }
                 };
                 if self.gui_fonts.is_none() {
                     // Sin FontSystem todavía: el reset a default no necesita crearlo.
-                    if name.is_empty() || name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("monospace") {
+                    if name.is_empty()
+                        || name.eq_ignore_ascii_case("default")
+                        || name.eq_ignore_ascii_case("monospace")
+                    {
                         return EvalResult::Value(self.true_ref);
                     }
                     self.gui_fonts = Some(GuiFonts::new());
@@ -3633,7 +4603,9 @@ impl super::Evaluator {
             }
 
             "font" => {
-                let name = self.gui_fonts.as_ref()
+                let name = self
+                    .gui_fonts
+                    .as_ref()
                     .map(|f| f.families[f.current as usize].clone())
                     .unwrap_or_default();
                 EvalResult::Value(self.alloc(ObjectData::Str(name)))
@@ -3641,29 +4613,44 @@ impl super::Evaluator {
 
             "fillRoundRect" => {
                 if dot_call.arguments.len() != 6 {
-                    return self.rt_err_kind("TypeError", "Gui.fillRoundRect(x, y, w, h, radius, color) requires 6 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.fillRoundRect(x, y, w, h, radius, color) requires 6 arguments",
+                    );
                 }
                 let mut vals = [0i64; 6];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { return self.rt_err_kind("TypeError", "Gui.fillRoundRect requires 6 integers"); }
+                        None => {
+                            return self
+                                .rt_err_kind("TypeError", "Gui.fillRoundRect requires 6 integers");
+                        }
                     }
                 }
                 let color = (vals[5] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
                     Some(st) => {
-                        st.fill_round_rect(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, vals[4] as i32, color);
+                        st.fill_round_rect(
+                            vals[0] as i32,
+                            vals[1] as i32,
+                            vals[2] as i32,
+                            vals[3] as i32,
+                            vals[4] as i32,
+                            color,
+                        );
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { self.rt_err_kind("GuiError", "Gui.fillRoundRect: no window open") }
+                    None => self.rt_err_kind("GuiError", "Gui.fillRoundRect: no window open"),
                 }
             }
 
             "time" => {
                 // Milisegundos desde que se abrió la ventana — para animaciones y blink del caret.
                 // Devuelve 0 si no hay ventana abierta.
-                let ms = self.gui_state.as_ref()
+                let ms = self
+                    .gui_state
+                    .as_ref()
                     .map(|s| s.open_time.elapsed().as_millis() as i64)
                     .unwrap_or(0);
                 EvalResult::Value(self.int_ref(ms))
@@ -3671,75 +4658,124 @@ impl super::Evaluator {
 
             "drawRect" => {
                 if dot_call.arguments.len() != 5 {
-                    return self.rt_err_kind("TypeError", "Gui.drawRect(x, y, w, h, color) requires 5 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.drawRect(x, y, w, h, color) requires 5 arguments",
+                    );
                 }
                 let mut vals = [0i64; 5];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { return self.rt_err_kind("TypeError", "Gui.drawRect requires 5 integers"); }
+                        None => {
+                            return self
+                                .rt_err_kind("TypeError", "Gui.drawRect requires 5 integers");
+                        }
                     }
                 }
                 let color = (vals[4] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.draw_rect(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.drawRect: no window open") }
+                    Some(st) => {
+                        st.draw_rect(
+                            vals[0] as i32,
+                            vals[1] as i32,
+                            vals[2] as i32,
+                            vals[3] as i32,
+                            color,
+                        );
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.drawRect: no window open"),
                 }
             }
 
             "fillCircle" => {
                 if dot_call.arguments.len() != 4 {
-                    return self.rt_err_kind("TypeError", "Gui.fillCircle(cx, cy, radius, color) requires 4 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.fillCircle(cx, cy, radius, color) requires 4 arguments",
+                    );
                 }
                 let mut vals = [0i64; 4];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { return self.rt_err_kind("TypeError", "Gui.fillCircle requires 4 integers"); }
+                        None => {
+                            return self
+                                .rt_err_kind("TypeError", "Gui.fillCircle requires 4 integers");
+                        }
                     }
                 }
                 let color = (vals[3] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.fill_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.fillCircle: no window open") }
+                    Some(st) => {
+                        st.fill_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color);
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.fillCircle: no window open"),
                 }
             }
 
             // Contorno de círculo (1px).
             "drawCircle" => {
                 if dot_call.arguments.len() != 4 {
-                    return self.rt_err_kind("TypeError", "Gui.drawCircle(cx, cy, radius, color) requires 4 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.drawCircle(cx, cy, radius, color) requires 4 arguments",
+                    );
                 }
                 let mut vals = [0i64; 4];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { return self.rt_err_kind("TypeError", "Gui.drawCircle requires 4 integers"); }
+                        None => {
+                            return self
+                                .rt_err_kind("TypeError", "Gui.drawCircle requires 4 integers");
+                        }
                     }
                 }
                 let color = (vals[3] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.draw_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.drawCircle: no window open") }
+                    Some(st) => {
+                        st.draw_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color);
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.drawCircle: no window open"),
                 }
             }
 
             // Línea de grosor configurable (extremos/juntas redondeados, antialiased).
             "drawLineThick" => {
                 if dot_call.arguments.len() != 6 {
-                    return self.rt_err_kind("TypeError", "Gui.drawLineThick(x0, y0, x1, y1, width, color) requires 6 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.drawLineThick(x0, y0, x1, y1, width, color) requires 6 arguments",
+                    );
                 }
                 let mut vals = [0i64; 6];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { return self.rt_err_kind("TypeError", "Gui.drawLineThick requires 6 integers"); }
+                        None => {
+                            return self
+                                .rt_err_kind("TypeError", "Gui.drawLineThick requires 6 integers");
+                        }
                     }
                 }
                 let color = (vals[5] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.draw_thick_line(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, vals[4] as i32, color); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.drawLineThick: no window open") }
+                    Some(st) => {
+                        st.draw_thick_line(
+                            vals[0] as i32,
+                            vals[1] as i32,
+                            vals[2] as i32,
+                            vals[3] as i32,
+                            vals[4] as i32,
+                            color,
+                        );
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.drawLineThick: no window open"),
                 }
             }
 
@@ -3747,28 +4783,48 @@ impl super::Evaluator {
             // Gui.drawPolyline(points, width, color).
             "drawPolyline" => {
                 if dot_call.arguments.len() != 3 {
-                    return self.rt_err_kind("TypeError", "Gui.drawPolyline(points, width, color) requires 3 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.drawPolyline(points, width, color) requires 3 arguments",
+                    );
                 }
                 let pts = match self.gui_int_vec_arg(&dot_call.arguments[0]) {
                     Some(p) => p,
-                    None => { return self.rt_err_kind("TypeError", "Gui.drawPolyline points must be a flat int array [x0,y0,x1,y1,…]"); }
+                    None => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.drawPolyline points must be a flat int array [x0,y0,x1,y1,…]",
+                        );
+                    }
                 };
                 let width = self.gui_int_arg(&dot_call.arguments[1]);
                 let color = self.gui_int_arg(&dot_call.arguments[2]);
                 let (width, color) = match (width, color) {
                     (Some(w), Some(c)) => (w.max(1) as i32, (c as u32) & 0x00FF_FFFF),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.drawPolyline requires (int[], int, int)"); }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.drawPolyline requires (int[], int, int)",
+                        );
+                    }
                 };
                 match self.gui_state.as_mut() {
                     Some(st) => {
                         let mut i = 0;
                         while i + 3 < pts.len() {
-                            st.draw_thick_line(pts[i] as i32, pts[i + 1] as i32, pts[i + 2] as i32, pts[i + 3] as i32, width, color);
+                            st.draw_thick_line(
+                                pts[i] as i32,
+                                pts[i + 1] as i32,
+                                pts[i + 2] as i32,
+                                pts[i + 3] as i32,
+                                width,
+                                color,
+                            );
                             i += 2;
                         }
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { self.rt_err_kind("GuiError", "Gui.drawPolyline: no window open") }
+                    None => self.rt_err_kind("GuiError", "Gui.drawPolyline: no window open"),
                 }
             }
 
@@ -3776,32 +4832,53 @@ impl super::Evaluator {
             // Gui.fillPolygon(points, color).
             "fillPolygon" => {
                 if dot_call.arguments.len() != 2 {
-                    return self.rt_err_kind("TypeError", "Gui.fillPolygon(points, color) requires 2 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.fillPolygon(points, color) requires 2 arguments",
+                    );
                 }
                 let pts = match self.gui_int_vec_arg(&dot_call.arguments[0]) {
                     Some(p) => p,
-                    None => { return self.rt_err_kind("TypeError", "Gui.fillPolygon points must be a flat int array [x0,y0,x1,y1,…]"); }
+                    None => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.fillPolygon points must be a flat int array [x0,y0,x1,y1,…]",
+                        );
+                    }
                 };
                 let color = match self.gui_int_arg(&dot_call.arguments[1]) {
                     Some(c) => (c as u32) & 0x00FF_FFFF,
-                    None => { return self.rt_err_kind("TypeError", "Gui.fillPolygon color must be an integer"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.fillPolygon color must be an integer");
+                    }
                 };
-                let verts: Vec<(i32, i32)> = pts.chunks_exact(2).map(|c| (c[0] as i32, c[1] as i32)).collect();
+                let verts: Vec<(i32, i32)> = pts
+                    .chunks_exact(2)
+                    .map(|c| (c[0] as i32, c[1] as i32))
+                    .collect();
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.fill_polygon(&verts, color); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.fillPolygon: no window open") }
+                    Some(st) => {
+                        st.fill_polygon(&verts, color);
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.fillPolygon: no window open"),
                 }
             }
 
             "setImePosition" => {
                 if dot_call.arguments.len() != 2 {
-                    return self.rt_err_kind("TypeError", "Gui.setImePosition(x, y) requires 2 arguments");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.setImePosition(x, y) requires 2 arguments");
                 }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
                 let (x, y) = match (x, y) {
                     (Some(x), Some(y)) => (x as i32, y as i32),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.setImePosition requires 2 integers"); }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.setImePosition requires 2 integers");
+                    }
                 };
                 if let Some(host) = host() {
                     let mut g = host.inner.lock().unwrap();
@@ -3811,7 +4888,11 @@ impl super::Evaluator {
             }
 
             "mouse" => {
-                let (mx, my) = self.gui_state.as_ref().map(|s| (s.input.mouse_x as i64, s.input.mouse_y as i64)).unwrap_or((0, 0));
+                let (mx, my) = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| (s.input.mouse_x as i64, s.input.mouse_y as i64))
+                    .unwrap_or((0, 0));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(mx), OwnedValue::Integer(my)],
@@ -3819,27 +4900,51 @@ impl super::Evaluator {
             }
 
             "mouseDown" => {
-                let down = self.gui_state.as_ref().map(|s| s.input.mouse_l).unwrap_or(false);
+                let down = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.mouse_l)
+                    .unwrap_or(false);
                 EvalResult::Value(if down { self.true_ref } else { self.false_ref })
             }
 
             "mouseRightDown" => {
-                let down = self.gui_state.as_ref().map(|s| s.input.mouse_r).unwrap_or(false);
+                let down = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.mouse_r)
+                    .unwrap_or(false);
                 EvalResult::Value(if down { self.true_ref } else { self.false_ref })
             }
 
             "mouseMiddleDown" => {
-                let down = self.gui_state.as_ref().map(|s| s.input.mouse_m).unwrap_or(false);
+                let down = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.mouse_m)
+                    .unwrap_or(false);
                 EvalResult::Value(if down { self.true_ref } else { self.false_ref })
             }
 
             "mousePressed" => {
-                let pressed = self.gui_state.as_ref().map(|s| s.input.mouse_pressed).unwrap_or(false);
-                EvalResult::Value(if pressed { self.true_ref } else { self.false_ref })
+                let pressed = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.mouse_pressed)
+                    .unwrap_or(false);
+                EvalResult::Value(if pressed {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                })
             }
 
             "scroll" => {
-                let (dx, dy) = self.gui_state.as_ref().map(|s| (s.input.scroll_x, s.input.scroll_y)).unwrap_or((0, 0));
+                let (dx, dy) = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| (s.input.scroll_x, s.input.scroll_y))
+                    .unwrap_or((0, 0));
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(dx), OwnedValue::Integer(dy)],
@@ -3852,7 +4957,9 @@ impl super::Evaluator {
                 }
                 let name = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.keyDown name must be a string"); }
+                    None => {
+                        return self.rt_err_kind("TypeError", "Gui.keyDown name must be a string");
+                    }
                 };
                 let down = match self.gui_state.as_ref() {
                     Some(st) => match name.as_str() {
@@ -3867,43 +4974,106 @@ impl super::Evaluator {
                 EvalResult::Value(if down { self.true_ref } else { self.false_ref })
             }
 
-            "keysPressed" => { let v = self.gui_state.as_ref().map(|s| s.input.keys_pressed.clone()).unwrap_or_default(); self.gui_str_array(v) }
-            "keysRepeated" => { let v = self.gui_state.as_ref().map(|s| s.input.keys_repeated.clone()).unwrap_or_default(); self.gui_str_array(v) }
-            "keysReleased" => { let v = self.gui_state.as_ref().map(|s| s.input.keys_released.clone()).unwrap_or_default(); self.gui_str_array(v) }
+            "keysPressed" => {
+                let v = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.keys_pressed.clone())
+                    .unwrap_or_default();
+                self.gui_str_array(v)
+            }
+            "keysRepeated" => {
+                let v = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.keys_repeated.clone())
+                    .unwrap_or_default();
+                self.gui_str_array(v)
+            }
+            "keysReleased" => {
+                let v = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.keys_released.clone())
+                    .unwrap_or_default();
+                self.gui_str_array(v)
+            }
 
             "charsTyped" => {
-                let s = self.gui_state.as_ref().map(|s| s.input.chars_typed.clone()).unwrap_or_default();
+                let s = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.chars_typed.clone())
+                    .unwrap_or_default();
                 EvalResult::Value(self.alloc(ObjectData::Str(s)))
             }
 
             "focused" => {
-                let v = self.gui_state.as_ref().map(|s| s.input.focused).unwrap_or(true);
+                let v = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.focused)
+                    .unwrap_or(true);
                 EvalResult::Value(if v { self.true_ref } else { self.false_ref })
             }
             "mouseInWindow" => {
-                let v = self.gui_state.as_ref().map(|s| s.input.mouse_in).unwrap_or(false);
+                let v = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.mouse_in)
+                    .unwrap_or(false);
                 EvalResult::Value(if v { self.true_ref } else { self.false_ref })
             }
             "mouseBackDown" => {
-                let v = self.gui_state.as_ref().map(|s| s.input.mouse_back).unwrap_or(false);
+                let v = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.mouse_back)
+                    .unwrap_or(false);
                 EvalResult::Value(if v { self.true_ref } else { self.false_ref })
             }
             "mouseForwardDown" => {
-                let v = self.gui_state.as_ref().map(|s| s.input.mouse_fwd).unwrap_or(false);
+                let v = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.mouse_fwd)
+                    .unwrap_or(false);
                 EvalResult::Value(if v { self.true_ref } else { self.false_ref })
             }
             // Archivos soltados sobre la ventana este frame (rutas). Requiere permiso File para leerlos.
-            "droppedFiles" => { let v = self.gui_state.as_ref().map(|s| s.input.dropped_files.clone()).unwrap_or_default(); self.gui_str_array(v) }
+            "droppedFiles" => {
+                let v = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.dropped_files.clone())
+                    .unwrap_or_default();
+                self.gui_str_array(v)
+            }
             // Composición IME en curso (CJK), "" si no hay. serez-ui la dibuja en el caret.
             "imePreedit" => {
-                let s = self.gui_state.as_ref().map(|s| s.input.ime_preedit.clone()).unwrap_or_default();
+                let s = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.ime_preedit.clone())
+                    .unwrap_or_default();
                 EvalResult::Value(self.alloc(ObjectData::Str(s)))
             }
             // Archivos arrastrados SOBRE la ventana (antes de soltar) — para resaltar zonas de drop.
-            "hoveredFiles" => { let v = self.gui_state.as_ref().map(|s| s.input.hovered_files.clone()).unwrap_or_default(); self.gui_str_array(v) }
+            "hoveredFiles" => {
+                let v = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.hovered_files.clone())
+                    .unwrap_or_default();
+                self.gui_str_array(v)
+            }
             // Toques activos este frame, aplanado: [id, fase, x, y, ...] (fase: 0=start 1=move 2=end 3=cancel).
             "touches" => {
-                let ts = self.gui_state.as_ref().map(|s| s.input.touches.clone()).unwrap_or_default();
+                let ts = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.touches.clone())
+                    .unwrap_or_default();
                 let mut elems: Vec<OwnedValue> = Vec::new();
                 for (id, code, x, y) in ts {
                     elems.push(OwnedValue::Integer(id as i64));
@@ -3911,47 +5081,88 @@ impl super::Evaluator {
                     elems.push(OwnedValue::Integer(x as i64));
                     elems.push(OwnedValue::Integer(y as i64));
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements: elems }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: Some("int".to_string()),
+                    elements: elems,
+                }))
             }
             // Delta de pinch/zoom acumulado este frame (decimal; 0 si no hubo gesto).
             "pinchDelta" => {
-                let d = self.gui_state.as_ref().map(|s| s.input.pinch_delta).unwrap_or(0.0);
+                let d = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.input.pinch_delta)
+                    .unwrap_or(0.0);
                 EvalResult::Value(self.alloc(ObjectData::Decimal(d)))
             }
             // Posición outer de la ventana en píxeles físicos: [x, y]. Para centrar /
             // recordar dónde estaba la ventana, o posicionar relativo a un monitor.
             "windowPosition" => {
-                let (x, y) = self.gui_state.as_ref().map(|s| (s.win_x, s.win_y)).unwrap_or((0, 0));
+                let (x, y) = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| (s.win_x, s.win_y))
+                    .unwrap_or((0, 0));
                 let elems = vec![OwnedValue::Integer(x as i64), OwnedValue::Integer(y as i64)];
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements: elems }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: Some("int".to_string()),
+                    elements: elems,
+                }))
             }
             // Monitores conectados: array de dicts {x, y, width, height, scale, name}
             // (posición + resolución en píxeles físicos). Para multi-monitor y centrado.
             "monitors" => {
-                let mons = self.gui_state.as_ref().map(|s| s.monitors.clone()).unwrap_or_default();
+                let mons = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.monitors.clone())
+                    .unwrap_or_default();
                 let mut elems: Vec<OwnedValue> = Vec::with_capacity(mons.len());
                 for m in mons {
                     elems.push(OwnedValue::Dict {
                         key_type: "string".to_string(),
                         value_type: "any".to_string(),
                         entries: vec![
-                            (OwnedValue::Str("x".to_string()), OwnedValue::Integer(m.x as i64)),
-                            (OwnedValue::Str("y".to_string()), OwnedValue::Integer(m.y as i64)),
-                            (OwnedValue::Str("width".to_string()), OwnedValue::Integer(m.w as i64)),
-                            (OwnedValue::Str("height".to_string()), OwnedValue::Integer(m.h as i64)),
-                            (OwnedValue::Str("scale".to_string()), OwnedValue::Decimal(m.scale)),
+                            (
+                                OwnedValue::Str("x".to_string()),
+                                OwnedValue::Integer(m.x as i64),
+                            ),
+                            (
+                                OwnedValue::Str("y".to_string()),
+                                OwnedValue::Integer(m.y as i64),
+                            ),
+                            (
+                                OwnedValue::Str("width".to_string()),
+                                OwnedValue::Integer(m.w as i64),
+                            ),
+                            (
+                                OwnedValue::Str("height".to_string()),
+                                OwnedValue::Integer(m.h as i64),
+                            ),
+                            (
+                                OwnedValue::Str("scale".to_string()),
+                                OwnedValue::Decimal(m.scale),
+                            ),
                             (OwnedValue::Str("name".to_string()), OwnedValue::Str(m.name)),
                         ],
                     });
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("dict".to_string()), elements: elems }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: Some("dict".to_string()),
+                    elements: elems,
+                }))
             }
 
             "clipboardGet" => {
                 let text = match self.gui_state.as_mut() {
                     Some(st) => {
-                        if st.clipboard.is_none() { st.clipboard = arboard::Clipboard::new().ok(); }
-                        st.clipboard.as_mut().and_then(|c| c.get_text().ok()).unwrap_or_default()
+                        if st.clipboard.is_none() {
+                            st.clipboard = arboard::Clipboard::new().ok();
+                        }
+                        st.clipboard
+                            .as_mut()
+                            .and_then(|c| c.get_text().ok())
+                            .unwrap_or_default()
                     }
                     None => String::new(),
                 };
@@ -3960,12 +5171,17 @@ impl super::Evaluator {
 
             "clipboardSet" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.clipboardSet(text) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.clipboardSet(text) requires 1 argument");
                 }
                 let text = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
                 if let Some(st) = self.gui_state.as_mut() {
-                    if st.clipboard.is_none() { st.clipboard = arboard::Clipboard::new().ok(); }
-                    if let Some(c) = st.clipboard.as_mut() { let _ = c.set_text(text); }
+                    if st.clipboard.is_none() {
+                        st.clipboard = arboard::Clipboard::new().ok();
+                    }
+                    if let Some(c) = st.clipboard.as_mut() {
+                        let _ = c.set_text(text);
+                    }
                 }
                 EvalResult::Value(self.null_ref)
             }
@@ -3974,7 +5190,9 @@ impl super::Evaluator {
             "clipboardGetImage" => {
                 let img = match self.gui_state.as_mut() {
                     Some(st) => {
-                        if st.clipboard.is_none() { st.clipboard = arboard::Clipboard::new().ok(); }
+                        if st.clipboard.is_none() {
+                            st.clipboard = arboard::Clipboard::new().ok();
+                        }
                         st.clipboard.as_mut().and_then(|c| c.get_image().ok())
                     }
                     None => None,
@@ -4009,29 +5227,47 @@ impl super::Evaluator {
             // Copia una imagen (por handle, como devuelve loadImage/loadImageBytes) al portapapeles.
             "clipboardSetImage" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.clipboardSetImage(handle) requires 1 argument");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.clipboardSetImage(handle) requires 1 argument",
+                    );
                 }
                 let hnd = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(h) => h,
-                    None => { return self.rt_err_kind("TypeError", "Gui.clipboardSetImage handle must be an integer"); }
+                    None => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.clipboardSetImage handle must be an integer",
+                        );
+                    }
                 };
                 // ARGB u32 (interno) → RGBA bytes (lo que espera arboard).
-                let rgba = self.gui_state.as_ref().and_then(|s| s.images.get(&hnd)).map(|im| {
-                    let mut bytes = Vec::with_capacity(im.px.len() * 4);
-                    for &p in &im.px {
-                        bytes.push(((p >> 16) & 0xff) as u8); // r
-                        bytes.push(((p >> 8) & 0xff) as u8);  // g
-                        bytes.push((p & 0xff) as u8);         // b
-                        bytes.push(((p >> 24) & 0xff) as u8); // a
-                    }
-                    (im.w, im.h, bytes)
-                });
+                let rgba = self
+                    .gui_state
+                    .as_ref()
+                    .and_then(|s| s.images.get(&hnd))
+                    .map(|im| {
+                        let mut bytes = Vec::with_capacity(im.px.len() * 4);
+                        for &p in &im.px {
+                            bytes.push(((p >> 16) & 0xff) as u8); // r
+                            bytes.push(((p >> 8) & 0xff) as u8); // g
+                            bytes.push((p & 0xff) as u8); // b
+                            bytes.push(((p >> 24) & 0xff) as u8); // a
+                        }
+                        (im.w, im.h, bytes)
+                    });
                 match rgba {
                     Some((w, h, bytes)) => {
                         if let Some(st) = self.gui_state.as_mut() {
-                            if st.clipboard.is_none() { st.clipboard = arboard::Clipboard::new().ok(); }
+                            if st.clipboard.is_none() {
+                                st.clipboard = arboard::Clipboard::new().ok();
+                            }
                             if let Some(c) = st.clipboard.as_mut() {
-                                let _ = c.set_image(arboard::ImageData { width: w, height: h, bytes: std::borrow::Cow::Owned(bytes) });
+                                let _ = c.set_image(arboard::ImageData {
+                                    width: w,
+                                    height: h,
+                                    bytes: std::borrow::Cow::Owned(bytes),
+                                });
                             }
                         }
                         EvalResult::Value(self.null_ref)
@@ -4044,15 +5280,21 @@ impl super::Evaluator {
 
             "loadImage" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.loadImage(path) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.loadImage(path) requires 1 argument");
                 }
                 let path = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.loadImage path must be a string"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.loadImage path must be a string");
+                    }
                 };
                 let decoded = match image::open(&path) {
                     Ok(img) => img.to_rgba8(),
-                    Err(e) => { return self.rt_err_kind("GuiError", format!("Gui.loadImage: {}", e)); }
+                    Err(e) => {
+                        return self.rt_err_kind("GuiError", format!("Gui.loadImage: {}", e));
+                    }
                 };
                 let (w, h) = (decoded.width() as usize, decoded.height() as usize);
                 let mut px = Vec::with_capacity(w * h);
@@ -4067,7 +5309,7 @@ impl super::Evaluator {
                         st.images.insert(id, ImageData { w, h, px });
                         EvalResult::Value(self.int_ref(id))
                     }
-                    None => { self.rt_err_kind("GuiError", "Gui.loadImage: no window open") }
+                    None => self.rt_err_kind("GuiError", "Gui.loadImage: no window open"),
                 }
             }
 
@@ -4076,7 +5318,8 @@ impl super::Evaluator {
                 // (0–255, como devuelve File binario / fetch / Binary.*), no desde una ruta.
                 // Sirve para imágenes fetcheadas o generadas sin tocar el disco.
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.loadImageBytes(bytes) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.loadImageBytes(bytes) requires 1 argument");
                 }
                 let r = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -4085,18 +5328,30 @@ impl super::Evaluator {
                 };
                 let elems = match self.resolve(r) {
                     Some(ObjectData::Array { elements, .. }) => elements.clone(),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.loadImageBytes: argument must be a byte array"); }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.loadImageBytes: argument must be a byte array",
+                        );
+                    }
                 };
                 let mut bytes = Vec::with_capacity(elems.len());
                 for elem in elems {
                     match elem {
                         OwnedValue::Integer(b) => bytes.push(b as u8),
-                        _ => { return self.rt_err_kind("TypeError", "Gui.loadImageBytes: all elements must be integers (0–255)"); }
+                        _ => {
+                            return self.rt_err_kind(
+                                "TypeError",
+                                "Gui.loadImageBytes: all elements must be integers (0–255)",
+                            );
+                        }
                     }
                 }
                 let decoded = match image::load_from_memory(&bytes) {
                     Ok(img) => img.to_rgba8(),
-                    Err(e) => { return self.rt_err_kind("GuiError", format!("Gui.loadImageBytes: {}", e)); }
+                    Err(e) => {
+                        return self.rt_err_kind("GuiError", format!("Gui.loadImageBytes: {}", e));
+                    }
                 };
                 let (w, h) = (decoded.width() as usize, decoded.height() as usize);
                 let mut px = Vec::with_capacity(w * h);
@@ -4111,7 +5366,7 @@ impl super::Evaluator {
                         st.images.insert(id, ImageData { w, h, px });
                         EvalResult::Value(self.int_ref(id))
                     }
-                    None => { self.rt_err_kind("GuiError", "Gui.loadImageBytes: no window open") }
+                    None => self.rt_err_kind("GuiError", "Gui.loadImageBytes: no window open"),
                 }
             }
 
@@ -4128,7 +5383,10 @@ impl super::Evaluator {
                 for i in 0..n {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => vals[i] = v,
-                        None => { return self.rt_err_kind("TypeError", "Gui.drawImage requires integers"); }
+                        None => {
+                            return self
+                                .rt_err_kind("TypeError", "Gui.drawImage requires integers");
+                        }
                     }
                 }
                 let (x, y, hnd) = (vals[0] as i32, vals[1] as i32, vals[2]);
@@ -4137,11 +5395,19 @@ impl super::Evaluator {
                         if n == 3 {
                             st.draw_image(x, y, hnd, 0);
                         } else {
-                            st.draw_image_scaled(x, y, hnd, vals[3] as i32, vals[4] as i32, (vals[5].clamp(0, 255)) as u32, 0);
+                            st.draw_image_scaled(
+                                x,
+                                y,
+                                hnd,
+                                vals[3] as i32,
+                                vals[4] as i32,
+                                (vals[5].clamp(0, 255)) as u32,
+                                0,
+                            );
                         }
                         EvalResult::Value(self.null_ref)
                     }
-                    None => { self.rt_err_kind("GuiError", "Gui.drawImage: no window open") }
+                    None => self.rt_err_kind("GuiError", "Gui.drawImage: no window open"),
                 }
             }
 
@@ -4153,76 +5419,127 @@ impl super::Evaluator {
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { return self.rt_err_kind("TypeError", "Gui.fillGradient requires 6 integers (x,y,w,h,color1,color2) + vertical(bool)"); }
+                        None => {
+                            return self.rt_err_kind("TypeError", "Gui.fillGradient requires 6 integers (x,y,w,h,color1,color2) + vertical(bool)");
+                        }
                     }
                 }
                 // `vertical` acepta bool (true=vertical) o int (≠0).
                 let vertical = match self.gui_bool_arg(&dot_call.arguments[6]) {
                     Some(b) => b,
-                    None => self.gui_int_arg(&dot_call.arguments[6]).map(|v| v != 0).unwrap_or(true),
+                    None => self
+                        .gui_int_arg(&dot_call.arguments[6])
+                        .map(|v| v != 0)
+                        .unwrap_or(true),
                 };
                 let c1 = (vals[4] as u32) & 0x00FF_FFFF;
                 let c2 = (vals[5] as u32) & 0x00FF_FFFF;
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.fill_gradient(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, c1, c2, vertical); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.fillGradient: no window open") }
+                    Some(st) => {
+                        st.fill_gradient(
+                            vals[0] as i32,
+                            vals[1] as i32,
+                            vals[2] as i32,
+                            vals[3] as i32,
+                            c1,
+                            c2,
+                            vertical,
+                        );
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.fillGradient: no window open"),
                 }
             }
 
             "blur" => {
                 if dot_call.arguments.len() != 5 {
-                    return self.rt_err_kind("TypeError", "Gui.blur(x, y, w, h, radius) requires 5 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.blur(x, y, w, h, radius) requires 5 arguments",
+                    );
                 }
                 let mut vals = [0i64; 5];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     match self.gui_int_arg(&dot_call.arguments[i]) {
                         Some(v) => *slot = v,
-                        None => { return self.rt_err_kind("TypeError", "Gui.blur requires 5 integers"); }
+                        None => {
+                            return self.rt_err_kind("TypeError", "Gui.blur requires 5 integers");
+                        }
                     }
                 }
                 match self.gui_state.as_mut() {
-                    Some(st) => { st.blur_region(vals[0] as i32, vals[1] as i32, vals[2] as i32, vals[3] as i32, vals[4] as i32); EvalResult::Value(self.null_ref) }
-                    None => { self.rt_err_kind("GuiError", "Gui.blur: no window open") }
+                    Some(st) => {
+                        st.blur_region(
+                            vals[0] as i32,
+                            vals[1] as i32,
+                            vals[2] as i32,
+                            vals[3] as i32,
+                            vals[4] as i32,
+                        );
+                        EvalResult::Value(self.null_ref)
+                    }
+                    None => self.rt_err_kind("GuiError", "Gui.blur: no window open"),
                 }
             }
 
             "scaleFactor" => {
-                let sf = self.gui_state.as_ref().map(|s| s.scale_factor).unwrap_or(1.0);
+                let sf = self
+                    .gui_state
+                    .as_ref()
+                    .map(|s| s.scale_factor)
+                    .unwrap_or(1.0);
                 EvalResult::Value(self.alloc(ObjectData::Decimal(sf)))
             }
 
             "textAdvances" => {
                 if dot_call.arguments.len() != 2 {
-                    return self.rt_err_kind("TypeError", "Gui.textAdvances(text, scale) requires 2 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.textAdvances(text, scale) requires 2 arguments",
+                    );
                 }
-                let text  = self.gui_str_arg(&dot_call.arguments[0]);
+                let text = self.gui_str_arg(&dot_call.arguments[0]);
                 let scale = self.gui_int_arg(&dot_call.arguments[1]);
                 let (text, scale) = match (text, scale) {
                     (Some(t), Some(s)) => (t, s.max(1) as i32),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.textAdvances requires (string, int)"); }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.textAdvances requires (string, int)");
+                    }
                 };
                 let xs = match self.gui_fonts.as_mut() {
                     Some(f) => f.advances(&text, scale * 8),
                     None => {
                         let mut v = vec![0i64];
                         let mut x = 0i64;
-                        for _ in text.chars() { x += 8 * scale as i64; v.push(x); }
+                        for _ in text.chars() {
+                            x += 8 * scale as i64;
+                            v.push(x);
+                        }
                         v
                     }
                 };
                 let elements: Vec<OwnedValue> = xs.into_iter().map(OwnedValue::Integer).collect();
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: Some("int".to_string()), elements }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: Some("int".to_string()),
+                    elements,
+                }))
             }
 
-            "setMinSize" | "setResizable" | "setFullscreen" | "maximize" | "setPosition" | "setDecorations"
-            | "setMaxSize" | "setAlwaysOnTop" | "minimize" | "requestAttention" | "setCursorVisible" => {
+            "setMinSize" | "setResizable" | "setFullscreen" | "maximize" | "setPosition"
+            | "setDecorations" | "setMaxSize" | "setAlwaysOnTop" | "minimize"
+            | "requestAttention" | "setCursorVisible" => {
                 let m = dot_call.method.clone();
                 return self.gui_window_control(&m, dot_call);
             }
             // Mover una ventana borderless (llamar en mousedown sobre la barra custom).
             "dragWindow" => {
                 if let Some(host) = host() {
-                    host.inner.lock().unwrap().cmds.push_back(GuiCmd::DragWindow);
+                    host.inner
+                        .lock()
+                        .unwrap()
+                        .cmds
+                        .push_back(GuiCmd::DragWindow);
                     host.cv.notify_all();
                 }
                 EvalResult::Value(self.null_ref)
@@ -4230,11 +5547,15 @@ impl super::Evaluator {
             // Ícono de la ventana desde un archivo de imagen ("" = quitar).
             "setWindowIcon" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.setWindowIcon(path) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.setWindowIcon(path) requires 1 argument");
                 }
                 let path = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.setWindowIcon path must be a string"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.setWindowIcon path must be a string");
+                    }
                 };
                 let cmd = if path.is_empty() {
                     GuiCmd::SetWindowIcon(Vec::new(), 0, 0)
@@ -4245,7 +5566,10 @@ impl super::Evaluator {
                             let (w, h) = (rgba.width(), rgba.height());
                             GuiCmd::SetWindowIcon(rgba.into_raw(), w, h)
                         }
-                        Err(e) => { return self.rt_err_kind("GuiError", format!("Gui.setWindowIcon: {}", e)); }
+                        Err(e) => {
+                            return self
+                                .rt_err_kind("GuiError", format!("Gui.setWindowIcon: {}", e));
+                        }
                     }
                 };
                 if let Some(host) = host() {
@@ -4258,17 +5582,28 @@ impl super::Evaluator {
             // Gui.setCursorImage(path, hotspotX, hotspotY); "" = restaurar el cursor por defecto.
             "setCursorImage" => {
                 if dot_call.arguments.len() != 3 {
-                    return self.rt_err_kind("TypeError", "Gui.setCursorImage(path, hotspotX, hotspotY) requires 3 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Gui.setCursorImage(path, hotspotX, hotspotY) requires 3 arguments",
+                    );
                 }
                 let path = match self.gui_str_arg(&dot_call.arguments[0]) {
                     Some(s) => s,
-                    None => { return self.rt_err_kind("TypeError", "Gui.setCursorImage path must be a string"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.setCursorImage path must be a string");
+                    }
                 };
                 let hx = self.gui_int_arg(&dot_call.arguments[1]);
                 let hy = self.gui_int_arg(&dot_call.arguments[2]);
                 let (hx, hy) = match (hx, hy) {
                     (Some(a), Some(b)) => (a.max(0) as u32, b.max(0) as u32),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.setCursorImage hotspotX/hotspotY must be integers"); }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.setCursorImage hotspotX/hotspotY must be integers",
+                        );
+                    }
                 };
                 let cmd = if path.is_empty() {
                     GuiCmd::SetCustomCursor(Vec::new(), 0, 0, 0, 0)
@@ -4277,9 +5612,18 @@ impl super::Evaluator {
                         Ok(img) => {
                             let rgba = img.to_rgba8();
                             let (w, h) = (rgba.width(), rgba.height());
-                            GuiCmd::SetCustomCursor(rgba.into_raw(), w, h, hx.min(w.saturating_sub(1)), hy.min(h.saturating_sub(1)))
+                            GuiCmd::SetCustomCursor(
+                                rgba.into_raw(),
+                                w,
+                                h,
+                                hx.min(w.saturating_sub(1)),
+                                hy.min(h.saturating_sub(1)),
+                            )
                         }
-                        Err(e) => { return self.rt_err_kind("GuiError", format!("Gui.setCursorImage: {}", e)); }
+                        Err(e) => {
+                            return self
+                                .rt_err_kind("GuiError", format!("Gui.setCursorImage: {}", e));
+                        }
                     }
                 };
                 if let Some(host) = host() {
@@ -4295,11 +5639,15 @@ impl super::Evaluator {
 
             "idleWait" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.idleWait(maxMs) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.idleWait(maxMs) requires 1 argument");
                 }
                 let ms = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(v) => v.max(0) as u64,
-                    None => { return self.rt_err_kind("TypeError", "Gui.idleWait maxMs must be an integer"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.idleWait maxMs must be an integer");
+                    }
                 };
                 if let Some(host) = host() {
                     let g = host.inner.lock().unwrap();
@@ -4314,13 +5662,19 @@ impl super::Evaluator {
 
             "imageSize" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.imageSize(handle) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.imageSize(handle) requires 1 argument");
                 }
                 let hnd = match self.gui_int_arg(&dot_call.arguments[0]) {
                     Some(h) => h,
-                    None => { return self.rt_err_kind("TypeError", "Gui.imageSize handle must be an integer"); }
+                    None => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.imageSize handle must be an integer");
+                    }
                 };
-                let (w, h) = self.gui_state.as_ref()
+                let (w, h) = self
+                    .gui_state
+                    .as_ref()
                     .and_then(|s| s.images.get(&hnd))
                     .map(|im| (im.w as i64, im.h as i64))
                     .unwrap_or((0, 0));
@@ -4332,15 +5686,20 @@ impl super::Evaluator {
 
             "pushClip" => {
                 if dot_call.arguments.len() != 4 {
-                    return self.rt_err_kind("TypeError", "Gui.pushClip(x, y, w, h) requires 4 arguments");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.pushClip(x, y, w, h) requires 4 arguments");
                 }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
                 let w = self.gui_int_arg(&dot_call.arguments[2]);
                 let h = self.gui_int_arg(&dot_call.arguments[3]);
                 let (x, y, w, h) = match (x, y, w, h) {
-                    (Some(x), Some(y), Some(w), Some(h)) => (x as i32, y as i32, w as i32, h as i32),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.pushClip requires 4 integers"); }
+                    (Some(x), Some(y), Some(w), Some(h)) => {
+                        (x as i32, y as i32, w as i32, h as i32)
+                    }
+                    _ => {
+                        return self.rt_err_kind("TypeError", "Gui.pushClip requires 4 integers");
+                    }
                 };
                 if let Some(st) = self.gui_state.as_mut() {
                     st.clip_stack.push(st.clip);
@@ -4380,7 +5739,8 @@ impl super::Evaluator {
 
             "setCursor" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Gui.setCursor(style) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Gui.setCursor(style) requires 1 argument");
                 }
                 let name = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
                 if let Some(h) = host() {
@@ -4401,7 +5761,10 @@ impl super::Evaluator {
                 EvalResult::Value(self.null_ref)
             }
 
-            _ => { self.rt_err_kind("TypeError", format!("Unknown Gui method '{}'", dot_call.method)) }
+            _ => self.rt_err_kind(
+                "TypeError",
+                format!("Unknown Gui method '{}'", dot_call.method),
+            ),
         }
     }
 
@@ -4450,14 +5813,19 @@ impl super::Evaluator {
 
     fn gui_str_array(&mut self, names: Vec<String>) -> EvalResult {
         let mut elems: Vec<OwnedValue> = Vec::with_capacity(names.len());
-        for n in names { elems.push(OwnedValue::Str(n)); }
+        for n in names {
+            elems.push(OwnedValue::Str(n));
+        }
         EvalResult::Value(self.alloc(ObjectData::Array {
             element_type: Some("string".to_string()),
             elements: elems,
         }))
     }
 
-    fn gui_rect_args(&mut self, dot_call: &ast::DotCallExpression) -> Option<(i64, i64, i64, i64, u32)> {
+    fn gui_rect_args(
+        &mut self,
+        dot_call: &ast::DotCallExpression,
+    ) -> Option<(i64, i64, i64, i64, u32)> {
         if dot_call.arguments.len() != 5 {
             eprintln!("❌ ERROR: Gui.fillRect(x, y, w, h, color) requires 5 arguments");
             return None;
@@ -4468,8 +5836,13 @@ impl super::Evaluator {
         let h = self.gui_int_arg(&dot_call.arguments[3]);
         let c = self.gui_int_arg(&dot_call.arguments[4]);
         match (x, y, w, h, c) {
-            (Some(x), Some(y), Some(w), Some(h), Some(c)) => Some((x, y, w, h, (c as u32) & 0x00FF_FFFF)),
-            _ => { eprintln!("❌ ERROR: Gui.fillRect requires 5 integers"); None }
+            (Some(x), Some(y), Some(w), Some(h), Some(c)) => {
+                Some((x, y, w, h, (c as u32) & 0x00FF_FFFF))
+            }
+            _ => {
+                eprintln!("❌ ERROR: Gui.fillRect requires 5 integers");
+                None
+            }
         }
     }
 
@@ -4517,42 +5890,76 @@ impl super::Evaluator {
 
     /// Control de ventana (setMinSize/setResizable/setFullscreen/maximize/setPosition/
     /// setDecorations): valida args y encola el GuiCmd para el hilo main.
-    fn gui_window_control(&mut self, method: &str, dot_call: &ast::DotCallExpression) -> EvalResult {
+    fn gui_window_control(
+        &mut self,
+        method: &str,
+        dot_call: &ast::DotCallExpression,
+    ) -> EvalResult {
         let cmd = match method {
             "setMinSize" | "setMaxSize" => {
-                if dot_call.arguments.len() != 2 { return self.rt_err_kind("TypeError", format!("Gui.{}(w, h) requires 2 arguments", method)); }
+                if dot_call.arguments.len() != 2 {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Gui.{}(w, h) requires 2 arguments", method),
+                    );
+                }
                 let w = self.gui_int_arg(&dot_call.arguments[0]);
                 let h = self.gui_int_arg(&dot_call.arguments[1]);
                 match (w, h) {
                     (Some(w), Some(h)) => {
                         let (w, h) = (w.max(0) as u32, h.max(0) as u32);
-                        if method == "setMinSize" { GuiCmd::SetMinSize(w, h) } else { GuiCmd::SetMaxSize(w, h) }
+                        if method == "setMinSize" {
+                            GuiCmd::SetMinSize(w, h)
+                        } else {
+                            GuiCmd::SetMaxSize(w, h)
+                        }
                     }
-                    _ => { return self.rt_err_kind("TypeError", format!("Gui.{} requires 2 integers", method)); }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            format!("Gui.{} requires 2 integers", method),
+                        );
+                    }
                 }
             }
             "setPosition" => {
-                if dot_call.arguments.len() != 2 { return self.rt_err_kind("TypeError", "Gui.setPosition(x, y) requires 2 arguments"); }
+                if dot_call.arguments.len() != 2 {
+                    return self
+                        .rt_err_kind("TypeError", "Gui.setPosition(x, y) requires 2 arguments");
+                }
                 let x = self.gui_int_arg(&dot_call.arguments[0]);
                 let y = self.gui_int_arg(&dot_call.arguments[1]);
                 match (x, y) {
                     (Some(x), Some(y)) => GuiCmd::SetPosition(x as i32, y as i32),
-                    _ => { return self.rt_err_kind("TypeError", "Gui.setPosition requires 2 integers"); }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", "Gui.setPosition requires 2 integers");
+                    }
                 }
             }
             _ => {
-                if dot_call.arguments.len() != 1 { return self.rt_err_kind("TypeError", format!("Gui.{}(bool) requires 1 argument", method)); }
+                if dot_call.arguments.len() != 1 {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Gui.{}(bool) requires 1 argument", method),
+                    );
+                }
                 let b = match self.gui_bool_arg(&dot_call.arguments[0]) {
                     Some(b) => b,
-                    None => { return self.rt_err_kind("TypeError", format!("Gui.{} requires a boolean", method)); }
+                    None => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            format!("Gui.{} requires a boolean", method),
+                        );
+                    }
                 };
                 match method {
-                    "setResizable"     => GuiCmd::SetResizable(b),
-                    "setFullscreen"    => GuiCmd::SetFullscreen(b),
-                    "maximize"         => GuiCmd::SetMaximized(b),
-                    "setDecorations"   => GuiCmd::SetDecorations(b),
-                    "setAlwaysOnTop"   => GuiCmd::SetAlwaysOnTop(b),
-                    "minimize"         => GuiCmd::SetMinimized(b),
+                    "setResizable" => GuiCmd::SetResizable(b),
+                    "setFullscreen" => GuiCmd::SetFullscreen(b),
+                    "maximize" => GuiCmd::SetMaximized(b),
+                    "setDecorations" => GuiCmd::SetDecorations(b),
+                    "setAlwaysOnTop" => GuiCmd::SetAlwaysOnTop(b),
+                    "minimize" => GuiCmd::SetMinimized(b),
                     "requestAttention" => GuiCmd::RequestAttention(b),
                     "setCursorVisible" => GuiCmd::SetCursorVisible(b),
                     _ => return EvalResult::Error,
@@ -4574,16 +5981,42 @@ impl super::Evaluator {
             return self.rt_err_kind("GuiError", "Gui file dialog: no window open");
         }
         let n = dot_call.arguments.len();
-        let filter_name  = if n >= 1 { self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default() } else { String::new() };
-        let exts_csv     = if n >= 2 { self.gui_str_arg(&dot_call.arguments[1]).unwrap_or_default() } else { String::new() };
-        let default_name = if save && n >= 3 { self.gui_str_arg(&dot_call.arguments[2]).unwrap_or_default() } else { String::new() };
-        let filter_exts: Vec<String> = exts_csv.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        let host = match host() { Some(h) => h.clone(), None => { return self.rt_err_kind("GuiError", "Gui file dialog: no GUI host"); } };
+        let filter_name = if n >= 1 {
+            self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let exts_csv = if n >= 2 {
+            self.gui_str_arg(&dot_call.arguments[1]).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let default_name = if save && n >= 3 {
+            self.gui_str_arg(&dot_call.arguments[2]).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let filter_exts: Vec<String> = exts_csv
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let host = match host() {
+            Some(h) => h.clone(),
+            None => {
+                return self.rt_err_kind("GuiError", "Gui file dialog: no GUI host");
+            }
+        };
         let want = {
             let mut g = host.inner.lock().unwrap();
             g.dialog_seq += 1;
             g.dialog_result = None;
-            g.cmds.push_back(GuiCmd::FileDialog { save, filter_name, filter_exts, default_name });
+            g.cmds.push_back(GuiCmd::FileDialog {
+                save,
+                filter_name,
+                filter_exts,
+                default_name,
+            });
             g.dialog_seq
         };
         host.cv.notify_all();

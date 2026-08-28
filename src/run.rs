@@ -36,7 +36,12 @@ pub struct RunOpts {
 
 impl Default for RunOpts {
     fn default() -> Self {
-        RunOpts { permissions: Vec::new(), current_file: None, lockdown: false, check_only: false }
+        RunOpts {
+            permissions: Vec::new(),
+            current_file: None,
+            lockdown: false,
+            check_only: false,
+        }
     }
 }
 
@@ -44,7 +49,10 @@ impl RunOpts {
     /// Options for running source you did not write: no permissions, no file to
     /// import from, and the self-granting escapes closed. This is what `--eval` uses.
     pub fn sandboxed() -> Self {
-        RunOpts { lockdown: true, ..Default::default() }
+        RunOpts {
+            lockdown: true,
+            ..Default::default()
+        }
     }
 }
 
@@ -54,12 +62,51 @@ pub struct Outcome {
     pub exit_code: i32,
 }
 
+/// Machine-readable reason a source pipeline failed.
+#[derive(Debug, Clone)]
+pub enum RunFailure {
+    Frontend(Vec<parser::ParseError>),
+    Runtime(evaluator::RuntimeError),
+    UncaughtException {
+        message: String,
+    },
+    InvalidControlFlow(evaluator::InvalidControlFlow),
+    /// A legacy `EvalResult::Error` producer that has not migrated to a
+    /// structured runtime diagnostic yet.
+    UnstructuredRuntime,
+}
+
+/// Detailed pipeline result for embedders, tests and tooling.
+///
+/// [`Outcome`] and [`run_source`] remain unchanged for source compatibility;
+/// callers that need the failure payload can opt into this richer API.
+#[derive(Debug, Clone)]
+pub struct DetailedOutcome {
+    pub exit_code: i32,
+    pub failure: Option<RunFailure>,
+}
+
+impl DetailedOutcome {
+    pub fn is_success(&self) -> bool {
+        self.failure.is_none()
+    }
+}
+
 /// Lex, parse, type-check and (unless `check_only`) evaluate `src`.
 ///
 /// `name` is only ever shown to the user — it labels parse errors, so it should be
 /// the file path when there is one and something obviously synthetic (`<eval>`)
 /// when there isn't.
 pub fn run_source(src: String, name: &str, opts: RunOpts) -> Outcome {
+    let detailed = run_source_detailed(src, name, opts);
+    Outcome {
+        exit_code: detailed.exit_code,
+    }
+}
+
+/// Detailed form of [`run_source`]. It preserves the same diagnostics and exit
+/// codes while also returning a structured failure to machine consumers.
+pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOutcome {
     let source_lines: Vec<String> = src.lines().map(|l| l.to_string()).collect();
 
     let lexer = lexer::Lexer::new(src);
@@ -80,28 +127,42 @@ pub fn run_source(src: String, name: &str, opts: RunOpts) -> Outcome {
         evaluator.set_current_file(path);
     }
 
-    let mut run_failed = false;
-    if parse_failed {
+    let failure = if parse_failed {
         // A program with parse errors must not half-run: statements after the
         // broken one would execute against missing definitions.
         eprintln!("❌ Aborted: fix the parse errors above before running.");
+        Some(RunFailure::Frontend(parser.take_errors()))
     } else if opts.check_only {
         evaluator.check_program(&program);
+        None
     } else {
-        // eval_program returns None on uncaught exception / runtime / flash-scope error
-        if evaluator.eval_program(&program).is_none() {
-            run_failed = true;
-        }
+        let program_outcome = evaluator.eval_program_outcome(&program);
+        evaluator.report_program_outcome(&program_outcome);
+        let failure = match program_outcome {
+            evaluator::ProgramOutcome::Value(_) => None,
+            evaluator::ProgramOutcome::RuntimeError(error) => Some(RunFailure::Runtime(error)),
+            evaluator::ProgramOutcome::UncaughtException { message } => {
+                Some(RunFailure::UncaughtException { message })
+            }
+            evaluator::ProgramOutcome::InvalidControlFlow(flow) => {
+                Some(RunFailure::InvalidControlFlow(flow))
+            }
+            evaluator::ProgramOutcome::UnstructuredError => Some(RunFailure::UnstructuredRuntime),
+        };
         if std::env::var("SEREZ_ARENA_STATS").is_ok() {
             let (global, scoped) = evaluator.arena_stats();
             eprintln!("[arena] global={} scoped={}", global, scoped);
         }
-    }
+        failure
+    };
 
     use std::io::Write;
     let _ = std::io::stdout().flush();
 
-    Outcome { exit_code: if parse_failed || run_failed { 1 } else { 0 } }
+    DetailedOutcome {
+        exit_code: if failure.is_some() { 1 } else { 0 },
+        failure,
+    }
 }
 
 /// Lex/parse/evaluate a `.sz` file. Returns the process exit code: 0 on success,
@@ -126,7 +187,11 @@ pub fn run_file(file_path: &str, is_check: bool) -> i32 {
     // Permissions come from the serez.json sitting next to the file, if any.
     let mut permissions = Vec::new();
     if let Some(dir) = file_path_obj.parent() {
-        let dir = if dir == std::path::Path::new("") { std::path::Path::new(".") } else { dir };
+        let dir = if dir == std::path::Path::new("") {
+            std::path::Path::new(".")
+        } else {
+            dir
+        };
         match crate::package_manager::SerezManifest::load(dir) {
             Ok(manifest) => permissions = manifest.permissions,
             Err(e) => {
@@ -160,5 +225,13 @@ pub fn run_file(file_path: &str, is_check: bool) -> i32 {
 /// and no permissions; lockdown is on because the source did not necessarily come
 /// from whoever is running it.
 pub fn run_eval(src: String, is_check: bool) -> i32 {
-    run_source(src, "<eval>", RunOpts { check_only: is_check, ..RunOpts::sandboxed() }).exit_code
+    run_source(
+        src,
+        "<eval>",
+        RunOpts {
+            check_only: is_check,
+            ..RunOpts::sandboxed()
+        },
+    )
+    .exit_code
 }

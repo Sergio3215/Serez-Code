@@ -89,3 +89,5 @@ test("copy between allocations", () => {
     unsafe { Memory.free(dst) };
     assert(v == 777, "copied value = 777");
 });
+
+summary();

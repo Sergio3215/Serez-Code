@@ -27,10 +27,16 @@ fn main() {
             }
             "--stdio" => {} // transport flag some clients pass; stdio is the only mode
             other => {
-                eprintln!("sz-lsp: unknown argument '{}' (stdio server; flags: --version)", other);
+                eprintln!(
+                    "sz-lsp: unknown argument '{}' (stdio server; flags: --version)",
+                    other
+                );
             }
         }
     }
-    eprintln!("sz-lsp v{} — serez-code language server (stdio)", env!("CARGO_PKG_VERSION"));
+    eprintln!(
+        "sz-lsp v{} — serez-code language server (stdio)",
+        env!("CARGO_PKG_VERSION")
+    );
     std::process::exit(lsp::server::run());
 }

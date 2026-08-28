@@ -1,11 +1,21 @@
 use crate::ast::{self, Expression, Program, Statement};
 use std::collections::HashMap;
 
+/// Generic semantic diagnostic: a type error not yet given a narrower code.
+///
+/// The checker is deliberately partial — runtime checks stay authoritative —
+/// so its findings are reported as advisory rather than fatal. Narrower codes
+/// get split out as individual checks acquire tests that pin their meaning.
+pub const SZ_TYPE_ERROR: &str = "SZ3000";
+
 /// A type error with its source position (1-based; 0 = unknown position), as
 /// reported alongside the stderr message. Collected so tools (LSP) can map
 /// errors to ranges; the CLI keeps using stderr.
 #[derive(Debug, Clone)]
 pub struct TypeError {
+    /// Stable `SZ3xxx` identifier. Tooling classifies on this; `message` is
+    /// for humans and its wording is not part of the contract.
+    pub code: &'static str,
     pub line: usize,
     pub column: usize,
     pub message: String,
@@ -37,10 +47,27 @@ impl<'a> TypeChecker<'a> {
 
     /// Report a type error: stderr (CLI behavior, unchanged) + collected list.
     fn type_error(&self, line: usize, column: usize, message: String) {
-        eprintln!("❌ TYPE ERROR{}: {}",
-            if line > 0 { format!(" [line {}:{}]", line, column) } else { String::new() },
-            message);
-        self.errors.borrow_mut().push(TypeError { line, column, message });
+        self.type_error_code(SZ_TYPE_ERROR, line, column, message);
+    }
+
+    /// Report a type error under a specific stable diagnostic code.
+    fn type_error_code(&self, code: &'static str, line: usize, column: usize, message: String) {
+        eprintln!(
+            "❌ TYPE ERROR [{}]{}: {}",
+            code,
+            if line > 0 {
+                format!(" [line {}:{}]", line, column)
+            } else {
+                String::new()
+            },
+            message
+        );
+        self.errors.borrow_mut().push(TypeError {
+            code,
+            line,
+            column,
+            message,
+        });
     }
 
     pub fn check(&mut self) {
@@ -81,18 +108,22 @@ impl<'a> TypeChecker<'a> {
             Expression::Identifier(name) => self.var_types.get(name).cloned(),
             Expression::Call(call) => {
                 if let Expression::Identifier(fname) = call.function.as_ref() {
-                    self.functions.get(fname).and_then(|f| f.return_type.clone())
+                    self.functions
+                        .get(fname)
+                        .and_then(|f| f.return_type.clone())
                 } else {
                     None
                 }
             }
-            Expression::ArrayLiteral(arr) => {
-                arr.element_type.as_ref().map(|t| format!("[{}]", t))
-            }
+            Expression::ArrayLiteral(arr) => arr.element_type.as_ref().map(|t| format!("[{}]", t)),
             Expression::If(if_expr) => {
                 // Infer from consequence branch
                 if_expr.consequence.statements.last().and_then(|s| {
-                    if let Statement::Expression(e) = s { self.infer_type(e) } else { None }
+                    if let Statement::Expression(e) = s {
+                        self.infer_type(e)
+                    } else {
+                        None
+                    }
                 })
             }
             _ => None,
@@ -265,10 +296,14 @@ impl<'a> TypeChecker<'a> {
                 None => continue,
             };
             if !types_compatible(element_type, &actual) {
-                self.type_error(0, 0, format!(
-                    "Array declared as [{}] but contains element of type '{}'.",
-                    element_type, actual
-                ));
+                self.type_error(
+                    0,
+                    0,
+                    format!(
+                        "Array declared as [{}] but contains element of type '{}'.",
+                        element_type, actual
+                    ),
+                );
             }
         }
     }
@@ -287,13 +322,26 @@ impl<'a> TypeChecker<'a> {
         };
 
         // Skip arity check if any argument is a spread expression
-        let has_spread_arg = call.arguments.iter().any(|a| matches!(a, Expression::Spread(_)));
-        if has_spread_arg { return; }
+        let has_spread_arg = call
+            .arguments
+            .iter()
+            .any(|a| matches!(a, Expression::Spread(_)));
+        if has_spread_arg {
+            return;
+        }
 
         let has_rest = func.parameters.last().map(|p| p.is_rest).unwrap_or(false);
-        let required_count = func.parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
+        let required_count = func
+            .parameters
+            .iter()
+            .filter(|p| !p.is_rest && p.default_value.is_none())
+            .count();
         let min_params = required_count;
-        let max_params = if has_rest { usize::MAX } else { func.parameters.len() };
+        let max_params = if has_rest {
+            usize::MAX
+        } else {
+            func.parameters.len()
+        };
         let arity_ok = call.arguments.len() >= min_params && call.arguments.len() <= max_params;
         if !arity_ok {
             let expected_str = if has_rest {
@@ -303,15 +351,23 @@ impl<'a> TypeChecker<'a> {
             } else {
                 format!("{}-{}", min_params, max_params)
             };
-            self.type_error(call.line, call.column, format!(
-                "'{}' expects {} argument(s) but got {}.",
-                func_name, expected_str, call.arguments.len()
-            ));
+            self.type_error(
+                call.line,
+                call.column,
+                format!(
+                    "'{}' expects {} argument(s) but got {}.",
+                    func_name,
+                    expected_str,
+                    call.arguments.len()
+                ),
+            );
             return;
         }
 
         for (i, param) in func.parameters.iter().enumerate() {
-            if i >= call.arguments.len() { break; }
+            if i >= call.arguments.len() {
+                break;
+            }
             let expected = match &param.type_name {
                 Some(t) => t,
                 None => continue,
@@ -323,11 +379,14 @@ impl<'a> TypeChecker<'a> {
             };
 
             if !types_compatible(expected, &actual) {
-                self.type_error(call.line, call.column, format!(
-                    "Parameter '{}' of '{}' expected '{}' but received '{}'.",
-                    param.name, func_name,
-                    expected, actual
-                ));
+                self.type_error(
+                    call.line,
+                    call.column,
+                    format!(
+                        "Parameter '{}' of '{}' expected '{}' but received '{}'.",
+                        param.name, func_name, expected, actual
+                    ),
+                );
             }
         }
     }
@@ -336,8 +395,12 @@ impl<'a> TypeChecker<'a> {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn types_compatible(expected: &str, actual: &str) -> bool {
-    if expected == actual { return true; }
-    if expected == "any" { return true; }
+    if expected == actual {
+        return true;
+    }
+    if expected == "any" {
+        return true;
+    }
     // Nullable: "int?" accepts "int" or "null"
     if expected.ends_with('?') {
         let base = &expected[..expected.len() - 1];

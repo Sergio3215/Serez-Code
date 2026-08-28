@@ -1,0 +1,79 @@
+// Regression contract for Random validation and recovery.
+use permissions { }
+
+test("Random arity and type failures are structured", () => {
+    let caught = 0;
+    try { Random.seed(); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { Random.seed("bad"); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { Random.shuffle(1); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    assert(caught == 3, "all Random type failures must be catchable");
+});
+
+test("Random domain failures are RangeError", () => {
+    let caught = 0;
+    try { Random.int(2, 1); }
+    catch (e) { if (e.code == "SZ4000" && e.kind == "RangeError") { caught++; } }
+    try { Random.uniform(1.0, 1.0); }
+    catch (e) { if (e.code == "SZ4000" && e.kind == "RangeError") { caught++; } }
+    try { Random.normal(0.0, 0.0 - 1.0); }
+    catch (e) { if (e.code == "SZ4000" && e.kind == "RangeError") { caught++; } }
+    try { Random.choice([]); }
+    catch (e) { if (e.code == "SZ4000" && e.kind == "RangeError") { caught++; } }
+    try { Random.bernoulli(2.0); }
+    catch (e) { if (e.code == "SZ4000" && e.kind == "RangeError") { caught++; } }
+    assert(caught == 5, "all Random domain failures must be catchable");
+});
+
+test("Random tensor shapes use the shared structured contract", () => {
+    let caught = 0;
+    try { Random.normalTensor([0], 0.0, 1.0); }
+    catch (e) { if (e.code == "SZ4000" && e.kind == "RangeError") { caught++; } }
+    try { Random.uniformTensor("bad", 0.0, 1.0); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    assert(caught == 2, "shape errors must be structured");
+});
+
+test("Random preserves nested runtime errors and user throws", () => {
+    let divided = false;
+    try { Random.int(0, 1 / 0); }
+    catch (e) { divided = e.code == "SZ4004" && e.kind == "DivisionByZero"; }
+
+    fn int explode() { throw "random-boom"; return 0; }
+    let thrown = false;
+    try { Random.seed(explode()); }
+    catch (e) { thrown = e == "random-boom"; }
+
+    assert(divided, "nested runtime error must survive");
+    assert(thrown, "user throw must survive");
+});
+
+test("Random validates arity before evaluating arguments", () => {
+    let touched = 0;
+    fn int touch() { touched++; return 1; }
+    try { Random.decimal(touch()); } catch (e) {}
+    assert(touched == 0, "invalid arity must have no argument side effects");
+});
+
+test("Random.int spans the complete i64 domain safely", () => {
+    let min = (0 - 9223372036854775807) - 1;
+    let max = 9223372036854775807;
+    let sawWide = false;
+    Random.seed(9876);
+    for (let i = 0; i < 32; i++) {
+        let value = Random.int(min, max);
+        if (value < min || value > max) { throw "draw escaped bounds"; }
+        if (value < (0 - 2147483648) || value > 2147483647) { sawWide = true; }
+    }
+    assert(sawWide, "draws must not remain truncated to 31 bits");
+});
+
+test("Random remains usable after caught failures", () => {
+    try { Random.choice([]); } catch (e) {}
+    Random.seed(12345);
+    assert(Random.int(0, 1000) == 181, "valid sequence must recover and remain compatible");
+});
+
+summary();

@@ -36,3 +36,20 @@ fn sumAll(...nums) {
 }
 out sumAll(1, 2, 3, 4, 5);
 out sumAll(10, 20);
+
+// Invalid spread operands are ordinary, catchable type errors in both contexts.
+let arraySpreadCaught = false;
+try {
+    let invalidArray = [...1];
+} catch (e) {
+    arraySpreadCaught = e.code == "SZ4002" && e.kind == "TypeError";
+}
+out arraySpreadCaught;
+
+let callSpreadCaught = false;
+try {
+    sumAll(...1);
+} catch (e) {
+    callSpreadCaught = e.code == "SZ4002" && e.kind == "TypeError";
+}
+out callSpreadCaught;

@@ -1,4 +1,4 @@
-// sec_sealed_inherit.sz — inheriting from a sealed class must produce an error
+// Inheriting from a sealed class must produce structured TypeError/SZ4002.
 
 sealed class Final {
     public Final() {

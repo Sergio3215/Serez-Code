@@ -1,0 +1,1801 @@
+//! Regression tests for the structured program-evaluation boundary.
+//!
+//! The evaluator still uses `EvalResult` internally, but a complete program
+//! must expose why it stopped without forcing embedders to parse stderr.
+
+use serez_code::ast::Program;
+use serez_code::evaluator::{Evaluator, InvalidControlFlow, ProgramOutcome};
+use serez_code::lexer::Lexer;
+use serez_code::parser::Parser;
+use serez_code::run::{RunFailure, RunOpts, run_source, run_source_detailed};
+
+fn parse(src: &str) -> Program {
+    let lexer = Lexer::new(src.to_string());
+    let mut parser = Parser::new(lexer);
+    parser.set_source(src.lines().map(str::to_string).collect());
+    parser.set_source_name("<runtime-outcome>");
+    let program = parser.parse_program();
+    assert!(
+        !parser.has_errors(),
+        "fixture must parse cleanly: {:?}",
+        parser.take_errors()
+    );
+    program
+}
+
+fn evaluate(src: &str) -> ProgramOutcome {
+    evaluate_with_permissions(src, &[])
+}
+
+fn evaluate_with_permissions(src: &str, permissions: &[&str]) -> ProgramOutcome {
+    let program = parse(src);
+    let mut evaluator = Evaluator::new();
+    evaluator.set_source(src.lines().map(str::to_string).collect());
+    evaluator.set_permissions(
+        permissions
+            .iter()
+            .map(|permission| (*permission).to_string())
+            .collect(),
+    );
+    evaluator.eval_program_outcome(&program)
+}
+
+fn evaluate_with_permissions_and_lockdown(src: &str, permissions: &[&str]) -> ProgramOutcome {
+    let program = parse(src);
+    let mut evaluator = Evaluator::new();
+    evaluator.set_source(src.lines().map(str::to_string).collect());
+    evaluator.set_permissions(
+        permissions
+            .iter()
+            .map(|permission| (*permission).to_string())
+            .collect(),
+    );
+    evaluator.set_lockdown(true);
+    evaluator.eval_program_outcome(&program)
+}
+
+#[test]
+fn runtime_error_keeps_its_stable_payload() {
+    match evaluate("out(1 / 0);") {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4004");
+            assert_eq!(error.kind, "DivisionByZero");
+            assert_eq!(error.message, "Division by zero");
+        }
+        other => panic!("expected structured runtime error, got {other:?}"),
+    }
+}
+
+#[test]
+fn user_throw_is_not_a_runtime_error() {
+    match evaluate("throw \"boom\";") {
+        ProgramOutcome::UncaughtException { message } => assert_eq!(message, "boom"),
+        other => panic!("expected uncaught user exception, got {other:?}"),
+    }
+}
+
+#[test]
+fn top_level_control_flow_has_its_own_outcome() {
+    let cases = [
+        ("return 1;", InvalidControlFlow::Return),
+        ("break;", InvalidControlFlow::Break),
+        ("continue;", InvalidControlFlow::Continue),
+    ];
+
+    for (src, expected) in cases {
+        match evaluate(src) {
+            ProgramOutcome::InvalidControlFlow(actual) => assert_eq!(actual, expected),
+            other => panic!("{src}: expected invalid control flow, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn caught_runtime_error_does_not_replace_later_control_flow() {
+    let src = r#"
+        try {
+            out(1 / 0);
+        } catch (e) {}
+        return 1;
+    "#;
+
+    assert!(matches!(
+        evaluate(src),
+        ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Return)
+    ));
+}
+
+#[test]
+fn evaluator_reuse_never_reuses_a_stale_runtime_error() {
+    let first_src = "out(1 / 0);";
+    let legacy_src = "let value = new MissingClass();";
+    let first = parse(first_src);
+    let legacy = parse(legacy_src);
+    let mut evaluator = Evaluator::new();
+
+    evaluator.set_source(first_src.lines().map(str::to_string).collect());
+    assert!(matches!(
+        evaluator.eval_program_outcome(&first),
+        ProgramOutcome::RuntimeError(_)
+    ));
+
+    // A later ReferenceError must replace, rather than inherit, the earlier
+    // division payload when the evaluator instance is reused.
+    evaluator.set_source(legacy_src.lines().map(str::to_string).collect());
+    match evaluator.eval_program_outcome(&legacy) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4001");
+            assert_eq!(error.kind, "ReferenceError");
+            assert!(error.message.contains("MissingClass"));
+        }
+        other => panic!("expected a fresh class ReferenceError, got {other:?}"),
+    }
+}
+
+#[test]
+fn construction_validation_errors_are_structured_and_catchable() {
+    let cases = [
+        (
+            "new MissingConstructionTarget();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown class or interface",
+        ),
+        (
+            "interface PositionalIface { value: int; } new PositionalIface(1);",
+            "SZ4002",
+            "TypeError",
+            "must be instantiated",
+        ),
+        (
+            "interface ExtraIface { value: int; } new ExtraIface({ value: 1, extra: 2 });",
+            "SZ4002",
+            "TypeError",
+            "not declared",
+        ),
+        (
+            "interface MissingIface { value: int; other: int; } new MissingIface({ value: 1 });",
+            "SZ4002",
+            "TypeError",
+            "Missing field",
+        ),
+        (
+            "interface TypedIface { value: int; } new TypedIface({ value: \"wrong\" });",
+            "SZ4002",
+            "TypeError",
+            "expects 'int'",
+        ),
+        (
+            "abstract class AbstractTarget {} new AbstractTarget();",
+            "SZ4002",
+            "TypeError",
+            "Cannot instantiate abstract",
+        ),
+        (
+            "class PositionalClass {} new PositionalClass({ value: 1 });",
+            "SZ4002",
+            "TypeError",
+            "uses positional arguments",
+        ),
+        (
+            "class NeedsArg { public NeedsArg(int value) {} } new NeedsArg();",
+            "SZ4002",
+            "TypeError",
+            "Constructor 'NeedsArg' expects",
+        ),
+        (
+            "class NoConstructor {} new NoConstructor(1);",
+            "SZ4002",
+            "TypeError",
+            "has no constructor",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected structured construction error, got {other:?}"),
+        }
+    }
+
+    let caught = r#"
+        interface CatchIface { value: int; other: int; }
+        interface CatchTypedIface { value: int; }
+        abstract class CatchAbstract {}
+        class CatchPositional {}
+        class CatchNeedsArg { public CatchNeedsArg(int value) {} }
+        class CatchNoConstructor {}
+
+        let caughtCount = 0;
+        try { new CatchMissing(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+        try { new CatchIface(1); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchIface({ value: 1, other: 2, extra: 3 }); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchIface({ value: 1 }); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchTypedIface({ value: "wrong" }); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchAbstract(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchPositional({ value: 1 }); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchNeedsArg(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchNoConstructor(1); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+
+        if (caughtCount != 9) { throw "construction validation errors were not catchable"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn super_validation_errors_are_structured_and_catchable() {
+    let cases = [
+        (
+            "super();",
+            "SZ4002",
+            "TypeError",
+            "outside of a constructor",
+        ),
+        (
+            "super.missing();",
+            "SZ4002",
+            "TypeError",
+            "outside of a class method",
+        ),
+        (
+            "class RootCtor { public RootCtor() { super(); } } new RootCtor();",
+            "SZ4002",
+            "TypeError",
+            "has no parent",
+        ),
+        (
+            "class RootMethod { public any fail() { return super.missing(); } } new RootMethod().fail();",
+            "SZ4002",
+            "TypeError",
+            "has no parent",
+        ),
+        (
+            "class MethodParent {} class MethodChild : MethodParent { public any fail() { return super.missing(); } } new MethodChild().fail();",
+            "SZ4001",
+            "ReferenceError",
+            "has no method",
+        ),
+        (
+            "class CtorParent { public CtorParent(int value) {} } class CtorChild : CtorParent { public CtorChild() { super(); } } new CtorChild();",
+            "SZ4002",
+            "TypeError",
+            "super() for 'CtorParent' expects",
+        ),
+        (
+            "class ArityParent { public int read(int value) { return value; } } class ArityChild : ArityParent { public int fail() { return super.read(); } } new ArityChild().fail();",
+            "SZ4002",
+            "TypeError",
+            "Method 'ArityParent::read' expects",
+        ),
+        (
+            "class RequiredParent { public RequiredParent(int value) {} } class ImplicitChild : RequiredParent {} new ImplicitChild();",
+            "SZ4002",
+            "TypeError",
+            "cannot be chained automatically",
+        ),
+        (
+            "class EmptyParent {} class EmptyChild : EmptyParent { public EmptyChild() { super(1); } } new EmptyChild();",
+            "SZ4002",
+            "TypeError",
+            "has no constructor",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected structured super error, got {other:?}"),
+        }
+    }
+
+    let caught = r#"
+        class CatchRootCtor { public CatchRootCtor() { super(); } }
+        class CatchRootMethod { public any fail() { return super.missing(); } }
+        class CatchMethodParent {}
+        class CatchMethodChild : CatchMethodParent {
+            public any fail() { return super.missing(); }
+        }
+        class CatchCtorParent { public CatchCtorParent(int value) {} }
+        class CatchCtorChild : CatchCtorParent { public CatchCtorChild() { super(); } }
+        class CatchArityParent { public int read(int value) { return value; } }
+        class CatchArityChild : CatchArityParent {
+            public int fail() { return super.read(); }
+        }
+        class CatchRequiredParent { public CatchRequiredParent(int value) {} }
+        class CatchImplicitChild : CatchRequiredParent {}
+        class CatchEmptyParent {}
+        class CatchEmptyChild : CatchEmptyParent { public CatchEmptyChild() { super(1); } }
+
+        let caughtCount = 0;
+        try { super(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { super.missing(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchRootCtor(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchRootMethod().fail(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchMethodChild().fail(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+        try { new CatchCtorChild(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchArityChild().fail(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchImplicitChild(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { new CatchEmptyChild(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+
+        if (caughtCount != 9) { throw "super validation errors were not catchable"; }
+
+        class HealthyParent { public int read() { return 7; } }
+        class HealthyChild : HealthyParent { public int readParent() { return super.read(); } }
+        if (new HealthyChild().readParent() != 7) { throw "super cleanup corrupted later dispatch"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn member_dispatch_errors_are_structured_and_catchable() {
+    let cases = [
+        (
+            "class MissingMember {} new MissingMember().missing();",
+            "SZ4001",
+            "ReferenceError",
+            "has no field or method",
+        ),
+        (
+            "class InstanceArity { public int read(int value) { return value; } } new InstanceArity().read();",
+            "SZ4002",
+            "TypeError",
+            "expects 1 argument",
+        ),
+        (
+            "class StaticArity { public static int read(int value) { return value; } } StaticArity.read();",
+            "SZ4002",
+            "TypeError",
+            "expects 1 argument",
+        ),
+        (
+            "class PrivateCall { private int secret() { return 1; } } new PrivateCall().secret();",
+            "SZ4002",
+            "TypeError",
+            "private and cannot be called externally",
+        ),
+        (
+            "class PrivateReference { private int secret() { return 1; } } let callback = new PrivateReference().secret;",
+            "SZ4002",
+            "TypeError",
+            "private and cannot be referenced externally",
+        ),
+        (
+            "class BadReturn { public int read() { return \"wrong\"; } } new BadReturn().read();",
+            "SZ4002",
+            "TypeError",
+            "declared return 'int'",
+        ),
+        (
+            "class MissingStatic {} MissingStatic.missing();",
+            "SZ4001",
+            "ReferenceError",
+            "has no static method",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected structured dispatch error, got {other:?}"),
+        }
+    }
+
+    let caught = r#"
+        class DispatchTarget {
+            private int secret() { return 1; }
+            public int read(int value) { return value; }
+            public int bad() { return "wrong"; }
+            public static int staticRead(int value) { return value; }
+        }
+
+        let target = new DispatchTarget();
+        let caughtCount = 0;
+        try { target.missing(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+        try { target.read(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { DispatchTarget.staticRead(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { target.secret(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { let callback = target.secret; }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { target.bad(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { DispatchTarget.missing(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+
+        if (caughtCount != 7) { throw "member dispatch errors were not catchable"; }
+        if (target.read(7) != 7 || DispatchTarget.staticRead(8) != 8) {
+            throw "member dispatch cleanup corrupted a later valid call";
+        }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn property_dispatch_errors_are_structured_and_catchable() {
+    let cases = [
+        (
+            "class ReadOnly { public ReadOnly() {} public get int value() { return 1; } } let item = new ReadOnly(); item.value = 2;",
+            "getter-only property",
+        ),
+        (
+            "let number = 1; number.value = 2;",
+            "not a class or interface instance",
+        ),
+        (
+            "class PrivateGetter { public PrivateGetter() {} private get int value() { return 1; } } let item = new PrivateGetter(); out item.value;",
+            "private and cannot be called externally",
+        ),
+        (
+            "class PrivateSetter { public PrivateSetter() {} private set value(int next) {} } let item = new PrivateSetter(); item.value = 1;",
+            "private and cannot be called externally",
+        ),
+        (
+            "class GetterArity { public GetterArity() {} public get int value(int extra) { return extra; } } let item = new GetterArity(); out item.value;",
+            "expects 1 argument",
+        ),
+        (
+            "class SetterArity { public SetterArity() {} public set value() {} } let item = new SetterArity(); item.value = 1;",
+            "expects 0 argument",
+        ),
+        (
+            "class GetterReturn { public GetterReturn() {} public get int value() { return \"wrong\"; } } let item = new GetterReturn(); out item.value;",
+            "declared return 'int'",
+        ),
+    ];
+
+    for (src, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{src}");
+                assert_eq!(error.kind, "TypeError", "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected structured property error, got {other:?}"),
+        }
+    }
+
+    let caught = r#"
+        class PropertyTarget {
+            public PropertyTarget() { this._value = 1; }
+            public get int value() { return this._value; }
+            private get int hidden() { return this._value; }
+            private set hidden(int next) { this._value = next; }
+            public set writable(int next) {
+                if (next < 0) { throw "negative value"; }
+                this._value = next;
+            }
+        }
+
+        let item = new PropertyTarget();
+        let caughtCount = 0;
+        try { item.value = 2; }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { let number = 1; number.value = 2; }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { out item.hidden; }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { item.hidden = 3; }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { item.writable = -1; }
+        catch (e) { if (e == "negative value") { caughtCount++; } }
+
+        if (caughtCount != 5) { throw "property dispatch errors were not catchable"; }
+        if (item.value != 1) { throw "failed property writes changed receiver state"; }
+        item.writable = 7;
+        if (item.value != 7) { throw "property cleanup corrupted a later valid setter"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn invalid_inheritance_graphs_are_rejected_without_poisoning_the_registry() {
+    let cases = [
+        (
+            "class SelfCycle : SelfCycle {}",
+            "SZ4002",
+            "TypeError",
+            "inheritance cycle",
+        ),
+        (
+            "class CycleA : CycleB {} class CycleB : CycleA {}",
+            "SZ4002",
+            "TypeError",
+            "inheritance cycle",
+        ),
+        (
+            "class MissingParentChild : MissingParent {} new MissingParentChild();",
+            "SZ4001",
+            "ReferenceError",
+            "Parent class 'MissingParent'",
+        ),
+        (
+            "class MissingSuperChild : MissingSuperParent { public MissingSuperChild() { super(); } } new MissingSuperChild();",
+            "SZ4001",
+            "ReferenceError",
+            "Parent class 'MissingSuperParent'",
+        ),
+        (
+            "sealed class SealedParent {} class SealedChild : SealedParent {}",
+            "SZ4002",
+            "TypeError",
+            "Cannot inherit from sealed class",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected inheritance error, got {other:?}"),
+        }
+    }
+
+    let recovery = r#"
+        let caughtCount = 0;
+        try { class RejectedSelf : RejectedSelf {} }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+
+        class ForwardChild : ForwardParent {}
+        try { new ForwardChild(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+
+        try { class ForwardParent : ForwardChild {} }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+
+        class ForwardParent { public int read() { return 7; } }
+        if (new ForwardChild().read() != 7) {
+            throw "forward hierarchy did not recover after defining its parent";
+        }
+
+        sealed class RecoverySealed {}
+        try { class RejectedSealedChild : RecoverySealed {} }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+
+        class HealthyAfterInheritanceErrors { public int read() { return 8; } }
+        if (new HealthyAfterInheritanceErrors().read() != 8) {
+            throw "rejected hierarchy poisoned later class dispatch";
+        }
+        if (caughtCount != 4) { throw "inheritance errors were not catchable"; }
+    "#;
+    assert!(matches!(evaluate(recovery), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn array_and_call_spread_type_errors_are_structured_and_catchable() {
+    let uncaught_cases = [
+        "let values = [...1];",
+        "fn any collect(...items) { return items; } collect(...1);",
+    ];
+
+    for src in uncaught_cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{src}");
+                assert_eq!(error.kind, "TypeError", "{src}");
+                assert!(error.message.contains("requires an array"), "{src}");
+            }
+            other => panic!("{src}: expected structured spread error, got {other:?}"),
+        }
+    }
+
+    let caught = r#"
+        fn any collect(...items) { return items; }
+        let caughtArray = false;
+        let caughtCall = false;
+        try { let values = [...1]; }
+        catch (e) { caughtArray = e.code == "SZ4002" && e.kind == "TypeError"; }
+        try { collect(...1); }
+        catch (e) { caughtCall = e.code == "SZ4002" && e.kind == "TypeError"; }
+        if (!caughtArray || !caughtCall) { throw "spread TypeError was not catchable"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+
+    let user_throw = r#"
+        fn any explode() { throw "spread boom"; return []; }
+        let values = [...explode()];
+    "#;
+    assert!(matches!(
+        evaluate(user_throw),
+        ProgramOutcome::UncaughtException { message } if message == "spread boom"
+    ));
+}
+
+#[test]
+fn iteration_and_destructuring_type_errors_are_structured_and_catchable() {
+    let uncaught_cases = [
+        ("for (let item in 1) {}", "for-in requires"),
+        (
+            "for (let [first] in [1]) {}",
+            "for-in array destructuring requires",
+        ),
+        ("let [first] = 1;", "Array destructuring requires"),
+        ("let {field} = 1;", "Object destructuring requires"),
+    ];
+
+    for (src, expected_message) in uncaught_cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{src}");
+                assert_eq!(error.kind, "TypeError", "{src}");
+                assert!(error.message.contains(expected_message), "{src}");
+            }
+            other => panic!("{src}: expected structured type error, got {other:?}"),
+        }
+    }
+
+    let caught = r#"
+        let caughtCount = 0;
+        try { for (let item in 1) {} }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { for (let [first] in [1]) {} }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { let [arrayItem] = 1; }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { let {objectField} = 1; }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        if (caughtCount != 4) { throw "iteration/destructuring TypeError was not catchable"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+
+    let throw_cases = [
+        r#"fn any explode() { throw "iterable boom"; return []; } for (let item in explode()) {}"#,
+        r#"fn any explode() { throw "iterable boom"; return []; } let [item] = explode();"#,
+        r#"fn any explode() { throw "iterable boom"; return null; } let {item} = explode();"#,
+    ];
+    for src in throw_cases {
+        assert!(matches!(
+            evaluate(src),
+            ProgramOutcome::UncaughtException { message } if message == "iterable boom"
+        ));
+    }
+}
+
+#[test]
+fn default_argument_user_throw_survives_all_call_paths() {
+    let cases = [
+        (
+            "function-default",
+            r#"
+                fn int fail() { throw "function-default"; return 0; }
+                fn int target(int value = fail()) { return value; }
+                target();
+            "#,
+        ),
+        (
+            "callback-default",
+            r#"
+                class CallbackDefault {
+                    public decimal fail() { throw "callback-default"; return 0.0; }
+                    public decimal apply(decimal value, decimal ignored = this.fail()) {
+                        return value;
+                    }
+                }
+                let handler = new CallbackDefault();
+                let source = GPU.createBufferFromArray([1.0]);
+                GPU.map(source, handler.apply);
+            "#,
+        ),
+        (
+            "constructor-default",
+            r#"
+                fn int fail() { throw "constructor-default"; return 0; }
+                class Box {
+                    public Box(int value = fail()) { this.value = value; }
+                }
+                new Box();
+            "#,
+        ),
+        (
+            "super-constructor-default",
+            r#"
+                fn int fail() { throw "super-constructor-default"; return 0; }
+                class Base {
+                    public Base(int value = fail()) { this.value = value; }
+                }
+                class Child : Base {
+                    public Child() { super(); }
+                }
+                new Child();
+            "#,
+        ),
+        (
+            "super-method-default",
+            r#"
+                fn int fail() { throw "super-method-default"; return 0; }
+                class Base {
+                    public int value(int fallback = fail()) { return fallback; }
+                }
+                class Child : Base {
+                    public int read() { return super.value(); }
+                }
+                new Child().read();
+            "#,
+        ),
+        (
+            "method-default",
+            r#"
+                fn int fail() { throw "method-default"; return 0; }
+                class Box {
+                    public int read(int value = fail()) { return value; }
+                }
+                new Box().read();
+            "#,
+        ),
+    ];
+
+    for (expected, src) in cases {
+        assert!(matches!(
+            evaluate(src),
+            ProgramOutcome::UncaughtException { message } if message == expected
+        ));
+    }
+}
+
+#[test]
+fn default_argument_runtime_error_remains_structured_and_catchable() {
+    let src = r#"
+        fn int target(int value = 1 / 0) { return value; }
+        let caught = false;
+        try { target(); }
+        catch (e) {
+            caught = e.code == "SZ4004" && e.kind == "DivisionByZero";
+        }
+        if (!caught) { throw "default runtime error was not catchable"; }
+    "#;
+    assert!(matches!(evaluate(src), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn math_type_errors_are_structured() {
+    let cases = [
+        "out(Math.sin(\"not-a-number\"));",
+        "out(Math.min(1, \"not-a-number\"));",
+        "out(Math.max(1, \"not-a-number\"));",
+        "out(Math.pow(2, \"not-a-number\"));",
+    ];
+
+    for src in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{src}");
+                assert_eq!(error.kind, "TypeError", "{src}");
+                assert!(error.message.contains("expects numeric"), "{src}");
+            }
+            other => panic!("{src}: expected structured Math TypeError, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn math_arguments_preserve_user_throw() {
+    let calls = [
+        "Math.sin(mathBoom())",
+        "Math.min(1, mathBoom())",
+        "Math.max(1, mathBoom())",
+        "Math.pow(2, mathBoom())",
+    ];
+
+    for call in calls {
+        let src = format!(
+            r#"
+                fn decimal mathBoom() {{
+                    throw "math-boom";
+                    return 0.0;
+                }}
+                out({call});
+            "#
+        );
+        match evaluate(&src) {
+            ProgramOutcome::UncaughtException { message } => assert_eq!(message, "math-boom"),
+            other => panic!("{call}: expected original user throw, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn ordinary_operator_errors_are_structured() {
+    let cases = [
+        ("out(-true);", "SZ4002", "TypeError"),
+        ("out(2 ** 63);", "SZ4000", "Overflow"),
+        ("out(8 >> -1);", "SZ4002", "TypeError"),
+        ("out(1m + 0.5);", "SZ4002", "TypeError"),
+        ("out(true + false);", "SZ4002", "TypeError"),
+    ];
+
+    for (src, expected_code, expected_kind) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+            }
+            other => panic!("{src}: expected structured operator error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn fatal_resource_error_is_structured_but_not_catchable() {
+    let src = r#"
+        try {
+            out("x" * 20000000);
+        } catch (e) {
+            out("unreachable: resource limit was caught");
+        }
+        out("unreachable: execution continued");
+    "#;
+
+    match evaluate(src) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ6002");
+            assert_eq!(error.kind, "ResourceError");
+            assert!(error.message.contains("exceeds maximum"));
+        }
+        other => panic!("expected fatal structured resource error, got {other:?}"),
+    }
+}
+
+#[test]
+fn missing_namespace_permissions_are_structured_but_not_catchable() {
+    let cases = vec![
+        ("Terminal.getSize()", "Terminal", "Terminal"),
+        ("OS.platform()", "OS", "OS"),
+        ("Env.get(\"PATH\")", "Env", "Env"),
+        ("Time.now()", "Time", "Time"),
+        ("DateTime.now()", "DateTime.now", "Time"),
+        ("DateTime.utcNow()", "DateTime.utcNow", "Time"),
+        ("System.cpuCount()", "System", "System"),
+        ("Socket.close(0)", "Socket", "Socket"),
+        ("Task.message()", "Task", "Task"),
+        ("Gui.measureText(\"x\", 1)", "Gui", "Gui"),
+    ];
+    #[cfg(feature = "audio")]
+    let cases = {
+        let mut cases = cases;
+        cases.push(("Media.isPlaying(0)", "Media", "Media"));
+        cases
+    };
+
+    for (call, operation, permission) in cases {
+        let src = format!(
+            r#"
+                try {{
+                    {call};
+                }} catch (e) {{
+                    out("unreachable: permission denial was caught");
+                }}
+                out("unreachable: execution continued");
+            "#
+        );
+
+        match evaluate(&src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ6001", "{call}");
+                assert_eq!(error.kind, "PermissionError", "{call}");
+                assert!(
+                    error.message.contains(operation),
+                    "{call}: {}",
+                    error.message
+                );
+                assert!(
+                    error.message.contains(permission),
+                    "{call}: {}",
+                    error.message
+                );
+            }
+            other => panic!("{call}: expected fatal permission error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn unsafe_gates_are_structured_but_not_catchable() {
+    let cases = [
+        ("File.delete()", "File.delete"),
+        ("File.rename()", "File.rename"),
+        ("Memory.alloc()", "Memory.alloc"),
+        ("Memory.free()", "Memory.free"),
+        ("Memory.read()", "Memory.read"),
+        ("Memory.write()", "Memory.write"),
+        ("Memory.copy()", "Memory.copy"),
+        ("Memory.fill()", "Memory.fill"),
+        ("Terminal.setRawMode()", "Terminal.setRawMode"),
+        ("Terminal.readByte(0)", "Terminal.readByte"),
+        ("Terminal.enableMouse()", "Terminal.enableMouse"),
+        ("Terminal.readEvent(0)", "Terminal.readEvent"),
+        ("OS.exec()", "OS.exec"),
+        ("OS.spawn()", "OS.spawn"),
+        ("OS.kill()", "OS.kill"),
+        ("Env.set()", "Env.set"),
+        ("let x = 0; let p = &x; *p = 1", "Pointer write"),
+    ];
+
+    for (body, operation) in cases {
+        let src = format!(
+            r#"
+                try {{
+                    {body};
+                }} catch (e) {{
+                    out("unreachable: unsafe gate was caught");
+                }}
+                out("unreachable: execution continued");
+            "#
+        );
+
+        match evaluate_with_permissions(&src, &["Terminal", "OS", "Env"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ6003", "{body}");
+                assert_eq!(error.kind, "UnsafeError", "{body}");
+                assert!(
+                    error.message.contains(operation),
+                    "{body}: {}",
+                    error.message
+                );
+                assert!(error.message.contains("unsafe"), "{body}");
+            }
+            other => panic!("{body}: expected fatal unsafe error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn call_depth_limit_is_structured_across_all_call_paths() {
+    let cases = [
+        r#"
+            fn int recurse(int n) { return recurse(n + 1); }
+            try { recurse(0); } catch (e) { out("unreachable: depth caught"); }
+        "#,
+        r#"
+            class Loop {
+                public int recurse(int n) { return this.recurse(n + 1); }
+            }
+            let loop = new Loop();
+            try { loop.recurse(0); } catch (e) { out("unreachable: depth caught"); }
+        "#,
+        r#"
+            class BaseLoop {
+                public int recurse(int n) { return this.recurse(n + 1); }
+            }
+            class ChildLoop : BaseLoop {
+                public int recurse(int n) { return super.recurse(n + 1); }
+            }
+            let loop = new ChildLoop();
+            try { loop.recurse(0); } catch (e) { out("unreachable: depth caught"); }
+        "#,
+        r#"
+            fn int callbackLoop(int n) { return [n].map(callbackLoop)[0]; }
+            try { [0].map(callbackLoop); } catch (e) { out("unreachable: depth caught"); }
+        "#,
+        r#"
+            class OperatorLoop {
+                public OperatorLoop op_add(OperatorLoop other) { return this + other; }
+            }
+            let left = new OperatorLoop();
+            let right = new OperatorLoop();
+            try { left + right; } catch (e) { out("unreachable: depth caught"); }
+        "#,
+    ];
+
+    std::thread::Builder::new()
+        .name("runtime-call-depth-regression".to_string())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            for src in cases {
+                match evaluate(src) {
+                    ProgramOutcome::RuntimeError(error) => {
+                        assert_eq!(error.code, "SZ6002");
+                        assert_eq!(error.kind, "ResourceError");
+                        assert!(error.message.contains("maximum call depth"));
+                    }
+                    other => panic!("expected fatal call-depth error, got {other:?}"),
+                }
+            }
+        })
+        .expect("call-depth regression thread must start")
+        .join()
+        .expect("call-depth regression must not panic");
+}
+
+#[test]
+fn allocation_limits_and_dimension_overflow_are_structured_and_fatal() {
+    let cases = [
+        (
+            r#"try { unsafe { Memory.alloc(268435457); } } catch (e) { out("unreachable: Memory limit caught"); }"#,
+            "Memory.alloc",
+        ),
+        (
+            r#"try { GPU.createBuffer(33554433); } catch (e) { out("unreachable: GPU limit caught"); }"#,
+            "GPU.createBuffer",
+        ),
+        (
+            r#"try { new Tensor([4000, 4000], 0.0); } catch (e) { out("unreachable: Tensor limit caught"); }"#,
+            "Tensor size",
+        ),
+        (
+            r#"try { new Tensor([9223372036854775807, 3], 0.0); } catch (e) { out("unreachable: Tensor overflow caught"); }"#,
+            "Tensor shape",
+        ),
+        (
+            r#"
+                let a = GPU.createBuffer(1);
+                let b = GPU.createBuffer(1);
+                try {
+                    GPU.matmul(a, 9223372036854775807, 3, b, 3, 1);
+                } catch (e) { out("unreachable: GPU overflow caught"); }
+            "#,
+            "GPU.matmul",
+        ),
+    ];
+
+    for (src, operation) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ6002", "{operation}");
+                assert_eq!(error.kind, "ResourceError", "{operation}");
+                assert!(
+                    error.message.contains(operation),
+                    "{operation}: {}",
+                    error.message
+                );
+            }
+            other => panic!("{operation}: expected fatal resource error, got {other:?}"),
+        }
+    }
+
+    // Zero is invalid input, not resource exhaustion, and stays recoverable.
+    let zero_size = r#"
+        let caught = false;
+        try {
+            unsafe { Memory.alloc(0); }
+        } catch (e) {
+            if (e.code == "SZ4002" && e.kind == "TypeError") { caught = true; }
+        }
+        if (!caught) { throw "Memory.alloc(0) did not stay catchable"; }
+    "#;
+    assert!(matches!(evaluate(zero_size), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn oversized_file_reads_are_structured_and_fatal_without_reading_contents() {
+    let path =
+        std::env::temp_dir().join(format!("serez-oversized-read-{}.bin", std::process::id()));
+    let file = std::fs::File::create(&path).expect("create sparse resource-limit fixture");
+    file.set_len(256 * 1024 * 1024 + 1)
+        .expect("set sparse fixture length");
+    drop(file);
+
+    let escaped_path = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let outcomes: Vec<_> = ["File.read", "File.read_asBinary"]
+        .into_iter()
+        .map(|operation| {
+            let src = format!(
+                r#"
+                    try {{ {operation}("{escaped_path}"); }}
+                    catch (e) {{ out("unreachable: file limit caught"); }}
+                "#
+            );
+            (operation, evaluate(&src))
+        })
+        .collect();
+    let _ = std::fs::remove_file(&path);
+
+    for (operation, outcome) in outcomes {
+        match outcome {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ6002", "{operation}");
+                assert_eq!(error.kind, "ResourceError", "{operation}");
+                assert!(error.message.contains("maximum read size"));
+            }
+            other => panic!("{operation}: expected fatal file resource error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn protected_process_targets_are_structured_but_not_catchable() {
+    let calls = [
+        r#"OS.exec("C:\\Windows\\System32\\cmd.exe", [])"#,
+        r#"OS.spawn("C:\\Windows\\System32\\cmd.exe", [])"#,
+    ];
+
+    for call in calls {
+        let src = format!(
+            r#"
+                unsafe {{
+                    try {{ {call}; }}
+                    catch (e) {{ out("unreachable: protected path caught"); }}
+                }}
+                out("unreachable: execution continued");
+            "#
+        );
+        match evaluate_with_permissions(&src, &["OS"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ6004", "{call}");
+                assert_eq!(error.kind, "SecurityError", "{call}");
+                assert!(error.message.contains("protected system path"));
+            }
+            other => panic!("{call}: expected fatal security error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn exact_decimal_arithmetic_errors_are_structured() {
+    let cases = [
+        ("out(1m / 0m);", "SZ4004", "DivisionByZero"),
+        ("out(5m % 0m);", "SZ4004", "DivisionByZero"),
+        ("out(2m ** 1.5m);", "SZ4002", "TypeError"),
+        ("out(Dec.MAX + 1m);", "SZ4000", "Overflow"),
+    ];
+
+    for (src, expected_code, expected_kind) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+            }
+            other => panic!("{src}: expected structured decimal error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn datetime_failures_are_structured_and_classified() {
+    let cases = [
+        (
+            "DateTime.from(2026, 1);",
+            "SZ4002",
+            "TypeError",
+            "takes 3 to 7 integers",
+        ),
+        (
+            "DateTime.from(\"2026\", 1, 1);",
+            "SZ4002",
+            "TypeError",
+            "expects integer arguments",
+        ),
+        (
+            "DateTime.from(2026, 13, 1);",
+            "SZ4000",
+            "RangeError",
+            "out-of-range field",
+        ),
+        (
+            "DateTime.from(2026, 2, 30);",
+            "SZ4000",
+            "RangeError",
+            "invalid calendar date",
+        ),
+        (
+            "DateTime.fromEpoch();",
+            "SZ4002",
+            "TypeError",
+            "requires 1 integer",
+        ),
+        (
+            "DateTime.fromEpoch(9223372036854775807);",
+            "SZ4000",
+            "RangeError",
+            "out-of-range timestamp",
+        ),
+        (
+            "DateTime.missing();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown DateTime method",
+        ),
+        (
+            "DateTime.from(2026, 1, 1).format();",
+            "SZ4002",
+            "TypeError",
+            "requires 1 string argument",
+        ),
+        (
+            "DateTime.from(2026, 1, 1).format(1);",
+            "SZ4002",
+            "TypeError",
+            "requires a string pattern",
+        ),
+        (
+            "DateTime.from(2026, 1, 1).missing();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown DateTime field/method",
+        ),
+        (
+            "DateTime.from(2026, 1, 1).day.add();",
+            "SZ4002",
+            "TypeError",
+            "requires 1 integer",
+        ),
+        (
+            "DateTime.from(2026, 1, 1).day.add(\"x\");",
+            "SZ4002",
+            "TypeError",
+            "expects integer arguments",
+        ),
+        (
+            "DateTime.from(2026, 1, 1).day.add(9223372036854775807);",
+            "SZ4000",
+            "Overflow",
+            "overflowed the representable date range",
+        ),
+        (
+            "DateTime.from(2026, 1, 1).day.missing();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown DateField method",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected structured DateTime error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn datetime_errors_are_catchable_and_arity_is_enforced_before_arguments() {
+    let src = r#"
+        use permissions { Time }
+
+        let caughtCount = 0;
+        try { DateTime.from(2026, 2, 30); }
+        catch (e) { if (e.code == "SZ4000" && e.kind == "RangeError") { caughtCount++; } }
+        try { DateTime.from("bad", 1, 1); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { DateTime.missing(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+
+        let touched = 0;
+        fn int touch() { touched++; return 1; }
+        try { DateTime.from(touch()); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { DateTime.fromEpoch(touch(), touch()); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { DateTime.now(touch()); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { DateTime.from(2026, 1, 1).year(touch()); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { DateTime.from(2026, 1, 1).timestamp(touch()); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { DateTime.from(2026, 1, 1).day.toInt(touch()); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { DateTime.from(2026, 1, 1).day.add(touch(), touch()); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+
+        if (caughtCount != 10) { throw "DateTime errors were not catchable"; }
+        if (touched != 0) { throw "invalid-arity calls evaluated arguments"; }
+        if (DateTime.from(2026, 1, 1).day.add(1).day != 2) {
+            throw "DateTime did not recover after caught errors";
+        }
+    "#;
+
+    assert!(matches!(evaluate(src), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn datetime_arguments_preserve_nested_runtime_errors_and_user_throws() {
+    let runtime_cases = [
+        "DateTime.from(1 / 0, 1, 1);",
+        "DateTime.fromEpoch(1 / 0);",
+        "DateTime.from(2026, 1, 1).format(1 / 0);",
+        "DateTime.from(2026, 1, 1).day.add(1 / 0);",
+    ];
+    for src in runtime_cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4004", "{src}");
+                assert_eq!(error.kind, "DivisionByZero", "{src}");
+            }
+            other => panic!("{src}: expected original runtime error, got {other:?}"),
+        }
+    }
+
+    let calls = [
+        "DateTime.from(dateBoom(), 1, 1)",
+        "DateTime.fromEpoch(dateBoom())",
+        "DateTime.from(2026, 1, 1).format(dateBoom())",
+        "DateTime.from(2026, 1, 1).day.add(dateBoom())",
+    ];
+    for call in calls {
+        let src = format!(
+            r#"
+                fn int dateBoom() {{ throw "date-boom"; return 0; }}
+                {call};
+            "#
+        );
+        match evaluate(&src) {
+            ProgramOutcome::UncaughtException { message } => assert_eq!(message, "date-boom"),
+            other => panic!("{call}: expected original user throw, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn random_failures_are_structured_and_catchable() {
+    let cases = [
+        ("Random.seed();", "SZ4002", "TypeError", "requires 1"),
+        (
+            "Random.seed(\"bad\");",
+            "SZ4002",
+            "TypeError",
+            "requires an integer",
+        ),
+        (
+            "Random.int(2, 1);",
+            "SZ4000",
+            "RangeError",
+            "min (2) must be <= max (1)",
+        ),
+        (
+            "Random.uniform(1.0, 1.0);",
+            "SZ4000",
+            "RangeError",
+            "lo must be < hi",
+        ),
+        (
+            "Random.normal(0.0, 0.0 - 1.0);",
+            "SZ4000",
+            "RangeError",
+            "std must be non-negative",
+        ),
+        (
+            "Random.choice([]);",
+            "SZ4000",
+            "RangeError",
+            "array is empty",
+        ),
+        (
+            "Random.bernoulli(2.0);",
+            "SZ4000",
+            "RangeError",
+            "p must be in [0, 1]",
+        ),
+        (
+            "Random.normalTensor([0], 0.0, 1.0);",
+            "SZ4000",
+            "RangeError",
+            "dimensions must be positive",
+        ),
+        (
+            "Random.missing();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown Random method",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected structured Random error, got {other:?}"),
+        }
+    }
+
+    let caught = r#"
+        let caughtCount = 0;
+        try { Random.int(1); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { Random.choice([]); }
+        catch (e) { if (e.code == "SZ4000" && e.kind == "RangeError") { caughtCount++; } }
+        try { Random.missing(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+        if (caughtCount != 3) { throw "Random errors were not catchable"; }
+        Random.seed(1);
+        Random.int(0, 1);
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn random_arguments_preserve_nested_outcomes_and_arity_short_circuits() {
+    let runtime_cases = [
+        "Random.seed(1 / 0);",
+        "Random.int(0, 1 / 0);",
+        "Random.uniform(0.0, 1 / 0);",
+        "Random.normal(0.0, 1 / 0);",
+        "Random.shuffle(1 / 0);",
+        "Random.choice(1 / 0);",
+        "Random.bernoulli(1 / 0);",
+    ];
+    for src in runtime_cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4004", "{src}");
+                assert_eq!(error.kind, "DivisionByZero", "{src}");
+            }
+            other => panic!("{src}: expected original Random argument error, got {other:?}"),
+        }
+    }
+
+    let user_throw = r#"
+        fn int randomBoom() { throw "random-boom"; return 0; }
+        Random.int(0, randomBoom());
+    "#;
+    assert!(matches!(
+        evaluate(user_throw),
+        ProgramOutcome::UncaughtException { message } if message == "random-boom"
+    ));
+
+    let arity = r#"
+        let touched = 0;
+        fn int touch() { touched++; return 1; }
+        try { Random.decimal(touch()); }
+        catch (e) {
+            if (e.code != "SZ4002" || e.kind != "TypeError") { throw "wrong arity error"; }
+        }
+        if (touched != 0) { throw "Random evaluated arguments after arity failure"; }
+    "#;
+    assert!(matches!(evaluate(arity), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn random_int_supports_the_complete_i64_domain_without_changing_small_sequences() {
+    let src = r#"
+        Random.seed(12345);
+        if (Random.int(0, 1000) != 181) { throw "small draw 1 changed"; }
+        if (Random.int(0, 1000) != 242) { throw "small draw 2 changed"; }
+        if (Random.int(0, 1000) != 79) { throw "small draw 3 changed"; }
+
+        let min = (0 - 9223372036854775807) - 1;
+        let max = 9223372036854775807;
+        let sawWide = false;
+        for (let i = 0; i < 32; i++) {
+            let value = Random.int(min, max);
+            if (value < min || value > max) { throw "draw escaped i64 bounds"; }
+            if (value < (0 - 2147483648) || value > 2147483647) { sawWide = true; }
+        }
+        if (!sawWide) { throw "full-domain draws remained truncated to 31 bits"; }
+    "#;
+
+    assert!(matches!(evaluate(src), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn string_method_failures_are_structured_and_catchable() {
+    let cases = [
+        (
+            "\"abc\".startsWith();",
+            "SZ4002",
+            "TypeError",
+            "expects 1 argument",
+        ),
+        (
+            "\"abc\".startsWith(1);",
+            "SZ4002",
+            "TypeError",
+            "prefix must be a string",
+        ),
+        (
+            "\"abc\".charAt(1.0);",
+            "SZ4002",
+            "TypeError",
+            "index must be an int",
+        ),
+        (
+            "\"abc\".padStart(3, 7);",
+            "SZ4002",
+            "TypeError",
+            "padString must be a string",
+        ),
+        (
+            "\"abc\".padEnd(0 - 1, \"0\");",
+            "SZ4000",
+            "RangeError",
+            "must be non-negative",
+        ),
+        (
+            "\"abc\".slice(0, 1, 2);",
+            "SZ4002",
+            "TypeError",
+            "expects 0, 1 or 2 arguments",
+        ),
+        (
+            "\"abc\".missing();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown string method",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected structured String error, got {other:?}"),
+        }
+    }
+
+    let caught = r#"
+        let caughtCount = 0;
+        try { "x".startsWith(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { "x".padStart(0 - 1); }
+        catch (e) { if (e.code == "SZ4000" && e.kind == "RangeError") { caughtCount++; } }
+        try { "x".missing(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+        if (caughtCount != 3) { throw "String errors were not catchable"; }
+        if ("abc".substring(1) != "bc") { throw "String did not recover"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn string_arguments_preserve_nested_outcomes_and_arity_short_circuits() {
+    let runtime_cases = [
+        "\"abc\".startsWith(1 / 0);",
+        "\"abc\".replace(\"a\", 1 / 0);",
+        "\"abc\".substring(1 / 0);",
+        "\"abc\".padEnd(3, 1 / 0);",
+        "\"abc\".slice(1 / 0);",
+    ];
+    for src in runtime_cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4004", "{src}");
+                assert_eq!(error.kind, "DivisionByZero", "{src}");
+            }
+            other => panic!("{src}: expected original String argument error, got {other:?}"),
+        }
+    }
+
+    let throw_cases = [
+        r#"fn string boom() { throw "string-boom"; return ""; } "x".startsWith(boom());"#,
+        r#"fn int boom() { throw "string-boom"; return 0; } "x".slice(boom());"#,
+    ];
+    for src in throw_cases {
+        assert!(matches!(
+            evaluate(src),
+            ProgramOutcome::UncaughtException { message } if message == "string-boom"
+        ));
+    }
+
+    let arity = r#"
+        let touched = 0;
+        fn int touch() { touched++; return 1; }
+        try { "abc".length(touch()); }
+        catch (e) {
+            if (e.code != "SZ4002" || e.kind != "TypeError") { throw "wrong arity error"; }
+        }
+        try { "abc".padStart(3, "0", touch()); } catch (e) {}
+        if (touched != 0) { throw "String evaluated arguments after arity failure"; }
+    "#;
+    assert!(matches!(evaluate(arity), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn string_padding_is_bounded_linear_and_preserves_valid_results() {
+    let src = r#"
+        if ("x".padStart(4, "ab") != "babx") { throw "padStart compatibility changed"; }
+        if ("x".padEnd(4, "ab") != "xaba") { throw "padEnd compatibility changed"; }
+        if ("é".padStart(3, "🙂") != "🙂🙂é") { throw "Unicode padding is byte-based"; }
+        if ("abc".slice((0 - 9223372036854775807) - 1) != "abc") {
+            throw "minimum slice index did not clamp";
+        }
+        if ("abc".slice(0, (0 - 9223372036854775807) - 1) != "") {
+            throw "minimum slice end did not clamp";
+        }
+    "#;
+    assert!(matches!(evaluate(src), ProgramOutcome::Value(_)));
+
+    let limit = r#"
+        try { "x".padEnd(10000001, "x"); }
+        catch (e) { throw "padding resource ceiling was catchable"; }
+        throw "padding resource ceiling did not stop execution";
+    "#;
+    match evaluate(limit) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ6002");
+            assert_eq!(error.kind, "ResourceError");
+            assert!(error.message.contains("padding target length"));
+        }
+        other => panic!("expected fatal String padding limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn task_api_failures_are_structured_and_preserve_argument_outcomes() {
+    let cases = [
+        ("Task.run();", "SZ4002", "TypeError", "requires 2"),
+        (
+            "Task.run(1, \"\");",
+            "SZ4002",
+            "TypeError",
+            "script_path must be a string",
+        ),
+        ("Task.message(1);", "SZ4002", "TypeError", "requires 0"),
+        ("Task.reply();", "SZ4002", "TypeError", "requires 1"),
+        (
+            "Task.reply(1);",
+            "SZ4002",
+            "TypeError",
+            "result must be a string",
+        ),
+        ("Task.poll();", "SZ4002", "TypeError", "requires 1"),
+        (
+            "Task.poll(\"bad\");",
+            "SZ4002",
+            "TypeError",
+            "taskId must be an integer",
+        ),
+        (
+            "Task.poll(-9223372036854775807);",
+            "SZ4001",
+            "ReferenceError",
+            "not found",
+        ),
+        ("Task.isDone();", "SZ4002", "TypeError", "requires 1"),
+        (
+            "Task.isDone(\"bad\");",
+            "SZ4002",
+            "TypeError",
+            "taskId must be an integer",
+        ),
+        (
+            "Task.isDone(-9223372036854775807);",
+            "SZ4001",
+            "ReferenceError",
+            "not found",
+        ),
+        (
+            "Task.missing();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown Task method",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate_with_permissions(src, &["Task"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected structured Task error, got {other:?}"),
+        }
+    }
+
+    let user_throw = r#"
+        fn string taskBoom() { throw "task-boom"; return ""; }
+        Task.run(taskBoom(), "");
+    "#;
+    assert!(matches!(
+        evaluate_with_permissions(user_throw, &["Task"]),
+        ProgramOutcome::UncaughtException { message } if message == "task-boom"
+    ));
+
+    match evaluate_with_permissions("Task.poll(1 / 0);", &["Task"]) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4004");
+            assert_eq!(error.kind, "DivisionByZero");
+        }
+        other => panic!("expected original nested Task runtime error, got {other:?}"),
+    }
+}
+
+#[test]
+fn task_workers_inherit_lockdown_instead_of_reopening_host_capabilities() {
+    let src = r#"
+        let id = Task.run("tests/task_worker_lockdown_escape.sz", "");
+        while (!Task.isDone(id)) {}
+        let result = Task.poll(id);
+        if (result == "escaped") { throw "worker escaped lockdown"; }
+        if (!result.includes("PermissionError")) { throw "worker lost the denial diagnostic"; }
+    "#;
+
+    assert!(matches!(
+        evaluate_with_permissions_and_lockdown(src, &["Task"]),
+        ProgramOutcome::Value(_)
+    ));
+}
+
+#[test]
+fn task_reply_is_not_published_before_worker_success_is_known() {
+    let src = r#"
+        use permissions { Task, Time }
+        let id = Task.run("tests/task_worker_reply_then_fail.sz", "");
+        while (!Task.isDone(id)) { Time.sleep(1); }
+        let result = Task.poll(id);
+        if (!result.includes("SZ4004")) { throw "reply hid the later worker failure"; }
+    "#;
+
+    assert!(matches!(evaluate(src), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn detailed_pipeline_exposes_runtime_failure_without_changing_exit_code() {
+    let detailed = run_source_detailed(
+        "out(1 / 0);".to_string(),
+        "<runtime-outcome>",
+        RunOpts::default(),
+    );
+
+    assert_eq!(detailed.exit_code, 1);
+    assert!(!detailed.is_success());
+    match detailed.failure {
+        Some(RunFailure::Runtime(error)) => assert_eq!(error.code, "SZ4004"),
+        other => panic!("expected structured pipeline runtime failure, got {other:?}"),
+    }
+
+    // The existing entry point remains the compact, source-compatible API.
+    assert_eq!(
+        run_source(
+            "out(1 / 0);".to_string(),
+            "<runtime-outcome>",
+            RunOpts::default(),
+        )
+        .exit_code,
+        1
+    );
+}
+
+#[test]
+fn detailed_pipeline_exposes_frontend_diagnostics() {
+    let detailed = run_source_detailed(
+        "let = ;".to_string(),
+        "<runtime-outcome>",
+        RunOpts::default(),
+    );
+
+    assert_eq!(detailed.exit_code, 1);
+    match detailed.failure {
+        Some(RunFailure::Frontend(errors)) => {
+            assert!(!errors.is_empty());
+            assert!(errors.iter().all(|error| error.code.starts_with("SZ2")));
+        }
+        other => panic!("expected frontend diagnostics, got {other:?}"),
+    }
+}

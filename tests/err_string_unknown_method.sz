@@ -1,0 +1,2 @@
+// Unknown String members must expose a stable ReferenceError.
+"text".notARealMethod();

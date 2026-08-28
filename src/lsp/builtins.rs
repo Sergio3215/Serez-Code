@@ -4,18 +4,53 @@ pub use super::builtins_gen::{NAMESPACES, VALUE_METHODS};
 
 /// Language keywords, from `token::lookup_ident`.
 pub static KEYWORDS: &[&str] = &[
-    "fn", "let", "const", "true", "false", "if", "else", "while", "for",
-    "return", "out", "break", "continue", "class", "interface", "new",
-    "public", "private", "switch", "case", "default", "try", "catch",
-    "finally", "throw", "in", "enum", "abstract", "sealed", "get", "set",
-    "do", "static", "is", "unsafe", "sizeof", "native", "import", "export",
-    "yield", "match", "use", "null",
+    "fn",
+    "let",
+    "const",
+    "true",
+    "false",
+    "if",
+    "else",
+    "while",
+    "for",
+    "return",
+    "out",
+    "break",
+    "continue",
+    "class",
+    "interface",
+    "new",
+    "public",
+    "private",
+    "switch",
+    "case",
+    "default",
+    "try",
+    "catch",
+    "finally",
+    "throw",
+    "in",
+    "enum",
+    "abstract",
+    "sealed",
+    "get",
+    "set",
+    "do",
+    "static",
+    "is",
+    "unsafe",
+    "sizeof",
+    "native",
+    "import",
+    "export",
+    "yield",
+    "match",
+    "use",
+    "null",
 ];
 
 /// Type keywords usable in annotations.
-pub static TYPE_KEYWORDS: &[&str] = &[
-    "int", "decimal", "dec", "string", "bool", "any", "void",
-];
+pub static TYPE_KEYWORDS: &[&str] = &["int", "decimal", "dec", "string", "bool", "any", "void"];
 
 /// Global builtin functions dispatched by name in the evaluator
 /// (expr.rs Call fast path), with a short signature for hover.
@@ -44,26 +79,74 @@ pub static BUILTIN_FUNCTIONS: &[(&str, &str)] = &[
 
 /// One-line description per namespace, for hover.
 pub static NAMESPACE_DOCS: &[(&str, &str)] = &[
-    ("Autodiff", "Diferenciación automática: tape, backward, optimizadores (SGD/Adam), losses"),
+    (
+        "Autodiff",
+        "Diferenciación automática: tape, backward, optimizadores (SGD/Adam), losses",
+    ),
     ("Binary", "Empaquetado binario: hex, utf8, enteros LE/BE"),
-    ("Crypto", "Criptografía: hashes, HMAC, base64, Ed25519, randomBytes (CSPRNG)"),
-    ("DateTime", "Fechas: now/utcNow/from/fromEpoch, campos inmutables, format"),
+    (
+        "Crypto",
+        "Criptografía: hashes, HMAC, base64, Ed25519, randomBytes (CSPRNG)",
+    ),
+    (
+        "DateTime",
+        "Fechas: now/utcNow/from/fromEpoch, campos inmutables, format",
+    ),
     ("Dec", "Decimal exacto base-10: parse, fromInt, MAX/MIN"),
-    ("Env", "Variables de entorno y argumentos del proceso (permiso Env)"),
-    ("File", "Ficheros: read/write/append, binario, stat, listDir (permiso File)"),
+    (
+        "Env",
+        "Variables de entorno y argumentos del proceso (permiso Env)",
+    ),
+    (
+        "File",
+        "Ficheros: read/write/append, binario, stat, listDir (permiso File)",
+    ),
     ("GPU", "Buffers y kernels numéricos (backend CPU)"),
-    ("Gui", "Ventanas y dibujo 2D: eventos, texto, imágenes, clipboard (permiso Gui)"),
+    (
+        "Gui",
+        "Ventanas y dibujo 2D: eventos, texto, imágenes, clipboard (permiso Gui)",
+    ),
     ("JSON", "parse / stringify / pretty"),
-    ("Math", "Constantes y utilidades: PI, E, clamp, random, atan2"),
-    ("Memory", "Memoria manual: alloc/free/read/write (requiere unsafe)"),
-    ("OS", "Procesos: exec, spawn/tick (async), platform, pid (permiso OS)"),
-    ("Random", "Aleatorios: int, decimal, normal, choice, shuffle, seed"),
-    ("Regex", "Expresiones regulares (usar raw strings r\"...\"): test, match, findAll, split, replace"),
-    ("Socket", "TCP y WebSocket: listen/connect/send/recv (permiso Socket)"),
-    ("System", "Información del sistema: cpuCount, memoria, hostname, uptime"),
-    ("Task", "Workers nativos share-nothing: run, message, poll (permiso Task)"),
-    ("Tensor", "Constructores estáticos de tensores: zeros, ones, eye, from"),
-    ("Terminal", "Terminal crudo: raw mode, eventos de teclado/ratón (permiso Terminal)"),
+    (
+        "Math",
+        "Constantes y utilidades: PI, E, clamp, random, atan2",
+    ),
+    (
+        "Memory",
+        "Memoria manual: alloc/free/read/write (requiere unsafe)",
+    ),
+    (
+        "OS",
+        "Procesos: exec, spawn/tick (async), platform, pid (permiso OS)",
+    ),
+    (
+        "Random",
+        "Aleatorios: int, decimal, normal, choice, shuffle, seed",
+    ),
+    (
+        "Regex",
+        "Expresiones regulares (usar raw strings r\"...\"): test, match, findAll, split, replace",
+    ),
+    (
+        "Socket",
+        "TCP y WebSocket: listen/connect/send/recv (permiso Socket)",
+    ),
+    (
+        "System",
+        "Información del sistema: cpuCount, memoria, hostname, uptime",
+    ),
+    (
+        "Task",
+        "Workers nativos share-nothing: run, message, poll (permiso Task)",
+    ),
+    (
+        "Tensor",
+        "Constructores estáticos de tensores: zeros, ones, eye, from",
+    ),
+    (
+        "Terminal",
+        "Terminal crudo: raw mode, eventos de teclado/ratón (permiso Terminal)",
+    ),
     ("Time", "Reloj y sleep (permiso Time)"),
 ];
 
@@ -77,13 +160,22 @@ pub fn is_namespace(name: &str) -> bool {
 }
 
 pub fn namespace_methods(name: &str) -> Option<&'static [&'static str]> {
-    NAMESPACES.iter().find(|(ns, _)| *ns == name).map(|(_, m)| *m)
+    NAMESPACES
+        .iter()
+        .find(|(ns, _)| *ns == name)
+        .map(|(_, m)| *m)
 }
 
 pub fn namespace_doc(name: &str) -> Option<&'static str> {
-    NAMESPACE_DOCS.iter().find(|(ns, _)| *ns == name).map(|(_, d)| *d)
+    NAMESPACE_DOCS
+        .iter()
+        .find(|(ns, _)| *ns == name)
+        .map(|(_, d)| *d)
 }
 
 pub fn builtin_function(name: &str) -> Option<&'static str> {
-    BUILTIN_FUNCTIONS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
+    BUILTIN_FUNCTIONS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, s)| *s)
 }

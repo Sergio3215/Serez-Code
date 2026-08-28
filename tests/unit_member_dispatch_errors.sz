@@ -1,0 +1,69 @@
+// Structured and catchable validation errors for instance/static dispatch.
+
+class DispatchErrors {
+    private int secret() { return 1; }
+    public int read(int value) { return value; }
+    public int badReturn() { return "wrong"; }
+    public static int staticRead(int value) { return value; }
+}
+
+test("missing instance member is ReferenceError", () => {
+    let caught = false;
+    try { new DispatchErrors().missing(); }
+    catch (e) { caught = e.code == "SZ4001" && e.kind == "ReferenceError"; }
+    assert(caught, "missing instance member must be catchable");
+});
+
+test("instance method arity is TypeError", () => {
+    let caught = false;
+    try { new DispatchErrors().read(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "instance arity must be catchable");
+});
+
+test("static method arity is TypeError", () => {
+    let caught = false;
+    try { DispatchErrors.staticRead(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "static arity must be catchable");
+});
+
+test("private method call is TypeError", () => {
+    let caught = false;
+    try { new DispatchErrors().secret(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "private call must remain refused and become catchable");
+});
+
+test("private method reference is TypeError", () => {
+    let caught = false;
+    try { let callback = new DispatchErrors().secret; }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "private reference must remain refused and become catchable");
+});
+
+test("declared method return mismatch is TypeError", () => {
+    let caught = false;
+    try { new DispatchErrors().badReturn(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "return mismatch must be catchable");
+});
+
+test("missing static method is ReferenceError", () => {
+    let caught = false;
+    try { DispatchErrors.missing(); }
+    catch (e) {
+        caught = e.code == "SZ4001"
+            && e.kind == "ReferenceError"
+            && e.message.includes("has no static method");
+    }
+    assert(caught, "class lookup must not masquerade as a missing variable");
+});
+
+test("cleanup preserves later valid member dispatch", () => {
+    let target = new DispatchErrors();
+    assert(target.read(7) == 7, "instance dispatch remains healthy");
+    assert(DispatchErrors.staticRead(8) == 8, "static dispatch remains healthy");
+});
+
+summary();

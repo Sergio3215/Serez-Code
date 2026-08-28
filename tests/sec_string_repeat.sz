@@ -1,3 +1,10 @@
-// Seguridad: repeticion de string con n gigante debe dar error (DoS prevention)
-let s = "a" * 20000000;
-out "FALLO: deberia haber dado error";
+// Seguridad: repeticion de string con n gigante debe dar un ResourceError
+// estructurado pero FATAL. Un catch no puede permitir reintentar el intento de
+// asignacion en loop ni convertir el limite DoS en flujo ordinario.
+try {
+    let s = "a" * 20000000;
+    out "unreachable: limite no aplicado";
+} catch (e) {
+    out "unreachable: limite de recursos capturado";
+}
+out "unreachable: ejecucion continuo tras limite fatal";

@@ -1,5 +1,18 @@
 use crate::token::{self, Token, TokenType};
 
+pub const SZ_LEX_UNEXPECTED_CHARACTER: &str = "SZ1001";
+pub const SZ_LEX_UNTERMINATED_STRING: &str = "SZ1002";
+pub const SZ_LEX_UNTERMINATED_COMMENT: &str = "SZ1003";
+pub const SZ_LEX_INVALID_BASE_INTEGER: &str = "SZ1004";
+
+#[derive(Debug, Clone)]
+pub struct LexError {
+    pub code: &'static str,
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+}
+
 pub struct Lexer {
     input: String,
     position: usize,      // byte offset of current char (self.ch)
@@ -7,6 +20,7 @@ pub struct Lexer {
     ch: char,             // current char under examination
     line: usize,
     column: usize,
+    errors: Vec<LexError>,
 }
 
 impl Lexer {
@@ -18,6 +32,7 @@ impl Lexer {
             ch: '\0',
             line: 1,
             column: 0,
+            errors: Vec::new(),
         };
         l.read_char();
         l
@@ -42,7 +57,24 @@ impl Lexer {
     }
 
     pub fn next_token(&mut self) -> Token {
-        self.skip_whitespace();
+        // Comments are whitespace, so consume them iteratively. The previous
+        // implementation called `next_token` recursively after every comment;
+        // enough consecutive comments could exhaust the native stack before a
+        // single real token was produced.
+        loop {
+            self.skip_whitespace();
+            if self.ch == '/' && self.peek_char() == '/' {
+                self.skip_line_comment();
+                continue;
+            }
+            if self.ch == '/' && self.peek_char() == '*' {
+                let line = self.line;
+                let column = self.column;
+                self.skip_block_comment(line, column);
+                continue;
+            }
+            break;
+        }
 
         // Position of the token's FIRST character (1-based), uniform for all
         // token kinds (multi-char operators, identifiers, numbers, strings).
@@ -58,12 +90,7 @@ impl Lexer {
                     self.read_char();
                     Token::new(TokenType::Arrow, "=>".to_string(), tok_line, tok_col)
                 } else {
-                    Token::new(
-                        TokenType::Assign,
-                        self.ch.to_string(),
-                        tok_line,
-                        tok_col,
-                    )
+                    Token::new(TokenType::Assign, self.ch.to_string(), tok_line, tok_col)
                 }
             }
             '+' => {
@@ -97,13 +124,7 @@ impl Lexer {
                 }
             }
             '/' => {
-                if self.peek_char() == '/' {
-                    self.skip_line_comment();
-                    return self.next_token();
-                } else if self.peek_char() == '*' {
-                    self.skip_block_comment();
-                    return self.next_token();
-                } else if self.peek_char() == '=' {
+                if self.peek_char() == '=' {
                     self.read_char();
                     Token::new(TokenType::SlashEq, "/=".to_string(), tok_line, tok_col)
                 } else {
@@ -172,54 +193,14 @@ impl Lexer {
             }
             '^' => Token::new(TokenType::BitXor, "^".to_string(), tok_line, tok_col),
             '~' => Token::new(TokenType::BitNot, "~".to_string(), tok_line, tok_col),
-            ';' => Token::new(
-                TokenType::Semicolon,
-                self.ch.to_string(),
-                tok_line,
-                tok_col,
-            ),
-            ',' => Token::new(
-                TokenType::Comma,
-                self.ch.to_string(),
-                tok_line,
-                tok_col,
-            ),
-            '(' => Token::new(
-                TokenType::LParen,
-                self.ch.to_string(),
-                tok_line,
-                tok_col,
-            ),
-            ')' => Token::new(
-                TokenType::RParen,
-                self.ch.to_string(),
-                tok_line,
-                tok_col,
-            ),
-            '{' => Token::new(
-                TokenType::LBrace,
-                self.ch.to_string(),
-                tok_line,
-                tok_col,
-            ),
-            '}' => Token::new(
-                TokenType::RBrace,
-                self.ch.to_string(),
-                tok_line,
-                tok_col,
-            ),
-            '[' => Token::new(
-                TokenType::LBracket,
-                self.ch.to_string(),
-                tok_line,
-                tok_col,
-            ),
-            ']' => Token::new(
-                TokenType::RBracket,
-                self.ch.to_string(),
-                tok_line,
-                tok_col,
-            ),
+            ';' => Token::new(TokenType::Semicolon, self.ch.to_string(), tok_line, tok_col),
+            ',' => Token::new(TokenType::Comma, self.ch.to_string(), tok_line, tok_col),
+            '(' => Token::new(TokenType::LParen, self.ch.to_string(), tok_line, tok_col),
+            ')' => Token::new(TokenType::RParen, self.ch.to_string(), tok_line, tok_col),
+            '{' => Token::new(TokenType::LBrace, self.ch.to_string(), tok_line, tok_col),
+            '}' => Token::new(TokenType::RBrace, self.ch.to_string(), tok_line, tok_col),
+            '[' => Token::new(TokenType::LBracket, self.ch.to_string(), tok_line, tok_col),
+            ']' => Token::new(TokenType::RBracket, self.ch.to_string(), tok_line, tok_col),
             '.' => {
                 // Check for `...` (spread/rest operator)
                 if self.peek_char() == '.' {
@@ -250,14 +231,33 @@ impl Lexer {
             '"' => {
                 let start_line = tok_line;
                 let start_column = tok_col;
-                let literal = self.read_string();
-                Token::new(TokenType::String, literal, start_line, start_column)
+                let literal = self.read_string(start_line, start_column);
+                let token_type = if self.ch == '"' {
+                    TokenType::String
+                } else {
+                    TokenType::Illegal
+                };
+                Token::new(token_type, literal, start_line, start_column)
             }
             '\'' => {
                 let start_line = tok_line;
                 let start_column = tok_col;
-                let literal = self.read_single_quote_string();
-                Token::new(TokenType::String, literal, start_line, start_column)
+                let literal = self.read_single_quote_string(start_line, start_column);
+                let token_type = if self.ch == '\'' {
+                    TokenType::String
+                } else {
+                    TokenType::Illegal
+                };
+                Token::new(token_type, literal, start_line, start_column)
+            }
+            '\0' if self.position < self.input.len() => {
+                self.lex_error(
+                    SZ_LEX_UNEXPECTED_CHARACTER,
+                    tok_line,
+                    tok_col,
+                    "Unexpected NUL character in source".to_string(),
+                );
+                Token::new(TokenType::Illegal, "\\0".to_string(), tok_line, tok_col)
             }
             '\0' => Token::new(TokenType::Eof, "".to_string(), tok_line, tok_col),
             _ => {
@@ -268,9 +268,14 @@ impl Lexer {
                     let start_line = tok_line;
                     let start_column = tok_col;
                     self.read_char(); // consume 'r' → self.ch == '"'
-                    let literal = self.read_raw_string(); // leaves ch at closing '"'
-                    self.read_char(); // consume closing '"'
-                    return Token::new(TokenType::RawString, literal, start_line, start_column);
+                    let literal = self.read_raw_string(start_line, start_column);
+                    let token_type = if self.ch == '"' {
+                        self.read_char(); // consume closing '"'
+                        TokenType::RawString
+                    } else {
+                        TokenType::Illegal
+                    };
+                    return Token::new(token_type, literal, start_line, start_column);
                 }
                 if is_letter(self.ch) {
                     let literal = self.read_identifier();
@@ -281,7 +286,7 @@ impl Lexer {
                 } else if is_digit(self.ch) {
                     let start_line = tok_line;
                     let start_column = tok_col;
-                    let literal = self.read_number();
+                    let literal = self.read_number(start_line, start_column);
                     // `dec` literal suffix `m` (12.50m, 5m, 1e-7m). Only when the
                     // `m` stands alone — not when it begins an identifier (5meters).
                     if self.ch == 'm' {
@@ -301,12 +306,13 @@ impl Lexer {
                     };
                     return Token::new(token_type, literal, start_line, start_column);
                 } else {
-                    Token::new(
-                        TokenType::Illegal,
-                        self.ch.to_string(),
+                    self.lex_error(
+                        SZ_LEX_UNEXPECTED_CHARACTER,
                         tok_line,
                         tok_col,
-                    )
+                        format!("Unexpected character {:?}", self.ch),
+                    );
+                    Token::new(TokenType::Illegal, self.ch.to_string(), tok_line, tok_col)
                 }
             }
         };
@@ -315,7 +321,20 @@ impl Lexer {
         token
     }
 
-    fn read_string(&mut self) -> String {
+    pub fn take_errors(&mut self) -> Vec<LexError> {
+        std::mem::take(&mut self.errors)
+    }
+
+    fn lex_error(&mut self, code: &'static str, line: usize, column: usize, message: String) {
+        self.errors.push(LexError {
+            code,
+            line,
+            column,
+            message,
+        });
+    }
+
+    fn read_string(&mut self, start_line: usize, start_column: usize) -> String {
         // self.ch == '"' (opening quote); read_position points to first content byte
         let mut result = String::new();
         let mut brace_depth: usize = 0;
@@ -326,26 +345,57 @@ impl Lexer {
                 // Escape sequences (only outside interpolation blocks)
                 '\\' if brace_depth == 0 => {
                     match self.peek_char() {
-                        'n'  => { self.read_char(); result.push('\n'); }
-                        't'  => { self.read_char(); result.push('\t'); }
-                        'r'  => { self.read_char(); result.push('\r'); }
-                        '\\' => { self.read_char(); result.push('\\'); }
-                        '"'  => { self.read_char(); result.push('"');  }
+                        'n' => {
+                            self.read_char();
+                            result.push('\n');
+                        }
+                        't' => {
+                            self.read_char();
+                            result.push('\t');
+                        }
+                        'r' => {
+                            self.read_char();
+                            result.push('\r');
+                        }
+                        '\\' => {
+                            self.read_char();
+                            result.push('\\');
+                        }
+                        '"' => {
+                            self.read_char();
+                            result.push('"');
+                        }
                         // \{ → sentinel \x01 so the parser won't treat it as interpolation
-                        '{'  => { self.read_char(); result.push('\x01'); }
+                        '{' => {
+                            self.read_char();
+                            result.push('\x01');
+                        }
                         // \} → literal '}' (symmetric with \{; otherwise the
                         // backslash leaked through, e.g. "a\}b" → "a\}b")
-                        '}'  => { self.read_char(); result.push('}'); }
+                        '}' => {
+                            self.read_char();
+                            result.push('}');
+                        }
                         // Unknown escape (\d, \s, or a lone backslash before a
                         // letter as in Windows paths): keep both chars verbatim,
                         // but CONSUME the peeked char — without read_char() the
                         // next loop iteration reads it again and duplicates it
                         // ("x\y" → "x\yy", "C:\Windows" → "C:\WWindows").
-                        c    => { self.read_char(); result.push('\\'); result.push(c); }
+                        c => {
+                            self.read_char();
+                            result.push('\\');
+                            result.push(c);
+                        }
                     }
                 }
-                '{' => { brace_depth += 1; result.push('{'); }
-                '}' if brace_depth > 0 => { brace_depth -= 1; result.push('}'); }
+                '{' => {
+                    brace_depth += 1;
+                    result.push('{');
+                }
+                '}' if brace_depth > 0 => {
+                    brace_depth -= 1;
+                    result.push('}');
+                }
                 // Skip inner quoted strings inside {…} interpolation blocks
                 '"' if brace_depth > 0 => {
                     result.push('"');
@@ -367,6 +417,14 @@ impl Lexer {
                 c => result.push(c),
             }
         }
+        if self.ch == '\0' {
+            self.lex_error(
+                SZ_LEX_UNTERMINATED_STRING,
+                start_line,
+                start_column,
+                "Unterminated double-quoted string".to_string(),
+            );
+        }
         result
     }
 
@@ -374,7 +432,7 @@ impl Lexer {
     // no escape processing (so `\n`, `\t`, `\d`, `{`, `}` stay as written, ideal
     // for Windows paths, regexes and literal braces). It cannot contain a `"`
     // (the first `"` closes it) — use a normal string with `\"` for that.
-    fn read_raw_string(&mut self) -> String {
+    fn read_raw_string(&mut self, start_line: usize, start_column: usize) -> String {
         // self.ch == '"' (opening quote)
         let mut result = String::new();
         loop {
@@ -385,10 +443,18 @@ impl Lexer {
                 c => result.push(c),
             }
         }
+        if self.ch == '\0' {
+            self.lex_error(
+                SZ_LEX_UNTERMINATED_STRING,
+                start_line,
+                start_column,
+                "Unterminated raw string".to_string(),
+            );
+        }
         result
     }
 
-    fn read_single_quote_string(&mut self) -> String {
+    fn read_single_quote_string(&mut self, start_line: usize, start_column: usize) -> String {
         let mut result = String::new();
         loop {
             self.read_char();
@@ -397,6 +463,14 @@ impl Lexer {
                 '\'' => break,
                 c => result.push(c),
             }
+        }
+        if self.ch == '\0' {
+            self.lex_error(
+                SZ_LEX_UNTERMINATED_STRING,
+                start_line,
+                start_column,
+                "Unterminated single-quoted string".to_string(),
+            );
         }
         result
     }
@@ -411,7 +485,8 @@ impl Lexer {
         self.input[start..self.position].to_string()
     }
 
-    fn read_number(&mut self) -> String {
+    fn read_number(&mut self, start_line: usize, start_column: usize) -> String {
+        let literal_start = self.position;
         // Binary literal: 0b101010
         if self.ch == '0' && (self.peek_char() == 'b' || self.peek_char() == 'B') {
             self.read_char(); // consume 'b'/'B'
@@ -421,7 +496,25 @@ impl Lexer {
                 self.read_char();
             }
             let bin_str = self.input[start..self.position].replace('_', "");
-            return format!("{}", i64::from_str_radix(&bin_str, 2).unwrap_or(0));
+            let invalid_suffix = is_letter(self.ch) || is_digit(self.ch);
+            if invalid_suffix {
+                while is_letter(self.ch) || is_digit(self.ch) || self.ch == '_' {
+                    self.read_char();
+                }
+            }
+            return match i64::from_str_radix(&bin_str, 2) {
+                Ok(value) if !invalid_suffix && !bin_str.is_empty() => value.to_string(),
+                _ => {
+                    let literal = &self.input[literal_start..self.position];
+                    self.lex_error(
+                        SZ_LEX_INVALID_BASE_INTEGER,
+                        start_line,
+                        start_column,
+                        format!("Invalid binary integer literal '{}'", literal),
+                    );
+                    "0".to_string()
+                }
+            };
         }
         // Hex literal: 0xFF or 0XFF
         if self.ch == '0' && (self.peek_char() == 'x' || self.peek_char() == 'X') {
@@ -432,7 +525,25 @@ impl Lexer {
                 self.read_char();
             }
             let hex_str = self.input[start..self.position].replace('_', "");
-            return format!("{}", i64::from_str_radix(&hex_str, 16).unwrap_or(0));
+            let invalid_suffix = is_letter(self.ch) || is_digit(self.ch);
+            if invalid_suffix {
+                while is_letter(self.ch) || is_digit(self.ch) || self.ch == '_' {
+                    self.read_char();
+                }
+            }
+            return match i64::from_str_radix(&hex_str, 16) {
+                Ok(value) if !invalid_suffix && !hex_str.is_empty() => value.to_string(),
+                _ => {
+                    let literal = &self.input[literal_start..self.position];
+                    self.lex_error(
+                        SZ_LEX_INVALID_BASE_INTEGER,
+                        start_line,
+                        start_column,
+                        format!("Invalid hexadecimal integer literal '{}'", literal),
+                    );
+                    "0".to_string()
+                }
+            };
         }
         let start = self.position;
         while is_digit(self.ch) || self.ch == '_' {
@@ -497,12 +608,20 @@ impl Lexer {
         self.skip_whitespace();
     }
 
-    fn skip_block_comment(&mut self) {
+    fn skip_block_comment(&mut self, start_line: usize, start_column: usize) {
         // current char is '/', peek is '*' — consume both
         self.read_char(); // consume '*'
         loop {
             self.read_char();
-            if self.ch == '\0' { break; }
+            if self.ch == '\0' {
+                self.lex_error(
+                    SZ_LEX_UNTERMINATED_COMMENT,
+                    start_line,
+                    start_column,
+                    "Unterminated block comment".to_string(),
+                );
+                break;
+            }
             if self.ch == '*' && self.peek_char() == '/' {
                 self.read_char(); // consume '/'
                 self.read_char(); // advance past '/'
@@ -645,5 +764,65 @@ if (5 < 10) {
                 i, expected_literal, tok.literal
             );
         }
+    }
+
+    #[test]
+    fn unexpected_characters_and_embedded_nul_are_lexical_errors() {
+        let mut lexer = Lexer::new("@\0#".to_string());
+        assert_eq!(lexer.next_token().token_type, TokenType::Illegal);
+        assert_eq!(lexer.next_token().token_type, TokenType::Illegal);
+        assert_eq!(lexer.next_token().token_type, TokenType::Illegal);
+        assert_eq!(lexer.next_token().token_type, TokenType::Eof);
+        let errors = lexer.take_errors();
+        assert_eq!(errors.len(), 3);
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.code == SZ_LEX_UNEXPECTED_CHARACTER)
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_have_a_stable_lexical_error() {
+        for source in ["\"double", "'single", "r\"raw"] {
+            let mut lexer = Lexer::new(source.to_string());
+            assert_eq!(lexer.next_token().token_type, TokenType::Illegal);
+            let errors = lexer.take_errors();
+            assert_eq!(errors.len(), 1, "source {source:?}");
+            assert_eq!(errors[0].code, SZ_LEX_UNTERMINATED_STRING);
+            assert_eq!((errors[0].line, errors[0].column), (1, 1));
+        }
+    }
+
+    #[test]
+    fn unterminated_block_comment_is_not_silently_accepted() {
+        let mut lexer = Lexer::new("/* never closed".to_string());
+        assert_eq!(lexer.next_token().token_type, TokenType::Eof);
+        let errors = lexer.take_errors();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, SZ_LEX_UNTERMINATED_COMMENT);
+    }
+
+    #[test]
+    fn invalid_base_integers_do_not_silently_become_zero() {
+        for source in ["0x", "0b", "0b102", "0xGG", "0xFFFFFFFFFFFFFFFFF"] {
+            let mut lexer = Lexer::new(source.to_string());
+            assert_eq!(lexer.next_token().token_type, TokenType::Int);
+            let errors = lexer.take_errors();
+            assert_eq!(errors.len(), 1, "source {source:?}");
+            assert_eq!(errors[0].code, SZ_LEX_INVALID_BASE_INTEGER);
+        }
+
+        let mut valid = Lexer::new("0xFF 0b101".to_string());
+        assert_eq!(valid.next_token().literal, "255");
+        assert_eq!(valid.next_token().literal, "5");
+        assert!(valid.take_errors().is_empty());
+    }
+
+    #[test]
+    fn many_consecutive_comments_are_consumed_without_recursion() {
+        let mut lexer = Lexer::new("// comment\n".repeat(50_000));
+        assert_eq!(lexer.next_token().token_type, TokenType::Eof);
+        assert!(lexer.take_errors().is_empty());
     }
 }

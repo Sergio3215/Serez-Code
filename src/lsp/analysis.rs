@@ -11,6 +11,10 @@ use crate::type_checker::TypeChecker;
 
 #[derive(Debug, Clone)]
 pub struct Diag {
+    /// Stable `SZ1xxx`/`SZ2xxx`/`SZ3xxx` identifier for the diagnostic. Sent to the
+    /// editor as the LSP `code` field so a client can classify, filter or
+    /// link a diagnostic without matching on its wording.
+    pub code: &'static str,
     /// 1-based; 0 means "unknown" (mapped to the start of the file).
     pub line: usize,
     pub column: usize,
@@ -89,7 +93,11 @@ pub struct Analysis {
 pub fn analyze_szx(text: &str) -> Analysis {
     let lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
     let symbols = scan_symbols(text, &lines);
-    Analysis { lines, diagnostics: Vec::new(), symbols }
+    Analysis {
+        lines,
+        diagnostics: Vec::new(),
+        symbols,
+    }
 }
 
 /// Every identifier token equal to `name`: 1-based (line, first-char column).
@@ -130,18 +138,34 @@ pub fn analyze(text: &str) -> Analysis {
     parser.set_source(lines.clone());
     let program = parser.parse_program();
     for e in parser.take_errors() {
-        diagnostics.push(Diag { line: e.line, column: e.column, message: e.message, severity: 1 });
+        diagnostics.push(Diag {
+            code: e.code,
+            line: e.line,
+            column: e.column,
+            message: e.message,
+            severity: 1,
+        });
     }
 
     // Type check: non-fatal in the CLI, so surfaced as warnings.
     let mut checker = TypeChecker::new(&program);
     checker.check();
     for e in checker.take_errors() {
-        diagnostics.push(Diag { line: e.line, column: e.column, message: e.message, severity: 2 });
+        diagnostics.push(Diag {
+            code: e.code,
+            line: e.line,
+            column: e.column,
+            message: e.message,
+            severity: 2,
+        });
     }
 
     let symbols = scan_symbols(text, &lines);
-    Analysis { lines, diagnostics, symbols }
+    Analysis {
+        lines,
+        diagnostics,
+        symbols,
+    }
 }
 
 // ── Symbol scanning ───────────────────────────────────────────────────────────
@@ -171,8 +195,14 @@ fn ident_start_col(tok: &Token) -> usize {
 fn is_type_token(tt: &TokenType) -> bool {
     matches!(
         tt,
-        TokenType::KwInt | TokenType::KwDecimal | TokenType::KwDec | TokenType::KwString
-        | TokenType::KwBool | TokenType::KwAny | TokenType::KwVoid | TokenType::KwNull
+        TokenType::KwInt
+            | TokenType::KwDecimal
+            | TokenType::KwDec
+            | TokenType::KwString
+            | TokenType::KwBool
+            | TokenType::KwAny
+            | TokenType::KwVoid
+            | TokenType::KwNull
     )
 }
 
@@ -186,7 +216,11 @@ fn source_slice(lines: &[String], start: (usize, usize), end: (usize, usize)) ->
         let line = &lines[li];
         let chars: Vec<char> = line.chars().collect();
         let from = if li == sl { sc.min(chars.len()) } else { 0 };
-        let to = if li == el { ec.min(chars.len()) } else { chars.len() };
+        let to = if li == el {
+            ec.min(chars.len())
+        } else {
+            chars.len()
+        };
         if !out.is_empty() {
             out.push(' ');
         }
@@ -241,12 +275,18 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                 let mut names: Vec<&Token> = Vec::new();
                 if destructure {
                     while j < tokens.len()
-                        && !matches!(tokens[j].token_type, TokenType::Assign | TokenType::Semicolon | TokenType::Eof)
+                        && !matches!(
+                            tokens[j].token_type,
+                            TokenType::Assign | TokenType::Semicolon | TokenType::Eof
+                        )
                     {
                         if tokens[j].token_type == TokenType::Ident {
                             // in `{key: alias}` only the alias binds; keep the
                             // last ident of each comma group
-                            if matches!(tokens.get(j + 1).map(|t| &t.token_type), Some(TokenType::Colon)) {
+                            if matches!(
+                                tokens.get(j + 1).map(|t| &t.token_type),
+                                Some(TokenType::Colon)
+                            ) {
                                 j += 1;
                                 continue;
                             }
@@ -304,7 +344,10 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                 let mut j = i + 1;
                 while j < tokens.len() && j - i < 8 {
                     if tokens[j].token_type == TokenType::Ident
-                        && matches!(tokens.get(j + 1).map(|t| &t.token_type), Some(TokenType::LParen))
+                        && matches!(
+                            tokens.get(j + 1).map(|t| &t.token_type),
+                            Some(TokenType::LParen)
+                        )
                     {
                         push_callable(&tokens, j, lines, &class_stack, &mut symbols);
                         break;
@@ -312,9 +355,14 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                     if !is_type_token(&tokens[j].token_type)
                         && !matches!(
                             tokens[j].token_type,
-                            TokenType::Ident | TokenType::LBracket | TokenType::RBracket
-                            | TokenType::Question | TokenType::Asterisk
-                            | TokenType::Lt | TokenType::Gt | TokenType::Comma
+                            TokenType::Ident
+                                | TokenType::LBracket
+                                | TokenType::RBracket
+                                | TokenType::Question
+                                | TokenType::Asterisk
+                                | TokenType::Lt
+                                | TokenType::Gt
+                                | TokenType::Comma
                         )
                     {
                         break;
@@ -327,11 +375,17 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                 // NAME ( … ) { is a method/constructor. Skip call syntax
                 // `obj.m(...)` (previous token is a dot).
                 let prev = i.checked_sub(1).map(|p| &tokens[p].token_type);
-                let prev_is_dot = matches!(prev, Some(TokenType::Dot) | Some(TokenType::QuestionDot));
+                let prev_is_dot =
+                    matches!(prev, Some(TokenType::Dot) | Some(TokenType::QuestionDot));
                 let prev_is_fn = matches!(prev, Some(TokenType::Function));
                 let prev_is_new = matches!(prev, Some(TokenType::KwNew));
-                if !prev_is_dot && !prev_is_fn && !prev_is_new
-                    && matches!(tokens.get(i + 1).map(|t| &t.token_type), Some(TokenType::LParen))
+                if !prev_is_dot
+                    && !prev_is_fn
+                    && !prev_is_new
+                    && matches!(
+                        tokens.get(i + 1).map(|t| &t.token_type),
+                        Some(TokenType::LParen)
+                    )
                 {
                     if let Some(close) = matching_paren(&tokens, i + 1) {
                         let after = tokens.get(close + 1).map(|t| &t.token_type);
@@ -432,7 +486,11 @@ pub fn is_ident_char(c: char) -> bool {
 
 /// The identifier under the given 0-based (line, character) position, plus an
 /// optional receiver if the word is written as `receiver.word`.
-pub fn word_at(lines: &[String], line: usize, character: usize) -> Option<(String, Option<String>)> {
+pub fn word_at(
+    lines: &[String],
+    line: usize,
+    character: usize,
+) -> Option<(String, Option<String>)> {
     let text = lines.get(line)?;
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
@@ -562,11 +620,13 @@ fn int doble(int n) {
 "#;
 
     fn sym<'a>(symbols: &'a [SymbolInfo], name: &str) -> &'a SymbolInfo {
-        symbols
-            .iter()
-            .find(|s| s.name == name)
-            .unwrap_or_else(|| panic!("symbol '{}' not found in {:?}", name,
-                symbols.iter().map(|s| &s.name).collect::<Vec<_>>()))
+        symbols.iter().find(|s| s.name == name).unwrap_or_else(|| {
+            panic!(
+                "symbol '{}' not found in {:?}",
+                name,
+                symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+            )
+        })
     }
 
     #[test]
@@ -587,9 +647,24 @@ fn int doble(int n) {
     }
 
     #[test]
+    fn lexical_error_keeps_its_code_in_editor_diagnostics() {
+        let analysis = analyze("out(0x);\n");
+        let diagnostic = analysis
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == crate::lexer::SZ_LEX_INVALID_BASE_INTEGER)
+            .expect("expected the lexer diagnostic in LSP analysis");
+        assert_eq!((diagnostic.line, diagnostic.column), (1, 5));
+        assert_eq!(diagnostic.severity, 1);
+    }
+
+    #[test]
     fn type_error_produces_warning_diagnostic() {
         let a = analyze("fn int f(int a) {\n    return a;\n}\nf(1, 2, 3);\n");
-        let warn = a.diagnostics.iter().find(|d| d.severity == 2)
+        let warn = a
+            .diagnostics
+            .iter()
+            .find(|d| d.severity == 2)
             .expect("expected an arity warning");
         assert_eq!(warn.line, 4);
         assert!(warn.message.contains("argument"), "{}", warn.message);
@@ -601,7 +676,11 @@ fn int doble(int n) {
         let f = sym(&a.symbols, "suma");
         assert_eq!(f.kind, SymbolKind::Function);
         assert_eq!(f.line, 3);
-        assert!(f.detail.contains("fn int suma(int a, int b)"), "{}", f.detail);
+        assert!(
+            f.detail.contains("fn int suma(int a, int b)"),
+            "{}",
+            f.detail
+        );
 
         assert_eq!(sym(&a.symbols, "total").kind, SymbolKind::Variable);
         assert_eq!(sym(&a.symbols, "LIMITE").kind, SymbolKind::Constant);
@@ -627,7 +706,10 @@ fn int doble(int n) {
         assert_eq!(m.kind, SymbolKind::Method);
         assert_eq!(m.container.as_deref(), Some("Animal"));
         // constructor: same name as the class, inside it
-        let c = a.symbols.iter().find(|s| s.name == "Animal" && s.kind == SymbolKind::Constructor);
+        let c = a
+            .symbols
+            .iter()
+            .find(|s| s.name == "Animal" && s.kind == SymbolKind::Constructor);
         assert!(c.is_some(), "constructor not detected");
     }
 
@@ -675,7 +757,8 @@ fn int doble(int n) {
     #[test]
     fn symbols_survive_parse_errors() {
         // while typing, the file is usually broken — symbols must still come out
-        let a = analyze("fn int suma(int a, int b) {\n    return a + b;\n}\nif (true {\nlet z = 1;\n");
+        let a =
+            analyze("fn int suma(int a, int b) {\n    return a + b;\n}\nif (true {\nlet z = 1;\n");
         assert!(!a.diagnostics.is_empty());
         assert_eq!(sym(&a.symbols, "suma").kind, SymbolKind::Function);
         assert_eq!(sym(&a.symbols, "z").kind, SymbolKind::Variable);

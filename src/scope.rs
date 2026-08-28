@@ -4,8 +4,8 @@
 //   - una tabla de bindings (nombre → ObjectRef)
 //   - un watermark para resetear la arena al salir del bloque
 
-use std::collections::HashMap;
 use crate::region::{Arena, ObjectData, ObjectRef, RegionId};
+use std::collections::HashMap;
 
 /// Un frame de ámbito local: tabla de variables + marca de reset.
 pub struct ScopeFrame {

@@ -1,46 +1,63 @@
-mod stmt;
-mod expr;
-mod ops;
-mod lvalue;
-mod check;
 mod builtins;
+mod check;
 mod classes;
-mod methods_array;
-mod methods_string;
 mod control;
-mod namespaces;
-mod methods_set;
+mod expr;
+mod lvalue;
+mod methods_array;
+mod methods_dec;
 mod methods_dict;
+mod methods_set;
+mod methods_string;
 mod methods_tensor;
-mod namespaces_crypto;
+mod namespaces;
+mod namespaces_autodiff;
 mod namespaces_binary;
+mod namespaces_crypto;
+pub(crate) mod namespaces_datetime;
 mod namespaces_gpu;
 mod namespaces_memory;
-mod namespaces_random;
-mod namespaces_autodiff;
-mod methods_dec;
-pub(crate) mod namespaces_datetime;
-mod namespaces_socket;
 mod namespaces_os;
+mod namespaces_random;
+mod namespaces_socket;
+mod ops;
+mod stmt;
 // `pub`, not `pub(crate)`: the `sz` binary is a separate crate now and has to
 // reach GuiHost/gui_host_main_loop — winit requires the event loop to own the
 // main thread, so that wiring can only live in main().
 pub mod namespaces_gui;
-mod namespaces_task;
-mod namespaces_regex;
-mod svg;
 #[cfg(feature = "audio")]
 mod namespaces_media;
+mod namespaces_regex;
+mod namespaces_task;
+mod svg;
 
 /// How deep a program may recurse before the interpreter stops it. `main()` hands
 /// the interpreter a 64 MB stack, which is what makes this many frames survivable.
-pub(crate) const MAX_CALL_DEPTH: usize = 1000;
+pub(crate) const MAX_CALL_DEPTH: usize = 512;
+
+fn runtime_error_code(kind: &str) -> &'static str {
+    match kind {
+        "ReferenceError" => "SZ4001",
+        "TypeError" => "SZ4002",
+        "IndexOutOfBounds" => "SZ4003",
+        "DivisionByZero" => "SZ4004",
+        "IOError" => "SZ4005",
+        "ModuleNotFound" => "SZ5001",
+        "PermissionError" => "SZ6001",
+        "ResourceError" => "SZ6002",
+        "UnsafeError" => "SZ6003",
+        "SecurityError" => "SZ6004",
+        _ => "SZ4000",
+    }
+}
 
 use crate::ast::{self, Program, Statement};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Clone)]
 struct StoredClass {
@@ -64,22 +81,99 @@ struct StoredClass {
 
 #[derive(Debug, Clone)]
 pub enum EvalResult {
-    Value(ObjectRef),       // Ejecución normal (retorno implícito)
-    Return(ObjectRef),      // Ejecución interrumpida por `return`
-    Break,                  // Señal de break — capturada por while/for
-    Continue,               // Señal de continue — capturada por while/for
-    BreakLabel(String),     // Señal de break con label
-    ContinueLabel(String),  // Señal de continue con label
-    Error,                  // Ocurrió un error
-    Throw(ObjectRef),       // Excepción de usuario — propagada hasta try/catch
+    Value(ObjectRef),      // Ejecución normal (retorno implícito)
+    Return(ObjectRef),     // Ejecución interrumpida por `return`
+    Break,                 // Señal de break — capturada por while/for
+    Continue,              // Señal de continue — capturada por while/for
+    BreakLabel(String),    // Señal de break con label
+    ContinueLabel(String), // Señal de continue con label
+    Error,                 // Ocurrió un error
+    Throw(ObjectRef),      // Excepción de usuario — propagada hasta try/catch
+}
+
+pub(crate) enum DefaultArgumentResult {
+    Value(ObjectRef),
+    Throw(OwnedValue),
+    Error,
 }
 
 // ── Evaluator ─────────────────────────────────────────────────────────────────
+#[derive(Debug, Clone)]
 struct CallFrame {
     name: String,
     line: usize,
     column: usize,
 }
+
+#[derive(Debug, Clone)]
+pub struct RuntimeError {
+    pub code: &'static str,
+    pub kind: String,
+    pub message: String,
+    pub span: Option<RuntimeErrorSpan>,
+    pub stack: Vec<RuntimeErrorFrame>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeErrorSpan {
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeErrorFrame {
+    pub name: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+/// Internal delivery metadata for a structured runtime error.
+///
+/// Recoverability is intentionally not part of the public `RuntimeError`
+/// payload: it controls whether the current `try/catch` may consume the error,
+/// while the diagnostic itself remains identical for CLI and tooling.
+#[derive(Debug, Clone)]
+struct PendingRuntimeError {
+    error: RuntimeError,
+    catchable: bool,
+}
+
+/// Top-level control flow that parsed successfully but has no legal consumer.
+/// Keeping it separate from runtime failures and user exceptions prevents the
+/// CLI/tooling boundary from having to infer the cause from printed text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidControlFlow {
+    Return,
+    Break,
+    Continue,
+}
+
+/// Structured result of evaluating a complete program.
+///
+/// `eval_statement` still uses the legacy `EvalResult` carrier internally. This
+/// boundary is the first migration step: callers no longer have to collapse a
+/// runtime error, a user `throw`, invalid control flow and an unstructured legacy
+/// error into the same `None` value.
+#[derive(Debug, Clone)]
+pub enum ProgramOutcome {
+    Value(ObjectRef),
+    RuntimeError(RuntimeError),
+    UncaughtException {
+        message: String,
+    },
+    InvalidControlFlow(InvalidControlFlow),
+    /// A legacy `EvalResult::Error` path that did not call `rt_err_kind`.
+    /// This remains explicit until those producers are migrated one by one.
+    UnstructuredError,
+}
+
+impl ProgramOutcome {
+    pub fn is_success(&self) -> bool {
+        matches!(self, ProgramOutcome::Value(_))
+    }
+}
+
 pub struct Evaluator {
     global_arena: Arena,
     global_bindings: HashMap<String, ObjectRef>,
@@ -168,16 +262,25 @@ pub struct Evaluator {
     #[cfg(feature = "audio")]
     media: Option<namespaces_media::MediaState>,
     // ── Task context ──────────────────────────────────────────────────────────
+    // Shared by one top-level evaluator and the workers it creates. Keeping the
+    // registry here isolates unrelated evaluators while preserving nested tasks.
+    task_runtime: Arc<namespaces_task::TaskRuntime>,
     task_id: Option<i64>,
     task_arg: Option<String>,
-    // ── Recoverable runtime errors (catchable by try/catch) ────────────────────
-    // (kind, message) of the most recent recoverable runtime error, recorded by
-    // `rt_err`/`rt_err_kind`. `eval_try` reads it to build the structured Error
-    // object bound in `catch (e)`. `try_depth` > 0 means we are inside a try body
-    // that has a catch handler, so `rt_err` suppresses the stderr noise (the error
-    // is handled, not aborted).
-    last_error: Option<(String, String)>,
+    // ── Pending structured runtime error ───────────────────────────────────────
+    // Payload and recoverability of the most recent structured runtime failure.
+    // `eval_try` consumes only recoverable errors; fatal permission/resource
+    // errors remain pending until the complete-program boundary reports them.
+    // `try_depth` suppresses stderr only for errors that a catch will handle.
+    last_error: Option<PendingRuntimeError>,
+    /// Monotonic generation of the last structured runtime error. A program
+    /// boundary compares this with its starting generation so an old REPL error
+    /// can never be mistaken for the cause of a later legacy `Error` sentinel.
+    error_generation: u64,
     try_depth: usize,
+    /// While non-zero, structured diagnostics are captured by a program outcome
+    /// and rendered once by its caller instead of at the point of failure.
+    diagnostic_capture_depth: usize,
     // ── Writeback de receptores anidados ──────────────────────────────────────
     // (clase, método) → ¿el cuerpo puede escribir en `this`? Lo llena
     // `method_mutates_self` (lvalue.rs) la primera vez que se consulta un
@@ -197,30 +300,54 @@ pub struct Evaluator {
 // harmless; incompleteness only degrades to live global lookup (the prior
 // behavior) and can never break a valid closure.
 fn collect_idents_block(b: &crate::ast::BlockStatement, out: &mut Vec<String>) {
-    for s in &b.statements { collect_idents_stmt(s, out); }
+    for s in &b.statements {
+        collect_idents_stmt(s, out);
+    }
 }
 
 fn collect_idents_stmt(s: &crate::ast::Statement, out: &mut Vec<String>) {
     use crate::ast::Statement as St;
     match s {
         St::Let(l) => collect_idents_expr(&l.value, out),
-        St::Assign(a) => { out.push(a.name.clone()); collect_idents_expr(&a.value, out); }
+        St::Assign(a) => {
+            out.push(a.name.clone());
+            collect_idents_expr(&a.value, out);
+        }
         St::Block(b) | St::Unsafe(b) => collect_idents_block(b, out),
         St::Return(r) => collect_idents_expr(&r.return_value, out),
         St::Expression(e) | St::Throw(e) | St::Yield(e) => collect_idents_expr(e, out),
         St::Out(o) => collect_idents_expr(&o.value, out),
-        St::While(w) | St::DoWhile(w) => { collect_idents_expr(&w.condition, out); collect_idents_block(&w.body, out); }
+        St::While(w) | St::DoWhile(w) => {
+            collect_idents_expr(&w.condition, out);
+            collect_idents_block(&w.body, out);
+        }
         St::For(f) => {
             collect_idents_expr(&f.init.value, out);
             collect_idents_expr(&f.condition, out);
             collect_idents_expr(&f.update.value, out);
             collect_idents_block(&f.body, out);
         }
-        St::ForEach(fe) => { collect_idents_expr(&fe.iterable, out); collect_idents_block(&fe.body, out); }
-        St::IndexAssign(ia) => { collect_idents_expr(&ia.target, out); collect_idents_expr(&ia.index, out); collect_idents_expr(&ia.value, out); }
-        St::FieldAssign(fa) => { out.push(fa.object.clone()); collect_idents_expr(&fa.value, out); }
-        St::NestedFieldAssign(fa) => { collect_idents_expr(&fa.object, out); collect_idents_expr(&fa.value, out); }
-        St::DerefAssign { ptr, value } => { collect_idents_expr(ptr, out); collect_idents_expr(value, out); }
+        St::ForEach(fe) => {
+            collect_idents_expr(&fe.iterable, out);
+            collect_idents_block(&fe.body, out);
+        }
+        St::IndexAssign(ia) => {
+            collect_idents_expr(&ia.target, out);
+            collect_idents_expr(&ia.index, out);
+            collect_idents_expr(&ia.value, out);
+        }
+        St::FieldAssign(fa) => {
+            out.push(fa.object.clone());
+            collect_idents_expr(&fa.value, out);
+        }
+        St::NestedFieldAssign(fa) => {
+            collect_idents_expr(&fa.object, out);
+            collect_idents_expr(&fa.value, out);
+        }
+        St::DerefAssign { ptr, value } => {
+            collect_idents_expr(ptr, out);
+            collect_idents_expr(value, out);
+        }
         _ => {}
     }
 }
@@ -229,29 +356,81 @@ fn collect_idents_expr(e: &crate::ast::Expression, out: &mut Vec<String>) {
     use crate::ast::Expression as Ex;
     match e {
         Ex::Identifier(n) => out.push(n.clone()),
-        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) => collect_idents_expr(inner, out),
-        Ex::Infix(i) => { collect_idents_expr(&i.left, out); collect_idents_expr(&i.right, out); }
-        Ex::Call(c) => { collect_idents_expr(&c.function, out); for a in &c.arguments { collect_idents_expr(a, out); } }
-        Ex::DotCall(d) => { collect_idents_expr(&d.object, out); for a in &d.arguments { collect_idents_expr(a, out); } }
-        Ex::Index(ix) => { collect_idents_expr(&ix.left, out); collect_idents_expr(&ix.index, out); }
-        Ex::ArrayLiteral(al) => { for el in &al.elements { collect_idents_expr(el, out); } }
-        Ex::DictLiteral(dl) => { for (k, v) in &dl.entries { collect_idents_expr(k, out); collect_idents_expr(v, out); } }
-        Ex::EntryLiteral(k, v) => { collect_idents_expr(k, out); collect_idents_expr(v, out); }
-        Ex::Ternary(t) => { collect_idents_expr(&t.condition, out); collect_idents_expr(&t.then_expr, out); collect_idents_expr(&t.else_expr, out); }
+        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) => {
+            collect_idents_expr(inner, out)
+        }
+        Ex::Infix(i) => {
+            collect_idents_expr(&i.left, out);
+            collect_idents_expr(&i.right, out);
+        }
+        Ex::Call(c) => {
+            collect_idents_expr(&c.function, out);
+            for a in &c.arguments {
+                collect_idents_expr(a, out);
+            }
+        }
+        Ex::DotCall(d) => {
+            collect_idents_expr(&d.object, out);
+            for a in &d.arguments {
+                collect_idents_expr(a, out);
+            }
+        }
+        Ex::Index(ix) => {
+            collect_idents_expr(&ix.left, out);
+            collect_idents_expr(&ix.index, out);
+        }
+        Ex::ArrayLiteral(al) => {
+            for el in &al.elements {
+                collect_idents_expr(el, out);
+            }
+        }
+        Ex::DictLiteral(dl) => {
+            for (k, v) in &dl.entries {
+                collect_idents_expr(k, out);
+                collect_idents_expr(v, out);
+            }
+        }
+        Ex::EntryLiteral(k, v) => {
+            collect_idents_expr(k, out);
+            collect_idents_expr(v, out);
+        }
+        Ex::Ternary(t) => {
+            collect_idents_expr(&t.condition, out);
+            collect_idents_expr(&t.then_expr, out);
+            collect_idents_expr(&t.else_expr, out);
+        }
         Ex::If(ife) => {
             collect_idents_expr(&ife.condition, out);
             collect_idents_block(&ife.consequence, out);
-            if let Some(alt) = &ife.alternative { collect_idents_block(alt, out); }
+            if let Some(alt) = &ife.alternative {
+                collect_idents_block(alt, out);
+            }
         }
-        Ex::InterpolatedString(parts) => { for p in parts { if let crate::ast::StringPart::Expr(ex) = p { collect_idents_expr(ex, out); } } }
+        Ex::InterpolatedString(parts) => {
+            for p in parts {
+                if let crate::ast::StringPart::Expr(ex) = p {
+                    collect_idents_expr(ex, out);
+                }
+            }
+        }
         Ex::New(n) => match &n.args {
-            crate::ast::NewArgs::Positional(v) => { for a in v { collect_idents_expr(a, out); } }
-            crate::ast::NewArgs::Fields(f) => { for (_, a) in f { collect_idents_expr(a, out); } }
+            crate::ast::NewArgs::Positional(v) => {
+                for a in v {
+                    collect_idents_expr(a, out);
+                }
+            }
+            crate::ast::NewArgs::Fields(f) => {
+                for (_, a) in f {
+                    collect_idents_expr(a, out);
+                }
+            }
         },
         Ex::Match(m) => {
             collect_idents_expr(&m.subject, out);
             for arm in &m.arms {
-                if let Some(g) = &arm.guard { collect_idents_expr(g, out); }
+                if let Some(g) = &arm.guard {
+                    collect_idents_expr(g, out);
+                }
                 collect_idents_block(&arm.body, out);
             }
         }
@@ -261,7 +440,11 @@ fn collect_idents_expr(e: &crate::ast::Expression, out: &mut Vec<String>) {
             crate::ast::LambdaBody::Expr(ex) => collect_idents_expr(ex, out),
         },
         Ex::UnsafeBlock(b) => collect_idents_block(b, out),
-        Ex::ObjectPatch(fields) => { for (_, ex) in fields { collect_idents_expr(ex, out); } }
+        Ex::ObjectPatch(fields) => {
+            for (_, ex) in fields {
+                collect_idents_expr(ex, out);
+            }
+        }
         _ => {}
     }
 }
@@ -270,18 +453,30 @@ impl Evaluator {
     pub fn new() -> Self {
         let mut global_arena = Arena::new();
         let null_idx = global_arena.alloc(ObjectData::Null);
-        let null_ref = ObjectRef { region: RegionId::Global, index: null_idx };
+        let null_ref = ObjectRef {
+            region: RegionId::Global,
+            index: null_idx,
+        };
 
-        let true_idx  = global_arena.alloc(ObjectData::Boolean(true));
-        let true_ref  = ObjectRef { region: RegionId::Global, index: true_idx };
+        let true_idx = global_arena.alloc(ObjectData::Boolean(true));
+        let true_ref = ObjectRef {
+            region: RegionId::Global,
+            index: true_idx,
+        };
         let false_idx = global_arena.alloc(ObjectData::Boolean(false));
-        let false_ref = ObjectRef { region: RegionId::Global, index: false_idx };
+        let false_ref = ObjectRef {
+            region: RegionId::Global,
+            index: false_idx,
+        };
 
         // Pre-allocate integers 0..=256 in the global arena
         let mut int_cache = [null_ref; 257];
         for i in 0usize..=256 {
             let idx = global_arena.alloc(ObjectData::Integer(i as i64));
-            int_cache[i] = ObjectRef { region: RegionId::Global, index: idx };
+            int_cache[i] = ObjectRef {
+                region: RegionId::Global,
+                index: idx,
+            };
         }
 
         // Seed LCG with current time
@@ -337,10 +532,13 @@ impl Evaluator {
             #[cfg(feature = "audio")]
             media: None,
             spawned: Vec::new(),
+            task_runtime: Arc::new(namespaces_task::TaskRuntime::default()),
             task_id: None,
             task_arg: None,
             last_error: None,
+            error_generation: 0,
             try_depth: 0,
+            diagnostic_capture_depth: 0,
             mutator_cache: HashMap::new(),
             super_cache: HashMap::new(),
         }
@@ -357,14 +555,65 @@ impl Evaluator {
     /// object (`e.message`, `e.kind`). Prints to stderr only when NOT inside a
     /// try-with-catch, so caught errors don't spam the console. Always returns
     /// `EvalResult::Error`, which `eval_try` intercepts for recoverable errors.
-    pub(crate) fn rt_err_kind(&mut self, kind: impl Into<String>, msg: impl Into<String>) -> EvalResult {
-        let m = msg.into();
-        let k = kind.into();
-        if self.try_depth == 0 {
-            eprintln!("❌ ERROR: {}", m);
+    pub(crate) fn rt_err_kind(
+        &mut self,
+        kind: impl Into<String>,
+        msg: impl Into<String>,
+    ) -> EvalResult {
+        self.record_runtime_error(kind.into(), msg.into(), true)
+    }
+
+    /// Raise a structured runtime error that `try/catch` must not consume.
+    ///
+    /// This is reserved for security gates and resource ceilings. It gives the
+    /// CLI/tooling a normal `RuntimeError` payload while preserving the contract
+    /// that user code cannot turn a denied capability or allocation limit into
+    /// ordinary control flow.
+    pub(crate) fn fatal_err_kind(
+        &mut self,
+        kind: impl Into<String>,
+        msg: impl Into<String>,
+    ) -> EvalResult {
+        self.record_runtime_error(kind.into(), msg.into(), false)
+    }
+
+    fn record_runtime_error(
+        &mut self,
+        kind: String,
+        message: String,
+        catchable: bool,
+    ) -> EvalResult {
+        let code = runtime_error_code(&kind);
+        let span = self.call_stack.last().map(|frame| RuntimeErrorSpan {
+            line: frame.line,
+            column: frame.column,
+        });
+        let stack = self
+            .call_stack
+            .iter()
+            .rev()
+            .map(|frame| RuntimeErrorFrame {
+                name: frame.name.clone(),
+                line: frame.line,
+                column: frame.column,
+            })
+            .collect();
+        if self.diagnostic_capture_depth == 0 && (!catchable || self.try_depth == 0) {
+            eprintln!("❌ ERROR [{code}]: {message}");
             self.print_call_stack();
         }
-        self.last_error = Some((k, m));
+        self.error_generation = self.error_generation.wrapping_add(1);
+        self.last_error = Some(PendingRuntimeError {
+            error: RuntimeError {
+                code,
+                kind,
+                message,
+                span,
+                stack,
+                notes: Vec::new(),
+            },
+            catchable,
+        });
         EvalResult::Error
     }
 
@@ -381,10 +630,79 @@ impl Evaluator {
         }
     }
 
-    /// Treat the source as untrusted: `use permissions { .. }` stops granting and
-    /// `fetch` is refused. Everything else (the permission checks themselves) is
-    /// unchanged — with no permissions granted, that already denies OS, File,
-    /// Socket, Task, Gui, Media and Time.
+    /// Check a native namespace permission without changing its historical
+    /// fatality. A missing declaration has a structured `SZ6001` payload for
+    /// CLI/tooling, but `try/catch` must not consume it.
+    ///
+    /// Returns `Some(error)` when the caller must stop, or `None` when the
+    /// permission is present.
+    pub(crate) fn require_permission(
+        &mut self,
+        operation: &str,
+        permission: &str,
+    ) -> Option<EvalResult> {
+        if self.permissions.contains(permission) {
+            return None;
+        }
+        Some(self.fatal_err_kind(
+            "PermissionError",
+            format!(
+                "'{operation}' requires permission '{permission}' — declare it in serez.json \
+                 (\"permissions\": [\"{permission}\", ...]) or with `use permissions {{ {permission} }}`"
+            ),
+        ))
+    }
+
+    /// Require lexical `unsafe { }` for a native operation while preserving the
+    /// historical fatal behavior of the gate. The structured payload lets
+    /// CLI/tooling classify the denial as `SZ6003`; user `try/catch` cannot
+    /// consume it.
+    pub(crate) fn require_unsafe(&mut self, operation: &str, reason: &str) -> Option<EvalResult> {
+        if self.in_unsafe_block {
+            return None;
+        }
+        let suffix = if reason.is_empty() {
+            String::new()
+        } else {
+            format!(" — {reason}")
+        };
+        Some(self.fatal_err_kind(
+            "UnsafeError",
+            format!("'{operation}' requires an `unsafe {{ }}` block{suffix}"),
+        ))
+    }
+
+    /// Stop before entering another Serez call frame when the runtime ceiling is
+    /// reached. This is fatal: attempting to run a catch handler on an exhausted
+    /// interpreter stack would consume more of the resource being protected.
+    pub(crate) fn require_call_capacity(&mut self) -> Option<EvalResult> {
+        if self.call_depth < MAX_CALL_DEPTH {
+            return None;
+        }
+        Some(self.fatal_err_kind(
+            "ResourceError",
+            format!("Stack overflow — maximum call depth ({MAX_CALL_DEPTH}) exceeded"),
+        ))
+    }
+
+    /// Evaluate a default-argument expression without letting a temporary-scope
+    /// teardown invalidate a user exception payload. Every call path performs
+    /// its own frame cleanup, then replants `Throw` in the caller's region.
+    pub(crate) fn eval_default_argument(
+        &mut self,
+        expression: &ast::Expression,
+    ) -> DefaultArgumentResult {
+        match self.eval_expression(expression) {
+            EvalResult::Value(value) => DefaultArgumentResult::Value(value),
+            EvalResult::Throw(value) => DefaultArgumentResult::Throw(self.extract(value)),
+            _ => DefaultArgumentResult::Error,
+        }
+    }
+
+    /// Enable the restricted-source profile: `use permissions { .. }` stops
+    /// granting, and direct disk capabilities outside the permission set are
+    /// refused. This is defense in depth, not a sandbox: `fetch` remains
+    /// available and the process still shares the host's security boundary.
     pub fn set_lockdown(&mut self, on: bool) {
         self.lockdown = on;
     }
@@ -416,6 +734,16 @@ impl Evaluator {
         self.permissions.insert("Task".to_string());
     }
 
+    fn set_task_runtime_context(
+        &mut self,
+        id: i64,
+        arg: String,
+        runtime: Arc<namespaces_task::TaskRuntime>,
+    ) {
+        self.task_runtime = runtime;
+        self.set_task_context(id, arg);
+    }
+
     pub fn set_source(&mut self, lines: Vec<String>) {
         self.source_lines = lines;
     }
@@ -445,11 +773,18 @@ impl Evaluator {
 
     fn print_call_stack(&self) {
         for frame in self.call_stack.iter().rev() {
-            eprintln!("    called from '{}' [line {}:{}]", frame.name, frame.line, frame.column);
+            eprintln!(
+                "    called from '{}' [line {}:{}]",
+                frame.name, frame.line, frame.column
+            );
             if let Some(src) = self.source_lines.get(frame.line.saturating_sub(1)) {
                 let ln = frame.line.to_string();
                 eprintln!("    {} | {}", ln, src.trim_end());
-                eprintln!("    {}   {}^", " ".repeat(ln.len()), " ".repeat(frame.column.saturating_sub(1)));
+                eprintln!(
+                    "    {}   {}^",
+                    " ".repeat(ln.len()),
+                    " ".repeat(frame.column.saturating_sub(1))
+                );
             }
         }
         eprintln!();
@@ -457,25 +792,44 @@ impl Evaluator {
 
     fn alloc(&mut self, data: ObjectData) -> ObjectRef {
         // Auto-assign stable tid to new tensors: tid==0 is the sentinel for "unassigned".
-        let data = if let ObjectData::Tensor { shape, data: d, tid: 0 } = data {
+        let data = if let ObjectData::Tensor {
+            shape,
+            data: d,
+            tid: 0,
+        } = data
+        {
             let tid = self.tensor_id_counter;
             self.tensor_id_counter += 1;
-            ObjectData::Tensor { shape, data: d, tid }
+            ObjectData::Tensor {
+                shape,
+                data: d,
+                tid,
+            }
         } else {
             data
         };
         if self.scopes.is_empty() {
             let idx = self.global_arena.alloc(data);
-            ObjectRef { region: RegionId::Global, index: idx }
+            ObjectRef {
+                region: RegionId::Global,
+                index: idx,
+            }
         } else {
             let idx = self.scopes.arena.alloc(data);
-            ObjectRef { region: RegionId::Scoped, index: idx }
+            ObjectRef {
+                region: RegionId::Scoped,
+                index: idx,
+            }
         }
     }
 
     // Allocate a new Tensor — tid is auto-assigned by alloc().
     pub(super) fn alloc_tensor(&mut self, shape: Vec<usize>, data: Vec<f64>) -> ObjectRef {
-        self.alloc(ObjectData::Tensor { shape, data, tid: 0 })
+        self.alloc(ObjectData::Tensor {
+            shape,
+            data,
+            tid: 0,
+        })
     }
 
     pub fn resolve(&self, obj_ref: ObjectRef) -> Option<&ObjectData> {
@@ -558,7 +912,10 @@ impl Evaluator {
     /// slot per unused local per lambda creation (deadly for per-frame /
     /// per-iteration lambdas). `this` is always considered referenced,
     /// defensively.
-    fn capture_lambda_env(&mut self, body: &crate::ast::BlockStatement) -> Vec<(String, ObjectRef)> {
+    fn capture_lambda_env(
+        &mut self,
+        body: &crate::ast::BlockStatement,
+    ) -> Vec<(String, ObjectRef)> {
         let mut names: Vec<String> = Vec::new();
         collect_idents_block(body, &mut names);
         let mut referenced: std::collections::HashSet<String> = names.into_iter().collect();
@@ -568,7 +925,9 @@ impl Evaluator {
         let bindings = self.scopes.all_bindings();
         let mut captured = Vec::new();
         for (name, r) in bindings {
-            if !referenced.contains(&name) { continue; }
+            if !referenced.contains(&name) {
+                continue;
+            }
             let global_ref = match r.region {
                 RegionId::Global => r,
                 RegionId::Scoped => {
@@ -591,12 +950,21 @@ impl Evaluator {
         let mut have: std::collections::HashSet<String> =
             captured.iter().map(|(n, _)| n.clone()).collect();
         for name in referenced {
-            if have.contains(&name) { continue; }
+            if have.contains(&name) {
+                continue;
+            }
             have.insert(name.clone());
             // Scoped locals are already captured above.
-            if self.scopes.lookup(&name).is_some() { continue; }
-            let gref = match self.global_bindings.get(&name) { Some(&r) => r, None => continue };
-            if matches!(self.resolve(gref), Some(ObjectData::Function { .. })) { continue; }
+            if self.scopes.lookup(&name).is_some() {
+                continue;
+            }
+            let gref = match self.global_bindings.get(&name) {
+                Some(&r) => r,
+                None => continue,
+            };
+            if matches!(self.resolve(gref), Some(ObjectData::Function { .. })) {
+                continue;
+            }
             // Live binding, not a snapshot: writes meet in the global slot.
             captured.push((name, gref));
         }
@@ -631,7 +999,8 @@ impl Evaluator {
             }
             Some(ObjectData::Function { .. }) => "Function".to_string(),
             Some(ObjectData::Instance { class_name, fields }) => {
-                let pairs: Vec<String> = fields.iter()
+                let pairs: Vec<String> = fields
+                    .iter()
                     .map(|(n, v)| format!("{}: {}", n, v.display_str()))
                     .collect();
                 format!("{}{{ {} }}", class_name, pairs.join(", "))
@@ -643,8 +1012,12 @@ impl Evaluator {
                 let elems: Vec<String> = elements.iter().map(|e| e.display_str()).collect();
                 format!("Set[{}]", elems.join(", "))
             }
-            Some(ObjectData::Tensor { shape, data, .. }) => crate::region::format_tensor(shape, data),
-            Some(ObjectData::DateTime { epoch_ms, utc }) => crate::region::format_datetime(*epoch_ms, *utc),
+            Some(ObjectData::Tensor { shape, data, .. }) => {
+                crate::region::format_tensor(shape, data)
+            }
+            Some(ObjectData::DateTime { epoch_ms, utc }) => {
+                crate::region::format_datetime(*epoch_ms, *utc)
+            }
             Some(ObjectData::DateField { value, .. }) => format!("{}", value),
             Some(ObjectData::Ptr(name)) => format!("&{}", name),
             Some(ObjectData::Null) => "null".to_string(),
@@ -665,26 +1038,39 @@ impl Evaluator {
             return OwnedValue::Null;
         }
         match owned {
-            OwnedValue::Array { element_type, elements } => {
-                OwnedValue::Array {
-                    element_type,
-                    elements: elements.into_iter().map(|e| self.extract_inner_owned(e, depth + 1)).collect(),
-                }
-            }
-            OwnedValue::Dict { key_type, value_type, entries } => {
-                OwnedValue::Dict {
-                    key_type,
-                    value_type,
-                    entries: entries.into_iter()
-                        .map(|(k, v)| (self.extract_inner_owned(k, depth + 1), self.extract_inner_owned(v, depth + 1)))
-                        .collect(),
-                }
-            }
-            OwnedValue::Set { elements } => {
-                OwnedValue::Set {
-                    elements: elements.into_iter().map(|e| self.extract_inner_owned(e, depth + 1)).collect(),
-                }
-            }
+            OwnedValue::Array {
+                element_type,
+                elements,
+            } => OwnedValue::Array {
+                element_type,
+                elements: elements
+                    .into_iter()
+                    .map(|e| self.extract_inner_owned(e, depth + 1))
+                    .collect(),
+            },
+            OwnedValue::Dict {
+                key_type,
+                value_type,
+                entries,
+            } => OwnedValue::Dict {
+                key_type,
+                value_type,
+                entries: entries
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            self.extract_inner_owned(k, depth + 1),
+                            self.extract_inner_owned(v, depth + 1),
+                        )
+                    })
+                    .collect(),
+            },
+            OwnedValue::Set { elements } => OwnedValue::Set {
+                elements: elements
+                    .into_iter()
+                    .map(|e| self.extract_inner_owned(e, depth + 1))
+                    .collect(),
+            },
             other => other,
         }
     }
@@ -701,16 +1087,33 @@ impl Evaluator {
             Some(ObjectData::Dec(d)) => OwnedValue::Dec(*d),
             Some(ObjectData::Boolean(b)) => OwnedValue::Boolean(*b),
             Some(ObjectData::Str(s)) => OwnedValue::Str(s.clone()),
-            Some(ObjectData::Array { element_type, elements }) => {
-                OwnedValue::Array {
-                    element_type: element_type.clone(),
-                    elements: elements.iter().map(|e| self.extract_inner_owned(e.clone(), depth + 1)).collect(),
-                }
-            }
-            Some(ObjectData::Dict { key_type, value_type, entries, .. }) => OwnedValue::Dict {
+            Some(ObjectData::Array {
+                element_type,
+                elements,
+            }) => OwnedValue::Array {
+                element_type: element_type.clone(),
+                elements: elements
+                    .iter()
+                    .map(|e| self.extract_inner_owned(e.clone(), depth + 1))
+                    .collect(),
+            },
+            Some(ObjectData::Dict {
+                key_type,
+                value_type,
+                entries,
+                ..
+            }) => OwnedValue::Dict {
                 key_type: key_type.clone(),
                 value_type: value_type.clone(),
-                entries: entries.iter().map(|(k, v)| (self.extract_inner_owned(k.clone(), depth + 1), self.extract_inner_owned(v.clone(), depth + 1))).collect(),
+                entries: entries
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            self.extract_inner_owned(k.clone(), depth + 1),
+                            self.extract_inner_owned(v.clone(), depth + 1),
+                        )
+                    })
+                    .collect(),
             },
             Some(ObjectData::Function {
                 return_type,
@@ -736,17 +1139,31 @@ impl Evaluator {
                 variant: variant.clone(),
             },
             Some(ObjectData::Set { elements, .. }) => OwnedValue::Set {
-                elements: elements.iter().map(|e| self.extract_inner_owned(e.clone(), depth + 1)).collect(),
+                elements: elements
+                    .iter()
+                    .map(|e| self.extract_inner_owned(e.clone(), depth + 1))
+                    .collect(),
             },
-            Some(ObjectData::Tensor { shape, data, tid }) => {
-                OwnedValue::Tensor { shape: shape.clone(), data: data.clone(), tid: *tid }
-            }
-            Some(ObjectData::DateTime { epoch_ms, utc }) => {
-                OwnedValue::DateTime { epoch_ms: *epoch_ms, utc: *utc }
-            }
-            Some(ObjectData::DateField { epoch_ms, utc, field, value }) => {
-                OwnedValue::DateField { epoch_ms: *epoch_ms, utc: *utc, field: *field, value: *value }
-            }
+            Some(ObjectData::Tensor { shape, data, tid }) => OwnedValue::Tensor {
+                shape: shape.clone(),
+                data: data.clone(),
+                tid: *tid,
+            },
+            Some(ObjectData::DateTime { epoch_ms, utc }) => OwnedValue::DateTime {
+                epoch_ms: *epoch_ms,
+                utc: *utc,
+            },
+            Some(ObjectData::DateField {
+                epoch_ms,
+                utc,
+                field,
+                value,
+            }) => OwnedValue::DateField {
+                epoch_ms: *epoch_ms,
+                utc: *utc,
+                field: *field,
+                value: *value,
+            },
             Some(ObjectData::Ptr(name)) => OwnedValue::Ptr(name.clone()),
             Some(ObjectData::Null) | None => OwnedValue::Null,
         }
@@ -761,12 +1178,23 @@ impl Evaluator {
             OwnedValue::Dec(d) => self.alloc(ObjectData::Dec(d)),
             OwnedValue::Boolean(b) => self.alloc(ObjectData::Boolean(b)),
             OwnedValue::Str(s) => self.alloc(ObjectData::Str(s)),
-            OwnedValue::Array { element_type, elements: items } => {
-                self.alloc(ObjectData::Array { element_type, elements: items })
-            }
-            OwnedValue::Dict { key_type, value_type, entries } => {
-                self.alloc(ObjectData::Dict { key_type, value_type, entries, index: Default::default() })
-            }
+            OwnedValue::Array {
+                element_type,
+                elements: items,
+            } => self.alloc(ObjectData::Array {
+                element_type,
+                elements: items,
+            }),
+            OwnedValue::Dict {
+                key_type,
+                value_type,
+                entries,
+            } => self.alloc(ObjectData::Dict {
+                key_type,
+                value_type,
+                entries,
+                index: Default::default(),
+            }),
             OwnedValue::Function {
                 return_type,
                 parameters,
@@ -788,18 +1216,27 @@ impl Evaluator {
             OwnedValue::EnumVariant { enum_name, variant } => {
                 self.alloc(ObjectData::EnumVariant { enum_name, variant })
             }
-            OwnedValue::Set { elements: items } => {
-                self.alloc(ObjectData::Set { elements: items, index: Default::default() })
-            }
+            OwnedValue::Set { elements: items } => self.alloc(ObjectData::Set {
+                elements: items,
+                index: Default::default(),
+            }),
             OwnedValue::Tensor { shape, data, tid } => {
                 self.alloc(ObjectData::Tensor { shape, data, tid })
             }
             OwnedValue::DateTime { epoch_ms, utc } => {
                 self.alloc(ObjectData::DateTime { epoch_ms, utc })
             }
-            OwnedValue::DateField { epoch_ms, utc, field, value } => {
-                self.alloc(ObjectData::DateField { epoch_ms, utc, field, value })
-            }
+            OwnedValue::DateField {
+                epoch_ms,
+                utc,
+                field,
+                value,
+            } => self.alloc(ObjectData::DateField {
+                epoch_ms,
+                utc,
+                field,
+                value,
+            }),
             OwnedValue::Ptr(name) => self.alloc(ObjectData::Ptr(name)),
             OwnedValue::Null => self.null_ref,
         }
@@ -820,38 +1257,76 @@ impl Evaluator {
         match value {
             OwnedValue::Integer(i) => {
                 let idx = self.global_arena.alloc(ObjectData::Integer(i));
-                ObjectRef { region: RegionId::Global, index: idx }
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::Dec(d) => {
                 let idx = self.global_arena.alloc(ObjectData::Dec(d));
-                ObjectRef { region: RegionId::Global, index: idx }
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::Decimal(d) => {
                 let idx = self.global_arena.alloc(ObjectData::Decimal(d));
-                ObjectRef { region: RegionId::Global, index: idx }
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::Boolean(b) => {
                 let idx = self.global_arena.alloc(ObjectData::Boolean(b));
-                ObjectRef { region: RegionId::Global, index: idx }
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::Str(s) => {
                 let idx = self.global_arena.alloc(ObjectData::Str(s));
-                ObjectRef { region: RegionId::Global, index: idx }
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
-            OwnedValue::Array { element_type, elements: items } => {
-                let idx = self.global_arena.alloc(ObjectData::Array { element_type, elements: items });
-                ObjectRef { region: RegionId::Global, index: idx }
+            OwnedValue::Array {
+                element_type,
+                elements: items,
+            } => {
+                let idx = self.global_arena.alloc(ObjectData::Array {
+                    element_type,
+                    elements: items,
+                });
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
-            OwnedValue::Dict { key_type, value_type, entries } => {
+            OwnedValue::Dict {
+                key_type,
+                value_type,
+                entries,
+            } => {
                 let idx = self.global_arena.alloc(ObjectData::Dict {
                     key_type,
                     value_type,
                     entries,
                     index: Default::default(),
                 });
-                ObjectRef { region: RegionId::Global, index: idx }
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
-            OwnedValue::Function { return_type, parameters, body, captured, is_generator, bound_class } => {
+            OwnedValue::Function {
+                return_type,
+                parameters,
+                body,
+                captured,
+                is_generator,
+                bound_class,
+            } => {
                 let idx = self.global_arena.alloc(ObjectData::Function {
                     return_type,
                     parameters,
@@ -860,35 +1335,80 @@ impl Evaluator {
                     is_generator,
                     bound_class,
                 });
-                ObjectRef { region: RegionId::Global, index: idx }
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::Instance { class_name, fields } => {
-                let idx = self.global_arena.alloc(ObjectData::Instance { class_name, fields });
-                ObjectRef { region: RegionId::Global, index: idx }
+                let idx = self
+                    .global_arena
+                    .alloc(ObjectData::Instance { class_name, fields });
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::EnumVariant { enum_name, variant } => {
-                let idx = self.global_arena.alloc(ObjectData::EnumVariant { enum_name, variant });
-                ObjectRef { region: RegionId::Global, index: idx }
+                let idx = self
+                    .global_arena
+                    .alloc(ObjectData::EnumVariant { enum_name, variant });
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::Set { elements: items } => {
-                let idx = self.global_arena.alloc(ObjectData::Set { elements: items, index: Default::default() });
-                ObjectRef { region: RegionId::Global, index: idx }
+                let idx = self.global_arena.alloc(ObjectData::Set {
+                    elements: items,
+                    index: Default::default(),
+                });
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::Tensor { shape, data, tid } => {
-                let idx = self.global_arena.alloc(ObjectData::Tensor { shape, data, tid });
-                ObjectRef { region: RegionId::Global, index: idx }
+                let idx = self
+                    .global_arena
+                    .alloc(ObjectData::Tensor { shape, data, tid });
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::DateTime { epoch_ms, utc } => {
-                let idx = self.global_arena.alloc(ObjectData::DateTime { epoch_ms, utc });
-                ObjectRef { region: RegionId::Global, index: idx }
+                let idx = self
+                    .global_arena
+                    .alloc(ObjectData::DateTime { epoch_ms, utc });
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
-            OwnedValue::DateField { epoch_ms, utc, field, value } => {
-                let idx = self.global_arena.alloc(ObjectData::DateField { epoch_ms, utc, field, value });
-                ObjectRef { region: RegionId::Global, index: idx }
+            OwnedValue::DateField {
+                epoch_ms,
+                utc,
+                field,
+                value,
+            } => {
+                let idx = self.global_arena.alloc(ObjectData::DateField {
+                    epoch_ms,
+                    utc,
+                    field,
+                    value,
+                });
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::Ptr(name) => {
                 let idx = self.global_arena.alloc(ObjectData::Ptr(name));
-                ObjectRef { region: RegionId::Global, index: idx }
+                ObjectRef {
+                    region: RegionId::Global,
+                    index: idx,
+                }
             }
             OwnedValue::Null => self.null_ref,
         }
@@ -896,7 +1416,25 @@ impl Evaluator {
 
     // ── Evaluación de Programa ──────────────────────────────────────────────
 
-    pub fn eval_program(&mut self, program: &Program) -> Option<ObjectRef> {
+    /// Evaluate a complete program and preserve the reason execution stopped.
+    ///
+    /// Runtime diagnostics are captured while the program is running and are
+    /// returned to the caller instead of being printed at the failure site. This
+    /// makes the same result usable by the CLI, tests and future tooling without
+    /// changing the internal `EvalResult` carrier all at once.
+    pub fn eval_program_outcome(&mut self, program: &Program) -> ProgramOutcome {
+        let starting_error_generation = self.error_generation;
+        self.diagnostic_capture_depth += 1;
+        let outcome = self.eval_program_outcome_inner(program, starting_error_generation);
+        self.diagnostic_capture_depth -= 1;
+        outcome
+    }
+
+    fn eval_program_outcome_inner(
+        &mut self,
+        program: &Program,
+        starting_error_generation: u64,
+    ) -> ProgramOutcome {
         let mut result = self.null_ref;
         for statement in &program.statements {
             // Out statements at top level produce values that are immediately consumed
@@ -923,36 +1461,121 @@ impl Evaluator {
                     }
                 }
                 EvalResult::Return(_) => {
-                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
-                    eprintln!("❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a function or conditional or loops.");
-                    return None;
+                    if let Some(mark) = scratch_mark {
+                        self.global_arena.reset_to(mark);
+                    }
+                    return ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Return);
                 }
                 EvalResult::Break | EvalResult::BreakLabel(_) => {
-                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
-                    eprintln!("❌ FLASH SCOPE ERROR: 'break' cannot be used outside of a loop.");
-                    return None;
+                    if let Some(mark) = scratch_mark {
+                        self.global_arena.reset_to(mark);
+                    }
+                    return ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Break);
                 }
                 EvalResult::Continue | EvalResult::ContinueLabel(_) => {
-                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
-                    eprintln!("❌ FLASH SCOPE ERROR: 'continue' cannot be used outside of a loop.");
-                    return None;
+                    if let Some(mark) = scratch_mark {
+                        self.global_arena.reset_to(mark);
+                    }
+                    return ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Continue);
                 }
                 EvalResult::Error => {
-                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
-                    return None;
+                    if let Some(mark) = scratch_mark {
+                        self.global_arena.reset_to(mark);
+                    }
+                    if self.error_generation != starting_error_generation {
+                        if let Some(pending) = self.last_error.clone() {
+                            return ProgramOutcome::RuntimeError(pending.error);
+                        }
+                    }
+                    return ProgramOutcome::UnstructuredError;
                 }
                 EvalResult::Throw(r) => {
                     // Render the thrown value BEFORE rewinding the scratch mark:
                     // for `out f()` the payload lives above the watermark and the
                     // reset would free it (the message became "Referencia inválida").
                     let msg = self.display(r);
-                    if let Some(mark) = scratch_mark { self.global_arena.reset_to(mark); }
-                    eprintln!("❌ UNCAUGHT EXCEPTION: {msg}");
-                    return None;
+                    if let Some(mark) = scratch_mark {
+                        self.global_arena.reset_to(mark);
+                    }
+                    return ProgramOutcome::UncaughtException { message: msg };
                 }
             }
         }
-        Some(result)
+        ProgramOutcome::Value(result)
+    }
+
+    /// Compatibility adapter for existing embedding code.
+    ///
+    /// New callers should prefer [`Self::eval_program_outcome`]. This method
+    /// retains the historical `Some(value)` / `None` shape and renders the same
+    /// human diagnostics as before.
+    pub fn eval_program(&mut self, program: &Program) -> Option<ObjectRef> {
+        let nested_capture = self.diagnostic_capture_depth > 0;
+        let outcome = self.eval_program_outcome(program);
+
+        // Imports and a few native services still call this legacy adapter from
+        // inside an outer program evaluation. A nested structured runtime error
+        // is propagated by `error_generation`, so the outer boundary renders it
+        // once. User throws and invalid control flow are still collapsed by those
+        // legacy callers; render those here to preserve their historical output.
+        if !nested_capture
+            || matches!(
+                &outcome,
+                ProgramOutcome::UncaughtException { .. } | ProgramOutcome::InvalidControlFlow(_)
+            )
+        {
+            self.report_program_outcome(&outcome);
+        }
+
+        match outcome {
+            ProgramOutcome::Value(value) => Some(value),
+            ProgramOutcome::RuntimeError(_)
+            | ProgramOutcome::UncaughtException { .. }
+            | ProgramOutcome::InvalidControlFlow(_)
+            | ProgramOutcome::UnstructuredError => None,
+        }
+    }
+
+    /// Render a structured program failure using the existing human CLI format.
+    /// Successful and legacy unstructured outcomes produce no additional output:
+    /// legacy error producers already emitted their own diagnostic.
+    pub fn report_program_outcome(&self, outcome: &ProgramOutcome) {
+        match outcome {
+            ProgramOutcome::Value(_) | ProgramOutcome::UnstructuredError => {}
+            ProgramOutcome::RuntimeError(error) => {
+                eprintln!("❌ ERROR [{}]: {}", error.code, error.message);
+                for frame in &error.stack {
+                    eprintln!(
+                        "    called from '{}' [line {}:{}]",
+                        frame.name, frame.line, frame.column
+                    );
+                    if let Some(src) = self.source_lines.get(frame.line.saturating_sub(1)) {
+                        let line_number = frame.line.to_string();
+                        eprintln!("    {} | {}", line_number, src.trim_end());
+                        eprintln!(
+                            "    {}   {}^",
+                            " ".repeat(line_number.len()),
+                            " ".repeat(frame.column.saturating_sub(1))
+                        );
+                    }
+                }
+                eprintln!();
+            }
+            ProgramOutcome::UncaughtException { message } => {
+                eprintln!("❌ UNCAUGHT EXCEPTION: {message}");
+            }
+            ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Return) => {
+                eprintln!(
+                    "❌ FLASH SCOPE ERROR: 'return' cannot be used outside of a function or conditional or loops."
+                );
+            }
+            ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Break) => {
+                eprintln!("❌ FLASH SCOPE ERROR: 'break' cannot be used outside of a loop.");
+            }
+            ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Continue) => {
+                eprintln!("❌ FLASH SCOPE ERROR: 'continue' cannot be used outside of a loop.");
+            }
+        }
     }
 
     /// Regla ÚNICA de "truthy" del lenguaje: la usan el ternario, las guardas de
@@ -985,15 +1608,28 @@ impl Evaluator {
         value_type: String,
         entries: Vec<(OwnedValue, OwnedValue)>,
     ) {
-        let data = ObjectData::Dict { key_type, value_type, entries, index: Default::default() };
+        let data = ObjectData::Dict {
+            key_type,
+            value_type,
+            entries,
+            index: Default::default(),
+        };
         match obj_ref.region {
             RegionId::Global => self.global_arena.update(obj_ref.index, data),
             RegionId::Scoped => self.scopes.arena.update(obj_ref.index, data),
         }
     }
 
-    fn update_array(&mut self, arr_ref: ObjectRef, element_type: Option<String>, elems: Vec<OwnedValue>) {
-        let data = ObjectData::Array { element_type, elements: elems };
+    fn update_array(
+        &mut self,
+        arr_ref: ObjectRef,
+        element_type: Option<String>,
+        elems: Vec<OwnedValue>,
+    ) {
+        let data = ObjectData::Array {
+            element_type,
+            elements: elems,
+        };
         match arr_ref.region {
             RegionId::Global => self.global_arena.update(arr_ref.index, data),
             RegionId::Scoped => self.scopes.arena.update(arr_ref.index, data),
@@ -1018,8 +1654,8 @@ impl Evaluator {
                             Ok(self.display(r))
                         }
                         EvalResult::Throw(v) => Err(EvalResult::Throw(v)),
-                        EvalResult::Error    => Err(EvalResult::Error),
-                        other                => Err(other),
+                        EvalResult::Error => Err(EvalResult::Error),
+                        other => Err(other),
                     }
                 } else {
                     Ok(self.display(obj_ref))
@@ -1053,14 +1689,16 @@ impl Evaluator {
         let method = match self.find_method(class_name, method_name) {
             Some(m) => m,
             None => {
-                eprintln!("❌ ERROR: no operator overload '{}' on class '{}'", method_name, class_name);
+                eprintln!(
+                    "❌ ERROR: no operator overload '{}' on class '{}'",
+                    method_name, class_name
+                );
                 return EvalResult::Error;
             }
         };
 
-        if self.call_depth >= 1000 {
-            eprintln!("❌ ERROR: Stack overflow — maximum call depth (1000) exceeded");
-            return EvalResult::Error;
+        if let Some(error) = self.require_call_capacity() {
+            return error;
         }
 
         let old_executing_class = self.executing_class.take();
@@ -1088,13 +1726,27 @@ impl Evaluator {
         let mut method_throw: Option<ObjectRef> = None;
         for stmt in &method.body.statements {
             match self.eval_statement(stmt) {
-                EvalResult::Value(_)  => {}
-                EvalResult::Return(v) => { result_ref = v; break; }
-                EvalResult::Throw(v)  => { method_throw = Some(v); break; }
-                EvalResult::Error     => { error = true; break; }
-                EvalResult::Break | EvalResult::Continue
-                | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
-                    eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop in operator method '{}'.", method_name);
+                EvalResult::Value(_) => {}
+                EvalResult::Return(v) => {
+                    result_ref = v;
+                    break;
+                }
+                EvalResult::Throw(v) => {
+                    method_throw = Some(v);
+                    break;
+                }
+                EvalResult::Error => {
+                    error = true;
+                    break;
+                }
+                EvalResult::Break
+                | EvalResult::Continue
+                | EvalResult::BreakLabel(_)
+                | EvalResult::ContinueLabel(_) => {
+                    eprintln!(
+                        "❌ RUNTIME ERROR: break/continue used outside a loop in operator method '{}'.",
+                        method_name
+                    );
                     error = true;
                     break;
                 }
@@ -1108,28 +1760,45 @@ impl Evaluator {
         self.call_stack.pop();
         self.executing_class = old_executing_class;
 
-        if error { return EvalResult::Error; }
-        if let Some(t) = throw_owned { return EvalResult::Throw(self.plant(t)); }
+        if error {
+            return EvalResult::Error;
+        }
+        if let Some(t) = throw_owned {
+            return EvalResult::Throw(self.plant(t));
+        }
         EvalResult::Value(self.plant(owned))
     }
 
     // ── Callback calling helper ───────────────────────────────────────────────
 
     fn call_function(&mut self, func_ref: ObjectRef, arg_vals: Vec<OwnedValue>) -> EvalResult {
-        if self.call_depth >= 1000 {
-            eprintln!("❌ ERROR: Stack overflow — maximum call depth (1000) exceeded");
-            return EvalResult::Error;
+        if let Some(error) = self.require_call_capacity() {
+            return error;
         }
         let func_data = self.resolve(func_ref).cloned();
         match func_data {
-            Some(ObjectData::Function { parameters, body, captured, bound_class, .. }) => {
+            Some(ObjectData::Function {
+                parameters,
+                body,
+                captured,
+                bound_class,
+                ..
+            }) => {
                 let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
-                let required = parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
-                let max_pos  = if has_rest { usize::MAX } else { parameters.len() };
+                let required = parameters
+                    .iter()
+                    .filter(|p| !p.is_rest && p.default_value.is_none())
+                    .count();
+                let max_pos = if has_rest {
+                    usize::MAX
+                } else {
+                    parameters.len()
+                };
                 if arg_vals.len() < required || arg_vals.len() > max_pos {
                     eprintln!(
                         "❌ ERROR: Callback expected {} argument(s), got {}",
-                        parameters.len(), arg_vals.len()
+                        parameters.len(),
+                        arg_vals.len()
                     );
                     return EvalResult::Error;
                 }
@@ -1145,10 +1814,12 @@ impl Evaluator {
                 }
                 for (i, param) in parameters.iter().enumerate() {
                     if param.is_rest {
-                        let rest_items: Vec<OwnedValue> = arg_vals[i.min(arg_vals.len())..].iter()
-                            .cloned()
-                            .collect();
-                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_items });
+                        let rest_items: Vec<OwnedValue> =
+                            arg_vals[i.min(arg_vals.len())..].iter().cloned().collect();
+                        let rest_ref = self.alloc(ObjectData::Array {
+                            element_type: None,
+                            elements: rest_items,
+                        });
                         self.scopes.declare(param.name.clone(), rest_ref);
                         break;
                     }
@@ -1156,9 +1827,24 @@ impl Evaluator {
                         self.plant(arg_vals[i].clone())
                     } else if let Some(default_expr) = &param.default_value {
                         let default_expr = default_expr.clone();
-                        match self.eval_expression(&default_expr) {
-                            EvalResult::Value(v) => v,
-                            _ => self.null_ref,
+                        match self.eval_default_argument(&default_expr) {
+                            DefaultArgumentResult::Value(value) => value,
+                            DefaultArgumentResult::Throw(owned) => {
+                                self.call_depth -= 1;
+                                self.scopes.pop();
+                                if let Some(previous) = prev_exec_class.clone() {
+                                    self.executing_class = previous;
+                                }
+                                return EvalResult::Throw(self.plant(owned));
+                            }
+                            DefaultArgumentResult::Error => {
+                                self.call_depth -= 1;
+                                self.scopes.pop();
+                                if let Some(previous) = prev_exec_class.clone() {
+                                    self.executing_class = previous;
+                                }
+                                return EvalResult::Error;
+                            }
                         }
                     } else {
                         self.null_ref
@@ -1170,25 +1856,39 @@ impl Evaluator {
                 for s in &body.statements {
                     match self.eval_statement(s) {
                         EvalResult::Value(_) => {} // only explicit return contributes result
-                        EvalResult::Return(v) => { result_ref = v; break; }
-                        EvalResult::Throw(v)  => { fn_throw = Some(v); break; }
+                        EvalResult::Return(v) => {
+                            result_ref = v;
+                            break;
+                        }
+                        EvalResult::Throw(v) => {
+                            fn_throw = Some(v);
+                            break;
+                        }
                         EvalResult::Error => {
                             self.call_depth -= 1;
                             self.scopes.pop();
-                            if let Some(prev) = prev_exec_class.clone() { self.executing_class = prev; }
+                            if let Some(prev) = prev_exec_class.clone() {
+                                self.executing_class = prev;
+                            }
                             return EvalResult::Error;
                         }
-                        EvalResult::Break | EvalResult::Continue
-                        | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
+                        EvalResult::Break
+                        | EvalResult::Continue
+                        | EvalResult::BreakLabel(_)
+                        | EvalResult::ContinueLabel(_) => {
                             eprintln!("❌ RUNTIME ERROR: break/continue used outside a loop.");
                             self.call_depth -= 1;
                             self.scopes.pop();
-                            if let Some(prev) = prev_exec_class.clone() { self.executing_class = prev; }
+                            if let Some(prev) = prev_exec_class.clone() {
+                                self.executing_class = prev;
+                            }
                             return EvalResult::Error;
                         }
                     }
                 }
-                if let Some(prev) = prev_exec_class { self.executing_class = prev; }
+                if let Some(prev) = prev_exec_class {
+                    self.executing_class = prev;
+                }
                 if let Some(thrown) = fn_throw {
                     let owned = self.extract(thrown);
                     self.call_depth -= 1;
@@ -1215,7 +1915,6 @@ impl Evaluator {
     }
 
     // ── Built-in global functions ─────────────────────────────────────────────
-
 }
 
 // ── Free helpers ──────────────────────────────────────────────────────────────
@@ -1224,18 +1923,18 @@ impl Evaluator {
 /// Returns `""` for operators that cannot be overloaded.
 fn operator_to_method_name(op: &str) -> &'static str {
     match op {
-        "+"  => "op_add",
-        "-"  => "op_sub",
-        "*"  => "op_mul",
-        "/"  => "op_div",
-        "%"  => "op_mod",
+        "+" => "op_add",
+        "-" => "op_sub",
+        "*" => "op_mul",
+        "/" => "op_div",
+        "%" => "op_mod",
         "==" => "op_eq",
         "!=" => "op_ne",
-        "<"  => "op_lt",
+        "<" => "op_lt",
         "<=" => "op_le",
-        ">"  => "op_gt",
+        ">" => "op_gt",
         ">=" => "op_ge",
-        _    => "",
+        _ => "",
     }
 }
 
@@ -1253,12 +1952,12 @@ fn format_decimal(d: f64) -> String {
 
 fn obj_data_eq(a: &Option<ObjectData>, b: &Option<ObjectData>) -> bool {
     match (a, b) {
-        (Some(ObjectData::Integer(x)),  Some(ObjectData::Integer(y)))  => x == y,
-        (Some(ObjectData::Decimal(x)),  Some(ObjectData::Decimal(y)))  => x == y,
-        (Some(ObjectData::Dec(x)),      Some(ObjectData::Dec(y)))      => x == y,
-        (Some(ObjectData::Boolean(x)),  Some(ObjectData::Boolean(y)))  => x == y,
-        (Some(ObjectData::Str(x)),      Some(ObjectData::Str(y)))      => x == y,
-        (Some(ObjectData::Null),        Some(ObjectData::Null))        => true,
+        (Some(ObjectData::Integer(x)), Some(ObjectData::Integer(y))) => x == y,
+        (Some(ObjectData::Decimal(x)), Some(ObjectData::Decimal(y))) => x == y,
+        (Some(ObjectData::Dec(x)), Some(ObjectData::Dec(y))) => x == y,
+        (Some(ObjectData::Boolean(x)), Some(ObjectData::Boolean(y))) => x == y,
+        (Some(ObjectData::Str(x)), Some(ObjectData::Str(y))) => x == y,
+        (Some(ObjectData::Null), Some(ObjectData::Null)) => true,
         _ => false,
     }
 }
@@ -1289,18 +1988,55 @@ pub(super) fn owned_to_obj_data(owned: &OwnedValue) -> ObjectData {
         OwnedValue::Dec(d) => ObjectData::Dec(*d),
         OwnedValue::Boolean(b) => ObjectData::Boolean(*b),
         OwnedValue::Str(s) => ObjectData::Str(s.clone()),
-        OwnedValue::Array { element_type, elements: _ } => {
-            ObjectData::Array { element_type: element_type.clone(), elements: Vec::new() }
-        }
-        OwnedValue::Dict { key_type, value_type, entries: _ } => {
-            ObjectData::Dict { key_type: key_type.clone(), value_type: value_type.clone(), entries: Vec::new(), index: Default::default() }
-        }
-        OwnedValue::Set { elements: _ } => ObjectData::Set { elements: Vec::new(), index: Default::default() },
+        OwnedValue::Array {
+            element_type,
+            elements: _,
+        } => ObjectData::Array {
+            element_type: element_type.clone(),
+            elements: Vec::new(),
+        },
+        OwnedValue::Dict {
+            key_type,
+            value_type,
+            entries: _,
+        } => ObjectData::Dict {
+            key_type: key_type.clone(),
+            value_type: value_type.clone(),
+            entries: Vec::new(),
+            index: Default::default(),
+        },
+        OwnedValue::Set { elements: _ } => ObjectData::Set {
+            elements: Vec::new(),
+            index: Default::default(),
+        },
         OwnedValue::Function { .. } => ObjectData::Null,
-        OwnedValue::Instance { class_name, fields: _ } => ObjectData::Instance { class_name: class_name.clone(), fields: Vec::new() },
-        OwnedValue::Tensor { shape, data, tid } => ObjectData::Tensor { shape: shape.clone(), data: data.clone(), tid: *tid },
-        OwnedValue::DateTime { epoch_ms, utc } => ObjectData::DateTime { epoch_ms: *epoch_ms, utc: *utc },
-        OwnedValue::DateField { epoch_ms, utc, field, value } => ObjectData::DateField { epoch_ms: *epoch_ms, utc: *utc, field: *field, value: *value },
+        OwnedValue::Instance {
+            class_name,
+            fields: _,
+        } => ObjectData::Instance {
+            class_name: class_name.clone(),
+            fields: Vec::new(),
+        },
+        OwnedValue::Tensor { shape, data, tid } => ObjectData::Tensor {
+            shape: shape.clone(),
+            data: data.clone(),
+            tid: *tid,
+        },
+        OwnedValue::DateTime { epoch_ms, utc } => ObjectData::DateTime {
+            epoch_ms: *epoch_ms,
+            utc: *utc,
+        },
+        OwnedValue::DateField {
+            epoch_ms,
+            utc,
+            field,
+            value,
+        } => ObjectData::DateField {
+            epoch_ms: *epoch_ms,
+            utc: *utc,
+            field: *field,
+            value: *value,
+        },
         OwnedValue::EnumVariant { .. } => ObjectData::Null,
         OwnedValue::Ptr(_) => ObjectData::Null,
     }
@@ -1348,9 +2084,12 @@ fn json_stringify_owned(val: &OwnedValue) -> String {
         // Exact decimal serializes as a JSON number literal preserving scale.
         OwnedValue::Dec(d) => d.to_string(),
         OwnedValue::Decimal(d) => {
-            if !d.is_finite() { return "null".to_string(); }
-            if d.fract() == 0.0 { format!("{:.1}", d) }
-            else {
+            if !d.is_finite() {
+                return "null".to_string();
+            }
+            if d.fract() == 0.0 {
+                format!("{:.1}", d)
+            } else {
                 let s = format!("{:.10}", d);
                 s.trim_end_matches('0').trim_end_matches('.').to_string()
             }
@@ -1369,20 +2108,27 @@ fn json_stringify_owned(val: &OwnedValue) -> String {
             format!("[{}]", parts.join(","))
         }
         OwnedValue::Dict { entries, .. } => {
-            let parts: Vec<String> = entries.iter().map(|(k, v)| {
-                let key = match k {
-                    OwnedValue::Str(s) => format!("\"{}\"", s.replace('"', "\\\"")),
-                    OwnedValue::Integer(i) => format!("\"{}\"", i),
-                    other => format!("\"{}\"", other.display_str()),
-                };
-                format!("{}:{}", key, json_stringify_owned(v))
-            }).collect();
+            let parts: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| {
+                    let key = match k {
+                        OwnedValue::Str(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+                        OwnedValue::Integer(i) => format!("\"{}\"", i),
+                        other => format!("\"{}\"", other.display_str()),
+                    };
+                    format!("{}:{}", key, json_stringify_owned(v))
+                })
+                .collect();
             format!("{{{}}}", parts.join(","))
         }
-        OwnedValue::Instance { class_name: _, fields } => {
-            let parts: Vec<String> = fields.iter().map(|(k, v)| {
-                format!("\"{}\":{}", k.replace('"', "\\\""), json_stringify_owned(v))
-            }).collect();
+        OwnedValue::Instance {
+            class_name: _,
+            fields,
+        } => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("\"{}\":{}", k.replace('"', "\\\""), json_stringify_owned(v)))
+                .collect();
             format!("{{{}}}", parts.join(","))
         }
         OwnedValue::Set { elements } => {
@@ -1392,22 +2138,35 @@ fn json_stringify_owned(val: &OwnedValue) -> String {
         OwnedValue::Tensor { shape, data, .. } => {
             fn nest_json(shape: &[usize], data: &[f64], off: usize) -> String {
                 if shape.len() == 1 {
-                    let vs: Vec<String> = (0..shape[0]).map(|i| {
-                        let v = data[off + i];
-                        if v.fract() == 0.0 { format!("{:.1}", v) }
-                        else { format!("{:.10}", v).trim_end_matches('0').trim_end_matches('.').to_string() }
-                    }).collect();
+                    let vs: Vec<String> = (0..shape[0])
+                        .map(|i| {
+                            let v = data[off + i];
+                            if v.fract() == 0.0 {
+                                format!("{:.1}", v)
+                            } else {
+                                format!("{:.10}", v)
+                                    .trim_end_matches('0')
+                                    .trim_end_matches('.')
+                                    .to_string()
+                            }
+                        })
+                        .collect();
                     format!("[{}]", vs.join(","))
                 } else {
                     let stride: usize = shape[1..].iter().product();
-                    let rows: Vec<String> = (0..shape[0]).map(|i| nest_json(&shape[1..], data, off + i * stride)).collect();
+                    let rows: Vec<String> = (0..shape[0])
+                        .map(|i| nest_json(&shape[1..], data, off + i * stride))
+                        .collect();
                     format!("[{}]", rows.join(","))
                 }
             }
             nest_json(shape, data, 0)
         }
         OwnedValue::EnumVariant { enum_name, variant } => {
-            format!("\"{}\"", format!("{}.{}", enum_name, variant).replace('"', "\\\""))
+            format!(
+                "\"{}\"",
+                format!("{}.{}", enum_name, variant).replace('"', "\\\"")
+            )
         }
         // A DateTime serializes as an ISO 8601 string; a DateField as its int.
         OwnedValue::DateTime { epoch_ms, utc } => {
@@ -1431,7 +2190,9 @@ fn json_pretty_owned(val: &OwnedValue, indent: usize) -> String {
 fn json_pretty_inner(val: &OwnedValue, indent: usize, level: usize) -> String {
     match val {
         OwnedValue::Array { elements, .. } | OwnedValue::Set { elements } => {
-            if elements.is_empty() { return "[]".to_string(); }
+            if elements.is_empty() {
+                return "[]".to_string();
+            }
             let pad = " ".repeat(indent * (level + 1));
             let pad_close = " ".repeat(indent * level);
             let parts: Vec<String> = elements
@@ -1441,26 +2202,46 @@ fn json_pretty_inner(val: &OwnedValue, indent: usize, level: usize) -> String {
             format!("[\n{}\n{}]", parts.join(",\n"), pad_close)
         }
         OwnedValue::Dict { entries, .. } => {
-            if entries.is_empty() { return "{}".to_string(); }
+            if entries.is_empty() {
+                return "{}".to_string();
+            }
             let pad = " ".repeat(indent * (level + 1));
             let pad_close = " ".repeat(indent * level);
-            let parts: Vec<String> = entries.iter().map(|(k, v)| {
-                let key = match k {
-                    OwnedValue::Str(s) => format!("\"{}\"", s.replace('"', "\\\"")),
-                    OwnedValue::Integer(i) => format!("\"{}\"", i),
-                    other => format!("\"{}\"", other.display_str()),
-                };
-                format!("{}{}: {}", pad, key, json_pretty_inner(v, indent, level + 1))
-            }).collect();
+            let parts: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| {
+                    let key = match k {
+                        OwnedValue::Str(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+                        OwnedValue::Integer(i) => format!("\"{}\"", i),
+                        other => format!("\"{}\"", other.display_str()),
+                    };
+                    format!(
+                        "{}{}: {}",
+                        pad,
+                        key,
+                        json_pretty_inner(v, indent, level + 1)
+                    )
+                })
+                .collect();
             format!("{{\n{}\n{}}}", parts.join(",\n"), pad_close)
         }
         OwnedValue::Instance { fields, .. } => {
-            if fields.is_empty() { return "{}".to_string(); }
+            if fields.is_empty() {
+                return "{}".to_string();
+            }
             let pad = " ".repeat(indent * (level + 1));
             let pad_close = " ".repeat(indent * level);
-            let parts: Vec<String> = fields.iter().map(|(k, v)| {
-                format!("{}\"{}\": {}", pad, k.replace('"', "\\\""), json_pretty_inner(v, indent, level + 1))
-            }).collect();
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}\"{}\": {}",
+                        pad,
+                        k.replace('"', "\\\""),
+                        json_pretty_inner(v, indent, level + 1)
+                    )
+                })
+                .collect();
             format!("{{\n{}\n{}}}", parts.join(",\n"), pad_close)
         }
         // Scalars (and tensors) have no nested structure to indent.
@@ -1474,13 +2255,18 @@ fn json_parse(input: &str) -> Result<OwnedValue, String> {
     let (val, pos) = json_parse_value(&chars, 0)?;
     let pos = json_skip_ws(&chars, pos);
     if pos != chars.len() {
-        return Err(format!("unexpected trailing characters at position {}", pos));
+        return Err(format!(
+            "unexpected trailing characters at position {}",
+            pos
+        ));
     }
     Ok(val)
 }
 
 fn json_skip_ws(chars: &[char], mut pos: usize) -> usize {
-    while pos < chars.len() && (chars[pos] == ' ' || chars[pos] == '\t' || chars[pos] == '\n' || chars[pos] == '\r') {
+    while pos < chars.len()
+        && (chars[pos] == ' ' || chars[pos] == '\t' || chars[pos] == '\n' || chars[pos] == '\r')
+    {
         pos += 1;
     }
     pos
@@ -1492,23 +2278,29 @@ fn json_parse_value(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), S
         return Err("unexpected end of input".to_string());
     }
     match chars[pos] {
-        '"'       => json_parse_string(chars, pos),
-        '['       => json_parse_array(chars, pos),
-        '{'       => json_parse_object(chars, pos),
-        't'       => {
-            if chars.get(pos..pos+4) == Some(&['t','r','u','e']) {
+        '"' => json_parse_string(chars, pos),
+        '[' => json_parse_array(chars, pos),
+        '{' => json_parse_object(chars, pos),
+        't' => {
+            if chars.get(pos..pos + 4) == Some(&['t', 'r', 'u', 'e']) {
                 Ok((OwnedValue::Boolean(true), pos + 4))
-            } else { Err(format!("invalid token at {}", pos)) }
+            } else {
+                Err(format!("invalid token at {}", pos))
+            }
         }
-        'f'       => {
-            if chars.get(pos..pos+5) == Some(&['f','a','l','s','e']) {
+        'f' => {
+            if chars.get(pos..pos + 5) == Some(&['f', 'a', 'l', 's', 'e']) {
                 Ok((OwnedValue::Boolean(false), pos + 5))
-            } else { Err(format!("invalid token at {}", pos)) }
+            } else {
+                Err(format!("invalid token at {}", pos))
+            }
         }
-        'n'       => {
-            if chars.get(pos..pos+4) == Some(&['n','u','l','l']) {
+        'n' => {
+            if chars.get(pos..pos + 4) == Some(&['n', 'u', 'l', 'l']) {
                 Ok((OwnedValue::Null, pos + 4))
-            } else { Err(format!("invalid token at {}", pos)) }
+            } else {
+                Err(format!("invalid token at {}", pos))
+            }
         }
         '-' | '0'..='9' => json_parse_number(chars, pos),
         c => Err(format!("unexpected character '{}' at position {}", c, pos)),
@@ -1521,22 +2313,28 @@ fn json_parse_string(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), 
     let mut s = String::new();
     while i < chars.len() {
         match chars[i] {
-            '"' => { return Ok((OwnedValue::Str(s), i + 1)); }
+            '"' => {
+                return Ok((OwnedValue::Str(s), i + 1));
+            }
             '\\' => {
                 i += 1;
-                if i >= chars.len() { return Err("unterminated string escape".to_string()); }
+                if i >= chars.len() {
+                    return Err("unterminated string escape".to_string());
+                }
                 match chars[i] {
-                    '"'  => s.push('"'),
+                    '"' => s.push('"'),
                     '\\' => s.push('\\'),
-                    '/'  => s.push('/'),
-                    'n'  => s.push('\n'),
-                    'r'  => s.push('\r'),
-                    't'  => s.push('\t'),
-                    'b'  => s.push('\u{0008}'),
-                    'f'  => s.push('\u{000C}'),
-                    'u'  => {
-                        if i + 4 >= chars.len() { return Err("invalid \\u escape".to_string()); }
-                        let hex: String = chars[i+1..i+5].iter().collect();
+                    '/' => s.push('/'),
+                    'n' => s.push('\n'),
+                    'r' => s.push('\r'),
+                    't' => s.push('\t'),
+                    'b' => s.push('\u{0008}'),
+                    'f' => s.push('\u{000C}'),
+                    'u' => {
+                        if i + 4 >= chars.len() {
+                            return Err("invalid \\u escape".to_string());
+                        }
+                        let hex: String = chars[i + 1..i + 5].iter().collect();
                         let code = u32::from_str_radix(&hex, 16)
                             .map_err(|_| format!("invalid \\u{}", hex))?;
                         let ch = char::from_u32(code)
@@ -1544,11 +2342,17 @@ fn json_parse_string(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), 
                         s.push(ch);
                         i += 4;
                     }
-                    c => { s.push('\\'); s.push(c); }
+                    c => {
+                        s.push('\\');
+                        s.push(c);
+                    }
                 }
                 i += 1;
             }
-            c => { s.push(c); i += 1; }
+            c => {
+                s.push(c);
+                i += 1;
+            }
         }
     }
     Err("unterminated string".to_string())
@@ -1558,17 +2362,37 @@ fn json_parse_array(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), S
     let mut i = json_skip_ws(chars, pos + 1); // skip '['
     let mut elements = Vec::new();
     if i < chars.len() && chars[i] == ']' {
-        return Ok((OwnedValue::Array { element_type: None, elements }, i + 1));
+        return Ok((
+            OwnedValue::Array {
+                element_type: None,
+                elements,
+            },
+            i + 1,
+        ));
     }
     loop {
         let (val, next) = json_parse_value(chars, i)?;
         elements.push(val);
         i = json_skip_ws(chars, next);
-        if i >= chars.len() { return Err("unterminated array".to_string()); }
+        if i >= chars.len() {
+            return Err("unterminated array".to_string());
+        }
         match chars[i] {
-            ']' => { return Ok((OwnedValue::Array { element_type: None, elements }, i + 1)); }
-            ',' => { i = json_skip_ws(chars, i + 1); }
-            c   => { return Err(format!("expected ',' or ']', got '{}'", c)); }
+            ']' => {
+                return Ok((
+                    OwnedValue::Array {
+                        element_type: None,
+                        elements,
+                    },
+                    i + 1,
+                ));
+            }
+            ',' => {
+                i = json_skip_ws(chars, i + 1);
+            }
+            c => {
+                return Err(format!("expected ',' or ']', got '{}'", c));
+            }
         }
     }
 }
@@ -1577,7 +2401,14 @@ fn json_parse_object(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), 
     let mut i = json_skip_ws(chars, pos + 1); // skip '{'
     let mut entries: Vec<(OwnedValue, OwnedValue)> = Vec::new();
     if i < chars.len() && chars[i] == '}' {
-        return Ok((OwnedValue::Dict { key_type: "string".to_string(), value_type: "any".to_string(), entries }, i + 1));
+        return Ok((
+            OwnedValue::Dict {
+                key_type: "string".to_string(),
+                value_type: "any".to_string(),
+                entries,
+            },
+            i + 1,
+        ));
     }
     loop {
         i = json_skip_ws(chars, i);
@@ -1593,11 +2424,26 @@ fn json_parse_object(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), 
         let (val, next_v) = json_parse_value(chars, i)?;
         entries.push((key, val));
         i = json_skip_ws(chars, next_v);
-        if i >= chars.len() { return Err("unterminated object".to_string()); }
+        if i >= chars.len() {
+            return Err("unterminated object".to_string());
+        }
         match chars[i] {
-            '}' => { return Ok((OwnedValue::Dict { key_type: "string".to_string(), value_type: "any".to_string(), entries }, i + 1)); }
-            ',' => { i = json_skip_ws(chars, i + 1); }
-            c   => { return Err(format!("expected ',' or '}}', got '{}'", c)); }
+            '}' => {
+                return Ok((
+                    OwnedValue::Dict {
+                        key_type: "string".to_string(),
+                        value_type: "any".to_string(),
+                        entries,
+                    },
+                    i + 1,
+                ));
+            }
+            ',' => {
+                i = json_skip_ws(chars, i + 1);
+            }
+            c => {
+                return Err(format!("expected ',' or '}}', got '{}'", c));
+            }
         }
     }
 }
@@ -1605,18 +2451,34 @@ fn json_parse_object(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), 
 fn json_parse_number(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), String> {
     let mut i = pos;
     let mut s = String::new();
-    if i < chars.len() && chars[i] == '-' { s.push('-'); i += 1; }
-    while i < chars.len() && chars[i].is_ascii_digit() { s.push(chars[i]); i += 1; }
+    if i < chars.len() && chars[i] == '-' {
+        s.push('-');
+        i += 1;
+    }
+    while i < chars.len() && chars[i].is_ascii_digit() {
+        s.push(chars[i]);
+        i += 1;
+    }
     let is_float = i < chars.len() && (chars[i] == '.' || chars[i] == 'e' || chars[i] == 'E');
     if i < chars.len() && chars[i] == '.' {
         s.push('.');
         i += 1;
-        while i < chars.len() && chars[i].is_ascii_digit() { s.push(chars[i]); i += 1; }
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            s.push(chars[i]);
+            i += 1;
+        }
     }
     if i < chars.len() && (chars[i] == 'e' || chars[i] == 'E') {
-        s.push(chars[i]); i += 1;
-        if i < chars.len() && (chars[i] == '+' || chars[i] == '-') { s.push(chars[i]); i += 1; }
-        while i < chars.len() && chars[i].is_ascii_digit() { s.push(chars[i]); i += 1; }
+        s.push(chars[i]);
+        i += 1;
+        if i < chars.len() && (chars[i] == '+' || chars[i] == '-') {
+            s.push(chars[i]);
+            i += 1;
+        }
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            s.push(chars[i]);
+            i += 1;
+        }
     }
     if is_float || s.contains('.') || s.contains('e') || s.contains('E') {
         let f: f64 = s.parse().map_err(|_| format!("invalid number '{}'", s))?;

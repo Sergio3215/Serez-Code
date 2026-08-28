@@ -1,4 +1,4 @@
-use crate::{lexer::Lexer, parser::Parser, evaluator::Evaluator};
+use crate::{evaluator::Evaluator, lexer::Lexer, parser::Parser};
 use std::io::{self, Write};
 
 const PROMPT: &str = ">> ";

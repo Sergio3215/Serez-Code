@@ -1,13 +1,15 @@
 #![allow(unused_imports)]
+use super::{
+    CallFrame, DefaultArgumentResult, EvalResult, StoredClass, format_decimal, json_parse,
+    json_stringify_owned, obj_data_eq, obj_data_to_key_str, operator_to_method_name,
+    owned_to_key_str, type_matches,
+};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::rc::Rc;
-use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str, owned_to_key_str,
-            obj_data_eq, format_decimal, json_stringify_owned, json_parse,
-            operator_to_method_name};
 
 impl super::Evaluator {
     /// Writes a mutated collection (`obj_ref`) back into the instance field it
@@ -15,16 +17,30 @@ impl super::Evaluator {
     /// generic dot-call path and the slot fast paths for Set/Array (value
     /// semantics plant a copy on field read; without this, the mutation would
     /// be lost).
-    pub(super) fn apply_field_writeback(&mut self, inner_obj_expr: &Expression, field_name: &str, obj_ref: ObjectRef) {
+    pub(super) fn apply_field_writeback(
+        &mut self,
+        inner_obj_expr: &Expression,
+        field_name: &str,
+        obj_ref: ObjectRef,
+    ) {
         if let EvalResult::Value(inst_ref) = self.eval_expression(inner_obj_expr) {
-            if let Some(ObjectData::Instance { class_name, mut fields }) = self.resolve(inst_ref).cloned() {
+            if let Some(ObjectData::Instance {
+                class_name,
+                mut fields,
+            }) = self.resolve(inst_ref).cloned()
+            {
                 let updated = self.extract(obj_ref);
                 if let Some(f) = fields.iter_mut().find(|(n, _)| n == field_name) {
                     f.1 = updated;
                 }
                 match inst_ref.region {
-                    RegionId::Global => self.global_arena.update(inst_ref.index, ObjectData::Instance { class_name, fields }),
-                    RegionId::Scoped => self.scopes.arena.update(inst_ref.index, ObjectData::Instance { class_name, fields }),
+                    RegionId::Global => self
+                        .global_arena
+                        .update(inst_ref.index, ObjectData::Instance { class_name, fields }),
+                    RegionId::Scoped => self
+                        .scopes
+                        .arena
+                        .update(inst_ref.index, ObjectData::Instance { class_name, fields }),
                 }
             }
         }
@@ -40,15 +56,34 @@ impl super::Evaluator {
         &mut self,
         dot_call: &ast::DotCallExpression,
     ) -> Result<Option<(ObjectRef, String)>, EvalResult> {
-        const MUTATING_OPS: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove",
-                                        "reverse", "add", "delete", "Add", "Remove", "RemoveAll", "clear"];
+        const MUTATING_OPS: &[&str] = &[
+            "push",
+            "pop",
+            "shift",
+            "unshift",
+            "sort",
+            "remove",
+            "reverse",
+            "add",
+            "delete",
+            "Add",
+            "Remove",
+            "RemoveAll",
+            "clear",
+        ];
         if !MUTATING_OPS.contains(&dot_call.method.as_str()) {
             return Ok(None);
         }
-        let Expression::Index(idx_expr) = dot_call.object.as_ref() else { return Ok(None) };
+        let Expression::Index(idx_expr) = dot_call.object.as_ref() else {
+            return Ok(None);
+        };
         let (dict_expr, key_expr) = (idx_expr.left.as_ref(), idx_expr.index.as_ref());
-        let Expression::Identifier(dict_name) = dict_expr else { return Ok(None) };
-        let Some(dr) = self.lookup_var(dict_name.as_str()) else { return Ok(None) };
+        let Expression::Identifier(dict_name) = dict_expr else {
+            return Ok(None);
+        };
+        let Some(dr) = self.lookup_var(dict_name.as_str()) else {
+            return Ok(None);
+        };
         if !matches!(self.resolve(dr), Some(ObjectData::Dict { .. })) {
             return Ok(None);
         }
@@ -61,7 +96,11 @@ impl super::Evaluator {
             Some(ObjectData::Integer(n)) => n.to_string(),
             _ => String::new(),
         };
-        Ok(if key_str.is_empty() { None } else { Some((dr, key_str)) })
+        Ok(if key_str.is_empty() {
+            None
+        } else {
+            Some((dr, key_str))
+        })
     }
 
     /// Writes the mutated value at `obj_ref` back into `dict_ref[key_str]`.
@@ -70,8 +109,15 @@ impl super::Evaluator {
     /// the mutation would be dropped.
     fn apply_dict_writeback(&mut self, dict_ref: ObjectRef, key_str: &str, obj_ref: ObjectRef) {
         let updated = self.extract(obj_ref);
-        let Some(ObjectData::Dict { key_type, value_type, mut entries, .. }) =
-            self.resolve(dict_ref).cloned() else { return };
+        let Some(ObjectData::Dict {
+            key_type,
+            value_type,
+            mut entries,
+            ..
+        }) = self.resolve(dict_ref).cloned()
+        else {
+            return;
+        };
         let mut found = false;
         for entry in entries.iter_mut() {
             let ks = match &entry.0 {
@@ -79,10 +125,21 @@ impl super::Evaluator {
                 OwnedValue::Integer(n) => n.to_string(),
                 _ => String::new(),
             };
-            if ks == key_str { entry.1 = updated.clone(); found = true; break; }
+            if ks == key_str {
+                entry.1 = updated.clone();
+                found = true;
+                break;
+            }
         }
-        if !found { entries.push((OwnedValue::Str(key_str.to_string()), updated)); }
-        let new_dict = ObjectData::Dict { key_type, value_type, entries, index: Default::default() };
+        if !found {
+            entries.push((OwnedValue::Str(key_str.to_string()), updated));
+        }
+        let new_dict = ObjectData::Dict {
+            key_type,
+            value_type,
+            entries,
+            index: Default::default(),
+        };
         match dict_ref.region {
             RegionId::Global => self.global_arena.update(dict_ref.index, new_dict),
             RegionId::Scoped => self.scopes.arena.update(dict_ref.index, new_dict),
@@ -120,9 +177,18 @@ impl super::Evaluator {
             }
 
             Expression::Lambda(lambda) => {
-                use crate::ast::{LambdaBody, Parameter, BlockStatement, Statement, ReturnStatement};
-                let params: Vec<Parameter> = lambda.params.iter()
-                    .map(|n| Parameter { name: n.clone(), type_name: None, is_rest: false, default_value: None })
+                use crate::ast::{
+                    BlockStatement, LambdaBody, Parameter, ReturnStatement, Statement,
+                };
+                let params: Vec<Parameter> = lambda
+                    .params
+                    .iter()
+                    .map(|n| Parameter {
+                        name: n.clone(),
+                        type_name: None,
+                        is_rest: false,
+                        default_value: None,
+                    })
                     .collect();
                 let body = match &lambda.body {
                     LambdaBody::Block(b) => b.clone(),
@@ -148,17 +214,13 @@ impl super::Evaluator {
                 for part in parts {
                     match part {
                         ast::StringPart::Literal(s) => result.push_str(s),
-                        ast::StringPart::Expr(expr) => {
-                            match self.eval_expression(expr) {
-                                EvalResult::Value(r) => {
-                                    match self.fmt_value(r) {
-                                        Ok(s)  => result.push_str(&s),
-                                        Err(e) => return e,
-                                    }
-                                }
-                                other => return other,
-                            }
-                        }
+                        ast::StringPart::Expr(expr) => match self.eval_expression(expr) {
+                            EvalResult::Value(r) => match self.fmt_value(r) {
+                                Ok(s) => result.push_str(&s),
+                                Err(e) => return e,
+                            },
+                            other => return other,
+                        },
                     }
                 }
                 EvalResult::Value(self.alloc(ObjectData::Str(result)))
@@ -168,19 +230,22 @@ impl super::Evaluator {
                 // Built-in global functions (intercept before variable lookup)
                 if let Expression::Identifier(name) = call_expr.function.as_ref() {
                     match name.as_str() {
-                        "parseInt"    => return self.eval_parse_int(&call_expr.arguments),
-                        "parseDecimal"=> return self.eval_parse_decimal(&call_expr.arguments),
-                        "readLine"    => return self.eval_read_line(&call_expr.arguments),
-                        "fetch" if self.lookup_var("fetch").is_none() => return self.eval_fetch(&call_expr.arguments),
-                        "super"       => return self.eval_super_call(&call_expr.arguments),
-                        "assert"      => return self.eval_assert(&call_expr.arguments),
-                        "type_of"     => return self.eval_type_of(&call_expr.arguments),
-                        "abs" | "sqrt" | "floor" | "ceil" | "round"
-                        | "min" | "max" | "pow" | "log" | "log2" | "log10"
-                            => return self.eval_math_builtin(name, &call_expr.arguments),
-                        "time"  => return self.eval_builtin_time(),
-                        "env"   => return self.eval_builtin_env(&call_expr.arguments),
-                        "exit"  => return self.eval_builtin_exit(&call_expr.arguments),
+                        "parseInt" => return self.eval_parse_int(&call_expr.arguments),
+                        "parseDecimal" => return self.eval_parse_decimal(&call_expr.arguments),
+                        "readLine" => return self.eval_read_line(&call_expr.arguments),
+                        "fetch" if self.lookup_var("fetch").is_none() => {
+                            return self.eval_fetch(&call_expr.arguments);
+                        }
+                        "super" => return self.eval_super_call(&call_expr.arguments),
+                        "assert" => return self.eval_assert(&call_expr.arguments),
+                        "type_of" => return self.eval_type_of(&call_expr.arguments),
+                        "abs" | "sqrt" | "floor" | "ceil" | "round" | "min" | "max" | "pow"
+                        | "log" | "log2" | "log10" => {
+                            return self.eval_math_builtin(name, &call_expr.arguments);
+                        }
+                        "time" => return self.eval_builtin_time(),
+                        "env" => return self.eval_builtin_env(&call_expr.arguments),
+                        "exit" => return self.eval_builtin_exit(&call_expr.arguments),
                         _ => {}
                     }
                     // native fn dispatch: if name is registered as a native function but has no
@@ -188,13 +253,18 @@ impl super::Evaluator {
                     // reached here there is no Rust implementation for it.
                     if self.native_fns.contains(name) && self.lookup_var(name).is_none() {
                         let n = name.clone();
-                        return self.rt_err_kind("TypeError", format!("native function '{}' has no Rust implementation registered", n));
+                        return self.rt_err_kind(
+                            "TypeError",
+                            format!(
+                                "native function '{}' has no Rust implementation registered",
+                                n
+                            ),
+                        );
                     }
                 }
 
-                if self.call_depth >= super::MAX_CALL_DEPTH {
-                    eprintln!("❌ ERROR: Stack overflow — maximum call depth ({}) exceeded", super::MAX_CALL_DEPTH);
-                    return EvalResult::Error;
+                if let Some(error) = self.require_call_capacity() {
+                    return error;
                 }
 
                 let func_ref = match self.eval_expression(&call_expr.function) {
@@ -230,26 +300,35 @@ impl super::Evaluator {
                         }
                     }
                 }
-                let (return_type, parameters, body, captured, is_generator, bound_class) = match func_data {
-                    Some(ObjectData::Function {
-                        return_type,
-                        parameters,
-                        body,
-                        captured,
-                        is_generator,
-                        bound_class,
-                    }) => (return_type, parameters, body, captured, is_generator, bound_class),
-                    _ => {
-                        // Raise BEFORE unwinding so the printed call stack still
-                        // shows the failing frame; state is restored either way,
-                        // so a catching try/catch sees a consistent evaluator.
-                        let err = self.rt_err_kind("TypeError", "Attempt to call a non-function");
-                        self.scopes.pop();
-                        self.call_depth -= 1;
-                        self.call_stack.pop();
-                        return err;
-                    }
-                };
+                let (return_type, parameters, body, captured, is_generator, bound_class) =
+                    match func_data {
+                        Some(ObjectData::Function {
+                            return_type,
+                            parameters,
+                            body,
+                            captured,
+                            is_generator,
+                            bound_class,
+                        }) => (
+                            return_type,
+                            parameters,
+                            body,
+                            captured,
+                            is_generator,
+                            bound_class,
+                        ),
+                        _ => {
+                            // Raise BEFORE unwinding so the printed call stack still
+                            // shows the failing frame; state is restored either way,
+                            // so a catching try/catch sees a consistent evaluator.
+                            let err =
+                                self.rt_err_kind("TypeError", "Attempt to call a non-function");
+                            self.scopes.pop();
+                            self.call_depth -= 1;
+                            self.call_stack.pop();
+                            return err;
+                        }
+                    };
 
                 let mut arg_refs = Vec::new();
                 for arg in &call_expr.arguments {
@@ -259,21 +338,36 @@ impl super::Evaluator {
                             EvalResult::Value(r) => r,
                             EvalResult::Throw(v) => {
                                 let owned = self.extract(v);
-                                self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
+                                self.scopes.pop();
+                                self.call_depth -= 1;
+                                self.call_stack.pop();
                                 return EvalResult::Throw(self.plant(owned));
                             }
-                            _ => { self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop(); return EvalResult::Error; }
+                            _ => {
+                                self.scopes.pop();
+                                self.call_depth -= 1;
+                                self.call_stack.pop();
+                                return EvalResult::Error;
+                            }
                         };
                         match self.resolve(spread_ref).cloned() {
-                            Some(ObjectData::Array { elements: spread_elems, .. }) => {
+                            Some(ObjectData::Array {
+                                elements: spread_elems,
+                                ..
+                            }) => {
                                 for elem in spread_elems {
                                     let planted = self.plant(elem);
                                     arg_refs.push(planted);
                                 }
                             }
                             _ => {
-                                let err = self.rt_err_kind("TypeError", "Spread in function call requires an array");
-                                self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
+                                let err = self.rt_err_kind(
+                                    "TypeError",
+                                    "Spread in function call requires an array",
+                                );
+                                self.scopes.pop();
+                                self.call_depth -= 1;
+                                self.call_stack.pop();
                                 return err;
                             }
                         }
@@ -302,9 +396,16 @@ impl super::Evaluator {
 
                 // Check for rest parameter (last param with is_rest=true)
                 let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
-                let required_count = parameters.iter().filter(|p| !p.is_rest && p.default_value.is_none()).count();
+                let required_count = parameters
+                    .iter()
+                    .filter(|p| !p.is_rest && p.default_value.is_none())
+                    .count();
                 let min_params = required_count;
-                let max_params = if has_rest { usize::MAX } else { parameters.len() };
+                let max_params = if has_rest {
+                    usize::MAX
+                } else {
+                    parameters.len()
+                };
 
                 if arg_refs.len() < min_params || arg_refs.len() > max_params {
                     let expected_str = if has_rest {
@@ -316,10 +417,14 @@ impl super::Evaluator {
                     };
                     // rt_err_kind prints the message + call stack (uncaught case)
                     // with the failing frame still on it; then unwind.
-                    let err = self.rt_err_kind("TypeError", format!(
-                        "Function expected {} argument(s), got {}",
-                        expected_str, arg_refs.len()
-                    ));
+                    let err = self.rt_err_kind(
+                        "TypeError",
+                        format!(
+                            "Function expected {} argument(s), got {}",
+                            expected_str,
+                            arg_refs.len()
+                        ),
+                    );
                     self.scopes.pop();
                     self.call_depth -= 1;
                     self.call_stack.pop();
@@ -327,8 +432,12 @@ impl super::Evaluator {
                 }
 
                 for (i, param) in parameters.iter().enumerate() {
-                    if param.is_rest { break; }
-                    if i >= arg_refs.len() { break; } // default will be used
+                    if param.is_rest {
+                        break;
+                    }
+                    if i >= arg_refs.len() {
+                        break;
+                    } // default will be used
                     let arg_ref = arg_refs[i];
                     if let Some(expected_type) = &param.type_name {
                         let actual_data = self.resolve(arg_ref).unwrap();
@@ -336,7 +445,9 @@ impl super::Evaluator {
                         if !is_valid {
                             eprintln!(
                                 "❌ TYPE ERROR: Parameter '{}' expected '{}' but received '{}'.",
-                                param.name, expected_type, actual_data.type_name()
+                                param.name,
+                                expected_type,
+                                actual_data.type_name()
                             );
                             self.print_call_stack();
                             self.scopes.pop();
@@ -355,10 +466,14 @@ impl super::Evaluator {
                 for (i, param) in parameters.iter().enumerate() {
                     if param.is_rest {
                         // Collect remaining args into an array
-                        let rest_elems: Vec<OwnedValue> = arg_refs[i.min(arg_refs.len())..].iter()
+                        let rest_elems: Vec<OwnedValue> = arg_refs[i.min(arg_refs.len())..]
+                            .iter()
                             .map(|&r| self.extract(r))
                             .collect();
-                        let rest_ref = self.alloc(ObjectData::Array { element_type: None, elements: rest_elems });
+                        let rest_ref = self.alloc(ObjectData::Array {
+                            element_type: None,
+                            elements: rest_elems,
+                        });
                         self.scopes.declare(param.name.clone(), rest_ref);
                         break;
                     }
@@ -367,9 +482,20 @@ impl super::Evaluator {
                         self.alloc(arg_data)
                     } else if let Some(default_expr) = &param.default_value {
                         let default_expr = default_expr.clone();
-                        match self.eval_expression(&default_expr) {
-                            EvalResult::Value(v) => v,
-                            _ => self.null_ref,
+                        match self.eval_default_argument(&default_expr) {
+                            DefaultArgumentResult::Value(value) => value,
+                            DefaultArgumentResult::Throw(owned) => {
+                                self.scopes.pop();
+                                self.call_depth -= 1;
+                                self.call_stack.pop();
+                                return EvalResult::Throw(self.plant(owned));
+                            }
+                            DefaultArgumentResult::Error => {
+                                self.scopes.pop();
+                                self.call_depth -= 1;
+                                self.call_stack.pop();
+                                return EvalResult::Error;
+                            }
                         }
                     } else {
                         self.null_ref
@@ -399,7 +525,10 @@ impl super::Evaluator {
                 for s in &body.statements {
                     match self.eval_statement(s) {
                         EvalResult::Value(_) => {} // implicit — function result is null unless explicit return
-                        EvalResult::Return(v) => { result_ref = v; break; }
+                        EvalResult::Return(v) => {
+                            result_ref = v;
+                            break;
+                        }
                         EvalResult::Throw(v) => {
                             early_throw = Some(self.extract(v));
                             break;
@@ -408,16 +537,22 @@ impl super::Evaluator {
                             early_error = true;
                             break;
                         }
-                        EvalResult::Break | EvalResult::Continue
-                        | EvalResult::BreakLabel(_) | EvalResult::ContinueLabel(_) => {
-                            eprintln!("❌ ERROR: 'break'/'continue' cannot be used outside of a loop");
+                        EvalResult::Break
+                        | EvalResult::Continue
+                        | EvalResult::BreakLabel(_)
+                        | EvalResult::ContinueLabel(_) => {
+                            eprintln!(
+                                "❌ ERROR: 'break'/'continue' cannot be used outside of a loop"
+                            );
                             early_error = true;
                             break;
                         }
                     }
                 }
 
-                if let Some(prev) = prev_exec_class { self.executing_class = prev; }
+                if let Some(prev) = prev_exec_class {
+                    self.executing_class = prev;
+                }
 
                 // Generator: collect yielded values before popping scope
                 if is_generator {
@@ -426,18 +561,29 @@ impl super::Evaluator {
                     self.scopes.pop();
                     self.call_depth -= 1;
                     self.call_stack.pop();
-                    if early_error { return EvalResult::Error; }
-                    if let Some(thrown) = early_throw { return EvalResult::Throw(self.plant(thrown)); }
-                    let arr_ref = self.alloc(ObjectData::Array { element_type: None, elements: collected });
+                    if early_error {
+                        return EvalResult::Error;
+                    }
+                    if let Some(thrown) = early_throw {
+                        return EvalResult::Throw(self.plant(thrown));
+                    }
+                    let arr_ref = self.alloc(ObjectData::Array {
+                        element_type: None,
+                        elements: collected,
+                    });
                     return EvalResult::Value(arr_ref);
                 }
 
                 if early_error {
-                    self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
+                    self.scopes.pop();
+                    self.call_depth -= 1;
+                    self.call_stack.pop();
                     return EvalResult::Error;
                 }
                 if let Some(thrown) = early_throw {
-                    self.scopes.pop(); self.call_depth -= 1; self.call_stack.pop();
+                    self.scopes.pop();
+                    self.call_depth -= 1;
+                    self.call_stack.pop();
                     return EvalResult::Throw(self.plant(thrown));
                 }
 
@@ -476,14 +622,17 @@ impl super::Evaluator {
                             _ => return EvalResult::Error,
                         };
                         match self.resolve(spread_ref).cloned() {
-                            Some(ObjectData::Array { elements: spread_elems, .. }) => {
+                            Some(ObjectData::Array {
+                                elements: spread_elems,
+                                ..
+                            }) => {
                                 for elem in spread_elems {
                                     owned_elems.push(elem);
                                 }
                             }
                             _ => {
-                                eprintln!("❌ ERROR: Spread operator requires an array");
-                                return EvalResult::Error;
+                                return self
+                                    .rt_err_kind("TypeError", "Array spread requires an array");
                             }
                         }
                         continue;
@@ -495,7 +644,8 @@ impl super::Evaluator {
                                 if !type_matches(et, data) {
                                     eprintln!(
                                         "❌ TYPE ERROR: Array declared as [{}] but element has type '{}'",
-                                        et, data.type_name()
+                                        et,
+                                        data.type_name()
                                     );
                                     return EvalResult::Error;
                                 }
@@ -554,7 +704,9 @@ impl super::Evaluator {
                 // stays warm across lookups (cloning a dict resets its index).
                 if let Some(ObjectData::Dict { entries, index, .. }) = self.resolve(left_ref) {
                     let search_key = obj_data_to_key_str(&idx_data);
-                    let found = index.lookup(entries, &search_key).map(|i| entries[i].1.clone());
+                    let found = index
+                        .lookup(entries, &search_key)
+                        .map(|i| entries[i].1.clone());
                     return match found {
                         Some(v) => EvalResult::Value(self.plant_global(v)),
                         None => EvalResult::Value(self.null_ref),
@@ -569,14 +721,15 @@ impl super::Evaluator {
                 // evaluated above, so no user code runs between resolve and read.
                 if let ObjectData::Integer(i) = idx_data {
                     // Ok(element) | Err(len) so the borrow ends before plant/rt_err.
-                    let from_array: Option<Result<OwnedValue, usize>> = match self.resolve(left_ref) {
-                        Some(ObjectData::Array { elements, .. }) => Some(
-                            if i >= 0 && (i as usize) < elements.len() {
+                    let from_array: Option<Result<OwnedValue, usize>> = match self.resolve(left_ref)
+                    {
+                        Some(ObjectData::Array { elements, .. }) => {
+                            Some(if i >= 0 && (i as usize) < elements.len() {
                                 Ok(elements[i as usize].clone())
                             } else {
                                 Err(elements.len())
-                            },
-                        ),
+                            })
+                        }
                         _ => None,
                     };
                     if let Some(got) = from_array {
@@ -611,7 +764,10 @@ impl super::Evaluator {
                     Some(d) => d.type_name().to_string(),
                     None => "unknown".to_string(),
                 };
-                self.rt_err_kind("TypeError", format!("Index operator not supported for type '{}'", tn))
+                self.rt_err_kind(
+                    "TypeError",
+                    format!("Index operator not supported for type '{}'", tn),
+                )
             }
 
             Expression::DictLiteral(dict_lit) => {
@@ -632,7 +788,10 @@ impl super::Evaluator {
                         let kd = self.resolve(key_ref).unwrap();
                         let valid = type_matches(&dict_lit.key_type, kd);
                         if !valid {
-                            eprintln!("❌ TYPE ERROR: Dict key does not match declared key type '{}'", dict_lit.key_type);
+                            eprintln!(
+                                "❌ TYPE ERROR: Dict key does not match declared key type '{}'",
+                                dict_lit.key_type
+                            );
                             return EvalResult::Error;
                         }
                     }
@@ -640,7 +799,10 @@ impl super::Evaluator {
                         let vd = self.resolve(val_ref).unwrap();
                         let valid = type_matches(&dict_lit.value_type, vd);
                         if !valid {
-                            eprintln!("❌ TYPE ERROR: Dict value does not match declared value type '{}'", dict_lit.value_type);
+                            eprintln!(
+                                "❌ TYPE ERROR: Dict value does not match declared value type '{}'",
+                                dict_lit.value_type
+                            );
                             return EvalResult::Error;
                         }
                     }
@@ -656,7 +818,9 @@ impl super::Evaluator {
             }
 
             Expression::EntryLiteral(_, _) => {
-                eprintln!("❌ ERROR: Entry literal {{k,v}} is only valid as an argument to a dict method");
+                eprintln!(
+                    "❌ ERROR: Entry literal {{k,v}} is only valid as an argument to a dict method"
+                );
                 EvalResult::Error
             }
 
@@ -745,7 +909,10 @@ impl super::Evaluator {
                                 variant,
                             }));
                         }
-                        eprintln!("❌ ERROR: '{}' is not a variant of enum '{}'", dot_call.method, name);
+                        eprintln!(
+                            "❌ ERROR: '{}' is not a variant of enum '{}'",
+                            dot_call.method, name
+                        );
                         return EvalResult::Error;
                     }
                     // ── Static method call: ClassName.method(args) ───────────────
@@ -768,6 +935,11 @@ impl super::Evaluator {
                             let fake_ref = self.null_ref;
                             return self.invoke_method(fake_ref, name, &m, arg_vals, 0, 0);
                         }
+                        let message = format!(
+                            "Class '{}' has no static method named '{}'",
+                            name, method_name
+                        );
+                        return self.rt_err_kind("ReferenceError", message);
                     }
                 }
 
@@ -780,12 +952,32 @@ impl super::Evaluator {
                 let writeback_ctx: Option<(Expression, String)> =
                     if let Expression::DotCall(inner) = dot_call.object.as_ref() {
                         if inner.arguments.is_empty() {
-                            const MUTATING: &[&str] = &["push", "pop", "shift", "unshift", "sort", "remove", "reverse", "add", "delete", "Add", "Remove", "RemoveAll", "clear"];
+                            const MUTATING: &[&str] = &[
+                                "push",
+                                "pop",
+                                "shift",
+                                "unshift",
+                                "sort",
+                                "remove",
+                                "reverse",
+                                "add",
+                                "delete",
+                                "Add",
+                                "Remove",
+                                "RemoveAll",
+                                "clear",
+                            ];
                             if MUTATING.contains(&dot_call.method.as_str()) {
                                 Some((*inner.object.clone(), inner.method.clone()))
-                            } else { None }
-                        } else { None }
-                    } else { None };
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
 
                 let obj_ref = match self.eval_expression(&dot_call.object) {
                     EvalResult::Value(r) => r,
@@ -958,8 +1150,16 @@ impl super::Evaluator {
 
                 let result = match obj_data {
                     // ── Array methods ─────────────────────────────────────────
-                    ObjectData::Array { element_type, elements: ref elems } => {
-                        let r = self.eval_array_method(obj_ref, element_type.clone(), elems.clone(), dot_call);
+                    ObjectData::Array {
+                        element_type,
+                        elements: ref elems,
+                    } => {
+                        let r = self.eval_array_method(
+                            obj_ref,
+                            element_type.clone(),
+                            elems.clone(),
+                            dot_call,
+                        );
                         // Writeback: if array came from dict["key"], update the dict entry
                         if let Some((dict_ref, key_str)) = dict_writeback_ctx {
                             self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
@@ -968,9 +1168,7 @@ impl super::Evaluator {
                     }
 
                     // ── String methods ────────────────────────────────────────
-                    ObjectData::Str(ref s) => {
-                        self.eval_string_method(s.clone(), dot_call)
-                    }
+                    ObjectData::Str(ref s) => self.eval_string_method(s.clone(), dot_call),
 
                     // (Dict methods are intercepted before this match — see the
                     // slot fast path above; a Dict can never reach here.)
@@ -987,9 +1185,7 @@ impl super::Evaluator {
                     }
 
                     // ── Exact decimal methods (round/setScale/abs/...) ─────────
-                    ObjectData::Dec(d) => {
-                        self.eval_dec_method(d, dot_call)
-                    }
+                    ObjectData::Dec(d) => self.eval_dec_method(d, dot_call),
 
                     // ── DateTime field getters / methods ──────────────────────
                     ObjectData::DateTime { epoch_ms, utc } => {
@@ -997,9 +1193,12 @@ impl super::Evaluator {
                     }
 
                     // ── DateField arithmetic (.add/.reduce/.remove) ───────────
-                    ObjectData::DateField { epoch_ms, utc, field, value } => {
-                        self.eval_datefield_method(epoch_ms, utc, field, value, dot_call)
-                    }
+                    ObjectData::DateField {
+                        epoch_ms,
+                        utc,
+                        field,
+                        value,
+                    } => self.eval_datefield_method(epoch_ms, utc, field, value, dot_call),
 
                     // ── EnumVariant: no field access, just toString ────────────
                     ObjectData::EnumVariant { enum_name, variant } => {
@@ -1019,7 +1218,10 @@ impl super::Evaluator {
                     }
 
                     _ => {
-                        eprintln!("❌ ERROR: '.' method call not supported for type '{}'", obj_data.type_name());
+                        eprintln!(
+                            "❌ ERROR: '.' method call not supported for type '{}'",
+                            obj_data.type_name()
+                        );
                         EvalResult::Error
                     }
                 };
@@ -1047,12 +1249,14 @@ impl super::Evaluator {
                 if let Some(class) = self.class_registry.get(&new_expr.class_name).cloned() {
                     return self.eval_new_class(new_expr, class);
                 }
-                eprintln!("❌ ERROR: Unknown class or interface '{}'", new_expr.class_name);
-                EvalResult::Error
+                let message = format!("Unknown class or interface '{}'", new_expr.class_name);
+                self.rt_err_kind("ReferenceError", message)
             }
 
             Expression::ObjectPatch(_) => {
-                eprintln!("❌ ERROR: Object patch '{{field: val}}' is only valid in an assignment context");
+                eprintln!(
+                    "❌ ERROR: Object patch '{{field: val}}' is only valid in an assignment context"
+                );
                 EvalResult::Error
             }
 
@@ -1181,14 +1385,14 @@ impl super::Evaluator {
                 use crate::ast::SizeOfTarget;
                 let size: i64 = match target {
                     SizeOfTarget::Type(name) => match name.as_str() {
-                        "int"     => 8,
+                        "int" => 8,
                         "decimal" => 8,
-                        "bool"    => 1,
-                        "string"  => 8,
-                        "null"    => 0,
-                        "void"    => 0,
-                        "any"     => 8,
-                        _         => 8, // unknown type: pointer-sized
+                        "bool" => 1,
+                        "string" => 8,
+                        "null" => 0,
+                        "void" => 0,
+                        "any" => 8,
+                        _ => 8, // unknown type: pointer-sized
                     },
                     SizeOfTarget::Expr(inner) => {
                         let val_ref = match self.eval_expression(inner) {
@@ -1196,13 +1400,13 @@ impl super::Evaluator {
                             other => return other,
                         };
                         match self.resolve(val_ref) {
-                            Some(ObjectData::Integer(_))    => 8,
-                            Some(ObjectData::Decimal(_))    => 8,
-                            Some(ObjectData::Boolean(_))    => 1,
-                            Some(ObjectData::Str(_))        => 8,
-                            Some(ObjectData::Null)          => 0,
-                            Some(ObjectData::Ptr(_))        => 8,
-                            _                               => 8,
+                            Some(ObjectData::Integer(_)) => 8,
+                            Some(ObjectData::Decimal(_)) => 8,
+                            Some(ObjectData::Boolean(_)) => 1,
+                            Some(ObjectData::Str(_)) => 8,
+                            Some(ObjectData::Null) => 0,
+                            Some(ObjectData::Ptr(_)) => 8,
+                            _ => 8,
                         }
                     }
                 };
@@ -1212,7 +1416,10 @@ impl super::Evaluator {
             Expression::AddressOf(inner) => {
                 if let Expression::Identifier(name) = inner.as_ref() {
                     if self.lookup_var(name).is_none() {
-                        eprintln!("❌ ERROR: Cannot take address of undeclared variable '{}'", name);
+                        eprintln!(
+                            "❌ ERROR: Cannot take address of undeclared variable '{}'",
+                            name
+                        );
                         return EvalResult::Error;
                     }
                     let ptr = ObjectData::Ptr(name.clone());
@@ -1229,15 +1436,13 @@ impl super::Evaluator {
                     other => return other,
                 };
                 match self.resolve(ptr_ref).cloned() {
-                    Some(ObjectData::Ptr(name)) => {
-                        match self.lookup_var(&name) {
-                            Some(r) => EvalResult::Value(r),
-                            None => {
-                                eprintln!("❌ ERROR: Dangling pointer to '{}'", name);
-                                EvalResult::Error
-                            }
+                    Some(ObjectData::Ptr(name)) => match self.lookup_var(&name) {
+                        Some(r) => EvalResult::Value(r),
+                        None => {
+                            eprintln!("❌ ERROR: Dangling pointer to '{}'", name);
+                            EvalResult::Error
                         }
-                    }
+                    },
                     _ => {
                         eprintln!("❌ ERROR: Cannot dereference a non-pointer value");
                         EvalResult::Error
@@ -1258,7 +1463,8 @@ impl super::Evaluator {
                 let arms = m.arms.clone();
                 for arm in &arms {
                     let mut bindings: Vec<(String, ObjectRef)> = Vec::new();
-                    if !self.match_pattern(&arm.pattern, &subject_data, subject_ref, &mut bindings) {
+                    if !self.match_pattern(&arm.pattern, &subject_data, subject_ref, &mut bindings)
+                    {
                         continue;
                     }
 
@@ -1273,7 +1479,10 @@ impl super::Evaluator {
                         let guard = guard.clone();
                         let guard_ref = match self.eval_expression(&guard) {
                             EvalResult::Value(v) => v,
-                            other => { self.scopes.pop(); return other; }
+                            other => {
+                                self.scopes.pop();
+                                return other;
+                            }
                         };
                         let truthy = {
                             let d = self.resolve(guard_ref).unwrap();
@@ -1292,14 +1501,19 @@ impl super::Evaluator {
                     for s in &body.statements {
                         match self.eval_statement(s) {
                             EvalResult::Value(v) => result_ref = v,
-                            other => { early = Some(other); break; }
+                            other => {
+                                early = Some(other);
+                                break;
+                            }
                         }
                     }
 
                     let owned = self.extract(result_ref);
                     self.scopes.pop();
 
-                    if let Some(r) = early { return r; }
+                    if let Some(r) = early {
+                        return r;
+                    }
                     return EvalResult::Value(self.plant(owned));
                 }
 
@@ -1350,5 +1564,4 @@ impl super::Evaluator {
             }
         }
     }
-
 }

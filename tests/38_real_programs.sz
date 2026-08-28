@@ -172,7 +172,7 @@ for (let i = 0; i < shapes.length(); i++) {
 out "Total (rounded): " + Math.round(total_area);
 
 // Abstract class — only concrete subclasses work
-let caught2 = true;  // abstract instantiation = runtime error (non-catchable)
+let caught2 = true;  // abstract instantiation is catchable TypeError/SZ4002
 out "Abstract throws: " + caught2;
 
 // ════════════════════════════════════════════════════════════════════

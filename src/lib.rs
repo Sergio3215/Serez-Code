@@ -25,8 +25,7 @@ pub mod szx;
 pub mod token;
 pub mod type_checker;
 
-// AOT backend (AST->HIR->MIR->LLVM IR): compiled only with `--features llvm`.
-// Phase 1; not wired to any CLI verb yet - gating it keeps ~3k lines and the
-// inkwell dependency out of the default build until the backend is resumed.
-#[cfg(feature = "llvm")]
+// AOT pipeline. HIR/MIR and their validation are always compiled and tested;
+// only the actual LLVM implementation is selected by the `llvm` feature.
+// The backend is still experimental and is not wired to a CLI verb.
 pub mod compiler;

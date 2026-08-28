@@ -1,6 +1,6 @@
+use super::{EvalResult, obj_data_to_key_str, owned_to_key_str, type_matches};
 use crate::ast;
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
-use super::{EvalResult, type_matches, obj_data_to_key_str, owned_to_key_str};
 
 impl super::Evaluator {
     /// Position of `probe` under the LEGACY comparator (`owned_to_key_str`),
@@ -25,7 +25,9 @@ impl super::Evaluator {
     ) -> Option<usize> {
         match index.lookup(entries, probe) {
             Some(i) if owned_to_key_str(&entries[i].0) == probe => Some(i),
-            Some(_) => entries.iter().position(|(k, _)| owned_to_key_str(k) == probe),
+            Some(_) => entries
+                .iter()
+                .position(|(k, _)| owned_to_key_str(k) == probe),
             None => None,
         }
     }
@@ -74,7 +76,10 @@ impl super::Evaluator {
                     }
                     _ => Vec::new(),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: keys }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: None,
+                    elements: keys,
+                }))
             }
 
             "values" => {
@@ -84,7 +89,10 @@ impl super::Evaluator {
                     }
                     _ => Vec::new(),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: vals }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: None,
+                    elements: vals,
+                }))
             }
 
             // Returns 2-D array of entries: [[k1,v1],[k2,v2],...]
@@ -99,7 +107,10 @@ impl super::Evaluator {
                         .collect(),
                     _ => Vec::new(),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: pairs }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: None,
+                    elements: pairs,
+                }))
             }
 
             // Reached only through a dict living somewhere the upstream length()
@@ -155,23 +166,31 @@ impl super::Evaluator {
         // The declared types are read AFTER the arguments are evaluated — they
         // are part of the receiver's slot, and only the two Strings are copied.
         let (key_type, value_type) = match self.resolve(dict_ref) {
-            Some(ObjectData::Dict { key_type, value_type, .. }) => {
-                (key_type.clone(), value_type.clone())
-            }
+            Some(ObjectData::Dict {
+                key_type,
+                value_type,
+                ..
+            }) => (key_type.clone(), value_type.clone()),
             _ => return EvalResult::Error,
         };
 
         if key_type != "any" {
             let kd = self.resolve(key_ref).unwrap();
             if !type_matches(&key_type, kd) {
-                eprintln!("❌ TYPE ERROR: Dict key type mismatch on Add (expected '{}')", key_type);
+                eprintln!(
+                    "❌ TYPE ERROR: Dict key type mismatch on Add (expected '{}')",
+                    key_type
+                );
                 return EvalResult::Error;
             }
         }
         if value_type != "any" {
             let vd = self.resolve(val_ref).unwrap();
             if !type_matches(&value_type, vd) {
-                eprintln!("❌ TYPE ERROR: Dict value type mismatch on Add (expected '{}')", value_type);
+                eprintln!(
+                    "❌ TYPE ERROR: Dict value type mismatch on Add (expected '{}')",
+                    value_type
+                );
                 return EvalResult::Error;
             }
         }
@@ -189,7 +208,9 @@ impl super::Evaluator {
             // "") is outside what the index can answer for: keep the historical
             // linear scan so those keys behave exactly as they always did.
             let pos = if search_key.is_empty() {
-                entries.iter().position(|(k, _)| owned_to_key_str(k).is_empty())
+                entries
+                    .iter()
+                    .position(|(k, _)| owned_to_key_str(k).is_empty())
             } else {
                 Self::dict_pos(entries, index, &search_key)
             };
@@ -210,7 +231,11 @@ impl super::Evaluator {
     /// one way to end up with duplicates, and the historical `retain` dropped
     /// them all). The indexed probe makes the common "key is not there" case
     /// O(1); an actual removal still shifts the tail of the Vec.
-    fn dict_remove(&mut self, dict_ref: ObjectRef, dot_call: &ast::DotCallExpression) -> EvalResult {
+    fn dict_remove(
+        &mut self,
+        dict_ref: ObjectRef,
+        dot_call: &ast::DotCallExpression,
+    ) -> EvalResult {
         if dot_call.arguments.len() != 1 {
             eprintln!("❌ ERROR: Remove expects 1 argument (key)");
             return EvalResult::Error;

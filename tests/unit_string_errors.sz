@@ -1,0 +1,66 @@
+// Regression contract for String method validation, propagation and recovery.
+use permissions { }
+
+test("String arity and types are structured", () => {
+    let caught = 0;
+    try { "abc".startsWith(); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { "abc".charAt("bad"); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { "abc".padStart(3, 7); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { "abc".slice(0, 1, 2); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    assert(caught == 4, "String validation must be catchable TypeError");
+});
+
+test("negative padding is a bounded RangeError", () => {
+    let caught = false;
+    try { "x".padEnd(0 - 1, "0"); }
+    catch (e) { caught = e.code == "SZ4000" && e.kind == "RangeError"; }
+    assert(caught, "negative padding must not loop or allocate");
+});
+
+test("String preserves nested errors and throws", () => {
+    let divided = false;
+    try { "abc".replace("a", 1 / 0); }
+    catch (e) { divided = e.code == "SZ4004" && e.kind == "DivisionByZero"; }
+
+    fn string explode() { throw "string-boom"; return ""; }
+    let thrown = false;
+    try { "abc".startsWith(explode()); }
+    catch (e) { thrown = e == "string-boom"; }
+
+    assert(divided, "nested runtime error must survive");
+    assert(thrown, "user throw must survive");
+});
+
+test("String validates arity before argument side effects", () => {
+    let touched = 0;
+    fn int touch() { touched++; return 1; }
+    try { "abc".length(touch()); } catch (e) {}
+    try { "abc".padStart(3, "0", touch()); } catch (e) {}
+    assert(touched == 0, "invalid arity must not evaluate arguments");
+});
+
+test("multichar and Unicode padding preserve character semantics", () => {
+    assert("x".padStart(4, "ab") == "babx", "historical padStart order");
+    assert("x".padEnd(4, "ab") == "xaba", "historical padEnd order");
+    assert("é".padStart(3, "🙂") == "🙂🙂é", "Unicode counts characters");
+});
+
+test("extreme slice indexes clamp without panic", () => {
+    let min = (0 - 9223372036854775807) - 1;
+    assert("abc".slice(min) == "abc", "minimum start clamps to zero");
+    assert("abc".slice(0, min) == "", "minimum end clamps to zero");
+});
+
+test("String recovers after caught validation errors", () => {
+    try { "x".missing(); } catch (e) {
+        assert(e.code == "SZ4001", "unknown member code");
+        assert(e.kind == "ReferenceError", "unknown member kind");
+    }
+    assert("abc".substring(1) == "bc", "later calls still work");
+});
+
+summary();

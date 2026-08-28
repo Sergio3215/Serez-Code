@@ -2,18 +2,64 @@
 
 ## How to run
 
+A change is verified when all three layers below are green. `cargo build`
+succeeding is not one of them.
+
 ```powershell
+# 1. Rust: static checks and the tests written in Rust
+cargo fmt --check
+cargo clippy --all-targets
+cargo test --all-targets
+
+# 2. The language itself: conformance, regression, error-path, security, CLI
 .\run_tests.ps1                    # full suite
 .\run_tests.ps1 -unit              # unit tests only
 .\run_tests.ps1 -e2e               # E2E + error tests only
 .\run_tests.ps1 -filter "switch"   # filter by name
 .\run_tests.ps1 -generate          # regenerate .expected (after language changes)
+
+# 3. The ecosystem, as real consumers of the language
+.\run_ecosystem.ps1                # every official package checked out alongside
+.\run_ecosystem.ps1 -only serez-ui # the canary that exercises the most semantics
 ```
 
-**Result:** 432 tests · 0 failures
+Layers 1 and 2 run in CI on Windows, Linux and macOS. Layer 3 is local: it needs
+the sibling package checkouts, and running floating external code in CI is a
+trust decision that has not been made yet.
 
-The sections below catalogue a selection of the suite, not every file in
-`tests/`. `run_tests.ps1` is the authority on what exists and what passes.
+**Result:** 459 tests · 0 failures in layer 2, plus 224 Rust tests in layer 1
+(144 library, 33 LSP-binary, 8 frontend-robustness and 39 runtime-outcome tests).
+
+The sections below catalogue a selection of layer 2, not every file in `tests/`.
+`run_tests.ps1` is the authority on what exists and what passes.
+
+### Rust-side tests
+
+Most Rust tests live in `#[cfg(test)]` modules next to the code they cover
+(package manager, LSP, CSS, sockets, autodiff, the HIR/MIR compiler stages).
+Two suites are separate integration tests:
+
+- **`tests/frontend_robustness.rs`** — the frontend must never crash on text a
+  user can type. Holds the AST depth ceiling (`MAX_PARSE_DEPTH`) against both
+  nesting and operator chains, checks that ordinary nesting is unaffected,
+  asserts the frontend does not panic on 43 shapes of malformed input, pins the
+  stable `SZ2xxx`/`SZ3xxx` diagnostic codes, and verifies default/rest parameter
+  ordering across every full signature form. Cases run on an explicitly sized
+  thread — see the comments in the file for why.
+
+- **`tests/runtime_outcome.rs`** — pins the complete-program boundary: stable
+  runtime payloads, user exceptions, invalid top-level control flow, caught
+  errors, evaluator reuse without stale payloads, recoverable operator failures,
+  default-expression propagation through every call path, structured and
+  catchable class/interface construction, inheritance, `super`, member and
+  property-dispatch validation, Random validation/full-domain integer draws,
+  String validation/propagation/padding ceilings, Task API/lifecycle/lockdown inheritance,
+  structured-but-fatal resource ceilings, and the detailed frontend/runtime
+  pipeline result.
+
+The same suite pins lexer diagnostics `SZ1001`–`SZ1004`. CLI error fixtures
+`err_lex_*` ensure unexpected/NUL characters, unterminated strings/comments and
+invalid base-prefixed integers abort instead of being evaluated.
 
 ---
 
@@ -681,7 +727,20 @@ If no error is produced, the test **fails** (the error condition was not detecte
 
 Unit tests use the `tests/framework.sz` framework.
 Each case calls `test("name", () => { assert(...); })`.
-A failure produces `[FAIL]` on stdout; the runner detects it.
+A unit file passes only when the interpreter exits zero, emits a `Results:`
+summary, and emits no `[FAIL]` line. This prevents parse/runtime aborts before
+`summary()` from becoming false positives. The runner executes a permanent
+abort-before-summary self-test on every invocation. Error/security fixtures
+must exit non-zero and emit a diagnostic; E2E fixtures must exit zero before
+their output can be compared or regenerated.
+
+Legacy `unit_*.sz` files with a matching `.expected` are golden tests despite
+their historical names. They run without the framework and must match their
+saved stdout. This avoids a noisy mass rename while making their contract real.
+
+`unit_datetime_errors.sz` and the DateTime cases in `runtime_outcome.rs` pin
+structured DateTime/DateField errors, arity-before-evaluation, nested failure
+propagation and recovery. `err_datetime_invalid.sz` covers the uncaught CLI path.
 
 ---
 

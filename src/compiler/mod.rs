@@ -1,3 +1,8 @@
+pub mod hir;
+pub mod hir_lower;
+pub mod llvm_emit;
+pub mod mir;
+pub mod mir_lower;
 /// Compiler pipeline: AST → HIR → MIR → LLVM IR → native binary.
 ///
 /// The interpreter in `evaluator/` walks the AST and executes it directly.
@@ -9,10 +14,4 @@
 ///   hir        — High-level IR: desugared AST with resolved types
 ///   mir        — Mid-level IR: three-address code with basic blocks
 ///   llvm_emit  — LLVM IR emission via inkwell
-
 pub mod types;
-pub mod hir;
-pub mod hir_lower;
-pub mod mir;
-pub mod mir_lower;
-pub mod llvm_emit;

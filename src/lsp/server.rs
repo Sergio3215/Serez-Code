@@ -40,7 +40,14 @@ struct Server {
     doc_imports: HashMap<String, Vec<ImportedSym>>,
     /// Imported-file cache keyed by filesystem path:
     /// (mtime, symbols, that file's own import paths).
-    import_cache: HashMap<String, (std::time::SystemTime, Vec<analysis::SymbolInfo>, Vec<String>)>,
+    import_cache: HashMap<
+        String,
+        (
+            std::time::SystemTime,
+            Vec<analysis::SymbolInfo>,
+            Vec<String>,
+        ),
+    >,
     got_shutdown: bool,
 }
 
@@ -81,12 +88,18 @@ impl Server {
 
             // ── document sync ────────────────────────────────────────────
             "textDocument/didOpen" => {
-                let uri = params["textDocument"]["uri"].as_str().unwrap_or("").to_string();
+                let uri = params["textDocument"]["uri"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
                 let text = params["textDocument"]["text"].as_str().unwrap_or("");
                 self.update_document(output, uri, text);
             }
             "textDocument/didChange" => {
-                let uri = params["textDocument"]["uri"].as_str().unwrap_or("").to_string();
+                let uri = params["textDocument"]["uri"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
                 // full sync: the last change carries the whole document
                 if let Some(text) = params["contentChanges"]
                     .as_array()
@@ -99,8 +112,11 @@ impl Server {
             "textDocument/didClose" => {
                 let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
                 self.docs.remove(uri);
-                self.notify(output, "textDocument/publishDiagnostics",
-                    json!({ "uri": uri, "diagnostics": [] }));
+                self.notify(
+                    output,
+                    "textDocument/publishDiagnostics",
+                    json!({ "uri": uri, "diagnostics": [] }),
+                );
             }
             "textDocument/didSave" => {}
 
@@ -143,7 +159,10 @@ impl Server {
                 if let Some(id) = id {
                     // unknown *request* → MethodNotFound
                     let error = json!({ "code": -32601, "message": format!("method '{}' not implemented", method) });
-                    rpc::write_message(output, &json!({ "jsonrpc": "2.0", "id": id, "error": error }));
+                    rpc::write_message(
+                        output,
+                        &json!({ "jsonrpc": "2.0", "id": id, "error": error }),
+                    );
                 }
                 // unknown notifications ($/cancelRequest, …) are ignored
             }
@@ -153,12 +172,18 @@ impl Server {
 
     fn respond(&self, output: &mut impl Write, id: Option<Value>, result: Value) {
         if let Some(id) = id {
-            rpc::write_message(output, &json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+            rpc::write_message(
+                output,
+                &json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            );
         }
     }
 
     fn notify(&self, output: &mut impl Write, method: &str, params: Value) {
-        rpc::write_message(output, &json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+        rpc::write_message(
+            output,
+            &json!({ "jsonrpc": "2.0", "method": method, "params": params }),
+        );
     }
 
     fn update_document(&mut self, output: &mut impl Write, uri: String, text: &str) {
@@ -176,13 +201,17 @@ impl Server {
                 json!({
                     "range": diag_range(&analysis.lines, d.line, d.column),
                     "severity": d.severity,
+                    "code": d.code,
                     "source": "sz",
                     "message": d.message,
                 })
             })
             .collect();
-        self.notify(output, "textDocument/publishDiagnostics",
-            json!({ "uri": uri, "diagnostics": diagnostics }));
+        self.notify(
+            output,
+            "textDocument/publishDiagnostics",
+            json!({ "uri": uri, "diagnostics": diagnostics }),
+        );
         let imported = self.collect_import_symbols(&uri, &analysis.lines);
         self.doc_imports.insert(uri.clone(), imported);
         self.docs.insert(uri, analysis);
@@ -212,8 +241,8 @@ impl Server {
             if !rel.ends_with(".sz") && !rel.ends_with(".szx") {
                 rel.push_str(".sz");
             }
-            let full = std::path::Path::new(&base)
-                .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+            let full =
+                std::path::Path::new(&base).join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
             let canon = match full.canonicalize() {
                 Ok(c) => c,
                 Err(_) => continue, // package/module imports without a local file
@@ -255,7 +284,10 @@ impl Server {
                 .unwrap_or_else(|| base.clone());
             for sym in symbols {
                 if sym.kind != SymbolKind::Import {
-                    out.push(ImportedSym { sym, uri: file_uri.clone() });
+                    out.push(ImportedSym {
+                        sym,
+                        uri: file_uri.clone(),
+                    });
                 }
             }
             for n in nested {
@@ -311,7 +343,12 @@ impl Server {
                 push(&mut items, k, 14, "tipo");
             }
             for (ns, methods) in builtins::NAMESPACES {
-                push(&mut items, ns, 9, &format!("namespace nativo ({} métodos)", methods.len()));
+                push(
+                    &mut items,
+                    ns,
+                    9,
+                    &format!("namespace nativo ({} métodos)", methods.len()),
+                );
             }
             for (name, sig) in builtins::BUILTIN_FUNCTIONS {
                 push(&mut items, name, 3, sig);
@@ -351,15 +388,26 @@ impl Server {
         };
 
         let text = if let Some(recv) = receiver.as_deref().filter(|r| builtins::is_namespace(r)) {
-            if builtins::namespace_methods(recv).map(|m| m.contains(&word.as_str())).unwrap_or(false) {
-                format!("```serez-code\n{}.{}(…)\n```\nMétodo nativo del namespace `{}`.", recv, word, recv)
+            if builtins::namespace_methods(recv)
+                .map(|m| m.contains(&word.as_str()))
+                .unwrap_or(false)
+            {
+                format!(
+                    "```serez-code\n{}.{}(…)\n```\nMétodo nativo del namespace `{}`.",
+                    recv, word, recv
+                )
             } else {
                 return Value::Null;
             }
         } else if builtins::is_namespace(&word) && receiver.is_none() {
             let doc_line = builtins::namespace_doc(&word).unwrap_or("");
-            let count = builtins::namespace_methods(&word).map(|m| m.len()).unwrap_or(0);
-            format!("```serez-code\n{}\n```\n{} ({} métodos)", word, doc_line, count)
+            let count = builtins::namespace_methods(&word)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            format!(
+                "```serez-code\n{}\n```\n{} ({} métodos)",
+                word, doc_line, count
+            )
         } else if let Some(symbol) = analysis::find_definition(&doc.symbols, &word, line) {
             let mut s = format!("```serez-code\n{}\n```\n", symbol.detail);
             if let Some(container) = &symbol.container {
@@ -375,7 +423,9 @@ impl Server {
             let file = imp.uri.rsplit('/').next().unwrap_or(&imp.uri);
             format!(
                 "```serez-code\n{}\n```\nImportado de `{}` (línea {}).",
-                imp.sym.detail, percent_decode(file), imp.sym.line
+                imp.sym.detail,
+                percent_decode(file),
+                imp.sym.line
             )
         } else if let Some(sig) = builtins::builtin_function(&word) {
             format!("```serez-code\n{}\n```\nFunción builtin.", sig)
@@ -389,7 +439,10 @@ impl Server {
     // ── definition ───────────────────────────────────────────────────────────
 
     fn definition(&self, params: &Value) -> Value {
-        let uri = params["textDocument"]["uri"].as_str().unwrap_or("").to_string();
+        let uri = params["textDocument"]["uri"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let (doc, line, character) = match self.at(params) {
             Some(x) => x,
             None => return Value::Null,
@@ -407,7 +460,11 @@ impl Server {
             Some(w) => w,
             None => return Value::Null,
         };
-        if receiver.as_deref().map(|r| builtins::is_namespace(r)).unwrap_or(false) {
+        if receiver
+            .as_deref()
+            .map(|r| builtins::is_namespace(r))
+            .unwrap_or(false)
+        {
             return Value::Null; // native methods have no source location
         }
         match analysis::find_definition(&doc.symbols, &word, line) {
@@ -423,7 +480,11 @@ impl Server {
                 })
             }
             // Not local — maybe it comes from an imported file.
-            None => match self.doc_imports.get(&uri).and_then(|v| v.iter().find(|i| i.sym.name == word)) {
+            None => match self
+                .doc_imports
+                .get(&uri)
+                .and_then(|v| v.iter().find(|i| i.sym.name == word))
+            {
                 Some(imp) => {
                     let l = imp.sym.line.saturating_sub(1);
                     let c = imp.sym.column.saturating_sub(1);
@@ -491,7 +552,10 @@ impl Server {
     // ── references / rename ─────────────────────────────────────────────────
 
     /// Every occurrence of the identifier under the cursor, as LSP Locations.
-    fn occurrence_locations(&self, params: &Value) -> Option<(String, String, Vec<(usize, usize)>)> {
+    fn occurrence_locations(
+        &self,
+        params: &Value,
+    ) -> Option<(String, String, Vec<(usize, usize)>)> {
         let uri = params["textDocument"]["uri"].as_str()?.to_string();
         let (doc, line, character) = self.at(params)?;
         let (word, _receiver) = analysis::word_at(&doc.lines, line, character)?;
@@ -557,7 +621,10 @@ impl Server {
     // ── signature help ───────────────────────────────────────────────────────
 
     fn signature_help(&self, params: &Value) -> Value {
-        let uri = params["textDocument"]["uri"].as_str().unwrap_or("").to_string();
+        let uri = params["textDocument"]["uri"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let (doc, line, character) = match self.at(params) {
             Some(x) => x,
             None => return Value::Null,
@@ -577,7 +644,10 @@ impl Server {
         for i in (0..upto).rev() {
             match chars[i] {
                 ')' => depth += 1,
-                '(' if depth == 0 => { open = Some(i); break; }
+                '(' if depth == 0 => {
+                    open = Some(i);
+                    break;
+                }
                 '(' => depth -= 1,
                 ',' if depth == 0 => commas += 1,
                 _ => {}
@@ -613,21 +683,31 @@ impl Server {
 
         // Signature label: user symbol (local or imported), builtin, or
         // namespace method.
-        let label = if let Some(sym) = doc
-            .symbols
-            .iter()
-            .find(|s| s.name == name && matches!(s.kind, SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor))
-        {
+        let label = if let Some(sym) = doc.symbols.iter().find(|s| {
+            s.name == name
+                && matches!(
+                    s.kind,
+                    SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor
+                )
+        }) {
             sym.detail.clone()
         } else if let Some(imp) = self.doc_imports.get(&uri).and_then(|v| {
-            v.iter().find(|i| i.sym.name == name
-                && matches!(i.sym.kind, SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor))
+            v.iter().find(|i| {
+                i.sym.name == name
+                    && matches!(
+                        i.sym.kind,
+                        SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor
+                    )
+            })
         }) {
             imp.sym.detail.clone()
         } else if let Some(sig) = builtins::builtin_function(&name) {
             sig.to_string()
         } else if let Some(recv) = receiver.filter(|r| builtins::is_namespace(r)) {
-            if builtins::namespace_methods(&recv).map(|m| m.contains(&name.as_str())).unwrap_or(false) {
+            if builtins::namespace_methods(&recv)
+                .map(|m| m.contains(&name.as_str()))
+                .unwrap_or(false)
+            {
                 format!("{}.{}(…)", recv, name)
             } else {
                 return Value::Null;
@@ -639,7 +719,11 @@ impl Server {
         // Parameter labels from the signature's own parens.
         let parameters: Vec<Value> = label
             .find('(')
-            .and_then(|o| label[o + 1..].find(')').map(|c| label[o + 1..o + 1 + c].to_string()))
+            .and_then(|o| {
+                label[o + 1..]
+                    .find(')')
+                    .map(|c| label[o + 1..o + 1 + c].to_string())
+            })
             .map(|inner| {
                 inner
                     .split(',')
@@ -736,7 +820,8 @@ fn import_target(lines: &[String], line: usize, doc_uri: &str) -> Option<String>
     let dir_uri = &doc_uri[..doc_uri.rfind('/')? + 1];
     // resolve against the document directory on disk before answering
     let dir_path = uri_to_path(dir_uri)?;
-    let target = std::path::Path::new(&dir_path).join(import_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let target = std::path::Path::new(&dir_path)
+        .join(import_path.replace('/', std::path::MAIN_SEPARATOR_STR));
     if !target.exists() {
         return None;
     }
@@ -766,11 +851,12 @@ fn uri_to_path(uri: &str) -> Option<String> {
     let rest = uri.strip_prefix("file://")?;
     let decoded = percent_decode(rest);
     // windows: /E:/dir → E:/dir
-    let decoded = if decoded.len() > 2 && decoded.as_bytes()[0] == b'/' && decoded.as_bytes()[2] == b':' {
-        decoded[1..].to_string()
-    } else {
-        decoded
-    };
+    let decoded =
+        if decoded.len() > 2 && decoded.as_bytes()[0] == b'/' && decoded.as_bytes()[2] == b':' {
+            decoded[1..].to_string()
+        } else {
+            decoded
+        };
     Some(decoded)
 }
 
@@ -796,7 +882,9 @@ fn percent_encode(seg: &str) -> String {
     let mut out = String::new();
     for b in seg.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -841,9 +929,15 @@ mod tests {
     }
 
     fn open(server: &mut Server, text: &str) -> Vec<Value> {
-        send(server, notification("textDocument/didOpen", json!({
-            "textDocument": { "uri": URI, "languageId": "serez-code", "version": 1, "text": text }
-        })))
+        send(
+            server,
+            notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": { "uri": URI, "languageId": "serez-code", "version": 1, "text": text }
+                }),
+            ),
+        )
     }
 
     fn at(line: u64, character: u64) -> Value {
@@ -881,10 +975,16 @@ mod tests {
     fn did_change_clears_diagnostics_when_fixed() {
         let mut server = Server::default();
         open(&mut server, "if (true {\n    out 1;\n}\n");
-        let replies = send(&mut server, notification("textDocument/didChange", json!({
-            "textDocument": { "uri": URI, "version": 2 },
-            "contentChanges": [ { "text": "if (true) {\n    out 1;\n}\n" } ],
-        })));
+        let replies = send(
+            &mut server,
+            notification(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": URI, "version": 2 },
+                    "contentChanges": [ { "text": "if (true) {\n    out 1;\n}\n" } ],
+                }),
+            ),
+        );
         let diags = replies[0]["params"]["diagnostics"].as_array().unwrap();
         assert!(diags.is_empty(), "{:?}", diags);
     }
@@ -898,13 +998,19 @@ mod tests {
         let labels: Vec<&str> = items.iter().filter_map(|i| i["label"].as_str()).collect();
         assert!(labels.contains(&"read"), "{:?}", labels);
         assert!(labels.contains(&"write"), "{:?}", labels);
-        assert!(!labels.contains(&"let"), "namespace completion must not list keywords");
+        assert!(
+            !labels.contains(&"let"),
+            "namespace completion must not list keywords"
+        );
     }
 
     #[test]
     fn completion_at_top_level_lists_keywords_namespaces_and_symbols() {
         let mut server = Server::default();
-        open(&mut server, "fn int suma(int a, int b) {\n    return a + b;\n}\n\n");
+        open(
+            &mut server,
+            "fn int suma(int a, int b) {\n    return a + b;\n}\n\n",
+        );
         let replies = send(&mut server, request(3, "textDocument/completion", at(3, 0)));
         let items = replies[0]["result"].as_array().unwrap();
         let labels: Vec<&str> = items.iter().filter_map(|i| i["label"].as_str()).collect();
@@ -917,7 +1023,10 @@ mod tests {
     #[test]
     fn hover_on_user_function_shows_signature() {
         let mut server = Server::default();
-        open(&mut server, "fn int suma(int a, int b) {\n    return a + b;\n}\nout suma(1, 2);\n");
+        open(
+            &mut server,
+            "fn int suma(int a, int b) {\n    return a + b;\n}\nout suma(1, 2);\n",
+        );
         let replies = send(&mut server, request(4, "textDocument/hover", at(3, 5)));
         let value = replies[0]["result"]["contents"]["value"].as_str().unwrap();
         assert!(value.contains("fn int suma(int a, int b)"), "{}", value);
@@ -935,7 +1044,10 @@ mod tests {
     #[test]
     fn definition_of_function_points_at_declaration() {
         let mut server = Server::default();
-        open(&mut server, "fn int suma(int a, int b) {\n    return a + b;\n}\nout suma(1, 2);\n");
+        open(
+            &mut server,
+            "fn int suma(int a, int b) {\n    return a + b;\n}\nout suma(1, 2);\n",
+        );
         let replies = send(&mut server, request(6, "textDocument/definition", at(3, 5)));
         let result = &replies[0]["result"];
         assert_eq!(result["uri"], URI);
@@ -946,12 +1058,25 @@ mod tests {
     #[test]
     fn document_symbols_nest_class_members() {
         let mut server = Server::default();
-        open(&mut server, "class Animal {\n    public Animal(string n) {\n        this.nombre = n;\n    }\n    public string getNombre() {\n        return this.nombre;\n    }\n}\nlet a = new Animal(\"Rex\");\n");
-        let replies = send(&mut server, request(7, "textDocument/documentSymbol", json!({
-            "textDocument": { "uri": URI }
-        })));
+        open(
+            &mut server,
+            "class Animal {\n    public Animal(string n) {\n        this.nombre = n;\n    }\n    public string getNombre() {\n        return this.nombre;\n    }\n}\nlet a = new Animal(\"Rex\");\n",
+        );
+        let replies = send(
+            &mut server,
+            request(
+                7,
+                "textDocument/documentSymbol",
+                json!({
+                    "textDocument": { "uri": URI }
+                }),
+            ),
+        );
         let symbols = replies[0]["result"].as_array().unwrap();
-        let class = symbols.iter().find(|s| s["name"] == "Animal").expect("class symbol");
+        let class = symbols
+            .iter()
+            .find(|s| s["name"] == "Animal")
+            .expect("class symbol");
         assert_eq!(class["kind"], 5);
         let children = class["children"].as_array().expect("children");
         assert!(children.iter().any(|c| c["name"] == "getNombre"));
@@ -960,15 +1085,24 @@ mod tests {
     #[test]
     fn unknown_request_gets_method_not_found() {
         let mut server = Server::default();
-        let replies = send(&mut server, request(9, "textDocument/foldingRange", json!({})));
+        let replies = send(
+            &mut server,
+            request(9, "textDocument/foldingRange", json!({})),
+        );
         assert_eq!(replies[0]["error"]["code"], -32601);
     }
 
     #[test]
     fn references_lists_every_occurrence() {
         let mut server = Server::default();
-        open(&mut server, "fn int suma(int a, int b) {\n    return a + b;\n}\nout suma(1, 2);\nout suma(3, 4);\n");
-        let replies = send(&mut server, request(11, "textDocument/references", at(3, 5)));
+        open(
+            &mut server,
+            "fn int suma(int a, int b) {\n    return a + b;\n}\nout suma(1, 2);\nout suma(3, 4);\n",
+        );
+        let replies = send(
+            &mut server,
+            request(11, "textDocument/references", at(3, 5)),
+        );
         let locs = replies[0]["result"].as_array().unwrap();
         assert_eq!(locs.len(), 3, "{:?}", locs); // decl + 2 calls
         assert_eq!(locs[0]["range"]["start"]["line"], 0);
@@ -978,7 +1112,10 @@ mod tests {
     #[test]
     fn rename_edits_every_occurrence_and_validates_name() {
         let mut server = Server::default();
-        open(&mut server, "let total = 1;\nout total;\ntotal = total + 1;\n");
+        open(
+            &mut server,
+            "let total = 1;\nout total;\ntotal = total + 1;\n",
+        );
         let mut p = at(1, 5);
         p["newName"] = json!("acumulado");
         let replies = send(&mut server, request(12, "textDocument/rename", p));
@@ -995,8 +1132,14 @@ mod tests {
     #[test]
     fn signature_help_shows_signature_and_active_parameter() {
         let mut server = Server::default();
-        open(&mut server, "fn int suma(int a, int b) {\n    return a + b;\n}\nout suma(1, \n");
-        let replies = send(&mut server, request(14, "textDocument/signatureHelp", at(3, 12)));
+        open(
+            &mut server,
+            "fn int suma(int a, int b) {\n    return a + b;\n}\nout suma(1, \n",
+        );
+        let replies = send(
+            &mut server,
+            request(14, "textDocument/signatureHelp", at(3, 12)),
+        );
         let result = &replies[0]["result"];
         let label = result["signatures"][0]["label"].as_str().unwrap();
         assert!(label.contains("fn int suma(int a, int b)"), "{}", label);
@@ -1010,17 +1153,30 @@ mod tests {
     fn szx_document_gets_symbols_but_no_diagnostics() {
         let mut server = Server::default();
         let uri = "file:///E%3A/proyecto/app.szx";
-        let replies = send(&mut server, notification("textDocument/didOpen", json!({
-            "textDocument": { "uri": uri, "languageId": "serez-code-jsx", "version": 1,
-                "text": "class App {\n    fn any render() {\n        return <View><Text>hola</Text></View>;\n    }\n}\n" }
-        })));
+        let replies = send(
+            &mut server,
+            notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": { "uri": uri, "languageId": "serez-code-jsx", "version": 1,
+                        "text": "class App {\n    fn any render() {\n        return <View><Text>hola</Text></View>;\n    }\n}\n" }
+                }),
+            ),
+        );
         // JSX would drown the parser — diagnostics must stay empty…
         let diags = replies[0]["params"]["diagnostics"].as_array().unwrap();
         assert!(diags.is_empty(), "{:?}", diags);
         // …while the token-level outline still works.
-        let replies = send(&mut server, request(15, "textDocument/documentSymbol", json!({
-            "textDocument": { "uri": uri }
-        })));
+        let replies = send(
+            &mut server,
+            request(
+                15,
+                "textDocument/documentSymbol",
+                json!({
+                    "textDocument": { "uri": uri }
+                }),
+            ),
+        );
         let symbols = replies[0]["result"].as_array().unwrap();
         assert!(symbols.iter().any(|s| s["name"] == "App"), "{:?}", symbols);
     }
@@ -1030,34 +1186,56 @@ mod tests {
         // Real files on disk: an imported module chain mod_a → mod_b.
         let dir = std::env::temp_dir().join("sz_lsp_multifile_test");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("mod_a.sz"), "import \"mod_b.sz\";\nfn int duplicar(int n) {\n    return n * 2;\n}\n").unwrap();
-        std::fs::write(dir.join("mod_b.sz"), "fn int triplicar(int n) {\n    return n * 3;\n}\n").unwrap();
+        std::fs::write(
+            dir.join("mod_a.sz"),
+            "import \"mod_b.sz\";\nfn int duplicar(int n) {\n    return n * 2;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("mod_b.sz"),
+            "fn int triplicar(int n) {\n    return n * 3;\n}\n",
+        )
+        .unwrap();
 
         let main_uri = path_to_uri(&dir.join("main.sz"));
         let mut server = Server::default();
-        send(&mut server, notification("textDocument/didOpen", json!({
-            "textDocument": { "uri": main_uri, "languageId": "serez-code", "version": 1,
-                "text": "import \"mod_a.sz\";\nout duplicar(21);\nout triplicar(7);\n" }
-        })));
+        send(
+            &mut server,
+            notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": { "uri": main_uri, "languageId": "serez-code", "version": 1,
+                        "text": "import \"mod_a.sz\";\nout duplicar(21);\nout triplicar(7);\n" }
+                }),
+            ),
+        );
 
         // definition of `duplicar` (direct import) lands in mod_a.sz
         let p = json!({ "textDocument": { "uri": main_uri }, "position": { "line": 1, "character": 6 } });
         let replies = send(&mut server, request(16, "textDocument/definition", p));
-        let uri = replies[0]["result"]["uri"].as_str().expect("definition uri");
+        let uri = replies[0]["result"]["uri"]
+            .as_str()
+            .expect("definition uri");
         assert!(uri.ends_with("mod_a.sz"), "{}", uri);
         assert_eq!(replies[0]["result"]["range"]["start"]["line"], 1);
 
         // definition of `triplicar` (transitive import) lands in mod_b.sz
         let p = json!({ "textDocument": { "uri": main_uri }, "position": { "line": 2, "character": 6 } });
         let replies = send(&mut server, request(17, "textDocument/definition", p));
-        let uri = replies[0]["result"]["uri"].as_str().expect("transitive definition uri");
+        let uri = replies[0]["result"]["uri"]
+            .as_str()
+            .expect("transitive definition uri");
         assert!(uri.ends_with("mod_b.sz"), "{}", uri);
 
         // completion offers the imported symbols
         let p = json!({ "textDocument": { "uri": main_uri }, "position": { "line": 2, "character": 0 } });
         let replies = send(&mut server, request(18, "textDocument/completion", p));
-        let labels: Vec<&str> = replies[0]["result"].as_array().unwrap()
-            .iter().filter_map(|i| i["label"].as_str()).collect();
+        let labels: Vec<&str> = replies[0]["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["label"].as_str())
+            .collect();
         assert!(labels.contains(&"duplicar"), "{:?}", labels);
         assert!(labels.contains(&"triplicar"), "{:?}", labels);
     }

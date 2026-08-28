@@ -1,0 +1,2 @@
+// Invalid calendar input must abort with a structured, stable runtime diagnostic.
+DateTime.from(2026, 2, 30);

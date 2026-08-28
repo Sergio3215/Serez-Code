@@ -14,9 +14,9 @@
 // Binary.unpackInt64Le(bytes)  → int
 // Binary.concat(a, b)          → [int]   concatenate two byte arrays
 
+use super::EvalResult;
 use crate::ast;
 use crate::region::{ObjectData, OwnedValue};
-use super::EvalResult;
 
 impl super::Evaluator {
     pub(super) fn eval_binary_namespace(
@@ -26,14 +26,18 @@ impl super::Evaluator {
         match dot_call.method.as_str() {
             "fromHex" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Binary.fromHex(hex) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Binary.fromHex(hex) requires 1 argument");
                 }
                 let hex = match self.eval_to_string(&dot_call.arguments[0], "Binary.fromHex") {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
                 if hex.len() % 2 != 0 {
-                    return self.rt_err_kind("BinaryError", "Binary.fromHex: hex string must have even length");
+                    return self.rt_err_kind(
+                        "BinaryError",
+                        "Binary.fromHex: hex string must have even length",
+                    );
                 }
                 let mut bytes: Vec<OwnedValue> = Vec::with_capacity(hex.len() / 2);
                 for i in (0..hex.len()).step_by(2) {
@@ -42,7 +46,10 @@ impl super::Evaluator {
                             bytes.push(OwnedValue::Integer(b as i64));
                         }
                         Err(_) => {
-                            return self.rt_err_kind("BinaryError", format!("Binary.fromHex: invalid hex pair '{}'", &hex[i..i + 2]));
+                            return self.rt_err_kind(
+                                "BinaryError",
+                                format!("Binary.fromHex: invalid hex pair '{}'", &hex[i..i + 2]),
+                            );
                         }
                     }
                 }
@@ -54,7 +61,8 @@ impl super::Evaluator {
 
             "toHex" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Binary.toHex(bytes) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Binary.toHex(bytes) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -63,7 +71,8 @@ impl super::Evaluator {
                 let elems = match self.resolve(arr_ref) {
                     Some(ObjectData::Array { elements, .. }) => elements.clone(),
                     _ => {
-                        return self.rt_err_kind("TypeError", "Binary.toHex: argument must be an array");
+                        return self
+                            .rt_err_kind("TypeError", "Binary.toHex: argument must be an array");
                     }
                 };
                 let mut hex = String::with_capacity(elems.len() * 2);
@@ -73,7 +82,10 @@ impl super::Evaluator {
                             hex.push_str(&format!("{:02x}", (b as u8)));
                         }
                         _ => {
-                            return self.rt_err_kind("TypeError", "Binary.toHex: all elements must be integers");
+                            return self.rt_err_kind(
+                                "TypeError",
+                                "Binary.toHex: all elements must be integers",
+                            );
                         }
                     }
                 }
@@ -101,7 +113,8 @@ impl super::Evaluator {
 
             "toUtf8" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Binary.toUtf8(bytes) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Binary.toUtf8(bytes) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -110,7 +123,8 @@ impl super::Evaluator {
                 let elems = match self.resolve(arr_ref) {
                     Some(ObjectData::Array { elements, .. }) => elements.clone(),
                     _ => {
-                        return self.rt_err_kind("TypeError", "Binary.toUtf8: argument must be an array");
+                        return self
+                            .rt_err_kind("TypeError", "Binary.toUtf8: argument must be an array");
                     }
                 };
                 let bytes: Result<Vec<u8>, _> = elems
@@ -125,9 +139,8 @@ impl super::Evaluator {
                         let s = String::from_utf8_lossy(&bs).into_owned();
                         EvalResult::Value(self.alloc(ObjectData::Str(s)))
                     }
-                    Err(_) => {
-                        self.rt_err_kind("TypeError", "Binary.toUtf8: all elements must be integers")
-                    }
+                    Err(_) => self
+                        .rt_err_kind("TypeError", "Binary.toUtf8: all elements must be integers"),
                 }
             }
 
@@ -151,14 +164,19 @@ impl super::Evaluator {
 
             "unpackInt32Le" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Binary.unpackInt32Le(bytes) requires 1 argument");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Binary.unpackInt32Le(bytes) requires 1 argument",
+                    );
                 }
-                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], "Binary.unpackInt32Le") {
+                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], "Binary.unpackInt32Le")
+                {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
                 if bytes.len() < 4 {
-                    return self.rt_err_kind("BinaryError", "Binary.unpackInt32Le: need at least 4 bytes");
+                    return self
+                        .rt_err_kind("BinaryError", "Binary.unpackInt32Le: need at least 4 bytes");
                 }
                 let n = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as i64;
                 EvalResult::Value(self.alloc(ObjectData::Integer(n)))
@@ -166,14 +184,19 @@ impl super::Evaluator {
 
             "unpackInt32Be" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Binary.unpackInt32Be(bytes) requires 1 argument");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Binary.unpackInt32Be(bytes) requires 1 argument",
+                    );
                 }
-                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], "Binary.unpackInt32Be") {
+                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], "Binary.unpackInt32Be")
+                {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
                 if bytes.len() < 4 {
-                    return self.rt_err_kind("BinaryError", "Binary.unpackInt32Be: need at least 4 bytes");
+                    return self
+                        .rt_err_kind("BinaryError", "Binary.unpackInt32Be: need at least 4 bytes");
                 }
                 let n = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as i64;
                 EvalResult::Value(self.alloc(ObjectData::Integer(n)))
@@ -190,14 +213,19 @@ impl super::Evaluator {
 
             "unpackInt64Le" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Binary.unpackInt64Le(bytes) requires 1 argument");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Binary.unpackInt64Le(bytes) requires 1 argument",
+                    );
                 }
-                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], "Binary.unpackInt64Le") {
+                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], "Binary.unpackInt64Le")
+                {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
                 if bytes.len() < 8 {
-                    return self.rt_err_kind("BinaryError", "Binary.unpackInt64Le: need at least 8 bytes");
+                    return self
+                        .rt_err_kind("BinaryError", "Binary.unpackInt64Le: need at least 8 bytes");
                 }
                 let arr: [u8; 8] = bytes[..8].try_into().unwrap();
                 let n = i64::from_le_bytes(arr);
@@ -206,7 +234,8 @@ impl super::Evaluator {
 
             "concat" => {
                 if dot_call.arguments.len() != 2 {
-                    return self.rt_err_kind("TypeError", "Binary.concat(a, b) requires 2 arguments");
+                    return self
+                        .rt_err_kind("TypeError", "Binary.concat(a, b) requires 2 arguments");
                 }
                 let a_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -219,13 +248,19 @@ impl super::Evaluator {
                 let a_elems = match self.resolve(a_ref) {
                     Some(ObjectData::Array { elements, .. }) => elements.clone(),
                     _ => {
-                        return self.rt_err_kind("TypeError", "Binary.concat: first argument must be an array");
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Binary.concat: first argument must be an array",
+                        );
                     }
                 };
                 let b_elems = match self.resolve(b_ref) {
                     Some(ObjectData::Array { elements, .. }) => elements.clone(),
                     _ => {
-                        return self.rt_err_kind("TypeError", "Binary.concat: second argument must be an array");
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Binary.concat: second argument must be an array",
+                        );
                     }
                 };
                 let mut combined = a_elems;
@@ -236,9 +271,10 @@ impl super::Evaluator {
                 }))
             }
 
-            _ => {
-                self.rt_err_kind("TypeError", format!("Unknown Binary method '{}'", dot_call.method))
-            }
+            _ => self.rt_err_kind(
+                "TypeError",
+                format!("Unknown Binary method '{}'", dot_call.method),
+            ),
         }
     }
 
@@ -255,11 +291,7 @@ impl super::Evaluator {
         }))
     }
 
-    fn require_one_int(
-        &mut self,
-        args: &[ast::Expression],
-        ctx: &str,
-    ) -> Result<i64, EvalResult> {
+    fn require_one_int(&mut self, args: &[ast::Expression], ctx: &str) -> Result<i64, EvalResult> {
         if args.len() != 1 {
             eprintln!("❌ ERROR: {}(n) requires 1 argument", ctx);
             return Err(EvalResult::Error);
@@ -278,11 +310,7 @@ impl super::Evaluator {
         }
     }
 
-    fn eval_to_bytes(
-        &mut self,
-        expr: &ast::Expression,
-        ctx: &str,
-    ) -> Result<Vec<u8>, EvalResult> {
+    fn eval_to_bytes(&mut self, expr: &ast::Expression, ctx: &str) -> Result<Vec<u8>, EvalResult> {
         let r = match self.eval_expression(expr) {
             EvalResult::Value(r) => r,
             EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),

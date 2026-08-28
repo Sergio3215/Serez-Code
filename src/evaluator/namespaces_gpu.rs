@@ -16,27 +16,27 @@
 // GPU.axpy(alpha, id_x, id_y)              → int   (new buffer: alpha*x + y)
 // GPU.matmul(id_a, rows_a, cols_a, id_b, rows_b, cols_b) → int (new buffer)
 
+use super::EvalResult;
 use crate::ast;
 use crate::region::{ObjectData, ObjectRef, OwnedValue};
-use super::EvalResult;
+
+const MAX_GPU_BUFFER_BYTES: usize = 256 * 1024 * 1024;
+const MAX_GPU_BUFFER_ELEMENTS: usize = MAX_GPU_BUFFER_BYTES / std::mem::size_of::<f64>();
 
 impl super::Evaluator {
-    pub(super) fn eval_gpu_namespace(
-        &mut self,
-        dot_call: &ast::DotCallExpression,
-    ) -> EvalResult {
+    pub(super) fn eval_gpu_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
         match dot_call.method.as_str() {
             "createBuffer" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "GPU.createBuffer(size) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "GPU.createBuffer(size) requires 1 argument");
                 }
                 let size = match self.eval_to_usize(&dot_call.arguments[0], "GPU.createBuffer") {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                if size > 256 * 1024 * 1024 {
-                    eprintln!("❌ ERROR: GPU.createBuffer: size {} exceeds limit", size);
-                    return EvalResult::Error;
+                if let Err(error) = self.ensure_gpu_buffer_elements("GPU.createBuffer", size) {
+                    return error;
                 }
                 let id = self.alloc_gpu_buffer(vec![0.0f64; size]);
                 EvalResult::Value(self.alloc(ObjectData::Integer(id)))
@@ -44,7 +44,10 @@ impl super::Evaluator {
 
             "createBufferFromArray" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "GPU.createBufferFromArray(arr) requires 1 argument");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "GPU.createBufferFromArray(arr) requires 1 argument",
+                    );
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -69,13 +72,13 @@ impl super::Evaluator {
                 let data = match self.gpu_buffers.get(&id) {
                     Some(v) => v.clone(),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.readBuffer: no buffer with id {}", id));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.readBuffer: no buffer with id {}", id),
+                        );
                     }
                 };
-                let owned: Vec<OwnedValue> = data
-                    .iter()
-                    .map(|&f| OwnedValue::Decimal(f))
-                    .collect();
+                let owned: Vec<OwnedValue> = data.iter().map(|&f| OwnedValue::Decimal(f)).collect();
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("decimal".to_string()),
                     elements: owned,
@@ -96,7 +99,8 @@ impl super::Evaluator {
 
             "fill" => {
                 if dot_call.arguments.len() != 2 {
-                    return self.rt_err_kind("TypeError", "GPU.fill(id, value) requires 2 arguments");
+                    return self
+                        .rt_err_kind("TypeError", "GPU.fill(id, value) requires 2 arguments");
                 }
                 let id = match self.eval_gpu_id(&dot_call.arguments[0], "GPU.fill") {
                     Ok(v) => v,
@@ -115,7 +119,10 @@ impl super::Evaluator {
                 match self.gpu_buffers.get_mut(&id) {
                     Some(buf) => buf.fill(val),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.fill: no buffer with id {}", id));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.fill: no buffer with id {}", id),
+                        );
                     }
                 }
                 EvalResult::Value(self.null_ref)
@@ -132,7 +139,10 @@ impl super::Evaluator {
                 let n = match self.gpu_buffers.get(&id) {
                     Some(buf) => buf.len() as i64,
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.size: no buffer with id {}", id));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.size: no buffer with id {}", id),
+                        );
                     }
                 };
                 EvalResult::Value(self.alloc(ObjectData::Integer(n)))
@@ -155,7 +165,8 @@ impl super::Evaluator {
                 let data = match self.gpu_buffers.get(&id) {
                     Some(v) => v.clone(),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.map: no buffer with id {}", id));
+                        return self
+                            .rt_err_kind("GpuError", format!("GPU.map: no buffer with id {}", id));
                     }
                 };
                 let mut out = Vec::with_capacity(data.len());
@@ -165,7 +176,10 @@ impl super::Evaluator {
                         EvalResult::Value(r) => match self.to_f64(r) {
                             Some(f) => out.push(f),
                             None => {
-                                return self.rt_err_kind("GpuError", "GPU.map: callback must return a number");
+                                return self.rt_err_kind(
+                                    "GpuError",
+                                    "GPU.map: callback must return a number",
+                                );
                             }
                         },
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
@@ -179,7 +193,10 @@ impl super::Evaluator {
             "reduce" => {
                 // GPU.reduce(id, fn, initial) → decimal
                 if dot_call.arguments.len() != 3 {
-                    return self.rt_err_kind("TypeError", "GPU.reduce(id, fn, initial) requires 3 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "GPU.reduce(id, fn, initial) requires 3 arguments",
+                    );
                 }
                 let id = match self.eval_gpu_id(&dot_call.arguments[0], "GPU.reduce") {
                     Ok(v) => v,
@@ -196,13 +213,17 @@ impl super::Evaluator {
                 let mut acc = match self.to_f64(init_ref) {
                     Some(f) => f,
                     None => {
-                        return self.rt_err_kind("TypeError", "GPU.reduce: initial value must be numeric");
+                        return self
+                            .rt_err_kind("TypeError", "GPU.reduce: initial value must be numeric");
                     }
                 };
                 let data = match self.gpu_buffers.get(&id) {
                     Some(v) => v.clone(),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.reduce: no buffer with id {}", id));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.reduce: no buffer with id {}", id),
+                        );
                     }
                 };
                 for val in data {
@@ -211,7 +232,10 @@ impl super::Evaluator {
                         EvalResult::Value(r) => match self.to_f64(r) {
                             Some(f) => acc = f,
                             None => {
-                                return self.rt_err_kind("GpuError", "GPU.reduce: callback must return a number");
+                                return self.rt_err_kind(
+                                    "GpuError",
+                                    "GPU.reduce: callback must return a number",
+                                );
                             }
                         },
                         EvalResult::Throw(v) => return EvalResult::Throw(v),
@@ -224,7 +248,8 @@ impl super::Evaluator {
             "dot" => {
                 // GPU.dot(id_a, id_b) → decimal
                 if dot_call.arguments.len() != 2 {
-                    return self.rt_err_kind("TypeError", "GPU.dot(id_a, id_b) requires 2 arguments");
+                    return self
+                        .rt_err_kind("TypeError", "GPU.dot(id_a, id_b) requires 2 arguments");
                 }
                 let id_a = match self.eval_gpu_id(&dot_call.arguments[0], "GPU.dot") {
                     Ok(v) => v,
@@ -237,18 +262,30 @@ impl super::Evaluator {
                 let a = match self.gpu_buffers.get(&id_a) {
                     Some(v) => v.clone(),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.dot: no buffer with id {}", id_a));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.dot: no buffer with id {}", id_a),
+                        );
                     }
                 };
                 let b = match self.gpu_buffers.get(&id_b) {
                     Some(v) => v.clone(),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.dot: no buffer with id {}", id_b));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.dot: no buffer with id {}", id_b),
+                        );
                     }
                 };
                 if a.len() != b.len() {
-                    return self.rt_err_kind("GpuError", format!("GPU.dot: buffer lengths differ ({} vs {})", a.len(),
-                        b.len()));
+                    return self.rt_err_kind(
+                        "GpuError",
+                        format!(
+                            "GPU.dot: buffer lengths differ ({} vs {})",
+                            a.len(),
+                            b.len()
+                        ),
+                    );
                 }
                 let result: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
                 EvalResult::Value(self.alloc(ObjectData::Decimal(result)))
@@ -257,7 +294,10 @@ impl super::Evaluator {
             "axpy" => {
                 // GPU.axpy(alpha, id_x, id_y) → int (new buffer: alpha*x + y)
                 if dot_call.arguments.len() != 3 {
-                    return self.rt_err_kind("TypeError", "GPU.axpy(alpha, id_x, id_y) requires 3 arguments");
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "GPU.axpy(alpha, id_x, id_y) requires 3 arguments",
+                    );
                 }
                 let alpha_ref = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -280,20 +320,36 @@ impl super::Evaluator {
                 let x = match self.gpu_buffers.get(&id_x) {
                     Some(v) => v.clone(),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.axpy: no buffer with id {}", id_x));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.axpy: no buffer with id {}", id_x),
+                        );
                     }
                 };
                 let y = match self.gpu_buffers.get(&id_y) {
                     Some(v) => v.clone(),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.axpy: no buffer with id {}", id_y));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.axpy: no buffer with id {}", id_y),
+                        );
                     }
                 };
                 if x.len() != y.len() {
-                    return self.rt_err_kind("GpuError", format!("GPU.axpy: buffer lengths differ ({} vs {})", x.len(),
-                        y.len()));
+                    return self.rt_err_kind(
+                        "GpuError",
+                        format!(
+                            "GPU.axpy: buffer lengths differ ({} vs {})",
+                            x.len(),
+                            y.len()
+                        ),
+                    );
                 }
-                let out: Vec<f64> = x.iter().zip(y.iter()).map(|(xi, yi)| alpha * xi + yi).collect();
+                let out: Vec<f64> = x
+                    .iter()
+                    .zip(y.iter())
+                    .map(|(xi, yi)| alpha * xi + yi)
+                    .collect();
                 let new_id = self.alloc_gpu_buffer(out);
                 EvalResult::Value(self.alloc(ObjectData::Integer(new_id)))
             }
@@ -330,28 +386,84 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 if cols_a != rows_b {
-                    return self.rt_err_kind("GpuError", format!("GPU.matmul: cols_a ({}) must equal rows_b ({})", cols_a, rows_b));
+                    return self.rt_err_kind(
+                        "GpuError",
+                        format!(
+                            "GPU.matmul: cols_a ({}) must equal rows_b ({})",
+                            cols_a, rows_b
+                        ),
+                    );
+                }
+                let expected_a = match self.checked_gpu_product(
+                    "GPU.matmul buffer A dimensions",
+                    rows_a,
+                    cols_a,
+                ) {
+                    Ok(elements) => elements,
+                    Err(error) => return error,
+                };
+                let expected_b = match self.checked_gpu_product(
+                    "GPU.matmul buffer B dimensions",
+                    rows_b,
+                    cols_b,
+                ) {
+                    Ok(elements) => elements,
+                    Err(error) => return error,
+                };
+                let output_elements =
+                    match self.checked_gpu_product("GPU.matmul output", rows_a, cols_b) {
+                        Ok(elements) => elements,
+                        Err(error) => return error,
+                    };
+                if let Err(error) =
+                    self.ensure_gpu_buffer_elements("GPU.matmul output", output_elements)
+                {
+                    return error;
                 }
                 let a = match self.gpu_buffers.get(&id_a) {
                     Some(v) => v.clone(),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.matmul: no buffer with id {}", id_a));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.matmul: no buffer with id {}", id_a),
+                        );
                     }
                 };
                 let b = match self.gpu_buffers.get(&id_b) {
                     Some(v) => v.clone(),
                     None => {
-                        return self.rt_err_kind("GpuError", format!("GPU.matmul: no buffer with id {}", id_b));
+                        return self.rt_err_kind(
+                            "GpuError",
+                            format!("GPU.matmul: no buffer with id {}", id_b),
+                        );
                     }
                 };
-                if a.len() != rows_a * cols_a {
-                    return self.rt_err_kind("TypeError", format!("GPU.matmul: buffer A has {} elements, expected {}×{}={}", a.len(), rows_a, cols_a, rows_a * cols_a));
+                if a.len() != expected_a {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!(
+                            "GPU.matmul: buffer A has {} elements, expected {}×{}={}",
+                            a.len(),
+                            rows_a,
+                            cols_a,
+                            expected_a
+                        ),
+                    );
                 }
-                if b.len() != rows_b * cols_b {
-                    return self.rt_err_kind("TypeError", format!("GPU.matmul: buffer B has {} elements, expected {}×{}={}", b.len(), rows_b, cols_b, rows_b * cols_b));
+                if b.len() != expected_b {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!(
+                            "GPU.matmul: buffer B has {} elements, expected {}×{}={}",
+                            b.len(),
+                            rows_b,
+                            cols_b,
+                            expected_b
+                        ),
+                    );
                 }
                 // Standard O(n³) matmul
-                let mut c = vec![0.0f64; rows_a * cols_b];
+                let mut c = vec![0.0f64; output_elements];
                 for i in 0..rows_a {
                     for j in 0..cols_b {
                         let mut s = 0.0f64;
@@ -365,13 +477,45 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Integer(new_id)))
             }
 
-            _ => {
-                self.rt_err_kind("TypeError", format!("Unknown GPU method '{}'", dot_call.method))
-            }
+            _ => self.rt_err_kind(
+                "TypeError",
+                format!("Unknown GPU method '{}'", dot_call.method),
+            ),
         }
     }
 
     // ── GPU helpers ───────────────────────────────────────────────────────────
+
+    fn ensure_gpu_buffer_elements(
+        &mut self,
+        operation: &str,
+        elements: usize,
+    ) -> Result<(), EvalResult> {
+        if elements > MAX_GPU_BUFFER_ELEMENTS {
+            return Err(self.fatal_err_kind(
+                "ResourceError",
+                format!(
+                    "{operation}: {elements} f64 elements exceed the 256 MiB per-buffer limit ({MAX_GPU_BUFFER_ELEMENTS} elements)"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn checked_gpu_product(
+        &mut self,
+        operation: &str,
+        left: usize,
+        right: usize,
+    ) -> Result<usize, EvalResult> {
+        match left.checked_mul(right) {
+            Some(elements) => Ok(elements),
+            None => Err(self.fatal_err_kind(
+                "ResourceError",
+                format!("{operation}: element count overflows the platform size"),
+            )),
+        }
+    }
 
     fn alloc_gpu_buffer(&mut self, data: Vec<f64>) -> i64 {
         let id = self.gpu_next_id;
@@ -380,11 +524,7 @@ impl super::Evaluator {
         id
     }
 
-    fn eval_gpu_id(
-        &mut self,
-        expr: &ast::Expression,
-        ctx: &str,
-    ) -> Result<i64, EvalResult> {
+    fn eval_gpu_id(&mut self, expr: &ast::Expression, ctx: &str) -> Result<i64, EvalResult> {
         let r = match self.eval_expression(expr) {
             EvalResult::Value(r) => r,
             EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
@@ -399,11 +539,7 @@ impl super::Evaluator {
         }
     }
 
-    fn eval_to_usize(
-        &mut self,
-        expr: &ast::Expression,
-        ctx: &str,
-    ) -> Result<usize, EvalResult> {
+    fn eval_to_usize(&mut self, expr: &ast::Expression, ctx: &str) -> Result<usize, EvalResult> {
         let r = match self.eval_expression(expr) {
             EvalResult::Value(r) => r,
             EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
@@ -426,16 +562,22 @@ impl super::Evaluator {
         }
     }
 
-    fn array_to_f64_vec(
-        &mut self,
-        arr_ref: ObjectRef,
-        ctx: &str,
-    ) -> Result<Vec<f64>, EvalResult> {
-        let elems = match self.resolve(arr_ref) {
-            Some(ObjectData::Array { elements, .. }) => elements.clone(),
+    fn array_to_f64_vec(&mut self, arr_ref: ObjectRef, ctx: &str) -> Result<Vec<f64>, EvalResult> {
+        let len = match self.resolve(arr_ref) {
+            Some(ObjectData::Array { elements, .. }) => elements.len(),
             _ => {
                 eprintln!("❌ ERROR: {}: argument must be an array", ctx);
                 return Err(EvalResult::Error);
+            }
+        };
+        self.ensure_gpu_buffer_elements(ctx, len)?;
+        let elems = match self.resolve(arr_ref) {
+            Some(ObjectData::Array { elements, .. }) => elements.clone(),
+            _ => {
+                return Err(self.rt_err_kind(
+                    "InternalError",
+                    format!("{ctx}: array reference became invalid during conversion"),
+                ));
             }
         };
         let mut out = Vec::with_capacity(elems.len());

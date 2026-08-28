@@ -19,11 +19,13 @@
 #                          The framework (tests/framework.sz) is prepended.
 #                          Each file calls test("name", () => { assert(...) })
 #                          and summary() at the end.
-#                          PASS = no [FAIL] line in stdout.
+#                          PASS = exit 0, a Results: summary and no [FAIL] line.
+#                          Legacy unit_*.expected pairs are golden tests instead;
+#                          they run without the framework and compare stdout.
 #
 #   tests/err_*.sz       -> Error tests
 #                          The program must emit at least one ❌ line on stderr.
-#                          PASS = at least one ❌ found.
+#                          PASS = non-zero exit and at least one ❌ found.
 #
 # ── E2E tests (tests/NN_*.sz) ─────────────────────────────────────────────────
 #
@@ -307,14 +309,24 @@ $skip = 0
 function Invoke-Sz([string]$runFile) {
     $outFile = [System.IO.Path]::GetTempFileName()
     $errFile = [System.IO.Path]::GetTempFileName()
-    Start-Process -FilePath $binary -ArgumentList "`"$runFile`"" `
+    $process = Start-Process -FilePath $binary -ArgumentList "`"$runFile`"" `
         -NoNewWindow -Wait `
+        -PassThru `
         -RedirectStandardOutput $outFile `
         -RedirectStandardError  $errFile
     $stdout = if (Test-Path $outFile) { Get-Content $outFile } else { @() }
     $stderr = if (Test-Path $errFile) { Get-Content $errFile } else { @() }
     Remove-Item $outFile, $errFile -ErrorAction SilentlyContinue
-    return @{ stdout = $stdout; stderr = $stderr }
+    return @{ stdout = $stdout; stderr = $stderr; exitCode = $process.ExitCode }
+}
+
+function Get-UnitFailureReason($result) {
+    $failures = @($result.stdout | Where-Object { $_ -match "^\[FAIL\]" })
+    $summary = @($result.stdout | Where-Object { $_ -match "^Results:" })
+    if ($result.exitCode -ne 0) { return "process exited with code $($result.exitCode)" }
+    if ($failures.Count -gt 0) { return "framework reported $($failures.Count) failure(s)" }
+    if ($summary.Count -eq 0) { return "missing Results: summary" }
+    return $null
 }
 
 function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$isUnit, [bool]$isErr) {
@@ -334,31 +346,47 @@ function Run-Test([string]$label, [string]$file, [string]$expectedFile, [bool]$i
     $stderr = $result.stderr
 
     if ($isErr) {
-        # Error tests: must have at least one ❌ on stderr
+        # Error tests must fail as a process and emit a diagnostic on stderr.
         $hasError = ($stderr | Where-Object { $_ -match "^❌" }).Count -gt 0
-        if ($hasError) {
+        if ($result.exitCode -ne 0 -and $hasError) {
             Write-Host "[PASS] $label" -ForegroundColor Green
             $script:pass++
         } else {
-            Write-Host "[FAIL] $label — expected an error but got none" -ForegroundColor Red
+            Write-Host "[FAIL] $label — expected non-zero exit and an error diagnostic (exit $($result.exitCode))" -ForegroundColor Red
             $script:fail++
         }
         return
     }
 
     if ($isUnit) {
-        # Unit tests: look for [FAIL] lines in stdout
-        $failures = $stdout | Where-Object { $_ -match "^\[FAIL\]" }
-        $summary  = $stdout | Where-Object { $_ -match "^Results:" }
-        if ($failures.Count -eq 0) {
+        # Unit tests must finish normally and prove the framework reached summary().
+        $failures = @($stdout | Where-Object { $_ -match "^\[FAIL\]" })
+        $summary = @($stdout | Where-Object { $_ -match "^Results:" })
+        $reason = Get-UnitFailureReason $result
+        if ($null -eq $reason) {
             Write-Host "[PASS] $label" -ForegroundColor Green
             if ($summary) { Write-Host "       $summary" -ForegroundColor Gray }
             $script:pass++
         } else {
-            Write-Host "[FAIL] $label" -ForegroundColor Red
+            Write-Host "[FAIL] $label — $reason" -ForegroundColor Red
             $failures | ForEach-Object { Write-Host "       $_" -ForegroundColor Yellow }
+            if ($result.exitCode -ne 0) {
+                $stderr | Select-Object -First 3 | ForEach-Object {
+                    Write-Host "       $_" -ForegroundColor Yellow
+                }
+            }
             $script:fail++
         }
+        return
+    }
+
+    # E2E programs must complete before output can be accepted or generated.
+    if ($result.exitCode -ne 0) {
+        Write-Host "[FAIL] $label — process exited with code $($result.exitCode)" -ForegroundColor Red
+        $stderr | Select-Object -First 3 | ForEach-Object {
+            Write-Host "       $_" -ForegroundColor Yellow
+        }
+        $script:fail++
         return
     }
 
@@ -439,6 +467,23 @@ function Run-CLI-Test([string]$label, [string[]]$binArgs, [string]$expectOut = "
     else     { Write-Host "[FAIL] $label — $reason" -ForegroundColor Red; $script:fail++ }
 }
 
+# The runner itself must reject a unit program that aborts before summary().
+Write-Host "═══ Test Runner Integrity ════════════════════" -ForegroundColor Cyan
+$runnerFixture = Join-Path $testsDir "runner_fixtures\unit_abort_before_summary.sz"
+$fw = Get-Content $framework -Raw
+$src = Get-Content $runnerFixture -Raw
+Set-Content $tempFile ($fw + "`n" + $src) -NoNewline
+$runnerProbe = Invoke-Sz $tempFile
+$runnerReason = Get-UnitFailureReason $runnerProbe
+if ($null -ne $runnerReason -and $runnerProbe.exitCode -ne 0) {
+    Write-Host "[PASS] runner rejects abort before summary" -ForegroundColor Green
+    $pass++
+} else {
+    Write-Host "[FAIL] runner accepted abort before summary" -ForegroundColor Red
+    $fail++
+}
+Write-Host ""
+
 # ── Discover and run tests ────────────────────────────────────────────────────
 $runAll  = -not $unit -and -not $e2e -and -not $security -and -not $cli -and -not $ai
 
@@ -460,7 +505,12 @@ if ($runAll -or $unit) {
         Where-Object { $_.Name -notmatch "^unit_sec_" } |
         Sort-Object Name | ForEach-Object {
             $label = $_.BaseName
-            Run-Test $label $_.FullName "" $true $false
+            $expected = Join-Path $testsDir ($_.BaseName + ".expected")
+            if (Test-Path $expected) {
+                Run-Test $label $_.FullName $expected $false $false
+            } else {
+                Run-Test $label $_.FullName "" $true $false
+            }
         }
 }
 
@@ -644,6 +694,13 @@ if ($runAll -or $cli) {
                  -expectOut "Installed test-pkg"  -workDir $tmpProject
     Run-CLI-Test "cli: sz install pkg@ver explicit"     @("install", "test-pkg@1.0.0") `
                  -expectOut "Installed test-pkg"  -workDir $tmpProject
+
+    # Filtered runs must not inherit state from a test that the filter skipped.
+    # Arrange the uninstall precondition without counting it as a separate test.
+    $uninstallLabel = "cli: sz uninstall removes package"
+    if (-not $filter -or $uninstallLabel -like "*$filter*") {
+        $null = Invoke-Binary @("install", "test-pkg@1.0.0") "" $tmpProject
+    }
     Run-CLI-Test "cli: sz uninstall removes package"    @("uninstall", "test-pkg") `
                  -expectOut "Uninstalled test-pkg" -workDir $tmpProject
     Run-CLI-Test "cli: sz uninstall nonexistent errors" @("uninstall", "test-pkg") `

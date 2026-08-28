@@ -49,7 +49,7 @@ test("File extended methods work without extra permission", () => {
     File.mkdir(dir);
     assert(File.exists(dir), "mkdir should work");
     let entries = File.listDir(dir);
-    assert(entries is [string], "listDir should work");
+    assert(entries is array, "listDir should work");
     let stat = File.stat(dir);
     assert(stat.isDir == true, "stat should work");
     unsafe { File.delete(dir); }

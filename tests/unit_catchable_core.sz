@@ -14,6 +14,45 @@ test("asignar a no declarada es capturable con ReferenceError", () => {
     assert(kind == "ReferenceError", "esperaba ReferenceError, dio: " + kind);
 });
 
+test("validaciones de new son ReferenceError/TypeError capturables", () => {
+    interface CatchIface { value: int; other: int; }
+    interface CatchTypedIface { value: int; }
+    abstract class CatchAbstract {}
+    class CatchPositional {}
+    class CatchNeedsArg { public CatchNeedsArg(int value) {} }
+    class CatchNoConstructor {}
+
+    let caught = 0;
+    try { new CatchMissing(); } catch (e) {
+        if (e.code == "SZ4001" && e.kind == "ReferenceError") { caught++; }
+    }
+    try { new CatchIface(1); } catch (e) {
+        if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
+    }
+    try { new CatchIface({ value: 1, other: 2, extra: 3 }); } catch (e) {
+        if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
+    }
+    try { new CatchIface({ value: 1 }); } catch (e) {
+        if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
+    }
+    try { new CatchTypedIface({ value: "wrong" }); } catch (e) {
+        if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
+    }
+    try { new CatchAbstract(); } catch (e) {
+        if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
+    }
+    try { new CatchPositional({ value: 1 }); } catch (e) {
+        if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
+    }
+    try { new CatchNeedsArg(); } catch (e) {
+        if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
+    }
+    try { new CatchNoConstructor(1); } catch (e) {
+        if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
+    }
+    assert(caught == 9, "las nueve validaciones de construccion deben capturarse");
+});
+
 test("llamar a un no-funcion es capturable con TypeError", () => {
     let n = 42;
     let kind = "none";
@@ -48,6 +87,61 @@ test("unwinding: 1000 catches de llamada invalida no corrompen el evaluador", ()
 test("tras los catches, llamadas y recursion siguen sanas", () => {
     fn int fact(int n) { if (n <= 1) { return 1; } return n * fact(n - 1); }
     assert(fact(10) == 3628800, "recursion sana tras el estres");
+});
+
+test("RuntimeError expone codigo, span, stack y notes estables", () => {
+    fn any failInsideFunction() {
+        let notCallable = 42;
+        notCallable();
+    }
+
+    let checked = false;
+    try {
+        failInsideFunction();
+    } catch (e) {
+        assert(e.code == "SZ4002", "TypeError debe usar SZ4002");
+        assert(e.kind == "TypeError", "debe conservar kind");
+        assert(e.message.includes("non-function"), "mensaje debe ser accionable");
+        assert(type_of(e.span) == "string", "span debe serializar linea y columna");
+        assert(type_of(e.stack) == "array" && e.stack.length > 0, "stack debe contener frames");
+        assert(type_of(e.notes) == "array", "notes debe ser un array estable");
+        checked = true;
+    }
+    assert(checked, "el error debe ser capturable");
+});
+
+test("errores aritmeticos dec son capturables y conservan su categoria", () => {
+    let divKind = "none";
+    try { out 1m / 0m; } catch (e) {
+        assert(e.code == "SZ4004", "division dec debe usar SZ4004");
+        divKind = e.kind;
+    }
+    assert(divKind == "DivisionByZero", "division dec debe ser capturable");
+
+    let overflowKind = "none";
+    try { out Dec.MAX + 1m; } catch (e) { overflowKind = e.kind; }
+    assert(overflowKind == "Overflow", "overflow dec debe ser capturable");
+});
+
+test("errores ordinarios de operadores son capturables", () => {
+    let typeKinds = 0;
+    try { out -true; } catch (e) {
+        assert(e.code == "SZ4002" && e.kind == "TypeError", "prefijo debe ser TypeError");
+        typeKinds = typeKinds + 1;
+    }
+    try { out 8 >> -1; } catch (e) {
+        assert(e.code == "SZ4002" && e.kind == "TypeError", "shift debe ser TypeError");
+        typeKinds = typeKinds + 1;
+    }
+    try { out 1m + 0.5; } catch (e) {
+        assert(e.code == "SZ4002" && e.kind == "TypeError", "mezcla dec/f64 debe ser TypeError");
+        typeKinds = typeKinds + 1;
+    }
+    assert(typeKinds == 3, "los tres TypeError deben ser capturables");
+
+    let overflowKind = "none";
+    try { out 2 ** 63; } catch (e) { overflowKind = e.kind; }
+    assert(overflowKind == "Overflow", "power overflow debe ser capturable");
 });
 
 summary();

@@ -85,7 +85,13 @@ pub(crate) struct NativeStylesheet {
 }
 
 fn parse_simple(s: &str) -> SimpleSel {
-    let mut sel = SimpleSel { universal: false, tag: None, classes: Vec::new(), id: None, pseudos: Vec::new() };
+    let mut sel = SimpleSel {
+        universal: false,
+        tag: None,
+        classes: Vec::new(),
+        id: None,
+        pseudos: Vec::new(),
+    };
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
     if i < chars.len() && chars[i] == '*' {
@@ -94,21 +100,35 @@ fn parse_simple(s: &str) -> SimpleSel {
     }
     if !sel.universal && i < chars.len() && chars[i] != '.' && chars[i] != '#' && chars[i] != ':' {
         let mut t = String::new();
-        while i < chars.len() && chars[i] != '.' && chars[i] != '#' && chars[i] != ':' { t.push(chars[i]); i += 1; }
-        if !t.is_empty() { sel.tag = Some(t); }
+        while i < chars.len() && chars[i] != '.' && chars[i] != '#' && chars[i] != ':' {
+            t.push(chars[i]);
+            i += 1;
+        }
+        if !t.is_empty() {
+            sel.tag = Some(t);
+        }
     }
     while i < chars.len() {
         let kind = chars[i];
         i += 1;
         let mut name = String::new();
-        while i < chars.len() && chars[i] != '.' && chars[i] != '#' && chars[i] != ':' { name.push(chars[i]); i += 1; }
-        if name.is_empty() { continue; }
+        while i < chars.len() && chars[i] != '.' && chars[i] != '#' && chars[i] != ':' {
+            name.push(chars[i]);
+            i += 1;
+        }
+        if name.is_empty() {
+            continue;
+        }
         match kind {
             '.' => sel.classes.push(name),
             '#' => sel.id = Some(name),
             // `:active-focus` es el alias documentado de `:focus` (opt-in de la
             // marca de foco); se normaliza acá para que matchee el estado "focus".
-            ':' => sel.pseudos.push(if name == "active-focus" { "focus".to_string() } else { name }),
+            ':' => sel.pseudos.push(if name == "active-focus" {
+                "focus".to_string()
+            } else {
+                name
+            }),
             _ => {}
         }
     }
@@ -117,7 +137,8 @@ fn parse_simple(s: &str) -> SimpleSel {
 
 fn parse_selector(s: &str) -> Selector {
     Selector {
-        parts: s.split_whitespace()
+        parts: s
+            .split_whitespace()
             .filter(|t| *t != ">") // combinador hijo: se degrada a descendiente
             .map(parse_simple)
             .collect(),
@@ -127,11 +148,31 @@ fn parse_selector(s: &str) -> Selector {
 /// ¿El selector simple casa este nodo? Todas las partes presentes deben casar,
 /// y debe haber al menos una parte (o `*`) para que la regla tenga sujeto.
 fn simple_matches(sel: &SimpleSel, k: &NodeKey) -> bool {
-    if let Some(t) = &sel.tag { if t != &k.tag { return false; } }
-    for c in &sel.classes { if !k.classes.iter().any(|x| x == c) { return false; } }
-    if let Some(i) = &sel.id { if k.id.as_deref() != Some(i.as_str()) { return false; } }
-    for p in &sel.pseudos { if !k.states.iter().any(|x| x == p) { return false; } }
-    sel.universal || sel.tag.is_some() || !sel.classes.is_empty() || sel.id.is_some() || !sel.pseudos.is_empty()
+    if let Some(t) = &sel.tag {
+        if t != &k.tag {
+            return false;
+        }
+    }
+    for c in &sel.classes {
+        if !k.classes.iter().any(|x| x == c) {
+            return false;
+        }
+    }
+    if let Some(i) = &sel.id {
+        if k.id.as_deref() != Some(i.as_str()) {
+            return false;
+        }
+    }
+    for p in &sel.pseudos {
+        if !k.states.iter().any(|x| x == p) {
+            return false;
+        }
+    }
+    sel.universal
+        || sel.tag.is_some()
+        || !sel.classes.is_empty()
+        || sel.id.is_some()
+        || !sel.pseudos.is_empty()
 }
 
 /// Match del selector completo: el último simple casa el SUJETO; los anteriores
@@ -139,8 +180,12 @@ fn simple_matches(sel: &SimpleSel, k: &NodeKey) -> bool {
 /// hacia la raíz, cada parte consume el primer ancestro que la satisface).
 fn selector_matches(sel: &Selector, subject: &NodeKey, ancestors: &[NodeKey]) -> bool {
     let parts = &sel.parts;
-    let Some(last) = parts.last() else { return false; };
-    if !simple_matches(last, subject) { return false; }
+    let Some(last) = parts.last() else {
+        return false;
+    };
+    if !simple_matches(last, subject) {
+        return false;
+    }
     let mut pi = parts.len() as i32 - 2;
     let mut ai = ancestors.len() as i32 - 1; // el ancestro más cercano va al final
     while pi >= 0 {
@@ -148,9 +193,14 @@ fn selector_matches(sel: &Selector, subject: &NodeKey, ancestors: &[NodeKey]) ->
         while ai >= 0 {
             let a = &ancestors[ai as usize];
             ai -= 1;
-            if simple_matches(&parts[pi as usize], a) { found = true; break; }
+            if simple_matches(&parts[pi as usize], a) {
+                found = true;
+                break;
+            }
         }
-        if !found { return false; }
+        if !found {
+            return false;
+        }
         pi -= 1;
     }
     true
@@ -159,7 +209,8 @@ fn selector_matches(sel: &Selector, subject: &NodeKey, ancestors: &[NodeKey]) ->
 impl NativeStylesheet {
     /// Familia real de un alias declarado en `:font` (o `name` tal cual si no es alias).
     pub(crate) fn resolve_font_alias<'a>(&'a self, name: &'a str) -> &'a str {
-        self.font_alias.iter()
+        self.font_alias
+            .iter()
             .find(|(a, _)| a == name)
             .map(|(_, fam)| fam.as_str())
             .unwrap_or(name)
@@ -174,9 +225,13 @@ impl NativeStylesheet {
             let is_body = r.sel.parts.len() == 1
                 && r.sel.parts[0].tag.as_deref() == Some("body")
                 && r.sel.parts[0].classes.is_empty();
-            if !is_body { continue; }
+            if !is_body {
+                continue;
+            }
             if let Some(ts) = &r.cond {
-                if !css_terms_eval_all(ts, ctx) { continue; }
+                if !css_terms_eval_all(ts, ctx) {
+                    continue;
+                }
             }
             if let Some((_, v)) = r.decls.iter().rev().find(|(p, _)| p == "font-family") {
                 found = Some(v.trim().trim_matches(|c| c == '\'' || c == '"').to_string());
@@ -187,7 +242,12 @@ impl NativeStylesheet {
 
     /// Props aplicables al nodo (sujeto + cadena de ancestros), última gana,
     /// dado el ctx [(nombre,valor)]. `ancestors` va de la raíz al padre directo.
-    pub(crate) fn props_for_node(&self, subject: &NodeKey, ancestors: &[NodeKey], ctx: &[(String, String)]) -> Vec<(String, String)> {
+    pub(crate) fn props_for_node(
+        &self,
+        subject: &NodeKey,
+        ancestors: &[NodeKey],
+        ctx: &[(String, String)],
+    ) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
         for r in &self.rules {
             if !selector_matches(&r.sel, subject, ancestors) {
@@ -228,15 +288,17 @@ fn css_terms_eval_all(terms: &[CondTerm], ctx: &[(String, String)]) -> bool {
 /// Evalúa la condición completa: OR de grupos AND, con `not` ya aplicado por
 /// cláusula. Una lista vacía pasa (regla sin condición no llega acá).
 fn css_cond_eval_all(clauses: &[CondClause], ctx: &[(String, String)]) -> bool {
-    let mut done = false;   // acumulado de los grupos AND ya cerrados
-    let mut group = true;   // grupo AND en curso
+    let mut done = false; // acumulado de los grupos AND ya cerrados
+    let mut group = true; // grupo AND en curso
     for (i, c) in clauses.iter().enumerate() {
         let mut v = css_cond_eval(&c.var, &c.op, &c.val, ctx);
-        if c.negated { v = !v; }
+        if c.negated {
+            v = !v;
+        }
         if i == 0 {
             group = v;
         } else if c.or_conn {
-            done = done || group;   // `or` cierra el grupo AND anterior
+            done = done || group; // `or` cierra el grupo AND anterior
             group = v;
         } else {
             group = group && v;
@@ -258,12 +320,21 @@ fn css_cond_eval(var: &str, op: &str, val: &str, ctx: &[(String, String)]) -> bo
     }
     if let (Ok(l), Ok(r)) = (lv.trim().parse::<f64>(), val.trim().parse::<f64>()) {
         return match op {
-            "==" => l == r, "!=" => l != r, "<" => l < r,
-            ">" => l > r, "<=" => l <= r, ">=" => l >= r, _ => false,
+            "==" => l == r,
+            "!=" => l != r,
+            "<" => l < r,
+            ">" => l > r,
+            "<=" => l <= r,
+            ">=" => l >= r,
+            _ => false,
         };
     }
     let r = val.trim().trim_matches(|c| c == '\'' || c == '"');
-    match op { "==" => lv == r, "!=" => lv != r, _ => false }
+    match op {
+        "==" => lv == r,
+        "!=" => lv != r,
+        _ => false,
+    }
 }
 
 pub(crate) fn css_color(raw: &str) -> Option<u32> {
@@ -273,43 +344,86 @@ pub(crate) fn css_color(raw: &str) -> Option<u32> {
     // FONDO el alpha del hex sí se honra (prim_bg_alpha → translucidez real).
     if let Some(hexs) = s.strip_prefix('#') {
         let mut hex = hexs.to_string();
-        if hex.len() == 4 { hex.truncate(3); }
-        if hex.len() == 8 { hex.truncate(6); }
+        if hex.len() == 4 {
+            hex.truncate(3);
+        }
+        if hex.len() == 8 {
+            hex.truncate(6);
+        }
         if hex.len() == 3 {
             let b = hex.as_bytes();
-            hex = format!("{0}{0}{1}{1}{2}{2}", b[0] as char, b[1] as char, b[2] as char);
+            hex = format!(
+                "{0}{0}{1}{1}{2}{2}",
+                b[0] as char, b[1] as char, b[2] as char
+            );
         }
-        if hex.len() != 6 { return None; }
+        if hex.len() != 6 {
+            return None;
+        }
         return u32::from_str_radix(&hex, 16).ok().map(|c| c & 0x00FF_FFFF);
     }
     // rgb(r, g, b) / rgba(r, g, b, a) — el alpha se ignora (el color es 0xRRGGBB;
     // la translucidez de un box va por `opacity`, no por el canal alpha del color).
     let lower = s.to_ascii_lowercase();
-    if let Some(inner) = lower.strip_prefix("rgb(").or_else(|| lower.strip_prefix("rgba(")) {
+    if let Some(inner) = lower
+        .strip_prefix("rgb(")
+        .or_else(|| lower.strip_prefix("rgba("))
+    {
         let inner = inner.trim_end_matches(')');
-        let n: Vec<u32> = inner.split(',').take(3)
-            .filter_map(|p| p.trim().parse::<f32>().ok().map(|v| v.round().clamp(0.0, 255.0) as u32))
+        let n: Vec<u32> = inner
+            .split(',')
+            .take(3)
+            .filter_map(|p| {
+                p.trim()
+                    .parse::<f32>()
+                    .ok()
+                    .map(|v| v.round().clamp(0.0, 255.0) as u32)
+            })
             .collect();
-        if n.len() == 3 { return Some((n[0] << 16) | (n[1] << 8) | n[2]); }
+        if n.len() == 3 {
+            return Some((n[0] << 16) | (n[1] << 8) | n[2]);
+        }
         return None;
     }
     // hsl(h, s%, l%) / hsla(...) — h en grados, s/l en porcentaje.
-    if let Some(inner) = lower.strip_prefix("hsl(").or_else(|| lower.strip_prefix("hsla(")) {
+    if let Some(inner) = lower
+        .strip_prefix("hsl(")
+        .or_else(|| lower.strip_prefix("hsla("))
+    {
         let inner = inner.trim_end_matches(')');
-        let parts: Vec<f32> = inner.split(',').take(3)
+        let parts: Vec<f32> = inner
+            .split(',')
+            .take(3)
             .filter_map(|p| p.trim().trim_end_matches('%').trim().parse::<f32>().ok())
             .collect();
-        if parts.len() == 3 { return Some(hsl_to_rgb(parts[0], parts[1] / 100.0, parts[2] / 100.0)); }
+        if parts.len() == 3 {
+            return Some(hsl_to_rgb(parts[0], parts[1] / 100.0, parts[2] / 100.0));
+        }
         return None;
     }
     // Nombres CSS comunes.
     Some(match lower.as_str() {
-        "white" => 0xffffff, "black" => 0x000000, "red" => 0xff0000, "green" => 0x008000,
-        "lime" => 0x00ff00, "blue" => 0x0000ff, "yellow" => 0xffff00, "cyan" | "aqua" => 0x00ffff,
-        "magenta" | "fuchsia" => 0xff00ff, "gray" | "grey" => 0x808080, "silver" => 0xc0c0c0,
-        "maroon" => 0x800000, "olive" => 0x808000, "navy" => 0x000080, "teal" => 0x008080,
-        "purple" => 0x800080, "orange" => 0xffa500, "pink" => 0xffc0cb, "brown" => 0xa52a2a,
-        "gold" => 0xffd700, "transparent" => return None,
+        "white" => 0xffffff,
+        "black" => 0x000000,
+        "red" => 0xff0000,
+        "green" => 0x008000,
+        "lime" => 0x00ff00,
+        "blue" => 0x0000ff,
+        "yellow" => 0xffff00,
+        "cyan" | "aqua" => 0x00ffff,
+        "magenta" | "fuchsia" => 0xff00ff,
+        "gray" | "grey" => 0x808080,
+        "silver" => 0xc0c0c0,
+        "maroon" => 0x800000,
+        "olive" => 0x808000,
+        "navy" => 0x000080,
+        "teal" => 0x008080,
+        "purple" => 0x800080,
+        "orange" => 0xffa500,
+        "pink" => 0xffc0cb,
+        "brown" => 0xa52a2a,
+        "gold" => 0xffd700,
+        "transparent" => return None,
         _ => return None,
     })
 }
@@ -322,20 +436,38 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> u32 {
     let (r, g, b) = if s == 0.0 {
         (l, l, l)
     } else {
-        let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+        let q = if l < 0.5 {
+            l * (1.0 + s)
+        } else {
+            l + s - l * s
+        };
         let p = 2.0 * l - q;
-        (hue_to_rgb(p, q, h + 1.0 / 3.0), hue_to_rgb(p, q, h), hue_to_rgb(p, q, h - 1.0 / 3.0))
+        (
+            hue_to_rgb(p, q, h + 1.0 / 3.0),
+            hue_to_rgb(p, q, h),
+            hue_to_rgb(p, q, h - 1.0 / 3.0),
+        )
     };
     let to = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
     (to(r) << 16) | (to(g) << 8) | to(b)
 }
 
 fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
-    if t < 0.0 { t += 1.0; }
-    if t > 1.0 { t -= 1.0; }
-    if t < 1.0 / 6.0 { return p + (q - p) * 6.0 * t; }
-    if t < 1.0 / 2.0 { return q; }
-    if t < 2.0 / 3.0 { return p + (q - p) * (2.0 / 3.0 - t) * 6.0; }
+    if t < 0.0 {
+        t += 1.0;
+    }
+    if t > 1.0 {
+        t -= 1.0;
+    }
+    if t < 1.0 / 6.0 {
+        return p + (q - p) * 6.0 * t;
+    }
+    if t < 1.0 / 2.0 {
+        return q;
+    }
+    if t < 2.0 / 3.0 {
+        return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+    }
     p
 }
 
@@ -343,12 +475,20 @@ fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
 fn parse_cmp(sraw: &str) -> (String, String, String) {
     for op in ["==", "!=", "<=", ">="] {
         if let Some(idx) = sraw.find(op) {
-            return (sraw[..idx].trim().to_string(), op.to_string(), sraw[idx + 2..].trim().to_string());
+            return (
+                sraw[..idx].trim().to_string(),
+                op.to_string(),
+                sraw[idx + 2..].trim().to_string(),
+            );
         }
     }
     for op in ["<", ">"] {
         if let Some(idx) = sraw.find(op) {
-            return (sraw[..idx].trim().to_string(), op.to_string(), sraw[idx + 1..].trim().to_string());
+            return (
+                sraw[..idx].trim().to_string(),
+                op.to_string(),
+                sraw[idx + 1..].trim().to_string(),
+            );
         }
     }
     (sraw.trim().to_string(), String::new(), String::new())
@@ -358,12 +498,16 @@ fn parse_cmp(sraw: &str) -> (String, String, String) {
 /// (condición malformada tipo `a and and b`: se ignora el hueco).
 fn parse_clause(seg: &str, or_conn: bool) -> Option<CondClause> {
     let mut s = seg.trim();
-    if s.is_empty() { return None; }
+    if s.is_empty() {
+        return None;
+    }
     let mut negated = false;
     loop {
         if let Some(rest) = s.strip_prefix('!') {
             // `!=` es el operador de comparación, no una negación.
-            if rest.starts_with('=') { break; }
+            if rest.starts_with('=') {
+                break;
+            }
             negated = !negated;
             s = rest.trim_start();
             continue;
@@ -380,7 +524,13 @@ fn parse_clause(seg: &str, or_conn: bool) -> Option<CondClause> {
         break;
     }
     let (var, op, val) = parse_cmp(s);
-    Some(CondClause { negated, var, op, val, or_conn })
+    Some(CondClause {
+        negated,
+        var,
+        op,
+        val,
+        or_conn,
+    })
 }
 
 /// Parte la condición en cláusulas por los conectores de tope: `and`/`or` como
@@ -397,18 +547,27 @@ fn parse_cond(sraw: &str) -> Vec<CondClause> {
     let mut or_conn = false; // conector que precede a la PRÓXIMA cláusula
     let flush = |clauses: &mut Vec<CondClause>, seg: &[char], or_c: bool| {
         let s: String = seg.iter().collect();
-        if let Some(c) = parse_clause(&s, or_c) { clauses.push(c); }
+        if let Some(c) = parse_clause(&s, or_c) {
+            clauses.push(c);
+        }
     };
     while i < n {
         let c = chars[i];
         if let Some(q) = quote {
-            if c == q { quote = None; }
+            if c == q {
+                quote = None;
+            }
             i += 1;
             continue;
         }
-        if c == '\'' || c == '"' { quote = Some(c); i += 1; continue; }
+        if c == '\'' || c == '"' {
+            quote = Some(c);
+            i += 1;
+            continue;
+        }
         if (c == '&' && i + 1 < n && chars[i + 1] == '&')
-            || (c == '|' && i + 1 < n && chars[i + 1] == '|') {
+            || (c == '|' && i + 1 < n && chars[i + 1] == '|')
+        {
             flush(&mut clauses, &chars[start..i], or_conn);
             or_conn = c == '|';
             i += 2;
@@ -417,9 +576,14 @@ fn parse_cond(sraw: &str) -> Vec<CondClause> {
         }
         if css_is_name_char(c) {
             // Sólo el comienzo de una palabra puede ser un conector.
-            if i > 0 && css_is_name_char(chars[i - 1]) { i += 1; continue; }
+            if i > 0 && css_is_name_char(chars[i - 1]) {
+                i += 1;
+                continue;
+            }
             let mut j = i;
-            while j < n && css_is_name_char(chars[j]) { j += 1; }
+            while j < n && css_is_name_char(chars[j]) {
+                j += 1;
+            }
             let w: String = chars[i..j].iter().collect::<String>().to_ascii_lowercase();
             if w == "and" || w == "or" {
                 flush(&mut clauses, &chars[start..i], or_conn);
@@ -447,19 +611,28 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
     fn skip(s: &[char], mut i: usize) -> usize {
         loop {
             let mut adv = false;
-            while i < s.len() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') { i += 1; adv = true; }
+            while i < s.len() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
+                i += 1;
+                adv = true;
+            }
             if i + 1 < s.len() && s[i] == '/' && s[i + 1] == '*' {
                 i += 2;
-                while i + 1 < s.len() && !(s[i] == '*' && s[i + 1] == '/') { i += 1; }
+                while i + 1 < s.len() && !(s[i] == '*' && s[i + 1] == '/') {
+                    i += 1;
+                }
                 i = (i + 2).min(s.len());
                 adv = true;
             }
             if i + 1 < s.len() && s[i] == '/' && s[i + 1] == '/' {
                 i += 2;
-                while i < s.len() && s[i] != '\n' { i += 1; }
+                while i < s.len() && s[i] != '\n' {
+                    i += 1;
+                }
                 adv = true;
             }
-            if !adv { break; }
+            if !adv {
+                break;
+            }
         }
         i
     }
@@ -471,37 +644,60 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
         while i < n && s[i] != '}' {
             loop {
                 let mut adv = false;
-                while i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') { i += 1; adv = true; }
+                while i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
+                    i += 1;
+                    adv = true;
+                }
                 if i + 1 < n && s[i] == '/' && s[i + 1] == '*' {
                     i += 2;
-                    while i + 1 < n && !(s[i] == '*' && s[i + 1] == '/') { i += 1; }
+                    while i + 1 < n && !(s[i] == '*' && s[i + 1] == '/') {
+                        i += 1;
+                    }
                     i = (i + 2).min(n);
                     adv = true;
                 }
                 if i + 1 < n && s[i] == '/' && s[i + 1] == '/' {
                     i += 2;
-                    while i < n && s[i] != '\n' { i += 1; }
+                    while i < n && s[i] != '\n' {
+                        i += 1;
+                    }
                     adv = true;
                 }
-                if !adv { break; }
+                if !adv {
+                    break;
+                }
             }
-            if i >= n || s[i] == '}' { break; }
+            if i >= n || s[i] == '}' {
+                break;
+            }
             let mut prop = String::new();
-            while i < n && s[i] != ':' && s[i] != '}' && s[i] != ';' { prop.push(s[i]); i += 1; }
+            while i < n && s[i] != ':' && s[i] != '}' && s[i] != ';' {
+                prop.push(s[i]);
+                i += 1;
+            }
             if i < n && s[i] == ':' {
                 i += 1;
                 let mut val = String::new();
-                while i < n && s[i] != ';' && s[i] != '}' { val.push(s[i]); i += 1; }
-                if i < n && s[i] == ';' { i += 1; }
+                while i < n && s[i] != ';' && s[i] != '}' {
+                    val.push(s[i]);
+                    i += 1;
+                }
+                if i < n && s[i] == ';' {
+                    i += 1;
+                }
                 let pn = prop.trim();
-                if !pn.is_empty() { decls.push((pn.to_string(), val.trim().to_string())); }
+                if !pn.is_empty() {
+                    decls.push((pn.to_string(), val.trim().to_string()));
+                }
             } else if i < n && s[i] == ';' {
                 i += 1;
             } else {
                 break;
             }
         }
-        if i < n && s[i] == '}' { i += 1; }
+        if i < n && s[i] == '}' {
+            i += 1;
+        }
         (decls, i)
     }
 
@@ -510,13 +706,23 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
     /// abre bloque. Devuelve el índice tras el cierre.
     fn skip_atrule(s: &[char], mut i: usize) -> usize {
         let n = s.len();
-        while i < n && s[i] != '{' && s[i] != ';' { i += 1; }
-        if i < n && s[i] == ';' { return i + 1; }
+        while i < n && s[i] != '{' && s[i] != ';' {
+            i += 1;
+        }
+        if i < n && s[i] == ';' {
+            return i + 1;
+        }
         if i < n && s[i] == '{' {
             let mut depth = 0i32;
             while i < n {
-                if s[i] == '{' { depth += 1; }
-                else if s[i] == '}' { depth -= 1; if depth == 0 { return i + 1; } }
+                if s[i] == '{' {
+                    depth += 1;
+                } else if s[i] == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        return i + 1;
+                    }
+                }
                 i += 1;
             }
         }
@@ -542,14 +748,22 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
         let mut else_neg: Vec<CondTerm> = Vec::new();
         loop {
             i = skip(s, i);
-            if i >= n { break; }
-            if nested && s[i] == '}' { i += 1; break; }
+            if i >= n {
+                break;
+            }
+            if nested && s[i] == '}' {
+                i += 1;
+                break;
+            }
 
             // --- Bloques @when (cond) { … } / @else [(cond)] { … } ---------------
             if s[i] == '@' {
                 let mut j = i + 1;
                 let mut kw = String::new();
-                while j < n && css_is_name_char(s[j]) { kw.push(s[j]); j += 1; }
+                while j < n && css_is_name_char(s[j]) {
+                    kw.push(s[j]);
+                    j += 1;
+                }
                 let kw = kw.to_ascii_lowercase();
                 if kw == "when" || kw == "else" {
                     i = skip(s, j);
@@ -558,25 +772,44 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
                     if i < n && s[i] == '(' {
                         i += 1;
                         let mut cs = String::new();
-                        while i < n && s[i] != ')' { cs.push(s[i]); i += 1; }
-                        if i < n { i += 1; }
+                        while i < n && s[i] != ')' {
+                            cs.push(s[i]);
+                            i += 1;
+                        }
+                        if i < n {
+                            i += 1;
+                        }
                         let clauses = parse_cond(&cs);
-                        if !clauses.is_empty() { term = Some(CondTerm { negated: false, clauses }); }
+                        if !clauses.is_empty() {
+                            term = Some(CondTerm {
+                                negated: false,
+                                clauses,
+                            });
+                        }
                     }
                     // Términos activos para el cuerpo de esta rama: los heredados, más
                     // (si es @else) las negaciones de las ramas previas, más el propio.
                     let mut branch: Vec<CondTerm> = ambient.to_vec();
-                    if kw == "else" { branch.extend(else_neg.iter().cloned()); }
-                    if let Some(t) = &term { branch.push(t.clone()); }
+                    if kw == "else" {
+                        branch.extend(else_neg.iter().cloned());
+                    }
+                    if let Some(t) = &term {
+                        branch.push(t.clone());
+                    }
                     i = skip(s, i);
                     if i < n && s[i] == '{' {
                         i = parse_rules(s, i + 1, &branch, true, rules, font_decls);
                     }
                     // `@when` abre una cadena nueva; el término negado alimenta al
                     // `@else` que pueda seguir. `@else` pelado cierra la cadena.
-                    if kw == "when" { else_neg.clear(); }
+                    if kw == "when" {
+                        else_neg.clear();
+                    }
                     match term {
-                        Some(mut t) => { t.negated = true; else_neg.push(t); }
+                        Some(mut t) => {
+                            t.negated = true;
+                            else_neg.push(t);
+                        }
                         None => else_neg.clear(),
                     }
                     continue;
@@ -594,13 +827,19 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
             if s[i] == ':' {
                 let mut j = i + 1;
                 let mut kw = String::new();
-                while j < n && css_is_name_char(s[j]) { kw.push(s[j]); j += 1; }
+                while j < n && css_is_name_char(s[j]) {
+                    kw.push(s[j]);
+                    j += 1;
+                }
                 i = skip(s, j);
                 if i < n && s[i] == '{' {
                     if kw == "font" {
                         let (decls, ni) = parse_decls(s, i + 1);
                         for (alias, path) in decls {
-                            let path = path.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
+                            let path = path
+                                .trim()
+                                .trim_matches(|c| c == '\'' || c == '"')
+                                .to_string();
                             font_decls.push((alias, path));
                         }
                         i = ni;
@@ -615,16 +854,27 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
             // Selector: todo hasta `(` (condición) o `{` (decls). Admite espacios
             // (descendientes), `.` `#` `:` y `>` — parse_selector lo trocea.
             let mut sel = String::new();
-            while i < n && s[i] != '{' && s[i] != '(' && s[i] != '}' { sel.push(s[i]); i += 1; }
+            while i < n && s[i] != '{' && s[i] != '(' && s[i] != '}' {
+                sel.push(s[i]);
+                i += 1;
+            }
             let sel = sel.trim().to_string();
-            if sel.is_empty() { i += 1; continue; }
+            if sel.is_empty() {
+                i += 1;
+                continue;
+            }
             i = skip(s, i);
             let mut own: Option<Vec<CondClause>> = None;
             if i < n && s[i] == '(' {
                 i += 1;
                 let mut cs = String::new();
-                while i < n && s[i] != ')' { cs.push(s[i]); i += 1; }
-                if i < n { i += 1; }
+                while i < n && s[i] != ')' {
+                    cs.push(s[i]);
+                    i += 1;
+                }
+                if i < n {
+                    i += 1;
+                }
                 // `()` vacío = sin condición (no una condición que nunca pasa).
                 let cs = parse_cond(&cs);
                 own = if cs.is_empty() { None } else { Some(cs) };
@@ -638,20 +888,35 @@ pub(crate) fn parse_css(src: &str) -> NativeStylesheet {
             }
             // Condición efectiva de la regla = términos heredados (@when/@else) + el propio.
             let mut terms: Vec<CondTerm> = ambient.to_vec();
-            if let Some(clauses) = own { terms.push(CondTerm { negated: false, clauses }); }
+            if let Some(clauses) = own {
+                terms.push(CondTerm {
+                    negated: false,
+                    clauses,
+                });
+            }
             let cond = if terms.is_empty() { None } else { Some(terms) };
             // Grupo `h1, h2 { … }` → una regla por selector (mismas decls/cond).
             for part in sel.split(',') {
                 let part = part.trim();
-                if part.is_empty() { continue; }
-                rules.push(CssRule { sel: parse_selector(part), cond: cond.clone(), decls: decls.clone() });
+                if part.is_empty() {
+                    continue;
+                }
+                rules.push(CssRule {
+                    sel: parse_selector(part),
+                    cond: cond.clone(),
+                    decls: decls.clone(),
+                });
             }
         }
         i
     }
 
     parse_rules(&s, 0, &[], false, &mut rules, &mut font_decls);
-    NativeStylesheet { rules, font_decls, font_alias: Vec::new() }
+    NativeStylesheet {
+        rules,
+        font_decls,
+        font_alias: Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -659,7 +924,10 @@ mod tests {
     use super::*;
 
     fn ctx(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
     }
 
     fn ev(cond: &str, c: &[(&str, &str)]) -> bool {
@@ -670,22 +938,43 @@ mod tests {
     fn and_exige_ambas() {
         let base = [("w", "800"), ("flag", "true")];
         assert!(ev("w > 600 and flag == true", &base));
-        assert!(!ev("w > 600 and flag == true", &[("w", "500"), ("flag", "true")]));
-        assert!(!ev("w > 600 and flag == true", &[("w", "800"), ("flag", "false")]));
+        assert!(!ev(
+            "w > 600 and flag == true",
+            &[("w", "500"), ("flag", "true")]
+        ));
+        assert!(!ev(
+            "w > 600 and flag == true",
+            &[("w", "800"), ("flag", "false")]
+        ));
     }
 
     #[test]
     fn or_basta_una() {
-        assert!(ev("flag == true or modo == \"x\"", &[("flag", "true"), ("modo", "z")]));
-        assert!(ev("flag == true or modo == \"x\"", &[("flag", "false"), ("modo", "x")]));
-        assert!(!ev("flag == true or modo == \"x\"", &[("flag", "false"), ("modo", "z")]));
+        assert!(ev(
+            "flag == true or modo == \"x\"",
+            &[("flag", "true"), ("modo", "z")]
+        ));
+        assert!(ev(
+            "flag == true or modo == \"x\"",
+            &[("flag", "false"), ("modo", "x")]
+        ));
+        assert!(!ev(
+            "flag == true or modo == \"x\"",
+            &[("flag", "false"), ("modo", "z")]
+        ));
     }
 
     #[test]
     fn alias_simbolicos_equivalen() {
         let c = [("w", "800"), ("flag", "true"), ("modo", "x")];
-        assert_eq!(ev("w > 600 and flag == true", &c), ev("w > 600 && flag == true", &c));
-        assert_eq!(ev("flag == false or modo == \"x\"", &c), ev("flag == false || modo == \"x\"", &c));
+        assert_eq!(
+            ev("w > 600 and flag == true", &c),
+            ev("w > 600 && flag == true", &c)
+        );
+        assert_eq!(
+            ev("flag == false or modo == \"x\"", &c),
+            ev("flag == false || modo == \"x\"", &c)
+        );
     }
 
     #[test]
@@ -726,7 +1015,7 @@ mod tests {
     fn una_sola_clausula_sigue_igual() {
         assert!(ev("w > 600", &[("w", "800")]));
         assert!(!ev("w > 600", &[("w", "100")]));
-        assert!(ev("flag", &[("flag", "true")]));   // truthy sin operador
+        assert!(ev("flag", &[("flag", "true")])); // truthy sin operador
         assert!(!ev("flag", &[("flag", "false")]));
     }
 
@@ -739,28 +1028,45 @@ mod tests {
     // --- Bloques @when / @else -------------------------------------------------
 
     fn nk(tag: &str) -> NodeKey {
-        NodeKey { tag: tag.to_string(), classes: Vec::new(), id: None, states: Vec::new() }
+        NodeKey {
+            tag: tag.to_string(),
+            classes: Vec::new(),
+            id: None,
+            states: Vec::new(),
+        }
     }
 
     /// Valor de la prop `p` que el nodo `tag` recibe de la hoja `src` bajo el ctx `c`.
     fn getp(src: &str, tag: &str, c: &[(&str, &str)], p: &str) -> Option<String> {
         let sheet = parse_css(src);
-        sheet.props_for_node(&nk(tag), &[], &ctx(c))
-            .iter().find(|(k, _)| k == p).map(|(_, v)| v.clone())
+        sheet
+            .props_for_node(&nk(tag), &[], &ctx(c))
+            .iter()
+            .find(|(k, _)| k == p)
+            .map(|(_, v)| v.clone())
     }
 
     #[test]
     fn when_aplica_solo_si_cumple() {
         let src = "@when (w > 600) { body { color: #fff } }";
-        assert_eq!(getp(src, "body", &[("w", "800")], "color").as_deref(), Some("#fff"));
+        assert_eq!(
+            getp(src, "body", &[("w", "800")], "color").as_deref(),
+            Some("#fff")
+        );
         assert_eq!(getp(src, "body", &[("w", "400")], "color"), None);
     }
 
     #[test]
     fn else_es_el_complemento_del_when() {
         let src = "@when (dark) { body { color: #fff } } @else { body { color: #000 } }";
-        assert_eq!(getp(src, "body", &[("dark", "true")], "color").as_deref(), Some("#fff"));
-        assert_eq!(getp(src, "body", &[("dark", "false")], "color").as_deref(), Some("#000"));
+        assert_eq!(
+            getp(src, "body", &[("dark", "true")], "color").as_deref(),
+            Some("#fff")
+        );
+        assert_eq!(
+            getp(src, "body", &[("dark", "false")], "color").as_deref(),
+            Some("#000")
+        );
     }
 
     #[test]
@@ -768,9 +1074,18 @@ mod tests {
         let src = "@when (w < 200) { body { color: #100 } } \
                    @else (w < 400) { body { color: #200 } } \
                    @else { body { color: #300 } }";
-        assert_eq!(getp(src, "body", &[("w", "100")], "color").as_deref(), Some("#100"));
-        assert_eq!(getp(src, "body", &[("w", "300")], "color").as_deref(), Some("#200"));
-        assert_eq!(getp(src, "body", &[("w", "900")], "color").as_deref(), Some("#300"));
+        assert_eq!(
+            getp(src, "body", &[("w", "100")], "color").as_deref(),
+            Some("#100")
+        );
+        assert_eq!(
+            getp(src, "body", &[("w", "300")], "color").as_deref(),
+            Some("#200")
+        );
+        assert_eq!(
+            getp(src, "body", &[("w", "900")], "color").as_deref(),
+            Some("#300")
+        );
     }
 
     #[test]
@@ -778,38 +1093,88 @@ mod tests {
         // El caso clave: `@else` debe negar `(a or b)` como un TODO, no cláusula a
         // cláusula. Con ambos true, `¬(a or b)` es false → gana el @when, no el @else.
         let src = "@when (a or b) { body { color: #fff } } @else { body { color: #000 } }";
-        assert_eq!(getp(src, "body", &[("a", "true"), ("b", "false")], "color").as_deref(), Some("#fff"));
-        assert_eq!(getp(src, "body", &[("a", "false"), ("b", "true")], "color").as_deref(), Some("#fff"));
-        assert_eq!(getp(src, "body", &[("a", "true"), ("b", "true")], "color").as_deref(), Some("#fff"));
-        assert_eq!(getp(src, "body", &[("a", "false"), ("b", "false")], "color").as_deref(), Some("#000"));
+        assert_eq!(
+            getp(src, "body", &[("a", "true"), ("b", "false")], "color").as_deref(),
+            Some("#fff")
+        );
+        assert_eq!(
+            getp(src, "body", &[("a", "false"), ("b", "true")], "color").as_deref(),
+            Some("#fff")
+        );
+        assert_eq!(
+            getp(src, "body", &[("a", "true"), ("b", "true")], "color").as_deref(),
+            Some("#fff")
+        );
+        assert_eq!(
+            getp(src, "body", &[("a", "false"), ("b", "false")], "color").as_deref(),
+            Some("#000")
+        );
     }
 
     #[test]
     fn when_and_condicion_propia_de_la_regla_se_and_ean() {
         let src = "@when (w > 600) { body (dark) { color: #fff } }";
-        assert_eq!(getp(src, "body", &[("w", "800"), ("dark", "true")], "color").as_deref(), Some("#fff"));
-        assert_eq!(getp(src, "body", &[("w", "800"), ("dark", "false")], "color"), None); // falla la propia
-        assert_eq!(getp(src, "body", &[("w", "400"), ("dark", "true")], "color"), None);  // falla el @when
+        assert_eq!(
+            getp(src, "body", &[("w", "800"), ("dark", "true")], "color").as_deref(),
+            Some("#fff")
+        );
+        assert_eq!(
+            getp(src, "body", &[("w", "800"), ("dark", "false")], "color"),
+            None
+        ); // falla la propia
+        assert_eq!(
+            getp(src, "body", &[("w", "400"), ("dark", "true")], "color"),
+            None
+        ); // falla el @when
     }
 
     #[test]
     fn when_anidado_acumula_condiciones() {
         let src = "@when (w > 600) { @when (dark) { body { color: #fff } } }";
-        assert_eq!(getp(src, "body", &[("w", "800"), ("dark", "true")], "color").as_deref(), Some("#fff"));
-        assert_eq!(getp(src, "body", &[("w", "800"), ("dark", "false")], "color"), None);
-        assert_eq!(getp(src, "body", &[("w", "400"), ("dark", "true")], "color"), None);
+        assert_eq!(
+            getp(src, "body", &[("w", "800"), ("dark", "true")], "color").as_deref(),
+            Some("#fff")
+        );
+        assert_eq!(
+            getp(src, "body", &[("w", "800"), ("dark", "false")], "color"),
+            None
+        );
+        assert_eq!(
+            getp(src, "body", &[("w", "400"), ("dark", "true")], "color"),
+            None
+        );
     }
 
     #[test]
     fn when_agrupa_varios_selectores() {
-        let src = "@when (w < 300) { body { color: #f00 } .card { color: #0f0 } #main { color: #00f } }";
-        assert_eq!(getp(src, "body", &[("w", "100")], "color").as_deref(), Some("#f00"));
+        let src =
+            "@when (w < 300) { body { color: #f00 } .card { color: #0f0 } #main { color: #00f } }";
+        assert_eq!(
+            getp(src, "body", &[("w", "100")], "color").as_deref(),
+            Some("#f00")
+        );
         assert_eq!(getp(src, "body", &[("w", "500")], "color"), None);
         // .card y #main comparten la misma condición del bloque
         let sheet = parse_css(src);
-        let card = NodeKey { tag: "div".into(), classes: vec!["card".into()], id: None, states: vec![] };
-        assert_eq!(sheet.props_for_node(&card, &[], &ctx(&[("w", "100")])).iter().find(|(k, _)| k == "color").map(|(_, v)| v.as_str()), Some("#0f0"));
-        assert!(sheet.props_for_node(&card, &[], &ctx(&[("w", "500")])).is_empty());
+        let card = NodeKey {
+            tag: "div".into(),
+            classes: vec!["card".into()],
+            id: None,
+            states: vec![],
+        };
+        assert_eq!(
+            sheet
+                .props_for_node(&card, &[], &ctx(&[("w", "100")]))
+                .iter()
+                .find(|(k, _)| k == "color")
+                .map(|(_, v)| v.as_str()),
+            Some("#0f0")
+        );
+        assert!(
+            sheet
+                .props_for_node(&card, &[], &ctx(&[("w", "500")]))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -823,7 +1188,10 @@ mod tests {
     fn regla_condicional_suelta_sigue_igual() {
         // Regresión: una regla con su propia (cond), sin @when, sigue funcionando.
         let src = "body (w > 600) { color: #fff }";
-        assert_eq!(getp(src, "body", &[("w", "800")], "color").as_deref(), Some("#fff"));
+        assert_eq!(
+            getp(src, "body", &[("w", "800")], "color").as_deref(),
+            Some("#fff")
+        );
         assert_eq!(getp(src, "body", &[("w", "100")], "color"), None);
     }
 }

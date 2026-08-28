@@ -1,4 +1,4 @@
-// sec_getter_no_setter.sz — writing to a getter-only property must error
+// Writing to a getter-only property must fail with structured TypeError/SZ4002.
 
 class ReadOnly {
     public ReadOnly(int v) {

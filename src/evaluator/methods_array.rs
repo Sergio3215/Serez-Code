@@ -1,20 +1,25 @@
 #![allow(unused_imports)]
+use super::{
+    CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
+    obj_data_eq, obj_data_to_key_str, operator_to_method_name, owned_to_obj_data, type_matches,
+};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::rc::Rc;
-use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str,
-            obj_data_eq, format_decimal, json_stringify_owned, json_parse,
-            operator_to_method_name, owned_to_obj_data};
 
 impl super::Evaluator {
     /// Slot fast path for push/pop (dispatched from expr.rs before the generic
     /// dot-call clones the receiver). Mutates the array in place via get_mut —
     /// no O(N) copy per call, no whole-slot rewrite. Error behavior is
     /// byte-for-byte identical to the generic path (fatal eprintln, same messages).
-    pub(super) fn eval_array_fast(&mut self, arr_ref: ObjectRef, dot_call: &ast::DotCallExpression) -> EvalResult {
+    pub(super) fn eval_array_fast(
+        &mut self,
+        arr_ref: ObjectRef,
+        dot_call: &ast::DotCallExpression,
+    ) -> EvalResult {
         match dot_call.method.as_str() {
             "push" => {
                 if dot_call.arguments.len() != 1 {
@@ -35,7 +40,8 @@ impl super::Evaluator {
                     if !type_matches(et, data) {
                         eprintln!(
                             "❌ TYPE ERROR: Cannot push '{}' into [{}] array",
-                            data.type_name(), et
+                            data.type_name(),
+                            et
                         );
                         return EvalResult::Error;
                     }
@@ -79,7 +85,6 @@ impl super::Evaluator {
         dot_call: &ast::DotCallExpression,
     ) -> EvalResult {
         match dot_call.method.as_str() {
-
             "length" => EvalResult::Value(self.alloc(ObjectData::Integer(elems.len() as i64))),
 
             "push" => {
@@ -97,7 +102,8 @@ impl super::Evaluator {
                     if !type_matches(et, data) {
                         eprintln!(
                             "❌ TYPE ERROR: Cannot push '{}' into [{}] array",
-                            data.type_name(), et
+                            data.type_name(),
+                            et
                         );
                         return EvalResult::Error;
                     }
@@ -146,7 +152,8 @@ impl super::Evaluator {
                     if !type_matches(et, data) {
                         eprintln!(
                             "❌ TYPE ERROR: Cannot unshift '{}' into [{}] array",
-                            data.type_name(), et
+                            data.type_name(),
+                            et
                         );
                         return EvalResult::Error;
                     }
@@ -171,7 +178,11 @@ impl super::Evaluator {
                     return EvalResult::Value(self.null_ref);
                 }
                 if idx < 0 || idx as usize >= elems.len() {
-                    eprintln!("❌ ERROR: remove: index {} out of bounds (length {})", idx, elems.len());
+                    eprintln!(
+                        "❌ ERROR: remove: index {} out of bounds (length {})",
+                        idx,
+                        elems.len()
+                    );
                     return EvalResult::Error;
                 }
                 let mut e = elems;
@@ -199,8 +210,7 @@ impl super::Evaluator {
 
                 if is_comparator {
                     let cb_ref = arg_ref.unwrap();
-                    let mut owned_vals: Vec<OwnedValue> =
-                        elems.iter().cloned().collect();
+                    let mut owned_vals: Vec<OwnedValue> = elems.iter().cloned().collect();
                     let n = owned_vals.len();
                     // Bubble sort (simple, avoids borrow issues with call_function)
                     let mut i = 0;
@@ -255,21 +265,28 @@ impl super::Evaluator {
 
                 let mut owned_vals: Vec<OwnedValue> = elems.clone();
 
-                let all_ints = owned_vals.iter().all(|v| matches!(v, OwnedValue::Integer(_)));
-                let all_decs = owned_vals.iter().all(|v| matches!(v, OwnedValue::Decimal(_)));
+                let all_ints = owned_vals
+                    .iter()
+                    .all(|v| matches!(v, OwnedValue::Integer(_)));
+                let all_decs = owned_vals
+                    .iter()
+                    .all(|v| matches!(v, OwnedValue::Decimal(_)));
                 let all_exact = owned_vals.iter().all(|v| matches!(v, OwnedValue::Dec(_)));
                 let all_strs = owned_vals.iter().all(|v| matches!(v, OwnedValue::Str(_)));
 
                 if !all_ints && !all_decs && !all_exact && !all_strs {
-                    eprintln!("❌ ERROR: sort requires a homogeneous array (all int, decimal, dec, or string)");
+                    eprintln!(
+                        "❌ ERROR: sort requires a homogeneous array (all int, decimal, dec, or string)"
+                    );
                     return EvalResult::Error;
                 }
 
                 owned_vals.sort_by(|a, b| {
                     let cmp = match (a, b) {
                         (OwnedValue::Integer(x), OwnedValue::Integer(y)) => x.cmp(y),
-                        (OwnedValue::Decimal(x), OwnedValue::Decimal(y)) =>
-                            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+                        (OwnedValue::Decimal(x), OwnedValue::Decimal(y)) => {
+                            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
+                        }
                         (OwnedValue::Dec(x), OwnedValue::Dec(y)) => x.cmp(y),
                         (OwnedValue::Str(x), OwnedValue::Str(y)) => x.cmp(y),
                         _ => std::cmp::Ordering::Equal,
@@ -293,7 +310,10 @@ impl super::Evaluator {
                 };
                 let n_params = match self.callback_param_count(cb_ref) {
                     Some(n) => n,
-                    None => { eprintln!("❌ ERROR: map argument must be a function"); return EvalResult::Error; }
+                    None => {
+                        eprintln!("❌ ERROR: map argument must be a function");
+                        return EvalResult::Error;
+                    }
                 };
                 let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
                 let mut results: Vec<OwnedValue> = Vec::new();
@@ -309,7 +329,10 @@ impl super::Evaluator {
                         _ => return EvalResult::Error,
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: results }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: None,
+                    elements: results,
+                }))
             }
 
             "filter" => {
@@ -324,7 +347,10 @@ impl super::Evaluator {
                 };
                 let n_params = match self.callback_param_count(cb_ref) {
                     Some(n) => n,
-                    None => { eprintln!("❌ ERROR: filter argument must be a function"); return EvalResult::Error; }
+                    None => {
+                        eprintln!("❌ ERROR: filter argument must be a function");
+                        return EvalResult::Error;
+                    }
                 };
                 let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
                 let mut kept: Vec<OwnedValue> = Vec::new();
@@ -346,12 +372,17 @@ impl super::Evaluator {
                         kept.push(val);
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type, elements: kept }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type,
+                    elements: kept,
+                }))
             }
 
             "reduce" => {
                 if dot_call.arguments.is_empty() || dot_call.arguments.len() > 2 {
-                    eprintln!("❌ ERROR: reduce expects 1 argument (callback) or 2 (initial, callback)");
+                    eprintln!(
+                        "❌ ERROR: reduce expects 1 argument (callback) or 2 (initial, callback)"
+                    );
                     return EvalResult::Error;
                 }
                 let owned_elems: Vec<OwnedValue> = elems.iter().cloned().collect();
@@ -371,7 +402,9 @@ impl super::Evaluator {
                 } else {
                     // reduce(callback) — first element is the initial accumulator
                     if owned_elems.is_empty() {
-                        eprintln!("❌ ERROR: reduce with no initial value requires a non-empty array");
+                        eprintln!(
+                            "❌ ERROR: reduce with no initial value requires a non-empty array"
+                        );
                         return EvalResult::Error;
                     }
                     let cb = match self.eval_expression(&dot_call.arguments[0]) {
@@ -402,9 +435,7 @@ impl super::Evaluator {
                         None => return EvalResult::Error,
                     }
                 };
-                let parts: Vec<String> = elems.iter()
-                    .map(|v| v.display_str())
-                    .collect();
+                let parts: Vec<String> = elems.iter().map(|v| v.display_str()).collect();
                 EvalResult::Value(self.alloc(ObjectData::Str(parts.join(&sep))))
             }
 
@@ -424,10 +455,15 @@ impl super::Evaluator {
                     _ => return EvalResult::Error,
                 };
                 let needle_data = self.resolve(needle_ref).cloned();
-                let idx = elems.iter().enumerate().find(|(_, elem)| {
-                    let elem_data = Some(owned_to_obj_data(elem));
-                    obj_data_eq(&elem_data, &needle_data)
-                }).map(|(i, _)| i as i64).unwrap_or(-1);
+                let idx = elems
+                    .iter()
+                    .enumerate()
+                    .find(|(_, elem)| {
+                        let elem_data = Some(owned_to_obj_data(elem));
+                        obj_data_eq(&elem_data, &needle_data)
+                    })
+                    .map(|(i, _)| i as i64)
+                    .unwrap_or(-1);
                 EvalResult::Value(self.alloc(ObjectData::Integer(idx)))
             }
 
@@ -502,22 +538,43 @@ impl super::Evaluator {
                 let len = elems.len() as i64;
                 let start_i = if !dot_call.arguments.is_empty() {
                     match self.eval_expression(&dot_call.arguments[0]) {
-                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i, _ => 0 },
+                        EvalResult::Value(v) => match self.resolve(v) {
+                            Some(ObjectData::Integer(i)) => *i,
+                            _ => 0,
+                        },
                         _ => return EvalResult::Error,
                     }
-                } else { 0 };
+                } else {
+                    0
+                };
                 let end_i = if dot_call.arguments.len() >= 2 {
                     match self.eval_expression(&dot_call.arguments[1]) {
-                        EvalResult::Value(v) => match self.resolve(v) { Some(ObjectData::Integer(i)) => *i, _ => len },
+                        EvalResult::Value(v) => match self.resolve(v) {
+                            Some(ObjectData::Integer(i)) => *i,
+                            _ => len,
+                        },
                         _ => return EvalResult::Error,
                     }
-                } else { len };
+                } else {
+                    len
+                };
                 // Normalize negative indices (count from end) then clamp
-                let start = (if start_i < 0 { (len + start_i).max(0) } else { start_i.min(len) }) as usize;
-                let end   = (if end_i   < 0 { (len + end_i  ).max(0) } else { end_i.min(len)   }) as usize;
+                let start = (if start_i < 0 {
+                    (len + start_i).max(0)
+                } else {
+                    start_i.min(len)
+                }) as usize;
+                let end = (if end_i < 0 {
+                    (len + end_i).max(0)
+                } else {
+                    end_i.min(len)
+                }) as usize;
                 let end = end.max(start); // prevent inverted range
                 let sliced: Vec<OwnedValue> = elems[start..end].iter().cloned().collect();
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: element_type.clone(), elements: sliced }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: element_type.clone(),
+                    elements: sliced,
+                }))
             }
 
             "reverse" => {
@@ -605,7 +662,10 @@ impl super::Evaluator {
                 }
 
                 let flat = flat_owned(elems.clone(), depth);
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: flat }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: None,
+                    elements: flat,
+                }))
             }
 
             _ => {
@@ -616,5 +676,4 @@ impl super::Evaluator {
     }
 
     // ── String methods ────────────────────────────────────────────────────────
-
 }

@@ -1,0 +1,228 @@
+# Classes and interfaces
+
+This revision freezes construction-target/shape validation, the audited
+constructor/method `super` subset and ordinary member-dispatch validation. Other
+initialization and receiver rules are listed under **Coverage boundary** rather
+than being implied here.
+Normative words such as "must" describe compatibility requirements.
+
+## Construction targets
+
+`new Name(...)` must resolve `Name` to a declared class, a declared interface or
+a separately documented built-in construction target such as `Set` or `Tensor`.
+An unknown target raises catchable `ReferenceError` (`SZ4001`).
+
+## Interface instances
+
+An interface is constructed with exactly one field-form argument:
+
+```serez
+interface Point {
+    x: int;
+    y: int;
+}
+
+let point = new Point({ x: 3, y: 4 });
+```
+
+Every declared field must be supplied, no undeclared field may be supplied, and
+each value must match its declared type. Positional arguments, missing fields,
+extra fields and field type mismatches raise catchable `TypeError` (`SZ4002`).
+
+This is exact construction, not the later partial object-patch operation.
+
+## Class instances
+
+A concrete class is constructed with positional arguments:
+
+```serez
+class Point {
+    public Point(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+let point = new Point(3, 4);
+```
+
+- A field-form argument is invalid for a class and raises catchable `TypeError`
+  (`SZ4002`).
+- An abstract class cannot be instantiated directly; attempting it raises the
+  same catchable `TypeError`.
+- A class with no constructor accepts no arguments. Supplying any raises the
+  same catchable `TypeError`.
+- A declared constructor follows the positional arity/default/rest contract in
+  `functions.md`. An invalid argument count raises the same catchable
+  `TypeError` before the constructor body runs.
+
+The human-readable messages remain actionable but are not stable identifiers;
+tooling and programs must classify on `code` and `kind`.
+
+## Inheritance graph
+
+A class has at most one named parent. Parent names may be forward references, so
+`class Child : Parent {}` may appear before `Parent` is declared. The hierarchy
+cannot be used while that reference is unresolved: constructing `Child`, an
+implicit/explicit `super()` call, or parent dispatch raises catchable
+`ReferenceError` (`SZ4001`) identifying the missing parent. Declaring the parent
+later makes the existing child hierarchy usable.
+
+The complete class graph must be acyclic. A declaration that would introduce
+self-inheritance or an indirect cycle is rejected atomically with catchable
+`TypeError` (`SZ4002`); the rejected class is not inserted. Method, getter and
+setter ancestor walks are additionally bounded by the number of registered
+classes, so even a corrupt legacy/internal registry cannot make lookup loop
+forever.
+
+A `sealed` class may be instantiated but cannot be used as a parent. Attempting
+to extend it is also catchable `TypeError` (`SZ4002`). These rules validate graph
+shape; abstract-method completeness and declaring-owner privacy remain separate
+contracts/debts below.
+
+## Constructor chaining
+
+`super(args...)` is valid only while a class constructor is running. It resolves
+the direct parent's constructor and runs it against the same `this` instance.
+Its positional arguments, defaults and final rest parameter follow
+`functions.md`.
+
+The compatibility rules for an omitted explicit call are:
+
+- If the parent constructor has no required parameters, it is called
+  implicitly before the child constructor body.
+- If the child declares no constructor, the same implicit call occurs. A parent
+  constructor with required parameters cannot be supplied implicitly and raises
+  catchable `TypeError` (`SZ4002`) at `new Child()`.
+- If the child has its own constructor and the parent requires arguments, an
+  omitted `super(...)` remains allowed for compatibility. No parent constructor
+  runs; the child may initialize inherited fields itself.
+- Detection is currently a conservative syntactic scan. Any `super(...)`
+  occurrence anywhere in the child constructor, including only one branch,
+  suppresses implicit chaining. This is a compatibility behavior and a known
+  semantic risk, not a recommendation for conditional constructor calls.
+
+An empty `super()` against a parent with no declared constructor is a compatible
+no-op. Supplying arguments in that case is invalid instead of silently ignoring
+them and raises catchable `TypeError` (`SZ4002`). Calling `super()` outside a
+constructor, on a class without a parent, or with invalid arity raises the same
+error.
+
+Running one parent's constructor does not synthesize a call to the next
+ancestor. Each constructor body in a required multi-level chain must itself
+call `super(...)`, or rely on the compatibility rule above when invoked through
+ordinary construction.
+
+## Parent-method dispatch
+
+`super.method(args...)` is valid inside a class method. Resolution begins at the
+direct parent and walks upward, deliberately bypassing an override on the
+current class. The selected method receives the current instance as `this` and
+uses the parameter/default/rest contract from `functions.md`.
+
+Calling it outside a class method, from a class without a parent, or with invalid
+arity raises catchable `TypeError` (`SZ4002`). A parent chain with no matching
+method raises catchable `ReferenceError` (`SZ4001`).
+
+## Ordinary member dispatch
+
+An instance method call begins lookup on the instance's runtime class and walks
+its single-inheritance chain upward. Calling a resolved instance or static method
+uses the positional/default/rest contract from `functions.md`; an invalid count
+raises catchable `TypeError` (`SZ4002`) after argument evaluation and before the
+method body.
+
+For a dot expression without parentheses, instance lookup prefers an existing
+field, then a getter, then a bound method reference. Calling an existing field
+as a method remains allowed only when that field contains a callable value. The
+universal `toString()` fallback is unchanged. If none of those routes resolve,
+the access raises catchable `ReferenceError` (`SZ4001`).
+
+A private method remains callable from an internal class context. Calling it or
+taking its bound reference from outside remains refused and raises catchable
+`TypeError` (`SZ4002`); catchability does not grant access. The current inherited
+privacy caveat is recorded below rather than silently described as stronger than
+the implementation. If a method returns a value incompatible with its declared
+return type, the completed call raises the same error after its call scope is
+unwound.
+
+`ClassName.method(...)` requires a static method declared for the named class.
+A missing static method raises catchable `ReferenceError` (`SZ4001`) identifying
+the class/member, rather than reporting the class name as an undeclared variable.
+Static inheritance and static method references remain outside this audited
+contract.
+
+## Fields and computed properties
+
+For `obj.name` without parentheses, an existing stored field takes precedence
+over a getter of the same name. Otherwise a matching getter is invoked with no
+implicit arguments. `obj.name = value` invokes a matching setter with the
+assigned value; if no accessor exists, the stored field is updated or created.
+
+Getter/setter lookup walks the same inheritance chain as methods. External use
+of a private accessor, malformed getter/setter arity and an incompatible declared
+return value raise catchable `TypeError` (`SZ4002`). A property with a getter but
+no setter is read-only: assignment remains refused with the same error. Assigning
+a field on a non-instance also raises `SZ4002`. A user `throw` or structured
+runtime error from an accessor body propagates unchanged.
+
+These errors do not make setter execution transactional. Mutations performed by
+a setter before it fails remain ordinary program mutations; the runtime only
+guarantees that rejecting the write before entering a setter does not perform a
+raw field fallback.
+
+### Known property compatibility debt (non-normative)
+
+The following observed behaviors are not frozen as desired semantics:
+
+- A class-field type annotation is used while parsing/initializing the field but
+  is not checked by later direct writes. A declared `value: int` can currently be
+  replaced with a string.
+- Interface construction is exact, but a later direct assignment can add an
+  undeclared field or replace a field with a value of another type.
+- Internal privacy is keyed to the receiver's runtime class rather than the
+  member's declaring class. A subclass method can therefore reach an inherited
+  private method/getter/setter even though external access is rejected.
+- Simple and nested field assignment evaluate the right-hand side before fully
+  validating the receiver/path.
+
+Changing any of these can break dynamic object patterns or evaluation order. It
+requires owner-aware member metadata/property schemas, dedicated migration tests
+and an ecosystem review; it must not be folded into diagnostic cleanup.
+
+## Conformance evidence
+
+- `tests/runtime_outcome.rs`: all nine target/interface/class validation paths,
+  all nine `super` validation paths, stable codes, catchability, cleanup and
+  evaluator reuse without stale payloads.
+- `tests/unit_catchable_core.sz`: language-level `try/catch` coverage for the
+  same validation matrix.
+- `tests/err_undeclared_class.sz`, `tests/sec_undeclared_class.sz`,
+  `tests/sec_abstract_instantiate.sz` and `tests/err_extra_iface_field.sz`: CLI
+  error paths retained for compatibility.
+- `tests/09_interfaces.sz`, `tests/08_classes.sz` and the official `serez-ui`
+  canary: successful construction remains compatible.
+- `tests/unit_super_errors.sz` and `tests/err_super_outside.sz`: language/CLI
+  failure matrix and cleanup after caught failures.
+- `tests/unit_implicit_super.sz`, `tests/unit_super_method.sz` and
+  `tests/unit_bug_b64_b74.sz`: successful implicit, explicit, multi-level,
+  default and rest behavior.
+- `tests/unit_member_dispatch_errors.sz` and `tests/err_member_missing.sz`:
+  instance/static validation, visibility refusal, return checking and cleanup
+  after caught failures.
+- `tests/unit_property_dispatch_errors.sz`, `tests/err_field_non_instance.sz`
+  and `tests/sec_getter_no_setter.sz`: property validation, accessor propagation
+  and preservation of receiver state across rejected writes.
+- `tests/unit_inheritance_errors.sz`, `tests/err_inheritance_cycle.sz`,
+  `tests/err_parent_missing.sz` and the cyclic-registry Rust unit test: graph
+  validity, forward-reference recovery, bounded lookup and structured errors.
+
+## Coverage boundary
+
+Class field-default timing, the compatibility debts above, constructor return
+behavior, abstract-method requirements, static inheritance/references, static
+`super`, closure capture and the complete receiver-writeback surface still
+require dedicated implementation and ecosystem audits. The evaluator state
+"executing class but no `this` binding" is treated as an internal invariant and
+is not exposed as a catchable source-level contract. Existing conformance tests
+remain authoritative for uncovered behaviors.

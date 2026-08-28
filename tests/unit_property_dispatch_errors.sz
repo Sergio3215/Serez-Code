@@ -1,0 +1,91 @@
+// Structured and catchable validation errors for fields/getters/setters.
+
+class PropertyErrors {
+    public PropertyErrors() { this._value = 1; }
+    public get int value() { return this._value; }
+    private get int hidden() { return this._value; }
+    private set hidden(int next) { this._value = next; }
+    public set writable(int next) {
+        if (next < 0) { throw "negative value"; }
+        this._value = next;
+    }
+}
+
+test("getter-only assignment is TypeError", () => {
+    let item = new PropertyErrors();
+    let caught = false;
+    try { item.value = 2; }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "read-only property must remain refused and become catchable");
+    assert(item.value == 1, "rejected write must preserve the receiver");
+});
+
+test("field assignment on non-instance is TypeError", () => {
+    let caught = false;
+    try { let number = 1; number.value = 2; }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "non-instance field write must be catchable");
+});
+
+test("private getter remains inaccessible", () => {
+    let caught = false;
+    try { out new PropertyErrors().hidden; }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "private getter must remain refused");
+});
+
+test("private setter remains inaccessible", () => {
+    let item = new PropertyErrors();
+    let caught = false;
+    try { item.hidden = 2; }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "private setter must remain refused");
+    assert(item.value == 1, "private write must preserve the receiver");
+});
+
+test("getter arity is TypeError", () => {
+    class PropertyGetterArity {
+        public PropertyGetterArity() {}
+        public get int value(int extra) { return extra; }
+    }
+    let caught = false;
+    try { out new PropertyGetterArity().value; }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "getter must receive zero implicit arguments");
+});
+
+test("setter arity is TypeError", () => {
+    class PropertySetterArity {
+        public PropertySetterArity() {}
+        public set value() {}
+    }
+    let item = new PropertySetterArity();
+    let caught = false;
+    try { item.value = 1; }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "setter must receive exactly the assigned value");
+});
+
+test("getter declared return mismatch is TypeError", () => {
+    class PropertyGetterReturn {
+        public PropertyGetterReturn() {}
+        public get int value() { return "wrong"; }
+    }
+    let caught = false;
+    try { out new PropertyGetterReturn().value; }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "getter return contract must be enforced");
+});
+
+test("failed property writes preserve state and later setter dispatch", () => {
+    let item = new PropertyErrors();
+    let thrown = false;
+    try { item.writable = -1; }
+    catch (e) { thrown = e == "negative value"; }
+    assert(thrown, "setter user throw must propagate unchanged");
+    assert(item.value == 1, "failed setter must not change receiver state");
+    item.writable = 7;
+    assert(item.value == 7, "later valid setter must remain healthy");
+});
+
+summary();

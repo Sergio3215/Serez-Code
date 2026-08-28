@@ -69,4 +69,36 @@ test("composición de math", () => {
     assert(max(floor(3.7), ceil(2.1)) == 3, "max(floor, ceil)");
 });
 
+test("errores de tipo Math son estructurados y capturables", () => {
+    let caught = 0;
+    try { Math.sin("x"); } catch (e) {
+        assert(e.code == "SZ4002" && e.kind == "TypeError", "sin tipo invalido");
+        caught = caught + 1;
+    }
+    try { Math.min(1, "x"); } catch (e) {
+        assert(e.code == "SZ4002" && e.kind == "TypeError", "min tipo invalido");
+        caught = caught + 1;
+    }
+    try { Math.max(1, "x"); } catch (e) {
+        assert(e.code == "SZ4002" && e.kind == "TypeError", "max tipo invalido");
+        caught = caught + 1;
+    }
+    try { Math.pow(2, "x"); } catch (e) {
+        assert(e.code == "SZ4002" && e.kind == "TypeError", "pow tipo invalido");
+        caught = caught + 1;
+    }
+    assert(caught == 4, "todos los TypeError Math deben ser capturables");
+});
+
+test("throw en argumentos Math conserva el valor original", () => {
+    fn decimal mathBoom() { throw "math-boom"; return 0.0; }
+
+    let caught = 0;
+    try { Math.sin(mathBoom()); } catch (e) { if (e == "math-boom") { caught = caught + 1; } }
+    try { Math.min(1, mathBoom()); } catch (e) { if (e == "math-boom") { caught = caught + 1; } }
+    try { Math.max(1, mathBoom()); } catch (e) { if (e == "math-boom") { caught = caught + 1; } }
+    try { Math.pow(2, mathBoom()); } catch (e) { if (e == "math-boom") { caught = caught + 1; } }
+    assert(caught == 4, "sin/min/max/pow deben propagar throw de argumentos");
+});
+
 summary();

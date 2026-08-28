@@ -1,0 +1,131 @@
+# Execution contract
+
+What Serez Code does and does not promise about running a program. The short
+version, because getting this wrong is expensive:
+
+> **Serez Code has no sandbox.** Nothing in the language makes hostile code safe
+> to run. The mechanisms below reduce *accidental* access by a program you
+> trust. Untrusted code needs an operating-system boundary — a container, a VM,
+> a separate user account with its own filesystem, process and network limits.
+
+Four different mechanisms are often confused with one another. They are not
+interchangeable and only the last one is a security boundary.
+
+| Mechanism | What it is | What it is not |
+| --- | --- | --- |
+| Permission manifest | A declaration in `serez.json` (or inline) of which native namespaces a program intends to use. | Not a boundary: outside lockdown a program can grant itself any permission at runtime. |
+| `unsafe { }` | A syntactic gate on individually destructive operations. | Not a permission and not isolation: any program can write `unsafe`. |
+| Lockdown | A restricted profile for source you did not write, closing self-granting and the capabilities that reach disk with nothing declared. | Not a sandbox: `fetch` still reaches the network, and the process still runs with the invoking user's full rights. |
+| OS isolation | A container, VM or restricted account around the `sz` process. | The only actual security boundary. Provided by the operating system, not by Serez. |
+
+## Permission manifest
+
+Permissions are **additive declarations**, checked at the point a native
+operation runs. These namespaces are enforced:
+
+`Env`, `Gui`, `Media`, `OS`, `Socket`, `System`, `Task`, `Terminal`, `Time`
+
+A program without the matching namespace permission gets a structured fatal
+`PermissionError` (`SZ6001`) instead of the operation. It crosses `try/catch`
+unchanged: the public payload is available to CLI/tooling, but user code cannot
+turn the denial into ordinary control flow. `sec_notcatch_permission.sz` and the
+Rust program-outcome regressions pin both properties across every guarded
+namespace.
+
+Two properties make this a manifest and not a boundary:
+
+- **It is self-grantable.** Outside lockdown, `use permissions { … }` inserts
+  into the running program's permission set. A program that wants a permission
+  can simply take it. This is intentional: someone running their own file is
+  supposed to be able to declare permissions inline.
+- **It is not exhaustive.** `File`, `import` and Autodiff's weight files reach
+  the disk with **no permission declared at all**. The permission set covers the
+  namespaces listed above, not the whole native surface.
+
+Read the manifest as documentation of intent — useful for review, for tooling,
+and for catching a dependency doing something unexpected. Do not read it as a
+list of what a program is *able* to do.
+
+## `unsafe { }`
+
+An operation-level gate on things that are destructive rather than merely
+capable. It requires the call to appear lexically inside an `unsafe { }` block:
+
+- `File.delete`, `File.rename`
+- Raw memory: allocation, pointer reads and writes, `*ptr = value`
+- OS operations that modify OS state
+
+`unsafe` is a speed bump against accident, not a privilege check. Any program
+can open an `unsafe` block. Its value is that a reviewer can grep for it, and
+that no destructive operation happens without the author having typed the word.
+Calling a gated operation outside such a block yields structured fatal
+`UnsafeError` (`SZ6003`). It crosses `try/catch` unchanged; the CLI and tooling
+receive the diagnostic payload, while user code cannot swallow the gate.
+
+## Protected process-target heuristic
+
+`OS.exec` and `OS.spawn` refuse command strings containing a short list of
+protected system-path fragments, returning fatal `SecurityError` (`SZ6004`).
+This is a compatibility defense against accidental direct execution from paths
+such as `C:\Windows\System32` or `/etc/`; it is **not** a sandbox or a complete
+process policy. The check is a case-sensitive substring test, not canonical path
+resolution, and process indirection, alternate spellings, symlinks or platform
+aliases can evade it. Host isolation and an OS allowlist are required when
+process execution must be contained.
+
+## Lockdown
+
+The profile for **source you did not write**. `sz --eval` runs under it
+automatically, because there is no file and therefore no `serez.json` to read
+intent from.
+
+Under lockdown:
+
+- `use permissions { … }` is refused instead of granting.
+- `File`, `import` and Autodiff weight I/O are refused — the three capabilities
+  that otherwise reach the disk with nothing declared.
+- All of the above currently surface as catchable `PermissionError` (`SZ6001`).
+  Catching records the denial but cannot grant the capability. This differs from
+  missing namespace permissions, which are fatal today; the distinction is
+  documented because silently unifying recoverability would be a semantic
+  change.
+- A Task worker inherits lockdown and the parent's granted permission set; it
+  cannot load extra permissions from its manifest or inline source. Workers
+  remain native threads in the same process, not an isolation boundary.
+
+Deliberately **still allowed** under lockdown:
+
+- **`fetch`.** Network egress remains available, from wherever `sz` is running.
+  This has the shape of an SSRF risk: a snippet can reach hosts reachable from
+  the machine, including loopback and link-local addresses. Closing it is
+  desirable but is a breaking change to existing behavior and needs a migration
+  path, so it is tracked rather than done silently.
+
+Lockdown narrows the blast radius of a careless snippet. It does not contain a
+hostile one.
+
+## Trusted vs untrusted execution
+
+**Trusted execution** — `sz file.sz` on code you or your team wrote. The
+manifest documents intent, `unsafe` marks the destructive parts, and the process
+runs with your full rights. This is the normal case and it is fine.
+
+**Untrusted execution** — code from anywhere else. The language cannot make this
+safe. The requirement is an OS boundary with its own filesystem, process and
+network restrictions. Lockdown is defense in depth *inside* that boundary, never
+a replacement for it.
+
+Concretely, running someone else's Serez program without OS isolation gives it:
+network access, whatever the host lets the invoking user do through any
+capability the program grants itself, and unbounded memory and CPU (see
+`limits.md` — there is no execution timeout and no memory ceiling).
+
+## Supply chain
+
+Installing a package runs no code at install time, but an installed package is
+ordinary source that runs with the importing program's rights, including
+whatever permissions that program grants itself. There is currently no lockfile,
+integrity hash or signature policy. Treat a dependency as code you are choosing
+to trust. `packages.md` defines the manifest, path and archive limits that reduce
+malformed-package risk; those checks do not establish publisher trust or isolate
+the code after installation.

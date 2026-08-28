@@ -23,7 +23,13 @@
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+const MAX_PACKAGE_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PACKAGE_ARCHIVE_ENTRIES: usize = 10_000;
+const MAX_PACKAGE_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PACKAGE_PATH_BYTES: usize = 4096;
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
@@ -45,87 +51,111 @@ impl SerezManifest {
     /// Read and parse `serez.json` from `dir`.
     pub fn load(dir: &Path) -> Result<SerezManifest, String> {
         let path = dir.join("serez.json");
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Cannot read serez.json: {}", e))?;
+        let metadata =
+            std::fs::metadata(&path).map_err(|e| format!("Cannot inspect serez.json: {}", e))?;
+        if metadata.len() > MAX_MANIFEST_BYTES as u64 {
+            return Err("serez.json exceeds the 1 MiB manifest limit".to_string());
+        }
+        let raw =
+            std::fs::read_to_string(&path).map_err(|e| format!("Cannot read serez.json: {}", e))?;
         SerezManifest::parse(&raw)
     }
 
     fn parse(raw: &str) -> Result<SerezManifest, String> {
-        // Minimal hand-rolled JSON parser for the specific manifest shape.
-        let raw = raw.trim();
-        if !raw.starts_with('{') || !raw.ends_with('}') {
-            return Err("serez.json must be a JSON object".to_string());
+        if raw.len() > MAX_MANIFEST_BYTES {
+            return Err("serez.json exceeds the 1 MiB manifest limit".to_string());
         }
-        let mut name = String::new();
-        let mut version = String::new();
-        let mut description = String::new();
-        let mut author = String::new();
-        let mut dependencies: HashMap<String, String> = HashMap::new();
-        let mut permissions: Vec<String> = Vec::new();
-        let mut scripts: HashMap<String, String> = HashMap::new();
-        let mut bin: HashMap<String, String> = HashMap::new();
+        let value: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+            format!(
+                "serez.json: invalid JSON at {}:{}: {}",
+                e.line(),
+                e.column(),
+                e
+            )
+        })?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| "serez.json must be a JSON object".to_string())?;
 
-        // Extract top-level string fields and the dependencies object.
-        let inner = &raw[1..raw.len() - 1];
-
-        // Simple tokenizer: extract quoted keys and values
-        let mut chars = inner.chars().peekable();
-        loop {
-            // skip whitespace and commas
-            while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
-                chars.next();
+        let required_string = |key: &str| -> Result<String, String> {
+            let value = object
+                .get(key)
+                .ok_or_else(|| format!("serez.json: '{}' field is required", key))?;
+            let text = value
+                .as_str()
+                .ok_or_else(|| format!("serez.json: '{}' must be a string", key))?;
+            if text.is_empty() {
+                return Err(format!("serez.json: '{}' must not be empty", key));
             }
-            if chars.peek().is_none() { break; }
-
-            // Expect a key
-            if chars.peek() != Some(&'"') { break; }
-            let key = read_json_string(&mut chars)?;
-
-            // Expect ':'
-            skip_ws_and(&mut chars, ':');
-
-            // Either a quoted string or '{' for object
-            match chars.peek() {
-                Some('"') => {
-                    let val = read_json_string(&mut chars)?;
-                    match key.as_str() {
-                        "name"        => name = val,
-                        "version"     => version = val,
-                        "description" => description = val,
-                        "author"      => author = val,
-                        _             => {}
-                    }
-                }
-                Some('{') => {
-                    if key == "dependencies" {
-                        dependencies = parse_string_map(&mut chars)?;
-                    } else if key == "scripts" {
-                        scripts = parse_string_map(&mut chars)?;
-                    } else if key == "bin" {
-                        bin = parse_string_map(&mut chars)?;
-                    } else {
-                        skip_value(&mut chars);
-                    }
-                }
-                Some('[') => {
-                    if key == "permissions" {
-                        permissions = parse_string_array(&mut chars)?;
-                    } else {
-                        skip_value(&mut chars);
-                    }
-                }
-                _ => { skip_value(&mut chars); }
+            Ok(text.to_string())
+        };
+        let optional_string = |key: &str| -> Result<String, String> {
+            match object.get(key) {
+                None => Ok(String::new()),
+                Some(value) => value
+                    .as_str()
+                    .map(String::from)
+                    .ok_or_else(|| format!("serez.json: '{}' must be a string", key)),
             }
-        }
+        };
 
-        if name.is_empty() {
-            return Err("serez.json: 'name' field is required".to_string());
+        let name = required_string("name")?;
+        let version = required_string("version")?;
+        let description = optional_string("description")?;
+        let author = optional_string("author")?;
+        let dependencies = manifest_string_map(object, "dependencies")?;
+        let scripts = manifest_string_map(object, "scripts")?;
+        let bin = manifest_string_map(object, "bin")?;
+        for (command, entry) in &bin {
+            validate_package_relative_path(entry, "bin entry")
+                .map_err(|error| format!("serez.json: invalid 'bin.{}': {}", command, error))?;
         }
-        if version.is_empty() {
-            return Err("serez.json: 'version' field is required".to_string());
-        }
-        Ok(SerezManifest { name, version, description, author, dependencies, permissions, scripts, bin })
+        let permissions = match object.get("permissions") {
+            None => Vec::new(),
+            Some(value) => value
+                .as_array()
+                .ok_or_else(|| "serez.json: 'permissions' must be an array".to_string())?
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    value.as_str().map(String::from).ok_or_else(|| {
+                        format!("serez.json: 'permissions[{}]' must be a string", index)
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        Ok(SerezManifest {
+            name,
+            version,
+            description,
+            author,
+            dependencies,
+            permissions,
+            scripts,
+            bin,
+        })
     }
+}
+
+fn manifest_string_map(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<HashMap<String, String>, String> {
+    let Some(value) = object.get(key) else {
+        return Ok(HashMap::new());
+    };
+    let entries = value
+        .as_object()
+        .ok_or_else(|| format!("serez.json: '{}' must be an object", key))?;
+    entries
+        .iter()
+        .map(|(entry_key, value)| {
+            value
+                .as_str()
+                .map(|text| (entry_key.clone(), text.to_string()))
+                .ok_or_else(|| format!("serez.json: '{}.{}' must be a string", key, entry_key))
+        })
+        .collect()
 }
 
 // ── Package resolution ────────────────────────────────────────────────────────
@@ -171,7 +201,7 @@ pub fn registry_url() -> String {
 /// project's serez.json (used by `sz install <pkg>`; skipped by `sz install`
 /// which already reads its list from the manifest).
 pub fn install_package(pkg_spec: &str, record: bool, global: bool) -> Result<(), String> {
-    let (pkg_name, pkg_version) = parse_pkg_spec(pkg_spec);
+    let (pkg_name, pkg_version) = parse_pkg_spec(pkg_spec)?;
     let registry = registry_dir();
 
     // Resolve version: explicit → local registry latest → HTTP latest
@@ -186,8 +216,14 @@ pub fn install_package(pkg_spec: &str, record: bool, global: bool) -> Result<(),
             fetch_latest_version(&pkg_name)?
         }
     };
+    validate_package_version(&version)?;
 
-    let dest = if global { packages_dir() } else { local_packages_dir() }.join(&pkg_name);
+    let dest = if global {
+        packages_dir()
+    } else {
+        local_packages_dir()
+    }
+    .join(&pkg_name);
     if dest.exists() {
         println!("Package '{}' already installed, updating...", pkg_name);
         std::fs::remove_dir_all(&dest)
@@ -200,9 +236,17 @@ pub fn install_package(pkg_spec: &str, record: bool, global: bool) -> Result<(),
         copy_dir_recursive(&src, &dest)
             .map_err(|e| format!("Failed to install '{}@{}': {}", pkg_name, version, e))?;
         if global {
-            println!("✅ Installed {}@{} → {} (global)", pkg_name, version, dest.display());
+            println!(
+                "✅ Installed {}@{} → {} (global)",
+                pkg_name,
+                version,
+                dest.display()
+            );
         } else {
-            println!("✅ Installed {}@{} → ./packages/{}", pkg_name, version, pkg_name);
+            println!(
+                "✅ Installed {}@{} → ./packages/{}",
+                pkg_name, version, pkg_name
+            );
         }
     } else {
         download_package(&pkg_name, &version, global)?;
@@ -225,8 +269,8 @@ pub fn install_package(pkg_spec: &str, record: bool, global: bool) -> Result<(),
 /// Initialize a serez.json in the current directory.
 /// `yes` = skip prompts and use defaults (folder name as project name).
 pub fn init_project(yes: bool) -> Result<(), String> {
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
 
     let manifest_path = cwd.join("serez.json");
     if manifest_path.exists() && !yes {
@@ -246,7 +290,12 @@ pub fn init_project(yes: bool) -> Result<(), String> {
         .unwrap_or_else(|| "my-project".to_string());
 
     let (name, version, description, author) = if yes {
-        (folder_name, "1.0.0".to_string(), String::new(), String::new())
+        (
+            folder_name,
+            "1.0.0".to_string(),
+            String::new(),
+            String::new(),
+        )
     } else {
         (
             prompt(&format!("name ({}): ", folder_name), &folder_name),
@@ -256,16 +305,33 @@ pub fn init_project(yes: bool) -> Result<(), String> {
         )
     };
 
-    let json = format!(
-        "{{\n  \"name\": \"{}\",\n  \"version\": \"{}\",\n  \"description\": \"{}\",\n  \"author\": \"{}\",\n  \"scripts\": {{\n    \"dev\": \"sz index.sz\"\n  }},\n  \"dependencies\": {{}},\n  \"permissions\": []\n}}\n",
-        name, version, description, author
-    );
+    let json = initial_manifest_json(&name, &version, &description, &author)?;
 
-    std::fs::write(&manifest_path, &json)
-        .map_err(|e| format!("Cannot write serez.json: {}", e))?;
+    std::fs::write(&manifest_path, &json).map_err(|e| format!("Cannot write serez.json: {}", e))?;
 
     println!("✅ Created serez.json");
     Ok(())
+}
+
+fn initial_manifest_json(
+    name: &str,
+    version: &str,
+    description: &str,
+    author: &str,
+) -> Result<String, String> {
+    let value = serde_json::json!({
+        "name": name,
+        "version": version,
+        "description": description,
+        "author": author,
+        "scripts": { "dev": "sz index.sz" },
+        "dependencies": {},
+        "permissions": [],
+    });
+    let mut rendered = serde_json::to_string_pretty(&value)
+        .map_err(|error| format!("Cannot serialize serez.json: {}", error))?;
+    rendered.push('\n');
+    Ok(rendered)
 }
 
 fn prompt(label: &str, default: &str) -> String {
@@ -274,7 +340,11 @@ fn prompt(label: &str, default: &str) -> String {
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).ok();
     let trimmed = input.trim().to_string();
-    if trimmed.is_empty() { default.to_string() } else { trimmed }
+    if trimmed.is_empty() {
+        default.to_string()
+    } else {
+        trimmed
+    }
 }
 
 /// Execute a script defined in serez.json's "scripts" section.
@@ -283,8 +353,8 @@ fn prompt(label: &str, default: &str) -> String {
 ///   2. a command declared by an installed package (`bin`), local then global
 /// Extra args are forwarded to whichever target is run.
 pub fn run_script(name: &str, extra_args: &[String]) -> Result<(), String> {
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
 
     // 1. Project script takes precedence (only if a project manifest exists).
     if let Ok(manifest) = SerezManifest::load(&cwd) {
@@ -303,7 +373,12 @@ pub fn run_script(name: &str, extra_args: &[String]) -> Result<(), String> {
 }
 
 /// Run a project `scripts` entry through the shell, forwarding extra args.
-fn run_project_script(name: &str, cmd: &str, cwd: &Path, extra_args: &[String]) -> Result<(), String> {
+fn run_project_script(
+    name: &str,
+    cmd: &str,
+    cwd: &Path,
+    extra_args: &[String],
+) -> Result<(), String> {
     let full = if extra_args.is_empty() {
         cmd.to_string()
     } else {
@@ -312,14 +387,24 @@ fn run_project_script(name: &str, cmd: &str, cwd: &Path, extra_args: &[String]) 
     println!("▶ {}", full);
 
     let status = if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd").args(["/C", &full]).current_dir(cwd).status()
+        std::process::Command::new("cmd")
+            .args(["/C", &full])
+            .current_dir(cwd)
+            .status()
     } else {
-        std::process::Command::new("sh").args(["-c", &full]).current_dir(cwd).status()
+        std::process::Command::new("sh")
+            .args(["-c", &full])
+            .current_dir(cwd)
+            .status()
     }
     .map_err(|e| format!("Failed to execute script '{}': {}", name, e))?;
 
     if !status.success() {
-        return Err(format!("Script '{}' exited with code {}", name, status.code().unwrap_or(1)));
+        return Err(format!(
+            "Script '{}' exited with code {}",
+            name,
+            status.code().unwrap_or(1)
+        ));
     }
     Ok(())
 }
@@ -327,16 +412,44 @@ fn run_project_script(name: &str, cmd: &str, cwd: &Path, extra_args: &[String]) 
 /// Launch a package's `bin` entry as `sz <pkgdir>/<entry> <args>` with CWD kept
 /// at the project root, so the entry's imports/permissions resolve from the
 /// package dir while `project=.` still points at the user's app.
-fn run_package_bin(name: &str, pkg_dir: &Path, entry: &str, cwd: &Path, extra_args: &[String]) -> Result<(), String> {
+fn run_package_bin(
+    name: &str,
+    pkg_dir: &Path,
+    entry: &str,
+    cwd: &Path,
+    extra_args: &[String],
+) -> Result<(), String> {
     if !entry.ends_with(".sz") {
-        return Err(format!("Command '{}': bin entry '{}' must be a .sz file", name, entry));
+        return Err(format!(
+            "Command '{}': bin entry '{}' must be a .sz file",
+            name, entry
+        ));
     }
-    let entry_path = pkg_dir.join(entry);
-    if !entry_path.exists() {
-        return Err(format!("Command '{}': entry not found at {}", name, entry_path.display()));
+    let relative_entry = validate_package_relative_path(entry, "bin entry")?;
+    let package_root = std::fs::canonicalize(pkg_dir).map_err(|e| {
+        format!(
+            "Command '{}': cannot resolve package directory '{}': {}",
+            name,
+            pkg_dir.display(),
+            e
+        )
+    })?;
+    let requested_entry = pkg_dir.join(relative_entry);
+    let entry_path = std::fs::canonicalize(&requested_entry).map_err(|_| {
+        format!(
+            "Command '{}': entry not found at {}",
+            name,
+            requested_entry.display()
+        )
+    })?;
+    if !entry_path.starts_with(&package_root) || !entry_path.is_file() {
+        return Err(format!(
+            "Command '{}': bin entry '{}' escapes its package directory or is not a file",
+            name, entry
+        ));
     }
-    let sz_exe = std::env::current_exe()
-        .map_err(|e| format!("Cannot locate the sz executable: {}", e))?;
+    let sz_exe =
+        std::env::current_exe().map_err(|e| format!("Cannot locate the sz executable: {}", e))?;
 
     println!("▶ {} ({})", name, entry_path.display());
     let status = std::process::Command::new(sz_exe)
@@ -347,7 +460,11 @@ fn run_package_bin(name: &str, pkg_dir: &Path, entry: &str, cwd: &Path, extra_ar
         .map_err(|e| format!("Failed to run command '{}': {}", name, e))?;
 
     if !status.success() {
-        return Err(format!("Command '{}' exited with code {}", name, status.code().unwrap_or(1)));
+        return Err(format!(
+            "Command '{}' exited with code {}",
+            name,
+            status.code().unwrap_or(1)
+        ));
     }
     Ok(())
 }
@@ -408,8 +525,10 @@ fn resolve_package_bin(cwd: &Path, command: &str) -> Result<Option<(PathBuf, Str
             Ok(Some((dir, entry)))
         }
         _ => {
-            let opts: Vec<String> =
-                matches.iter().map(|(f, _, _)| format!("{}:{}", f, cmd_name)).collect();
+            let opts: Vec<String> = matches
+                .iter()
+                .map(|(f, _, _)| format!("{}:{}", f, cmd_name))
+                .collect();
             Err(format!(
                 "Command '{}' is provided by multiple packages. Disambiguate with: sz run {}",
                 cmd_name,
@@ -429,13 +548,19 @@ fn run_not_found_error(cwd: &Path, name: &str) -> String {
     let mut commands: Vec<String> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     for root in [cwd.join("packages"), packages_dir()] {
-        let dir_iter = match std::fs::read_dir(&root) { Ok(d) => d, Err(_) => continue };
+        let dir_iter = match std::fs::read_dir(&root) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
         for entry in dir_iter.flatten() {
             let pkg_dir = entry.path();
             let folder = match pkg_dir.file_name().and_then(|s| s.to_str()) {
-                Some(f) => f.to_string(), None => continue,
+                Some(f) => f.to_string(),
+                None => continue,
             };
-            if seen.contains(&folder) { continue; }
+            if seen.contains(&folder) {
+                continue;
+            }
             seen.push(folder.clone());
             if let Ok(m) = SerezManifest::load(&pkg_dir) {
                 for cmd in m.bin.keys() {
@@ -447,7 +572,10 @@ fn run_not_found_error(cwd: &Path, name: &str) -> String {
     scripts.sort();
     commands.sort();
 
-    let mut msg = format!("'{}' not found — not a project script or a package command.", name);
+    let mut msg = format!(
+        "'{}' not found — not a project script or a package command.",
+        name
+    );
     if !scripts.is_empty() {
         msg.push_str(&format!("\n  Project scripts: {}", scripts.join(", ")));
     }
@@ -459,14 +587,31 @@ fn run_not_found_error(cwd: &Path, name: &str) -> String {
 
 /// Remove a package from the local project packages directory.
 pub fn uninstall_package(pkg_name: &str, global: bool) -> Result<(), String> {
-    let dest = if global { packages_dir() } else { local_packages_dir() }.join(pkg_name);
+    validate_package_name(pkg_name)?;
+    let dest = if global {
+        packages_dir()
+    } else {
+        local_packages_dir()
+    }
+    .join(pkg_name);
     if !dest.exists() {
-        let scope = if global { "the global store" } else { "./packages/" };
-        return Err(format!("Package '{}' is not installed in {}", pkg_name, scope));
+        let scope = if global {
+            "the global store"
+        } else {
+            "./packages/"
+        };
+        return Err(format!(
+            "Package '{}' is not installed in {}",
+            pkg_name, scope
+        ));
     }
     std::fs::remove_dir_all(&dest)
         .map_err(|e| format!("Failed to uninstall '{}': {}", pkg_name, e))?;
-    println!("✅ Uninstalled {}{}", pkg_name, if global { " (global)" } else { "" });
+    println!(
+        "✅ Uninstalled {}{}",
+        pkg_name,
+        if global { " (global)" } else { "" }
+    );
 
     // Drop the dependency from the project serez.json only for local uninstalls
     // (a global package is not a project dependency).
@@ -496,14 +641,22 @@ pub fn uninstall_all_global() -> Result<(), String> {
     {
         let p = entry.path();
         if p.is_dir() {
-            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string();
+            let name = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+                .to_string();
             std::fs::remove_dir_all(&p)
                 .map_err(|e| format!("Failed to remove global '{}': {}", name, e))?;
             println!("  removed {}", name);
             count += 1;
         }
     }
-    println!("✅ Uninstalled {} global package(s) from {}", count, dir.display());
+    println!(
+        "✅ Uninstalled {} global package(s) from {}",
+        count,
+        dir.display()
+    );
     Ok(())
 }
 
@@ -512,6 +665,7 @@ pub fn uninstall_all_global() -> Result<(), String> {
 /// local-registry copy never shadows a newer release). Local by default,
 /// global with `global=true`.
 pub fn update_package(name: &str, global: bool) -> Result<(), String> {
+    validate_package_name(name)?;
     let version = fetch_latest_version(name)?;
     println!("Updating {} → {} ...", name, version);
     install_package(&format!("{}@{}", name, version), !global, global)
@@ -542,8 +696,8 @@ pub fn update_all(global: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
     let manifest = SerezManifest::load(&cwd)?;
     if manifest.dependencies.is_empty() {
         println!("No dependencies to update.");
@@ -560,8 +714,8 @@ pub fn update_all(global: bool) -> Result<(), String> {
 
 /// Install all dependencies listed in serez.json from the current directory.
 pub fn install_all() -> Result<(), String> {
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
     let manifest = SerezManifest::load(&cwd)?;
 
     if manifest.dependencies.is_empty() {
@@ -586,6 +740,8 @@ pub fn install_all() -> Result<(), String> {
 /// Insert or update a dependency in the project's serez.json.
 /// No-op (with a hint) if there is no manifest in `dir`.
 fn record_dependency(dir: &Path, name: &str, version: &str) -> Result<(), String> {
+    validate_package_name(name)?;
+    validate_package_version(version)?;
     let path = dir.join("serez.json");
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -594,6 +750,7 @@ fn record_dependency(dir: &Path, name: &str, version: &str) -> Result<(), String
             return Ok(());
         }
     };
+    SerezManifest::parse(&raw)?;
     let updated = upsert_dependency(&raw, name, version)?;
     std::fs::write(&path, &updated).map_err(|e| format!("Cannot write serez.json: {}", e))?;
     println!("   added {}@{} to serez.json", name, version);
@@ -603,11 +760,13 @@ fn record_dependency(dir: &Path, name: &str, version: &str) -> Result<(), String
 /// Remove a dependency from the project's serez.json if present.
 /// No-op if there is no manifest or the dependency isn't listed.
 fn remove_dependency(dir: &Path, name: &str) -> Result<(), String> {
+    validate_package_name(name)?;
     let path = dir.join("serez.json");
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(_) => return Ok(()),
     };
+    SerezManifest::parse(&raw)?;
     let (obj_start, obj_end) = match find_object_span(&raw, "dependencies") {
         Some(span) => span,
         None => return Ok(()),
@@ -657,13 +816,17 @@ fn find_object_span(raw: &str, key: &str) -> Option<(usize, usize)> {
         let key_at = from + rel;
         // Skip whitespace then expect ':'.
         let mut i = key_at + needle.len();
-        while i < bytes.len() && (bytes[i] as char).is_whitespace() { i += 1; }
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
         if i >= bytes.len() || bytes[i] != b':' {
             from = key_at + needle.len();
             continue;
         }
         i += 1;
-        while i < bytes.len() && (bytes[i] as char).is_whitespace() { i += 1; }
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
         if i < bytes.len() && bytes[i] == b'{' {
             if let Some(close) = match_braces(bytes, i) {
                 return Some((i, close));
@@ -715,7 +878,10 @@ fn parse_ordered_pairs(body: &str) -> Result<Vec<(String, String)>, String> {
     let mut chars = body.chars().peekable();
     let mut pairs = Vec::new();
     loop {
-        while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
+        while chars
+            .peek()
+            .map_or(false, |c| c.is_whitespace() || *c == ',')
+        {
             chars.next();
         }
         match chars.peek() {
@@ -804,11 +970,13 @@ fn json_escape(s: &str) -> String {
 
 /// Fetch the latest version string for a package from the HTTP registry.
 fn fetch_latest_version(pkg_name: &str) -> Result<String, String> {
+    validate_package_name(pkg_name)?;
     let url = format!("{}/api/packages/{}/latest", registry_url(), pkg_name);
     let response = ureq::get(&url).call().map_err(|e| match e {
         ureq::Error::Status(404, _) => format!(
             "Package '{}' not found in local registry or remote registry ({})",
-            pkg_name, registry_url()
+            pkg_name,
+            registry_url()
         ),
         other => format!("Failed to reach registry for '{}': {}", pkg_name, other),
     })?;
@@ -818,15 +986,31 @@ fn fetch_latest_version(pkg_name: &str) -> Result<String, String> {
         .trim()
         .to_string();
     if version.is_empty() {
-        return Err(format!("Registry returned empty version for '{}'", pkg_name));
+        return Err(format!(
+            "Registry returned empty version for '{}'",
+            pkg_name
+        ));
     }
+    validate_package_version(&version)?;
     Ok(version)
 }
 
 /// Download a package zip from the HTTP registry and extract it to ./packages/<name>/.
 fn download_package(pkg_name: &str, version: &str, global: bool) -> Result<(), String> {
-    let url = format!("{}/api/packages/{}/{}.zip", registry_url(), pkg_name, version);
-    println!("Downloading {}@{} from {}...", pkg_name, version, registry_url());
+    validate_package_name(pkg_name)?;
+    validate_package_version(version)?;
+    let url = format!(
+        "{}/api/packages/{}/{}.zip",
+        registry_url(),
+        pkg_name,
+        version
+    );
+    println!(
+        "Downloading {}@{} from {}...",
+        pkg_name,
+        version,
+        registry_url()
+    );
 
     let response = ureq::get(&url).call().map_err(|e| match e {
         ureq::Error::Status(404, _) => format!(
@@ -839,17 +1023,42 @@ fn download_package(pkg_name: &str, version: &str, global: bool) -> Result<(), S
     let mut bytes = Vec::new();
     response
         .into_reader()
+        .take(MAX_PACKAGE_ARCHIVE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("Failed to read download for '{}@{}': {}", pkg_name, version, e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to read download for '{}@{}': {}",
+                pkg_name, version, e
+            )
+        })?;
+    if bytes.len() > MAX_PACKAGE_ARCHIVE_BYTES {
+        return Err(format!(
+            "Package archive for '{}@{}' exceeds the 64 MiB download limit",
+            pkg_name, version
+        ));
+    }
 
-    let dest = if global { packages_dir() } else { local_packages_dir() }.join(pkg_name);
+    let dest = if global {
+        packages_dir()
+    } else {
+        local_packages_dir()
+    }
+    .join(pkg_name);
     extract_zip(&bytes, &dest)
         .map_err(|e| format!("Failed to extract '{}@{}': {}", pkg_name, version, e))?;
 
     if global {
-        println!("✅ Installed {}@{} → {} (global, remote)", pkg_name, version, dest.display());
+        println!(
+            "✅ Installed {}@{} → {} (global, remote)",
+            pkg_name,
+            version,
+            dest.display()
+        );
     } else {
-        println!("✅ Installed {}@{} → ./packages/{} (remote)", pkg_name, version, pkg_name);
+        println!(
+            "✅ Installed {}@{} → ./packages/{} (remote)",
+            pkg_name, version, pkg_name
+        );
     }
     Ok(())
 }
@@ -899,8 +1108,9 @@ fn save_credentials(username: &str, token: &str) -> Result<(), String> {
         "username": username,
         "token": token,
     });
-    std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
-        .map_err(|e| format!("Cannot write {}: {}", path.display(), e))
+    let rendered = serde_json::to_string_pretty(&json)
+        .map_err(|e| format!("Cannot serialize registry credentials: {}", e))?;
+    std::fs::write(&path, rendered).map_err(|e| format!("Cannot write {}: {}", path.display(), e))
 }
 
 fn delete_credentials() {
@@ -919,8 +1129,7 @@ pub fn logout() -> Result<(), String> {
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
         .and_then(|v| v.get("username").and_then(|u| u.as_str()).map(String::from));
-    std::fs::remove_file(&path)
-        .map_err(|e| format!("Cannot remove {}: {}", path.display(), e))?;
+    std::fs::remove_file(&path).map_err(|e| format!("Cannot remove {}: {}", path.display(), e))?;
     match username {
         Some(u) => println!("✅ Logged out {} (removed {})", u, path.display()),
         None => println!("✅ Logged out (removed {})", path.display()),
@@ -1066,10 +1275,10 @@ fn build_publish_body(manifest: &SerezManifest, zip_bytes: &[u8]) -> (Vec<u8>, S
     let mut body: Vec<u8> = Vec::new();
 
     for (key, val) in &[
-        ("name",        manifest.name.as_str()),
-        ("version",     manifest.version.as_str()),
+        ("name", manifest.name.as_str()),
+        ("version", manifest.version.as_str()),
         ("description", manifest.description.as_str()),
-        ("author",      manifest.author.as_str()),
+        ("author", manifest.author.as_str()),
     ] {
         body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
         body.extend_from_slice(
@@ -1103,14 +1312,20 @@ fn send_publish(body: &[u8], content_type: &str, auth: &RegistryAuth) -> Result<
         .send_bytes(body)
         .map(|_| ())
         .map_err(|e| match e {
-            ureq::Error::Status(code, r) => (code, extract_api_error(&r.into_string().unwrap_or_default())),
+            ureq::Error::Status(code, r) => (
+                code,
+                extract_api_error(&r.into_string().unwrap_or_default()),
+            ),
             other => (0, format!("{}", other)),
         })
 }
 
 fn publish_error_message(code: u16, msg: String, version: &str) -> String {
     match code {
-        401 => "Unauthorized — log in again (delete ~/.serez/credentials.json or check SEREZ_API_KEY)".to_string(),
+        401 => {
+            "Unauthorized — log in again (delete ~/.serez/credentials.json or check SEREZ_API_KEY)"
+                .to_string()
+        }
         403 if msg.is_empty() => "This package belongs to another user".to_string(),
         403 => msg,
         409 => format!("Version {} already exists in the registry", version),
@@ -1125,9 +1340,11 @@ fn publish_error_message(code: u16, msg: String, version: &str) -> String {
 /// and POSTs to /api/publish. Logs in interactively the first time and reuses
 /// the stored credential afterwards.
 pub fn publish_package() -> Result<(), String> {
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
     let manifest = SerezManifest::load(&cwd)?;
+    validate_package_name(&manifest.name)?;
+    validate_package_version(&manifest.version)?;
 
     let (auth, from_store) = registry_auth()?;
 
@@ -1158,14 +1375,20 @@ fn send_unpublish(pkg_name: &str, version: &str, auth: &RegistryAuth) -> Result<
         .call()
         .map(|_| ())
         .map_err(|e| match e {
-            ureq::Error::Status(code, r) => (code, extract_api_error(&r.into_string().unwrap_or_default())),
+            ureq::Error::Status(code, r) => (
+                code,
+                extract_api_error(&r.into_string().unwrap_or_default()),
+            ),
             other => (0, format!("{}", other)),
         })
 }
 
 fn unpublish_error_message(code: u16, msg: String, pkg_name: &str, version: &str) -> String {
     match code {
-        401 => "Unauthorized — log in again (delete ~/.serez/credentials.json or check SEREZ_API_KEY)".to_string(),
+        401 => {
+            "Unauthorized — log in again (delete ~/.serez/credentials.json or check SEREZ_API_KEY)"
+                .to_string()
+        }
         403 if msg.is_empty() => "This package belongs to another user".to_string(),
         403 => msg,
         404 => format!("{}@{} not found in registry", pkg_name, version),
@@ -1177,7 +1400,7 @@ fn unpublish_error_message(code: u16, msg: String, pkg_name: &str, version: &str
 /// Remove a published version from the registry (yank).
 /// pkg_spec = "name@version"
 pub fn unpublish_package_remote(pkg_spec: &str) -> Result<(), String> {
-    let (pkg_name, version) = parse_pkg_spec(pkg_spec);
+    let (pkg_name, version) = parse_pkg_spec(pkg_spec)?;
     let version = version.ok_or_else(|| "Usage: sz unpublish <package>@<version>".to_string())?;
 
     let (auth, from_store) = registry_auth()?;
@@ -1200,6 +1423,7 @@ pub fn unpublish_package_remote(pkg_spec: &str) -> Result<(), String> {
 
 /// Show stats and version list for a package in the registry.
 pub fn info_package(pkg_name: &str) -> Result<(), String> {
+    validate_package_name(pkg_name)?;
     let url = format!("{}/api/packages/{}/stats", registry_url(), pkg_name);
     let body = ureq::get(&url)
         .call()
@@ -1211,8 +1435,8 @@ pub fn info_package(pkg_name: &str) -> Result<(), String> {
         .map_err(|e| format!("Invalid response: {}", e))?;
 
     // Minimal display — extract numbers with basic string search
-    let total   = extract_json_number(&body, "total").unwrap_or(0);
-    let weekly  = extract_json_number(&body, "weekly").unwrap_or(0);
+    let total = extract_json_number(&body, "total").unwrap_or(0);
+    let weekly = extract_json_number(&body, "weekly").unwrap_or(0);
     let monthly = extract_json_number(&body, "monthly").unwrap_or(0);
 
     println!("\nPackage: {}", pkg_name);
@@ -1229,7 +1453,8 @@ pub fn info_package(pkg_name: &str) -> Result<(), String> {
             let inner = &search[start + 1..];
             if let Some(end) = inner.find('"') {
                 let ver = &inner[..end];
-                let yanked = search.contains("\"yanked\":1") || search.find("\"yanked\":1").map_or(false, |i| i < 60);
+                let yanked = search.contains("\"yanked\":1")
+                    || search.find("\"yanked\":1").map_or(false, |i| i < 60);
                 if yanked {
                     println!("  {} (unpublished)", ver);
                 } else {
@@ -1246,7 +1471,9 @@ fn extract_json_number(json: &str, key: &str) -> Option<u64> {
     let needle = format!("\"{}\":", key);
     let idx = json.find(&needle)?;
     let after = json[idx + needle.len()..].trim_start();
-    let end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
+    let end = after
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after.len());
     after[..end].parse().ok()
 }
 
@@ -1267,13 +1494,14 @@ fn create_package_zip(dir: &Path) -> Result<Vec<u8>, String> {
     for (rel, path) in &files {
         zip.start_file(rel, options)
             .map_err(|e| format!("Zip error on '{}': {}", rel, e))?;
-        let content = std::fs::read(path)
-            .map_err(|e| format!("Cannot read '{}': {}", rel, e))?;
+        let content = std::fs::read(path).map_err(|e| format!("Cannot read '{}': {}", rel, e))?;
         zip.write_all(&content)
             .map_err(|e| format!("Zip write error: {}", e))?;
     }
 
-    let buf = zip.finish().map_err(|e| format!("Zip finish error: {}", e))?;
+    let buf = zip
+        .finish()
+        .map_err(|e| format!("Zip finish error: {}", e))?;
     Ok(buf.into_inner())
 }
 
@@ -1340,9 +1568,7 @@ fn is_ignored(rel: &str, patterns: &[String]) -> bool {
         }
         // Directory pattern: "apps/" → the dir and everything beneath it.
         if let Some(d) = p.strip_suffix('/') {
-            if rel == d
-                || rel.starts_with(&format!("{}/", d))
-                || rel.split('/').any(|seg| seg == d)
+            if rel == d || rel.starts_with(&format!("{}/", d)) || rel.split('/').any(|seg| seg == d)
             {
                 return true;
             }
@@ -1392,24 +1618,32 @@ fn extract_zip(data: &[u8], dest: &Path) -> Result<(), String> {
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid zip archive: {}", e))?;
 
+    let names = inspect_archive(
+        &mut archive,
+        MAX_PACKAGE_ARCHIVE_ENTRIES,
+        MAX_PACKAGE_EXTRACTED_BYTES,
+    )?;
+
     // Detect a single common top-level wrapper dir (e.g. "serez-ai-1.0.0/") shared
     // by ALL entries, and strip it. If entries don't share one prefix (files at the
     // root plus subdirs like src/), strip nothing — preserve the layout as-is.
-    let names: Vec<String> = (0..archive.len())
-        .map(|i| {
-            archive
-                .by_index(i)
-                .map(|f| f.name().to_string())
-                .unwrap_or_default()
-        })
-        .collect();
     let prefix: Option<String> = names
         .first()
         .and_then(|name| name.find('/').map(|i| name[..=i].to_string()))
         .filter(|p| names.iter().all(|n| n.starts_with(p.as_str())));
 
-    std::fs::create_dir_all(dest)
-        .map_err(|e| format!("Cannot create destination: {}", e))?;
+    if std::fs::symlink_metadata(dest)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "Package destination '{}' must not be a symbolic link",
+            dest.display()
+        ));
+    }
+    std::fs::create_dir_all(dest).map_err(|e| format!("Cannot create destination: {}", e))?;
+
+    let mut extracted_bytes = 0_u64;
 
     for i in 0..archive.len() {
         let mut file = archive
@@ -1417,11 +1651,6 @@ fn extract_zip(data: &[u8], dest: &Path) -> Result<(), String> {
             .map_err(|e| format!("Zip read error at entry {}: {}", i, e))?;
 
         let raw_name = file.name().to_string();
-
-        // Security: reject path traversal
-        if raw_name.contains("..") {
-            return Err(format!("Unsafe path in archive: '{}'", raw_name));
-        }
 
         // Strip top-level prefix if present
         let rel = if let Some(ref pfx) = prefix {
@@ -1434,21 +1663,106 @@ fn extract_zip(data: &[u8], dest: &Path) -> Result<(), String> {
             continue;
         }
 
-        let outpath = dest.join(rel);
+        let relative_path = validate_package_relative_path(rel, "archive path")?;
+        let outpath = dest.join(&relative_path);
 
         if raw_name.ends_with('/') {
-            std::fs::create_dir_all(&outpath)
-                .map_err(|e| format!("Cannot create dir '{}': {}", outpath.display(), e))?;
+            create_package_directories(dest, &relative_path)?;
         } else {
-            if let Some(parent) = outpath.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Cannot create dir '{}': {}", parent.display(), e))?;
+            if let Some(parent) = relative_path.parent() {
+                create_package_directories(dest, parent)?;
             }
-            let mut content = Vec::new();
-            file.read_to_end(&mut content)
-                .map_err(|e| format!("Cannot read zip entry '{}': {}", raw_name, e))?;
-            std::fs::write(&outpath, content)
-                .map_err(|e| format!("Cannot write '{}': {}", outpath.display(), e))?;
+            if std::fs::symlink_metadata(&outpath)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return Err(format!(
+                    "Refusing to overwrite symbolic link '{}'",
+                    outpath.display()
+                ));
+            }
+            let mut output = std::fs::File::create(&outpath)
+                .map_err(|e| format!("Cannot create '{}': {}", outpath.display(), e))?;
+            let remaining = MAX_PACKAGE_EXTRACTED_BYTES - extracted_bytes;
+            let copied = std::io::copy(&mut file.by_ref().take(remaining + 1), &mut output)
+                .map_err(|e| format!("Cannot extract '{}': {}", raw_name, e))?;
+            if copied > remaining {
+                let _ = std::fs::remove_file(&outpath);
+                return Err("Package archive exceeds the 256 MiB extraction limit".to_string());
+            }
+            extracted_bytes += copied;
+        }
+    }
+    Ok(())
+}
+
+fn inspect_archive<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    max_entries: usize,
+    max_extracted_bytes: u64,
+) -> Result<Vec<String>, String> {
+    if archive.len() > max_entries {
+        return Err(format!(
+            "Package archive has {} entries; maximum is {}",
+            archive.len(),
+            max_entries
+        ));
+    }
+
+    let mut total_bytes = 0_u64;
+    let mut names = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let file = archive
+            .by_index(index)
+            .map_err(|e| format!("Zip read error at entry {}: {}", index, e))?;
+        let name = file.name().to_string();
+        validate_package_relative_path(&name, "archive path")?;
+        total_bytes = total_bytes
+            .checked_add(file.size())
+            .ok_or_else(|| "Package archive size overflows the runtime counter".to_string())?;
+        if total_bytes > max_extracted_bytes {
+            return Err(format!(
+                "Package archive expands beyond the {} byte limit",
+                max_extracted_bytes
+            ));
+        }
+        names.push(name);
+    }
+    Ok(names)
+}
+
+fn create_package_directories(dest: &Path, relative: &Path) -> Result<(), String> {
+    let mut current = dest.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(segment) = component else {
+            return Err("Package path must contain only normal relative components".to_string());
+        };
+        current.push(segment);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "Package path traverses symbolic link '{}'",
+                    current.display()
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(format!(
+                    "Package path component '{}' is not a directory",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&current)
+                    .map_err(|e| format!("Cannot create dir '{}': {}", current.display(), e))?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Cannot inspect package path '{}': {}",
+                    current.display(),
+                    error
+                ));
+            }
         }
     }
     Ok(())
@@ -1456,12 +1770,80 @@ fn extract_zip(data: &[u8], dest: &Path) -> Result<(), String> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn parse_pkg_spec(spec: &str) -> (String, Option<String>) {
-    if let Some(idx) = spec.find('@') {
-        (spec[..idx].to_string(), Some(spec[idx + 1..].to_string()))
+fn parse_pkg_spec(spec: &str) -> Result<(String, Option<String>), String> {
+    let (name, version) = if let Some(idx) = spec.find('@') {
+        (&spec[..idx], Some(&spec[idx + 1..]))
     } else {
-        (spec.to_string(), None)
+        (spec, None)
+    };
+    validate_package_name(name)?;
+    if let Some(version) = version {
+        validate_package_version(version)?;
     }
+    Ok((name.to_string(), version.map(String::from)))
+}
+
+fn validate_package_name(name: &str) -> Result<(), String> {
+    validate_package_segment(name, "package name", false)
+}
+
+fn validate_package_version(version: &str) -> Result<(), String> {
+    validate_package_segment(version, "package version", true)
+}
+
+fn validate_package_relative_path(value: &str, label: &str) -> Result<PathBuf, String> {
+    if value.is_empty() {
+        return Err(format!("Invalid {}: path must not be empty", label));
+    }
+    if value.len() > MAX_PACKAGE_PATH_BYTES {
+        return Err(format!(
+            "Invalid {}: path exceeds {} bytes",
+            label, MAX_PACKAGE_PATH_BYTES
+        ));
+    }
+    if value.contains('\\') || value.contains(':') || value.chars().any(char::is_control) {
+        return Err(format!(
+            "Invalid {} '{}': package paths use portable '/'-separated components",
+            label, value
+        ));
+    }
+
+    let path = Path::new(value);
+    if path.components().next().is_none()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "Invalid {} '{}': path must stay within the package directory",
+            label, value
+        ));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn validate_package_segment(value: &str, label: &str, allow_plus: bool) -> Result<(), String> {
+    let valid_char = |c: char| {
+        c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || (allow_plus && c == '+')
+    };
+    if value.is_empty() {
+        return Err(format!("Invalid {}: value must not be empty", label));
+    }
+    if value.len() > 128 {
+        return Err(format!(
+            "Invalid {} '{}': maximum length is 128 bytes",
+            label, value
+        ));
+    }
+    if value == "." || value == ".." || !value.chars().all(valid_char) {
+        return Err(format!(
+            "Invalid {} '{}': use only ASCII letters, digits, '.', '-'{} and '_'",
+            label,
+            value,
+            if allow_plus { ", '+'" } else { "" }
+        ));
+    }
+    Ok(())
 }
 
 fn find_latest_version(pkg_reg_dir: &Path) -> Option<String> {
@@ -1507,17 +1889,18 @@ fn read_json_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<
         match chars.next() {
             None | Some('\0') => return Err("Unterminated string".to_string()),
             Some('"') => break,
-            Some('\\') => {
-                match chars.next() {
-                    Some('"')  => s.push('"'),
-                    Some('\\') => s.push('\\'),
-                    Some('n')  => s.push('\n'),
-                    Some('t')  => s.push('\t'),
-                    Some('r')  => s.push('\r'),
-                    Some(c)    => { s.push('\\'); s.push(c); }
-                    None       => return Err("Unterminated escape".to_string()),
+            Some('\\') => match chars.next() {
+                Some('"') => s.push('"'),
+                Some('\\') => s.push('\\'),
+                Some('n') => s.push('\n'),
+                Some('t') => s.push('\t'),
+                Some('r') => s.push('\r'),
+                Some(c) => {
+                    s.push('\\');
+                    s.push(c);
                 }
-            }
+                None => return Err("Unterminated escape".to_string()),
+            },
             Some(c) => s.push(c),
         }
     }
@@ -1545,11 +1928,17 @@ fn parse_string_map(
     }
     let mut map = HashMap::new();
     loop {
-        while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
+        while chars
+            .peek()
+            .map_or(false, |c| c.is_whitespace() || *c == ',')
+        {
             chars.next();
         }
         match chars.peek() {
-            None | Some('}') => { chars.next(); break; }
+            None | Some('}') => {
+                chars.next();
+                break;
+            }
             Some('"') => {}
             _ => break,
         }
@@ -1569,11 +1958,17 @@ fn parse_string_array(
     }
     let mut arr = Vec::new();
     loop {
-        while chars.peek().map_or(false, |c| c.is_whitespace() || *c == ',') {
+        while chars
+            .peek()
+            .map_or(false, |c| c.is_whitespace() || *c == ',')
+        {
             chars.next();
         }
         match chars.peek() {
-            None | Some(']') => { chars.next(); break; }
+            None | Some(']') => {
+                chars.next();
+                break;
+            }
             Some('"') => {}
             _ => break,
         }
@@ -1588,23 +1983,42 @@ fn skip_value(chars: &mut std::iter::Peekable<std::str::Chars>) {
         chars.next();
     }
     match chars.peek() {
-        Some('"') => { let _ = read_json_string(chars); }
+        Some('"') => {
+            let _ = read_json_string(chars);
+        }
         Some('{') => {
             let mut depth = 0i32;
             for c in chars.by_ref() {
-                if c == '{' { depth += 1; }
-                if c == '}' { depth -= 1; if depth == 0 { break; } }
+                if c == '{' {
+                    depth += 1;
+                }
+                if c == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
             }
         }
         Some('[') => {
             let mut depth = 0i32;
             for c in chars.by_ref() {
-                if c == '[' { depth += 1; }
-                if c == ']' { depth -= 1; if depth == 0 { break; } }
+                if c == '[' {
+                    depth += 1;
+                }
+                if c == ']' {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
             }
         }
         _ => {
-            while chars.peek().map_or(false, |c| !matches!(c, ',' | '}' | ']')) {
+            while chars
+                .peek()
+                .map_or(false, |c| !matches!(c, ',' | '}' | ']'))
+            {
                 chars.next();
             }
         }
@@ -1614,6 +2028,18 @@ fn skip_value(chars: &mut std::iter::Peekable<std::str::Chars>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Cursor, Write};
+
+    fn test_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, content) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(content).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
 
     #[test]
     fn test_manifest_parse() {
@@ -1643,6 +2069,30 @@ mod tests {
         let m = SerezManifest::parse(json).unwrap();
         assert_eq!(m.bin["apipack"], "pack.sz");
         assert_eq!(m.permissions, vec!["OS", "File", "Env"]);
+    }
+
+    #[test]
+    fn manifest_rejects_bin_entry_that_escapes_package() {
+        let error = SerezManifest::parse(
+            r#"{"name":"bad-bin","version":"1.0.0","bin":{"bad":"../outside.sz"}}"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("bin.bad") && error.contains("package directory"));
+    }
+
+    #[test]
+    fn initial_manifest_escapes_user_supplied_json_strings() {
+        let rendered = initial_manifest_json(
+            "quoted\"name",
+            "1.0.0",
+            "line one\nline two",
+            "path\\author",
+        )
+        .unwrap();
+        let manifest = SerezManifest::parse(&rendered).unwrap();
+        assert_eq!(manifest.name, "quoted\"name");
+        assert_eq!(manifest.description, "line one\nline two");
+        assert_eq!(manifest.author, "path\\author");
     }
 
     #[test]
@@ -1697,17 +2147,96 @@ mod tests {
     }
 
     #[test]
+    fn manifest_rejects_valid_prefix_followed_by_malformed_json() {
+        let error = SerezManifest::parse(r#"{"name":"app","version":"1.0.0", this is not json}"#)
+            .unwrap_err();
+        assert!(error.contains("invalid JSON"));
+    }
+
+    #[test]
+    fn manifest_rejects_wrong_public_field_types() {
+        let error =
+            SerezManifest::parse(r#"{"name":"app","version":"1.0.0","dependencies":{"bad":7}}"#)
+                .unwrap_err();
+        assert!(error.contains("dependencies.bad") && error.contains("string"));
+    }
+
+    #[test]
+    fn manifest_rejects_oversized_input_before_parsing() {
+        let raw = " ".repeat(1024 * 1024 + 1);
+        let error = SerezManifest::parse(&raw).unwrap_err();
+        assert!(error.contains("1 MiB"));
+    }
+
+    #[test]
     fn test_pkg_spec_with_version() {
-        let (name, ver) = parse_pkg_spec("foo@1.2.3");
+        let (name, ver) = parse_pkg_spec("foo@1.2.3").unwrap();
         assert_eq!(name, "foo");
         assert_eq!(ver, Some("1.2.3".to_string()));
     }
 
     #[test]
     fn test_pkg_spec_without_version() {
-        let (name, ver) = parse_pkg_spec("foo");
+        let (name, ver) = parse_pkg_spec("foo").unwrap();
         assert_eq!(name, "foo");
         assert_eq!(ver, None);
+    }
+
+    #[test]
+    fn package_identifiers_reject_path_traversal_and_separators() {
+        for spec in ["..", "../outside", "..\\outside", "pkg@../version", "pkg@"] {
+            assert!(parse_pkg_spec(spec).is_err(), "must reject {spec:?}");
+        }
+        assert!(parse_pkg_spec("serez-http@1.2.3-beta+build.1").is_ok());
+    }
+
+    #[test]
+    fn uninstall_rejects_traversal_before_touching_filesystem() {
+        let error = uninstall_package("..", false).unwrap_err();
+        assert!(error.contains("Invalid package name"));
+    }
+
+    #[test]
+    fn package_relative_paths_reject_escape_and_platform_specific_forms() {
+        for path in [
+            "",
+            ".",
+            "./cli.sz",
+            "../outside.sz",
+            "bin/../../outside.sz",
+            "/absolute.sz",
+            "C:/absolute.sz",
+            "bin\\..\\outside.sz",
+        ] {
+            assert!(
+                validate_package_relative_path(path, "test path").is_err(),
+                "must reject {path:?}"
+            );
+        }
+        assert_eq!(
+            validate_package_relative_path("bin/cli.sz", "test path").unwrap(),
+            PathBuf::from("bin/cli.sz")
+        );
+    }
+
+    #[test]
+    fn archive_inspection_rejects_path_traversal() {
+        let bytes = test_zip(&[("../outside.sz", b"malicious")]);
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let error = inspect_archive(&mut archive, 10, 1024).unwrap_err();
+        assert!(error.contains("stay within the package directory"));
+    }
+
+    #[test]
+    fn archive_inspection_enforces_entry_and_expansion_limits() {
+        let bytes = test_zip(&[("one.sz", b"123"), ("two.sz", b"456")]);
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let entry_error = inspect_archive(&mut archive, 1, 1024).unwrap_err();
+        assert!(entry_error.contains("maximum is 1"));
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let size_error = inspect_archive(&mut archive, 10, 5).unwrap_err();
+        assert!(size_error.contains("beyond the 5 byte limit"));
     }
 
     #[test]

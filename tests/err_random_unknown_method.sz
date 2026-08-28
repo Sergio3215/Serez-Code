@@ -1,0 +1,2 @@
+// Unknown Random members must be a stable ReferenceError, not an internal abort.
+Random.notARealMethod();

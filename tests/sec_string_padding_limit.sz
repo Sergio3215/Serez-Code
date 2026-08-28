@@ -1,0 +1,7 @@
+// Padding must stop at the native resource ceiling and remain non-catchable.
+try {
+    "x".padEnd(10000001, "x");
+} catch (e) {
+    out("SECURITY_FAILURE: padding ceiling was catchable");
+}
+out("SECURITY_FAILURE: padding ceiling did not abort");

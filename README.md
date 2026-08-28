@@ -44,6 +44,7 @@ out fibonacci(10);   // → 55
    - [Enums](#enums)
    - [Set](#set)
    - [Math](#math)
+   - [Random](#random)
    - [File](#file)
    - [JSON](#json)
    - [Networking (fetch)](#networking-fetch)
@@ -97,7 +98,9 @@ On top of that model sits a feature you drive yourself: an inner `{ ... }` block
 
 ### Install
 
-Current release: **v9.11.0**. Every binary is self-contained — there is nothing else to install and no runtime to set up.
+Every published binary is self-contained — there is nothing else to install and
+no separate runtime to set up. `sz --version` is the authority for the installed
+version; download links below always resolve the latest published release.
 
 **Linux / macOS** — installs `sz` into `~/.local/bin`:
 ```sh
@@ -282,6 +285,21 @@ PI = 3.0;   // ❌ ERROR: Cannot reassign const 'PI'
 ```
 
 `const` follows the same scoping rules as `let` — it is invisible outside its block.
+
+#### Destructuring declarations
+
+Array and object patterns are available on `let` and `const` declarations:
+
+```serez
+let [head, _, ...tail] = [1, 2, 3, 4];
+let {name, age: years} = ({"name", "Ana"}, {"age", 30});
+```
+
+Array holes create no binding, missing positions become `null`, and the final
+`...rest` receives a new array. Object patterns accept dicts, class instances
+and `DateTime`; missing properties become `null`. A wrong source type is a
+catchable `TypeError` (`SZ4002`), and a `throw` while evaluating the source is
+preserved. The normative contract is in [`spec/variables.md`](spec/variables.md).
 
 ---
 
@@ -806,7 +824,7 @@ When a parameter has no type annotation, the function accepts any value for it.
 
 #### Default parameters
 
-Parameters can have default values. If the caller omits the argument, the default is used. Default parameters must come after required ones.
+Parameters can have default values. If the caller omits the argument, the default is used. Default parameters must come after required ones; a required parameter after a default is a parser error (`SZ2000`). A final `...rest` parameter may still follow defaults.
 
 ```serez
 fn string greet(string name = "World") {
@@ -828,7 +846,10 @@ out add(5);      // → 15   (b defaults to 10)
 out add(5, 3);   // → 8    (b supplied)
 ```
 
-Default values are arbitrary expressions evaluated at call time:
+Default values are arbitrary expressions evaluated at call time. They are
+evaluated in declaration order, so a default can read an earlier parameter; an
+explicit argument skips its default. A user `throw` or runtime error raised by a
+default propagates unchanged rather than becoming `null`:
 
 ```serez
 fn int compute(int n = 2 + 3) {
@@ -838,6 +859,9 @@ fn int compute(int n = 2 + 3) {
 out compute();    // → 10  (default: 5 * 2)
 out compute(7);   // → 14
 ```
+
+The normative parameter and call-time contract is in
+[`spec/functions.md`](spec/functions.md).
 
 #### Calling functions
 
@@ -1048,7 +1072,10 @@ Like `while`, the condition and update temporaries are freed each iteration — 
 
 #### `for-in`
 
-Iterates over every element of an array or every character of a string. The loop variable is declared with `let` and is scoped to the loop body.
+Iterates over every element of an array, every Unicode scalar value of a string,
+or every key of a dict. The loop variable is declared with `let` and is scoped
+to the loop body. Values/keys are snapshotted before the first iteration and
+bound as copies.
 
 ```
 for (let <var> in <iterable>) { <body> }
@@ -1073,6 +1100,19 @@ for (let c in "abc") {
 }
 out result;   // → a-b-c-
 ```
+
+Dict iteration yields keys in insertion order. An array pattern can destructure
+array rows directly:
+
+```serez
+for (let [key, value] in [["a", 1], ["b", 2]]) {
+    out key + "=" + value;
+}
+```
+
+A non-array/string/dict iterable, or a non-array row used with that pattern,
+raises catchable `TypeError` (`SZ4002`). See the normative rules in
+[`spec/control-flow.md`](spec/control-flow.md).
 
 `break` and `continue` work the same as in `while`/`for`:
 
@@ -1316,9 +1356,11 @@ try {
 |---|---|
 | `IndexOutOfBounds` | Array/string access outside `[0, len-1]` |
 | `DivisionByZero` | `/` or `%` with zero on the right |
-| `TypeError` | Type mismatches, wrong argument counts/types, unknown methods |
+| `ReferenceError` | Missing variables, classes or migrated namespace/object members |
+| `TypeError` | Type mismatches and wrong argument counts/types |
+| `RangeError` | A value outside a supported semantic range, such as an invalid calendar date |
 | `InvalidAssignTarget` | Assign into a temporary — one not reachable from a variable (`get()[i] = x`) |
-| `Overflow` | Integer arithmetic outside the `i64` range |
+| `Overflow` | Arithmetic outside a supported numeric or calendar range |
 | `IOError` | `File.*` failures (missing file, permissions), `Terminal.*` I/O |
 | `JsonError` | `JSON.parse` on invalid JSON |
 | `OSError` | `OS.exec` / `OS.kill` process failures |
@@ -1330,6 +1372,15 @@ try {
 | `MemoryError` | `Memory.*` runtime failures inside `unsafe {}` (bad handle, OOB) |
 | `BinaryError` | `Binary.*` decode/encode failures |
 | `RuntimeError` | Anything else raised by the runtime (e.g. invalid `Regex` patterns) |
+| `PermissionError` | Missing native namespace permission (`SZ6001`) |
+| `ResourceError` | A recursion, allocation or input-size ceiling (`SZ6002`) |
+| `UnsafeError` | An operation used outside its required `unsafe {}` block (`SZ6003`) |
+| `SecurityError` | A protected native target refused by policy (`SZ6004`) |
+
+Permission, resource, unsafe and security gates are fatal and normally bypass
+`try/catch`; lockdown denials retain their documented recoverable compatibility
+behavior. Stable fields/codes and the exact ceilings are specified in
+[`spec/errors.md`](spec/errors.md) and [`spec/limits.md`](spec/limits.md).
 
 `catch` is optional. `finally` is optional. Both together are also valid:
 
@@ -1645,8 +1696,8 @@ All string methods are called with dot syntax. `.length` is a property; all othe
 | `.substring(start[, end])` | Characters from `start` (inclusive) to `end` (exclusive). Omitting `end` goes to end of string. |
 | `.slice(start[, end])` | Like `substring`; negative `start` counts from the end. |
 | `.split(sep)` | Splits by `sep`, returns an array. Empty `sep` splits into individual characters. |
-| `.replace(from, to)` | Returns a new string with **all** occurrences of `from` replaced by `to`. |
-| `.replaceAll(from, to)` | Alias for `.replace`. |
+| `.replace(from, to)` | Returns a new string with the **first** occurrence of `from` replaced by `to`. |
+| `.replaceAll(from, to)` | Returns a new string with every occurrence replaced. |
 | `.includes(sub)` / `.contains(sub)` | `true` if the string contains `sub`. |
 | `.indexOf(sub)` | Index of first occurrence of `sub`, or `-1`. |
 | `.startsWith(prefix)` | `true` if the string starts with `prefix`. |
@@ -1667,8 +1718,8 @@ All string methods are called with dot syntax. `.length` is a property; all othe
 
 | Method | Description |
 |---|---|
-| `.padStart(n[, ch])` | Pads the start with `ch` (default: space) until the string is at least `n` characters. |
-| `.padEnd(n[, ch])` | Pads the end with `ch` (default: space) until the string is at least `n` characters. |
+| `.padStart(n[, text])` | Pads the start with `text` (default: space) to exactly `n` Unicode characters. `n` must be non-negative. |
+| `.padEnd(n[, text])` | Pads the end with `text` (default: space) to exactly `n` Unicode characters. `n` must be non-negative. |
 
 ```serez
 let s = "hello world";
@@ -1683,9 +1734,10 @@ out s.startsWith("hel");          // → true
 out s.endsWith("ld");             // → true
 out "abc".split("");              // → [a, b, c]
 
-// replace replaces all occurrences
+// replace changes the first occurrence; replaceAll changes every occurrence
 let r = "one two one two one";
-out r.replace("one", "X");        // → X two X two X
+out r.replace("one", "X");        // → X two one two one
+out r.replaceAll("one", "X");     // → X two X two X
 
 // case and whitespace
 out "hello".toUpperCase();        // → HELLO
@@ -1704,6 +1756,14 @@ out 42.toString();     // → 42
 out 3.14.toString();   // → 3.14
 out true.toString();   // → true
 ```
+
+Indexes and lengths count Unicode scalar values rather than UTF-8 bytes.
+`substring` clamps negative indexes to zero; `slice` interprets negative bounds
+relative to the end. Reversed bounds return an empty string. Wrong arity/types
+are catchable `TypeError` (`SZ4002`), a negative padding target is catchable
+`RangeError` (`SZ4000`), and unknown members are catchable `ReferenceError`
+(`SZ4001`). Padding above 10,000,000 characters is a fatal resource error. See
+the normative [String contract](spec/strings.md).
 
 ---
 
@@ -2007,6 +2067,11 @@ out a.intersection(b);   // → Set{3, 4, 5}
 
 `Math` is a built-in namespace for mathematical functions. All functions are called as `Math.functionName(args)`.
 
+Scalar Math arguments accept `int` and `decimal`; exact `dec` values require an
+explicit conversion. A value of any other type raises catchable `TypeError`
+`SZ4002`. Arguments are evaluated before the operation, and a user `throw` or
+runtime error produced by an argument propagates unchanged.
+
 #### Constants
 
 | Constant | Value |
@@ -2068,6 +2133,35 @@ out Math.atan2(1.0, 1.0);      // → 0.7853981633974483  (π/4)
 
 ---
 
+### Random
+
+`Random` is a deterministic, seedable pseudo-random namespace. The same seed
+and ordered calls reproduce the same stream; it shares generator state with
+`Math.random()`. It requires no permission.
+
+| Call | Result and constraints |
+| --- | --- |
+| `Random.seed(n)` | Reset from an `int`; negative seeds are valid. |
+| `Random.decimal()` | `decimal` in `[0, 1)`. |
+| `Random.int(min, max)` | Inclusive `int` in `[min, max]`, including the complete 64-bit integer domain. |
+| `Random.uniform(lo, hi)` | Finite `decimal` in `[lo, hi)`; `lo < hi`. |
+| `Random.normal(mean, std)` | Normal draw with finite parameters and `std >= 0`. |
+| `Random.normalTensor(shape, mean, std)` | Tensor of normal draws. |
+| `Random.uniformTensor(shape, lo, hi)` | Tensor of uniform draws. |
+| `Random.shuffle(array)` | Shuffled copy; does not mutate the input. |
+| `Random.choice(array)` | Element from a non-empty array. |
+| `Random.bernoulli(p)` | Boolean with finite `p` in `[0, 1]`. |
+
+Wrong types/arity raise catchable `TypeError` (`SZ4002`), invalid domains raise
+catchable `RangeError` (`SZ4000`), and unknown members raise catchable
+`ReferenceError` (`SZ4001`). Tensor allocation ceilings remain fatal. See the
+normative [Random contract](spec/random.md).
+
+> ⚠️ `Random` is a predictable LCG intended for games, simulations and
+> reproducible tests. Use `Crypto.randomBytes` for secrets.
+
+---
+
 ### File
 
 `File` is a built-in namespace for file I/O operations.
@@ -2075,10 +2169,10 @@ out Math.atan2(1.0, 1.0);      // → 0.7853981633974483  (π/4)
 | Function | Description |
 |---|---|
 | `File.exists(path)` | Returns `true` if the file at `path` exists. |
-| `File.read(path)` | Returns the full file contents as a `string`. Runtime error if the file cannot be read. |
+| `File.read(path)` | Returns the full file contents as a `string`. Runtime error if it cannot be read; files above 256 MiB are refused with fatal `SZ6002`. |
 | `File.write(path, content)` | Writes `content` (converted to string) to `path`. Creates the file if it does not exist; overwrites if it does. Returns `null`. |
 | `File.create(path)` | Creates an empty file at `path` if it does not already exist (touch). No-op if the file exists. Returns `null`. |
-| `File.read_asBinary(path)` | Returns the raw bytes of the file as a `[int]` array (each byte as an integer 0–255). |
+| `File.read_asBinary(path)` | Returns raw bytes as `[int]` (0–255); files above 256 MiB are refused with fatal `SZ6002`. |
 | `File.write_asBinary(path, bytes)` | Writes a `[int]` array of bytes to `path`. |
 | `File.listDir(path)` | Returns a `[string]` array with the names of entries in the directory at `path`. |
 | `File.mkdir(path)` | Creates a directory (and all intermediate directories) at `path`. |
@@ -2380,7 +2474,7 @@ sz run build     # execute build script
 
 ### GPU
 
-CPU-backed compute buffers with a GPU-shaped API. Buffers are flat `decimal` arrays; the create / upload / dispatch / readback / free pattern mirrors real GPU compute so a future backend can swap the CPU implementation for actual GPU calls. Buffers are **not** garbage-collected — free them with `GPU.freeBuffer` when done. No permission declaration is required.
+CPU-backed compute buffers with a GPU-shaped API. Buffers are flat `decimal` arrays; the create / upload / dispatch / readback / free pattern mirrors real GPU compute so a future backend can swap the CPU implementation for actual GPU calls. Buffers are **not** garbage-collected — free them with `GPU.freeBuffer` when done. No permission declaration is required. Every buffer is capped at 256 MiB (33,554,432 `decimal`/`f64` elements), including uploads and `matmul` outputs; dimension overflow or a larger result is fatal `SZ6002`.
 
 ```serez
 let src     = GPU.createBufferFromArray([1.0, 2.0, 3.0, 4.0]);  // → buffer id
@@ -2528,6 +2622,10 @@ unsafe {
 | `OS.exec(cmd, args)` ⚠️ | Executes an external command. Returns `{ stdout: string, stderr: string, code: int }`. **Requires `unsafe {}`**. Blocked for system paths (`C:\Windows\System32`, `/etc/`, etc.). |
 | `OS.kill(pid)` ⚠️ | Terminates a process by PID. **Requires `unsafe {}`**. |
 
+The protected-path refusal used by `OS.exec`/`OS.spawn` is fatal `SZ6004`, but
+it is only a case-sensitive substring heuristic. It is not path canonicalization,
+an allowlist or a sandbox; use OS isolation for untrusted process execution.
+
 ```serez
 use permissions { OS }
 
@@ -2651,6 +2749,14 @@ out year + "-" + month + "-" + day  // 2026-6-20
 
 Two `DateTime`s compare by instant (`<`, `>`, `==`, …); arithmetic between two
 dates is not allowed — operate through their fields.
+
+Every member enforces its documented arity before evaluating argument
+expressions. Wrong arity/type is catchable `TypeError` (`SZ4002`), an invalid
+calendar or epoch is catchable `RangeError` (`SZ4000`), field arithmetic
+overflow is catchable `Overflow` (`SZ4000`), and an unknown member is catchable
+`ReferenceError` (`SZ4001`). Nested runtime errors and user `throw` values
+propagate unchanged. The normative contract is in
+[`spec/datetime.md`](spec/datetime.md).
 
 ---
 
@@ -2963,7 +3069,12 @@ A missing file throws a catchable `IOError`; an unsupported format or no audio d
 
 ### Permissions
 
-Serez-Code uses a **three-level permission model** to control access to OS, hardware, and destructive operations. Programs run in a sandbox by default — no OS access without an explicit opt-in.
+Serez-Code uses three complementary safety mechanisms: a permission manifest,
+operation-level `unsafe` gates, and lockdown for selected capabilities. These
+mechanisms reduce accidental access; they are **not a security sandbox** and do not
+make hostile code safe to execute. In particular, `fetch` can access the network
+under lockdown. Run untrusted programs inside an OS/container boundary with its own
+filesystem, process and network restrictions.
 
 #### Level 1 — Project-wide (`serez.json`)
 
@@ -2993,6 +3104,9 @@ use permissions { OS, File }
 
 Certain destructive or OS-modifying operations require an `unsafe {}` block even when the namespace is permitted:
 
+Calling one outside the block aborts with structured fatal `UnsafeError`
+(`SZ6003`); it is visible to CLI/tooling and deliberately bypasses `try/catch`.
+
 | Operation | Why unsafe |
 |---|---|
 | `Terminal.setRawMode` | Modifies OS terminal state |
@@ -3004,6 +3118,10 @@ Certain destructive or OS-modifying operations require an `unsafe {}` block even
 | `Env.set` | Modifies environment (thread-unsafe) |
 | `File.delete` | Permanently removes files |
 | `File.rename` | Modifies the filesystem |
+| `Memory.*` and raw pointers | Access raw evaluator-managed memory |
+
+`Memory.alloc(n)` accepts 1 through 256 MiB. Zero is a catchable argument
+`TypeError`; a larger allocation is a fatal `ResourceError` (`SZ6002`).
 
 ```serez
 use permissions { OS, Env }
@@ -3019,7 +3137,9 @@ unsafe {
 }
 ```
 
-Without a declared permission, every namespace call fails immediately with a clear error pointing to how to grant it.
+Without a declared permission, every guarded namespace call fails immediately
+with a structured fatal `PermissionError` (`SZ6001`) pointing to how to grant it.
+The error is visible to CLI/tooling but deliberately bypasses `try/catch`.
 
 ---
 
@@ -3048,7 +3168,7 @@ let input = Task.message()
 // Do some calculations or IO...
 let result = "Hello, " + input + "! This runs in parallel."
 
-// Send the response back and exit the worker
+// Record the response; it is published when the worker exits successfully
 Task.reply(result)
 ```
 
@@ -3080,9 +3200,23 @@ out "Result: " + response
 |---|---|
 | `Task.run(scriptPath: string, arg: string) -> int` | Spawns a background thread running the specified script. Returns the `taskId`. |
 | `Task.message() -> string` | (Worker only) Retrieves the argument passed to the worker. |
-| `Task.reply(result: string) -> void` | (Worker only) Sends the result back to the main thread and terminates the task. |
+| `Task.reply(result: string) -> void` | (Worker only) Records a provisional result. The script continues; the result is published only if it exits successfully. |
 | `Task.isDone(taskId: int) -> bool` | Returns `true` if the task completed successfully or failed with an error. |
 | `Task.poll(taskId: int) -> string` | Retrieves the result of the task. If the task failed or panicked, it returns a string starting with `"ERROR: "`. |
+
+Workers use isolated evaluators but native threads in the same process. Task IDs
+and replies are shared only with the parent/descendant runtime tree, not with
+unrelated embedders. A worker inherits lockdown when its parent is restricted;
+outside lockdown it can use inline/manifest permissions like trusted source.
+
+The runtime allows 32 concurrent workers, 1 MiB message/error payloads, 16 MiB worker
+sources and 256 retained task records. Starting over the concurrent/message
+ceilings is fatal `ResourceError` (`SZ6002`); old terminal records are evicted
+before active workers. Unknown/evicted IDs are catchable `ReferenceError`
+(`SZ4001`), and API arity/type mistakes are catchable `TypeError` (`SZ4002`).
+Worker failures remain returned as `ERROR: [code] kind: message` strings for
+compatibility. There is no cancellation or timeout. See the normative contract
+in [`spec/tasks.md`](spec/tasks.md).
 
 ---
 
@@ -3109,7 +3243,9 @@ out "{origen.x}, {origen.y}";   // → 0.0, 0.0
 out "{p.x}, {p.y}";             // → 3.0, 4.0
 ```
 
-All field names and types from the interface declaration must be supplied. Extra fields are a runtime error.
+All field names and types from the interface declaration must be supplied.
+Positional construction, missing or extra fields, and wrong field types are
+catchable `TypeError` (`SZ4002`).
 
 **Reading fields:**
 
@@ -3137,7 +3273,9 @@ The patch only overwrites the listed fields. Fields not listed keep their previo
 
 #### Classes
 
-A `class` bundles data and behaviour. Each class has a constructor (same name as the class, prefixed with `public`) and any number of `public` or `private` methods.
+A `class` bundles data and behaviour. It may have a constructor (same name as
+the class, prefixed with `public`) and any number of `public` or `private`
+methods. A class without a constructor accepts zero construction arguments.
 
 ```serez
 public class Animal {
@@ -3170,6 +3308,11 @@ perro.comer(20);
 out perro.describir();         // → Rex (energía: 120)
 ```
 
+An unknown class/interface is a catchable `ReferenceError` (`SZ4001`). Invalid
+class/interface construction shape, abstract instantiation and constructor
+arity are catchable `TypeError` (`SZ4002`). The audited construction subset is
+normative in [`spec/classes.md`](spec/classes.md).
+
 **Field assignment:**
 
 Fields set inside the constructor via `this.field = value` are created automatically. Any method can read or write them with the same syntax:
@@ -3184,11 +3327,21 @@ perro.energia = 50;   // direct field mutation from outside
 out perro.getNombre();   // → Rex
 ```
 
+Method lookup walks the runtime class and then its parents. A missing member is
+catchable `ReferenceError` (`SZ4001`); invalid instance/static arity and a value
+that violates the method's declared return type are catchable `TypeError`
+(`SZ4002`). A missing `ClassName.staticMethod()` reports the class/member rather
+than masquerading as an undeclared class variable. See
+[`spec/classes.md`](spec/classes.md) for the audited dispatch contract.
+
 ---
 
 #### Inheritance
 
-Use `: ParentClass` to inherit from another class. The child's constructor **must** call `super(args...)` before doing anything else — this executes the parent constructor body against the same `this` object.
+Use `: ParentClass` to inherit from another class. `super(args...)` executes the
+parent constructor body against the same `this` object. When the parent can be
+called with no arguments, Serez inserts that call before the child constructor
+body if the child omitted it.
 
 ```serez
 public class Perro : Animal {
@@ -3214,7 +3367,12 @@ out fido.getNombre();       // → Fido  (inherited)
 out fido.getRaza();         // → Labrador
 ```
 
-Inheritance is single — a class can have at most one parent.
+Inheritance is single — a class can have at most one parent. A parent may be
+declared later, but the child cannot be instantiated until it exists; attempting
+to use the unresolved hierarchy raises catchable `ReferenceError` (`SZ4001`). A
+self/indirect cycle is rejected at declaration with catchable `TypeError`
+(`SZ4002`) instead of entering an unbounded ancestor lookup. The normative graph
+contract is in [`spec/classes.md`](spec/classes.md).
 
 **Method resolution** walks the chain from the most-derived class upward until the method is found:
 
@@ -3225,7 +3383,24 @@ Perro.hacer_sonido() → not in Perro → found in Animal — use it
 
 **`super()` semantics:**
 
-`super(args...)` runs the parent constructor's body against the same `this` that the child constructor received. Only the variables that the parent explicitly assigns to `this` inside its body are visible in the child. Grand-parent constructors are not automatically called by `super()` — each level must call `super()` explicitly if the chain needs to be continued.
+`super(args...)` runs the parent constructor's body against the same `this` that
+the child constructor received. Only variables assigned to `this` become fields
+visible to the child. If the parent requires arguments, a child constructor that
+omits `super(...)` remains allowed for compatibility and must initialize the
+needed fields itself; a child with no constructor instead gets catchable
+`TypeError` (`SZ4002`) because the runtime cannot supply those arguments.
+
+The implicit-call check is syntactic and conservative: a `super(...)` occurrence
+in any branch suppresses insertion even if that branch does not run. An empty
+`super()` to a parent without a constructor is a no-op, while supplying arguments
+is `SZ4002`. Grand-parent constructors are not synthesized by an explicit
+`super()` call; each required level must chain itself.
+
+`super.method(...)` begins lookup at the direct parent, bypasses the current
+override and keeps the same `this`. Invalid context/parent/arity is catchable
+`TypeError` (`SZ4002`); a missing parent method is catchable `ReferenceError`
+(`SZ4001`). The normative audited subset is in
+[`spec/classes.md`](spec/classes.md).
 
 Multi-level inheritance example:
 
@@ -3286,7 +3461,11 @@ out c.siguiente();   // → 1
 out c.siguiente();   // → 2
 ```
 
-`private` methods can only be called by other methods of the same class. Calling a private method from outside the instance is a runtime error.
+External calls or bound references to `private` methods remain refused with
+catchable `TypeError` (`SZ4002`); catching the error does not grant access. The
+runtime currently treats subclass execution as internal for inherited private
+members. This compatibility caveat is documented in `spec/classes.md` and is not
+a host-security boundary.
 
 > **Note:** The `public` keyword is required on class and constructor declarations. Omitting it is a parse error.
 
@@ -3325,7 +3504,9 @@ out Counter.label();   // → Counter
 
 #### Abstract classes
 
-An `abstract` class cannot be instantiated directly. It is designed to be subclassed. Attempting to call `new` on it is a runtime error.
+An `abstract` class cannot be instantiated directly. It is designed to be
+subclassed. Attempting to call `new` on it raises catchable `TypeError`
+(`SZ4002`).
 
 ```serez
 abstract class Shape {
@@ -3355,7 +3536,8 @@ out c.describe();   // → Circle: area=78.53975
 
 #### Sealed classes
 
-A `sealed` class cannot be inherited from. Attempting to extend it is a runtime error.
+A `sealed` class cannot be inherited from. Attempting to extend it raises
+catchable `TypeError` (`SZ4002`); the rejected child is not registered.
 
 ```serez
 sealed class Token {
@@ -3395,7 +3577,11 @@ t.fahrenheit = 212.0;     // setter called
 out t.celsius;            // → 100.0
 ```
 
-A property with only a getter and no setter is read-only — assigning to it is a runtime error.
+A property with only a getter and no setter is read-only. Assigning to it, using
+a private accessor externally, malformed accessor arity, or assigning a field on
+a non-instance raises catchable `TypeError` (`SZ4002`). A `throw` from inside an
+accessor propagates unchanged. See the normative audited subset and known dynamic
+field compatibility debt in [`spec/classes.md`](spec/classes.md).
 
 ---
 

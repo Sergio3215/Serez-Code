@@ -9,38 +9,41 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub enum Statement {
     Let(LetStatement),
-    Assign(AssignStatement),                      // Reasignación: ii = 2
-    Block(BlockStatement),                        // Bloque local: { ... }
-    Return(ReturnStatement),                      // Retorno: return <expr>
-    FunctionDeclaration(FunctionDeclaration),     // fn tipo nombre() {}
-    Expression(Expression),                       // Expresiones sueltas: ii, 1 + 1, etc.
-    While(WhileStatement),                        // Bucle while: while (cond) { ... }
-    For(ForStatement),                            // Bucle for: for (let i = 0; ...) { ... }
-    ForEach(ForEachStatement),                    // Bucle for-in: for (let x in arr) { ... }
-    IndexAssign(IndexAssignStatement),            // Mutación de array: arr[i] = expr
-    Out(OutStatement),                            // Salida a consola: out expr;
-    ClassDeclaration(ClassDeclaration),           // class / public class ...
-    InterfaceDeclaration(InterfaceDeclaration),   // interface ...
-    FieldAssign(FieldAssignStatement),            // obj.field = expr  /  this.field = expr
-    NestedFieldAssign(NestedFieldAssignStatement),// a.b.c = expr — más de un salto
-    Break,                                        // break; (or break label;)
-    Continue,                                     // continue; (or continue label;)
-    BreakLabel(String),                           // break outer;
-    ContinueLabel(String),                        // continue outer;
-    EnumDeclaration(EnumDeclaration),             // enum Color { Red, Green, Blue }
-    Switch(SwitchStatement),                      // switch (expr) { case ...: {} }
-    Try(TryStatement),                            // try {} catch (e) {} finally {}
-    Throw(Expression),                            // throw expr;
-    DoWhile(WhileStatement),                      // do { ... } while (cond);
+    Assign(AssignStatement),                       // Reasignación: ii = 2
+    Block(BlockStatement),                         // Bloque local: { ... }
+    Return(ReturnStatement),                       // Retorno: return <expr>
+    FunctionDeclaration(FunctionDeclaration),      // fn tipo nombre() {}
+    Expression(Expression),                        // Expresiones sueltas: ii, 1 + 1, etc.
+    While(WhileStatement),                         // Bucle while: while (cond) { ... }
+    For(ForStatement),                             // Bucle for: for (let i = 0; ...) { ... }
+    ForEach(ForEachStatement),                     // Bucle for-in: for (let x in arr) { ... }
+    IndexAssign(IndexAssignStatement),             // Mutación de array: arr[i] = expr
+    Out(OutStatement),                             // Salida a consola: out expr;
+    ClassDeclaration(ClassDeclaration),            // class / public class ...
+    InterfaceDeclaration(InterfaceDeclaration),    // interface ...
+    FieldAssign(FieldAssignStatement),             // obj.field = expr  /  this.field = expr
+    NestedFieldAssign(NestedFieldAssignStatement), // a.b.c = expr — más de un salto
+    Break,                                         // break; (or break label;)
+    Continue,                                      // continue; (or continue label;)
+    BreakLabel(String),                            // break outer;
+    ContinueLabel(String),                         // continue outer;
+    EnumDeclaration(EnumDeclaration),              // enum Color { Red, Green, Blue }
+    Switch(SwitchStatement),                       // switch (expr) { case ...: {} }
+    Try(TryStatement),                             // try {} catch (e) {} finally {}
+    Throw(Expression),                             // throw expr;
+    DoWhile(WhileStatement),                       // do { ... } while (cond);
     Unsafe(BlockStatement),                        // unsafe { ... }
-    DerefAssign { ptr: Box<Expression>, value: Expression }, // *ptr = val
-    NativeDeclaration(NativeFnDeclaration),                 // native fn type name(params);
-    Import(String),                                          // import "path/to/module";
-    Export(Box<Statement>),                                  // export fn/class/let/const/enum/interface
-    LetDestructureArray(LetDestructureArray),                // let [a, b, ...rest] = expr;
-    LetDestructureDict(LetDestructureDict),                  // let {key, key: alias} = expr;
-    Yield(Expression),                                       // yield expr;  (inside fn*)
-    UsePermissions(Vec<String>),                             // use permissions { Terminal, OS.exec }
+    DerefAssign {
+        ptr: Box<Expression>,
+        value: Expression,
+    }, // *ptr = val
+    NativeDeclaration(NativeFnDeclaration),        // native fn type name(params);
+    Import(String),                                // import "path/to/module";
+    Export(Box<Statement>),                        // export fn/class/let/const/enum/interface
+    LetDestructureArray(LetDestructureArray),      // let [a, b, ...rest] = expr;
+    LetDestructureDict(LetDestructureDict),        // let {key, key: alias} = expr;
+    Yield(Expression),                             // yield expr;  (inside fn*)
+    UsePermissions(Vec<String>),                   // use permissions { Terminal, OS.exec }
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +121,7 @@ pub struct WhileStatement {
 
 #[derive(Debug, Clone)]
 pub struct IndexAssignStatement {
-    pub target: Expression,  // Identifier or DotCall (for this.field[i] = val)
+    pub target: Expression, // Identifier or DotCall (for this.field[i] = val)
     pub index: Expression,
     pub value: Expression,
 }
@@ -135,7 +138,7 @@ pub struct ForStatement {
 #[derive(Debug, Clone)]
 pub enum ForEachVar {
     Name(String),
-    Array(Vec<Option<String>>, Option<String>),  // (slots — None=hole, rest_name)
+    Array(Vec<Option<String>>, Option<String>), // (slots — None=hole, rest_name)
 }
 
 #[derive(Debug, Clone)]
@@ -149,8 +152,8 @@ pub struct ForEachStatement {
 // let [a, b, ...rest] = expr;
 #[derive(Debug, Clone)]
 pub struct LetDestructureArray {
-    pub names: Vec<Option<String>>,  // None = hole (skip that position)
-    pub rest: Option<String>,        // ...rest_name (captures remaining elements)
+    pub names: Vec<Option<String>>, // None = hole (skip that position)
+    pub rest: Option<String>,       // ...rest_name (captures remaining elements)
     pub value: Expression,
     pub is_const: bool,
 }
@@ -158,7 +161,7 @@ pub struct LetDestructureArray {
 // let {key, key: alias} = expr;
 #[derive(Debug, Clone)]
 pub struct LetDestructureDict {
-    pub fields: Vec<(String, Option<String>)>,  // (key, local_alias) — None = use key as name
+    pub fields: Vec<(String, Option<String>)>, // (key, local_alias) — None = use key as name
     pub value: Expression,
     pub is_const: bool,
 }
@@ -233,7 +236,7 @@ pub struct ClassMethod {
 
 #[derive(Debug, Clone)]
 pub struct FieldAssignStatement {
-    pub object: String,  // "this" or a variable name
+    pub object: String, // "this" or a variable name
     pub field: String,
     pub value: Expression,
 }
@@ -261,7 +264,7 @@ pub struct SwitchStatement {
 
 #[derive(Debug, Clone)]
 pub struct SwitchCase {
-    pub values: Vec<Expression>,       // one case can match multiple values: case 1, 2:
+    pub values: Vec<Expression>, // one case can match multiple values: case 1, 2:
     pub body: BlockStatement,
 }
 
@@ -270,7 +273,7 @@ pub struct SwitchCase {
 #[derive(Debug, Clone)]
 pub struct TryStatement {
     pub body: BlockStatement,
-    pub catch_var: Option<String>,          // catch (e) → Some("e"), bare catch → None
+    pub catch_var: Option<String>, // catch (e) → Some("e"), bare catch → None
     pub catch_body: Option<BlockStatement>,
     pub finally_body: Option<BlockStatement>,
 }
@@ -295,25 +298,25 @@ pub enum Expression {
     Call(CallExpression),             // sumar(1, 2)
     If(IfExpression),
     Index(IndexExpression),
-    DictLiteral(DictLiteral),                        // ({"k","v"}, ...)
-    EntryLiteral(Box<Expression>, Box<Expression>),  // {key, value} in method args
-    DotCall(DotCallExpression),                      // obj.method(args)
-    InterpolatedString(Vec<StringPart>),             // "Hello, {name}!"
-    New(NewExpression),                              // new ClassName(args)
-    ObjectPatch(Vec<(String, Expression)>),          // { field: val, ... } for interface update
-    Ternary(TernaryExpression),                      // cond ? then : else
-    Spread(Box<Expression>),                         // ...expr (spread operator)
-    SizeOf(SizeOfTarget),                            // sizeof(int)  /  sizeof(expr)
-    AddressOf(Box<Expression>),                      // &varname
-    Deref(Box<Expression>),                          // *ptr
-    Match(Box<MatchExpression>),                     // match expr { pat => body, ... }
-    UnsafeBlock(BlockStatement),                     // unsafe { ... } as expression
+    DictLiteral(DictLiteral),                       // ({"k","v"}, ...)
+    EntryLiteral(Box<Expression>, Box<Expression>), // {key, value} in method args
+    DotCall(DotCallExpression),                     // obj.method(args)
+    InterpolatedString(Vec<StringPart>),            // "Hello, {name}!"
+    New(NewExpression),                             // new ClassName(args)
+    ObjectPatch(Vec<(String, Expression)>),         // { field: val, ... } for interface update
+    Ternary(TernaryExpression),                     // cond ? then : else
+    Spread(Box<Expression>),                        // ...expr (spread operator)
+    SizeOf(SizeOfTarget),                           // sizeof(int)  /  sizeof(expr)
+    AddressOf(Box<Expression>),                     // &varname
+    Deref(Box<Expression>),                         // *ptr
+    Match(Box<MatchExpression>),                    // match expr { pat => body, ... }
+    UnsafeBlock(BlockStatement),                    // unsafe { ... } as expression
 }
 
 #[derive(Debug, Clone)]
 pub enum SizeOfTarget {
-    Type(String),           // sizeof(int), sizeof(bool), ...
-    Expr(Box<Expression>),  // sizeof(someVar)
+    Type(String),          // sizeof(int), sizeof(bool), ...
+    Expr(Box<Expression>), // sizeof(someVar)
 }
 
 #[derive(Debug, Clone)]
@@ -381,7 +384,7 @@ pub struct DotCallExpression {
     pub object: Box<Expression>,
     pub method: String,
     pub arguments: Vec<Expression>,
-    pub has_parens: bool,  // true if written as obj.method(...), false if obj.field
+    pub has_parens: bool, // true if written as obj.method(...), false if obj.field
     pub is_optional: bool, // true if written as obj?.method(...)
     #[allow(dead_code)]
     pub line: usize,
@@ -422,8 +425,8 @@ pub struct NewExpression {
 
 #[derive(Debug, Clone)]
 pub enum NewArgs {
-    Positional(Vec<Expression>),           // new MyClass(a, b)
-    Fields(Vec<(String, Expression)>),     // new MyObject({ field: val, ... })
+    Positional(Vec<Expression>),       // new MyClass(a, b)
+    Fields(Vec<(String, Expression)>), // new MyObject({ field: val, ... })
 }
 
 #[derive(Debug, Clone)]

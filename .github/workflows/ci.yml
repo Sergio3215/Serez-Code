@@ -19,6 +19,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       # rodio (namespace Media) enlaza ALSA en Linux; sus cabeceras no vienen
       # en ubuntu-latest. Sin esto, alsa-sys falla al compilar.
@@ -26,8 +28,24 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
 
-      - name: Build
-        run: cargo build
+      - name: Format
+        run: cargo fmt --check
 
-      - name: Check (no warnings as errors)
+      - name: Check
         run: cargo check
+
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+      - name: Rust tests
+        run: cargo test --all-targets
+
+      - name: Serez conformance, regression, error-path, security and CLI tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\run_tests.ps1
+
+      - name: Serez conformance, regression, error-path, security and CLI tests (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./run_tests.sh

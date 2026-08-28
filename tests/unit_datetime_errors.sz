@@ -1,0 +1,74 @@
+// DateTime and DateField validation must be structured, catchable and atomic.
+use permissions { Time }
+
+fn catches(any callback, string code, string kind, string messagePart) {
+    let caught = false;
+    try { callback(); }
+    catch (e) {
+        caught = e.code == code
+            && e.kind == kind
+            && e.message.includes(messagePart);
+    }
+    return caught;
+}
+
+test("DateTime argument errors are TypeError", () => {
+    assert(catches(() => DateTime.from(2026, 1), "SZ4002", "TypeError", "3 to 7"), "from arity");
+    assert(catches(() => DateTime.from("bad", 1, 1), "SZ4002", "TypeError", "integer"), "from type");
+    assert(catches(() => DateTime.fromEpoch(), "SZ4002", "TypeError", "1 integer"), "epoch arity");
+    let d = DateTime.from(2026, 1, 1);
+    assert(catches(() => d.format(), "SZ4002", "TypeError", "1 string"), "format arity");
+    assert(catches(() => d.format(1), "SZ4002", "TypeError", "string pattern"), "format type");
+    assert(catches(() => d.day.add(), "SZ4002", "TypeError", "1 integer"), "field arity");
+    assert(catches(() => d.day.add("bad"), "SZ4002", "TypeError", "integer"), "field type");
+});
+
+test("DateTime range and overflow errors retain distinct kinds", () => {
+    assert(catches(() => DateTime.from(2026, 13, 1), "SZ4000", "RangeError", "out-of-range"), "field range");
+    assert(catches(() => DateTime.from(2026, 2, 30), "SZ4000", "RangeError", "invalid calendar"), "calendar range");
+    assert(catches(() => DateTime.fromEpoch(9223372036854775807), "SZ4000", "RangeError", "timestamp"), "epoch range");
+    let d = DateTime.from(2026, 1, 1);
+    assert(catches(() => d.day.add(9223372036854775807), "SZ4000", "Overflow", "overflowed"), "field overflow");
+});
+
+test("unknown DateTime members are ReferenceError", () => {
+    assert(catches(() => DateTime.missing(), "SZ4001", "ReferenceError", "Unknown DateTime"), "namespace member");
+    let d = DateTime.from(2026, 1, 1);
+    assert(catches(() => d.missing(), "SZ4001", "ReferenceError", "field/method"), "datetime member");
+    assert(catches(() => d.day.missing(), "SZ4001", "ReferenceError", "DateField"), "date field member");
+});
+
+test("DateTime validates arity before evaluating arguments", () => {
+    let touched = 0;
+    fn int touch() { touched++; return 1; }
+    assert(catches(() => DateTime.from(touch()), "SZ4002", "TypeError", "3 to 7"), "from arity before evaluation");
+    assert(catches(() => DateTime.fromEpoch(touch(), touch()), "SZ4002", "TypeError", "1 integer"), "epoch arity before evaluation");
+    assert(catches(() => DateTime.now(touch()), "SZ4002", "TypeError", "0 arguments"), "static zero arity");
+    let d = DateTime.from(2026, 1, 1);
+    assert(catches(() => d.year(touch()), "SZ4002", "TypeError", "0 arguments"), "field zero arity");
+    assert(catches(() => d.timestamp(touch()), "SZ4002", "TypeError", "0 arguments"), "method zero arity");
+    assert(catches(() => d.day.toInt(touch()), "SZ4002", "TypeError", "0 arguments"), "DateField zero arity");
+    assert(catches(() => d.day.add(touch(), touch()), "SZ4002", "TypeError", "1 integer"), "DateField arity before evaluation");
+    assert(touched == 0, "rejected arguments must not be evaluated");
+});
+
+test("DateTime arguments preserve nested throw and runtime failures", () => {
+    fn int boom() { throw "date-boom"; return 0; }
+    let userThrow = false;
+    try { DateTime.from(boom(), 1, 1); }
+    catch (e) { userThrow = e == "date-boom"; }
+    assert(userThrow, "user throw propagates unchanged");
+
+    let runtime = false;
+    try { DateTime.from(2026, 1, 1).day.add(1 / 0); }
+    catch (e) { runtime = e.code == "SZ4004" && e.kind == "DivisionByZero"; }
+    assert(runtime, "nested runtime error propagates unchanged");
+});
+
+test("caught DateTime errors do not poison later valid operations", () => {
+    try { DateTime.from(2026, 2, 30); } catch (_) {}
+    let d = DateTime.from(2026, 1, 31).month.add(1);
+    assert(d.month == 2 && d.day == 28, "valid operation after recovery");
+});
+
+summary();

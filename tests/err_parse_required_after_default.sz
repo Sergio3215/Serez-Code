@@ -1,0 +1,3 @@
+fn int invalid(int optional = 1, int required) {
+    return required;
+}

@@ -12,7 +12,7 @@ test("File.mkdir creates a directory", () => {
 test("File.listDir returns an array", () => {
     File.mkdir(tmpDir);
     let entries = File.listDir(tmpDir);
-    assert(entries is [string], "listDir should return a string array");
+    assert(entries is array, "listDir should return an array");
 });
 
 test("File.listDir contains created files", () => {

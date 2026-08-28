@@ -1,13 +1,14 @@
 #![allow(unused_imports)]
+use super::{
+    CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
+    obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
+};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::rc::Rc;
-use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str,
-            obj_data_eq, format_decimal, json_stringify_owned, json_parse,
-            operator_to_method_name};
 
 impl super::Evaluator {
     pub(super) fn eval_str_arg(&mut self, expr: &ast::Expression) -> Option<String> {
@@ -16,7 +17,10 @@ impl super::Evaluator {
                 Some(ObjectData::Str(s)) => Some(s),
                 // rt_err_kind records the recoverable error; callers turn the
                 // None into EvalResult::Error, which try/catch can then bind.
-                _ => { self.rt_err_kind("TypeError", "Expected string argument"); None }
+                _ => {
+                    self.rt_err_kind("TypeError", "Expected string argument");
+                    None
+                }
             },
             _ => None,
         }
@@ -26,7 +30,10 @@ impl super::Evaluator {
         match self.eval_expression(expr) {
             EvalResult::Value(r) => match self.resolve(r).cloned() {
                 Some(ObjectData::Integer(i)) => Some(i),
-                _ => { self.rt_err_kind("TypeError", "Expected int argument"); None }
+                _ => {
+                    self.rt_err_kind("TypeError", "Expected int argument");
+                    None
+                }
             },
             _ => None,
         }
@@ -69,26 +76,50 @@ impl super::Evaluator {
 
     pub(super) fn values_equal(&self, a: &ObjectData, b: &ObjectData) -> bool {
         // A DateField compares as its integer value (e.g. switch on date.month).
-        let a_norm; let b_norm;
-        let a = match a { ObjectData::DateField { value, .. } => { a_norm = ObjectData::Integer(*value); &a_norm } _ => a };
-        let b = match b { ObjectData::DateField { value, .. } => { b_norm = ObjectData::Integer(*value); &b_norm } _ => b };
+        let a_norm;
+        let b_norm;
+        let a = match a {
+            ObjectData::DateField { value, .. } => {
+                a_norm = ObjectData::Integer(*value);
+                &a_norm
+            }
+            _ => a,
+        };
+        let b = match b {
+            ObjectData::DateField { value, .. } => {
+                b_norm = ObjectData::Integer(*value);
+                &b_norm
+            }
+            _ => b,
+        };
         match (a, b) {
-            (ObjectData::Integer(x),  ObjectData::Integer(y))  => x == y,
+            (ObjectData::Integer(x), ObjectData::Integer(y)) => x == y,
             // Two DateTimes are equal when they denote the same instant.
-            (ObjectData::DateTime { epoch_ms: x, .. }, ObjectData::DateTime { epoch_ms: y, .. }) => x == y,
+            (
+                ObjectData::DateTime { epoch_ms: x, .. },
+                ObjectData::DateTime { epoch_ms: y, .. },
+            ) => x == y,
             // Exact decimal, by value (scale ignored); int mixes in exactly.
             (ObjectData::Dec(x), ObjectData::Dec(y)) => x == y,
             (ObjectData::Dec(x), ObjectData::Integer(y)) => *x == rust_decimal::Decimal::from(*y),
             (ObjectData::Integer(x), ObjectData::Dec(y)) => rust_decimal::Decimal::from(*x) == *y,
-            (ObjectData::Decimal(x),  ObjectData::Decimal(y))  => x == y,
+            (ObjectData::Decimal(x), ObjectData::Decimal(y)) => x == y,
             // Cross-type numeric: same coercion that == uses in infix expressions
-            (ObjectData::Decimal(x),  ObjectData::Integer(y))  => *x == (*y as f64),
-            (ObjectData::Integer(x),  ObjectData::Decimal(y))  => (*x as f64) == *y,
-            (ObjectData::Str(x),      ObjectData::Str(y))      => x == y,
-            (ObjectData::Boolean(x),  ObjectData::Boolean(y))  => x == y,
-            (ObjectData::Null,        ObjectData::Null)         => true,
-            (ObjectData::EnumVariant { enum_name: en1, variant: v1 },
-             ObjectData::EnumVariant { enum_name: en2, variant: v2 }) => en1 == en2 && v1 == v2,
+            (ObjectData::Decimal(x), ObjectData::Integer(y)) => *x == (*y as f64),
+            (ObjectData::Integer(x), ObjectData::Decimal(y)) => (*x as f64) == *y,
+            (ObjectData::Str(x), ObjectData::Str(y)) => x == y,
+            (ObjectData::Boolean(x), ObjectData::Boolean(y)) => x == y,
+            (ObjectData::Null, ObjectData::Null) => true,
+            (
+                ObjectData::EnumVariant {
+                    enum_name: en1,
+                    variant: v1,
+                },
+                ObjectData::EnumVariant {
+                    enum_name: en2,
+                    variant: v2,
+                },
+            ) => en1 == en2 && v1 == v2,
             _ => false,
         }
     }
@@ -111,18 +142,58 @@ impl super::Evaluator {
         // A *recoverable* runtime Error inside a try-with-catch becomes a catchable
         // value (its message as a string), so user code can handle ordinary
         // programming faults (index out of range, type mismatch, division by zero)
-        // exactly like an explicit `throw`. Errors that DON'T set `last_error`
-        // (permission denials, `unsafe`-required gates, resource limits) are NOT
-        // recoverable: they stay fatal and abort, preserving the sandbox invariant.
+        // exactly like an explicit `throw`. Structured failures recorded as
+        // non-catchable (namespace permission denials and migrated resource
+        // limits), plus legacy failures without a payload, stay fatal and abort.
         let body_result = match body_result {
-            EvalResult::Error if has_catch && self.last_error.is_some() => {
-                let (kind, msg) = self.last_error.take().unwrap();
-                // Bind a structured Error object: e.message, e.kind (dot-readable).
+            EvalResult::Error
+                if has_catch
+                    && self
+                        .last_error
+                        .as_ref()
+                        .is_some_and(|pending| pending.catchable) =>
+            {
+                let error = match self.last_error.take() {
+                    Some(pending) => pending.error,
+                    None => return EvalResult::Error,
+                };
+                let span = error
+                    .span
+                    .map(|span| OwnedValue::Str(format!("{}:{}", span.line, span.column)))
+                    .unwrap_or(OwnedValue::Null);
+                let stack = error
+                    .stack
+                    .into_iter()
+                    .map(|frame| {
+                        OwnedValue::Str(format!(
+                            "{} at {}:{}",
+                            frame.name, frame.line, frame.column
+                        ))
+                    })
+                    .collect();
+                let notes = error.notes.into_iter().map(OwnedValue::Str).collect();
+                // Preserve message and kind while exposing the stable diagnostic contract.
                 let err_ref = self.alloc(ObjectData::Instance {
                     class_name: "Error".to_string(),
                     fields: vec![
-                        ("message".to_string(), OwnedValue::Str(msg)),
-                        ("kind".to_string(),    OwnedValue::Str(kind)),
+                        ("code".to_string(), OwnedValue::Str(error.code.to_string())),
+                        ("kind".to_string(), OwnedValue::Str(error.kind)),
+                        ("message".to_string(), OwnedValue::Str(error.message)),
+                        ("span".to_string(), span),
+                        (
+                            "stack".to_string(),
+                            OwnedValue::Array {
+                                element_type: Some("string".to_string()),
+                                elements: stack,
+                            },
+                        ),
+                        (
+                            "notes".to_string(),
+                            OwnedValue::Array {
+                                element_type: Some("string".to_string()),
+                                elements: notes,
+                            },
+                        ),
                     ],
                 });
                 EvalResult::Throw(err_ref)
@@ -140,37 +211,67 @@ impl super::Evaluator {
                     // Run catch body statement-by-statement (same pattern as eval_call)
                     // so we can extract the result BEFORE the scope pop.
                     let mut catch_val = self.null_ref;
-                    let mut catch_return:   Option<ObjectRef> = None;
-                    let mut catch_throw:    Option<ObjectRef> = None;
-                    let mut catch_error    = false;
-                    let mut catch_break    = false;
+                    let mut catch_return: Option<ObjectRef> = None;
+                    let mut catch_throw: Option<ObjectRef> = None;
+                    let mut catch_error = false;
+                    let mut catch_break = false;
                     let mut catch_continue = false;
                     let mut catch_break_label: Option<String> = None;
                     let mut catch_continue_label: Option<String> = None;
                     for s in &catch_block.statements {
                         match self.eval_statement(s) {
-                            EvalResult::Value(v)   => catch_val = v,
-                            EvalResult::Return(v)  => { catch_return   = Some(v); break; }
-                            EvalResult::Throw(v)   => { catch_throw    = Some(v); break; }
-                            EvalResult::Error      => { catch_error    = true;    break; }
-                            EvalResult::Break      => { catch_break    = true;    break; }
-                            EvalResult::Continue   => { catch_continue = true;    break; }
-                            EvalResult::BreakLabel(l)    => { catch_break_label    = Some(l); break; }
-                            EvalResult::ContinueLabel(l) => { catch_continue_label = Some(l); break; }
+                            EvalResult::Value(v) => catch_val = v,
+                            EvalResult::Return(v) => {
+                                catch_return = Some(v);
+                                break;
+                            }
+                            EvalResult::Throw(v) => {
+                                catch_throw = Some(v);
+                                break;
+                            }
+                            EvalResult::Error => {
+                                catch_error = true;
+                                break;
+                            }
+                            EvalResult::Break => {
+                                catch_break = true;
+                                break;
+                            }
+                            EvalResult::Continue => {
+                                catch_continue = true;
+                                break;
+                            }
+                            EvalResult::BreakLabel(l) => {
+                                catch_break_label = Some(l);
+                                break;
+                            }
+                            EvalResult::ContinueLabel(l) => {
+                                catch_continue_label = Some(l);
+                                break;
+                            }
                         }
                     }
                     // Extract BEFORE pop so refs remain valid
                     let primary = catch_return.or(catch_throw).unwrap_or(catch_val);
                     let owned = self.extract(primary);
                     self.scopes.pop();
-                    if catch_error             { EvalResult::Error }
-                    else if catch_break        { EvalResult::Break }
-                    else if catch_continue     { EvalResult::Continue }
-                    else if let Some(l) = catch_break_label    { EvalResult::BreakLabel(l) }
-                    else if let Some(l) = catch_continue_label { EvalResult::ContinueLabel(l) }
-                    else if catch_return.is_some() { EvalResult::Return(self.plant(owned)) }
-                    else if catch_throw.is_some()  { EvalResult::Throw(self.plant(owned)) }
-                    else                           { EvalResult::Value(self.plant(owned)) }
+                    if catch_error {
+                        EvalResult::Error
+                    } else if catch_break {
+                        EvalResult::Break
+                    } else if catch_continue {
+                        EvalResult::Continue
+                    } else if let Some(l) = catch_break_label {
+                        EvalResult::BreakLabel(l)
+                    } else if let Some(l) = catch_continue_label {
+                        EvalResult::ContinueLabel(l)
+                    } else if catch_return.is_some() {
+                        EvalResult::Return(self.plant(owned))
+                    } else if catch_throw.is_some() {
+                        EvalResult::Throw(self.plant(owned))
+                    } else {
+                        EvalResult::Value(self.plant(owned))
+                    }
                 } else {
                     EvalResult::Throw(thrown_ref) // no catch — re-throw after finally
                 }
@@ -181,9 +282,9 @@ impl super::Evaluator {
         // finally always runs — throw/return/error from it override the try/catch result
         if let Some(ref finally_block) = try_stmt.finally_body {
             match self.eval_block(finally_block) {
-                EvalResult::Throw(v)  => return EvalResult::Throw(v),
+                EvalResult::Throw(v) => return EvalResult::Throw(v),
                 EvalResult::Return(v) => return EvalResult::Return(v),
-                EvalResult::Error     => return EvalResult::Error,
+                EvalResult::Error => return EvalResult::Error,
                 _ => {} // Value / Break / Continue — preserve result_after_catch
             }
         }

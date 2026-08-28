@@ -1,14 +1,15 @@
 #![allow(unused_imports)]
+use super::{
+    CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
+    obj_data_eq, obj_data_to_key_str, operator_to_method_name, owned_to_obj_data, type_matches,
+};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
+use crate::region::{SET_INDEX_MIN, SetIndex, set_key_str};
 use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::rc::Rc;
-use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str,
-            obj_data_eq, format_decimal, json_stringify_owned, json_parse,
-            operator_to_method_name, owned_to_obj_data};
-use crate::region::{set_key_str, SetIndex, SET_INDEX_MIN};
 
 impl super::Evaluator {
     pub(super) fn eval_new_set(&mut self, new_expr: &ast::NewExpression) -> EvalResult {
@@ -22,7 +23,11 @@ impl super::Evaluator {
                 EvalResult::Value(r) => r,
                 _ => return EvalResult::Error,
             };
-            if let Some(ObjectData::Array { elements: arr_elems, .. }) = self.resolve(arr_ref).cloned() {
+            if let Some(ObjectData::Array {
+                elements: arr_elems,
+                ..
+            }) = self.resolve(arr_ref).cloned()
+            {
                 // Hash-based dedup: O(N) instead of the old O(N²) pairwise scan.
                 // Elements without a fingerprint can never equal anything under
                 // obj_data_eq (compounds), so they are pushed unconditionally —
@@ -40,21 +45,31 @@ impl super::Evaluator {
                 }
             }
         }
-        EvalResult::Value(self.alloc(ObjectData::Set { elements, index: Default::default() }))
+        EvalResult::Value(self.alloc(ObjectData::Set {
+            elements,
+            index: Default::default(),
+        }))
     }
 
     /// True when the set contains `vd`, honouring obj_data_eq semantics.
     /// Scalar probe on a big set → O(1) via the slot-resident index; small set
     /// or fingerprint-less probe → linear scan (same behavior as always).
-    fn set_contains(elements: &[OwnedValue], index: &SetIndex, vd: &OwnedValue, key: Option<&str>) -> bool {
+    fn set_contains(
+        elements: &[OwnedValue],
+        index: &SetIndex,
+        vd: &OwnedValue,
+        key: Option<&str>,
+    ) -> bool {
         match key {
             Some(k) if elements.len() >= SET_INDEX_MIN => index.lookup(elements, k).is_some(),
-            Some(k) => elements.iter().any(|e| set_key_str(e).as_deref() == Some(k)),
+            Some(k) => elements
+                .iter()
+                .any(|e| set_key_str(e).as_deref() == Some(k)),
             // No fingerprint = compound value: obj_data_eq never matches those,
             // but keep the authoritative scan in case its semantics ever widen.
-            None => elements.iter().any(|e| {
-                obj_data_eq(&Some(owned_to_obj_data(e)), &Some(owned_to_obj_data(vd)))
-            }),
+            None => elements
+                .iter()
+                .any(|e| obj_data_eq(&Some(owned_to_obj_data(e)), &Some(owned_to_obj_data(vd)))),
         }
     }
 
@@ -62,7 +77,11 @@ impl super::Evaluator {
     /// clones the receiver: every method runs against the arena slot, so even
     /// `.size()` on a 20k-element set no longer pays an O(N) copy, mutations
     /// happen in place (no whole-slot rewrite), and the hash index stays warm.
-    pub(super) fn eval_set_method_slot(&mut self, set_ref: ObjectRef, dot_call: &ast::DotCallExpression) -> EvalResult {
+    pub(super) fn eval_set_method_slot(
+        &mut self,
+        set_ref: ObjectRef,
+        dot_call: &ast::DotCallExpression,
+    ) -> EvalResult {
         match dot_call.method.as_str() {
             "size" => {
                 let n = match self.resolve(set_ref) {
@@ -77,7 +96,10 @@ impl super::Evaluator {
                     Some(ObjectData::Set { elements, .. }) => elements.clone(),
                     _ => Vec::new(),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array { element_type: None, elements: items }))
+                EvalResult::Value(self.alloc(ObjectData::Array {
+                    element_type: None,
+                    elements: items,
+                }))
             }
 
             "has" | "contains" => {
@@ -142,12 +164,16 @@ impl super::Evaluator {
                     RegionId::Global => &mut self.global_arena,
                     RegionId::Scoped => &mut self.scopes.arena,
                 };
-                let removed = if let Some(ObjectData::Set { elements, index }) = arena.get_mut(set_ref.index) {
+                let removed = if let Some(ObjectData::Set { elements, index }) =
+                    arena.get_mut(set_ref.index)
+                {
                     // At most one occurrence can match: scalars are deduped on
                     // insert and compounds never match under obj_data_eq.
                     let pos = match key.as_deref() {
                         Some(k) if elements.len() >= SET_INDEX_MIN => index.lookup(elements, k),
-                        Some(k) => elements.iter().position(|e| set_key_str(e).as_deref() == Some(k)),
+                        Some(k) => elements
+                            .iter()
+                            .position(|e| set_key_str(e).as_deref() == Some(k)),
                         None => elements.iter().position(|e| {
                             obj_data_eq(&Some(owned_to_obj_data(e)), &Some(owned_to_obj_data(&vd)))
                         }),
@@ -156,10 +182,15 @@ impl super::Evaluator {
                         // Vec::remove keeps insertion order (observable via toArray);
                         // the length change invalidates the index stamp — it rebuilds
                         // on the next lookup.
-                        Some(p) => { elements.remove(p); true }
+                        Some(p) => {
+                            elements.remove(p);
+                            true
+                        }
                         None => false,
                     }
-                } else { false };
+                } else {
+                    false
+                };
                 EvalResult::Value(self.alloc(ObjectData::Boolean(removed)))
             }
 
@@ -193,7 +224,8 @@ impl super::Evaluator {
                 // equates them, which is what the old pairwise scan concluded.
                 let (mut result, mut seen) = match self.resolve(set_ref) {
                     Some(ObjectData::Set { elements, .. }) => {
-                        let seen: HashSet<String> = elements.iter().filter_map(set_key_str).collect();
+                        let seen: HashSet<String> =
+                            elements.iter().filter_map(set_key_str).collect();
                         (elements.clone(), seen)
                     }
                     _ => return EvalResult::Error,
@@ -208,12 +240,16 @@ impl super::Evaluator {
                         None => result.push(elem),
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Set { elements: result, index: Default::default() }))
+                EvalResult::Value(self.alloc(ObjectData::Set {
+                    elements: result,
+                    index: Default::default(),
+                }))
             }
 
             "intersection" => {
                 if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind("TypeError", "Set.intersection(other) requires 1 argument");
+                    return self
+                        .rt_err_kind("TypeError", "Set.intersection(other) requires 1 argument");
                 }
                 let or = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
@@ -224,7 +260,10 @@ impl super::Evaluator {
                     Some(ObjectData::Set { elements, .. }) => {
                         elements.iter().filter_map(set_key_str).collect()
                     }
-                    _ => return self.rt_err_kind("TypeError", "Set.intersection requires a Set argument"),
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", "Set.intersection requires a Set argument");
+                    }
                 };
                 let self_elems: Vec<OwnedValue> = match self.resolve(set_ref) {
                     Some(ObjectData::Set { elements, .. }) => elements.clone(),
@@ -233,10 +272,14 @@ impl super::Evaluator {
                 // O(N+M). Fingerprint-less elements are dropped: obj_data_eq
                 // can never match a compound against anything in `other`, which
                 // is exactly what the old O(N×M) scan concluded for them.
-                let result: Vec<OwnedValue> = self_elems.into_iter()
+                let result: Vec<OwnedValue> = self_elems
+                    .into_iter()
                     .filter(|e| set_key_str(e).map_or(false, |k| other_keys.contains(&k)))
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Set { elements: result, index: Default::default() }))
+                EvalResult::Value(self.alloc(ObjectData::Set {
+                    elements: result,
+                    index: Default::default(),
+                }))
             }
 
             "toString" => {

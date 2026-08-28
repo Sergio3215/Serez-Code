@@ -1,97 +1,218 @@
+use super::{EvalResult, ProgramOutcome};
 use crate::ast;
 use crate::region::ObjectData;
-use super::EvalResult;
-use std::sync::{Mutex, OnceLock};
 use std::collections::HashMap;
+use std::io::Read;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+pub(crate) const MAX_CONCURRENT_TASKS: usize = 32;
+pub(crate) const MAX_TASK_RECORDS: usize = 256;
+pub(crate) const MAX_TASK_MESSAGE_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_TASK_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
-pub(crate) enum TaskState {
-    Running,
+enum TaskState {
+    Running { reply: Option<String> },
     Finished { result: String },
     Failed { error: String },
 }
 
-pub(crate) static TASK_REGISTRY: OnceLock<Mutex<HashMap<i64, TaskState>>> = OnceLock::new();
-static NEXT_TASK_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
+/// Runtime service shared by a top-level evaluator and its worker descendants.
+///
+/// It deliberately is not process-global: task IDs and replies from one embedder
+/// must not be observable by another evaluator in the same host process.
+pub(crate) struct TaskRuntime {
+    registry: Mutex<HashMap<i64, TaskState>>,
+    next_id: AtomicI64,
+}
 
-fn registry() -> &'static Mutex<HashMap<i64, TaskState>> {
-    TASK_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+impl Default for TaskRuntime {
+    fn default() -> Self {
+        Self {
+            registry: Mutex::new(HashMap::new()),
+            next_id: AtomicI64::new(1),
+        }
+    }
+}
+
+impl TaskRuntime {
+    fn lock_registry(&self) -> MutexGuard<'_, HashMap<i64, TaskState>> {
+        // No user evaluation runs while this lock is held, so recovering the
+        // structurally valid map is safer than turning poison into a host panic.
+        self.registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn allocate_id(&self) -> Option<i64> {
+        self.next_id
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| id.checked_add(1))
+            .ok()
+    }
+}
+
+fn running_count(registry: &HashMap<i64, TaskState>) -> usize {
+    registry
+        .values()
+        .filter(|state| matches!(state, TaskState::Running { .. }))
+        .count()
+}
+
+fn evict_oldest_terminal_if_full(registry: &mut HashMap<i64, TaskState>) {
+    if registry.len() < MAX_TASK_RECORDS {
+        return;
+    }
+    let oldest_terminal = registry
+        .iter()
+        .filter(|(_, state)| !matches!(state, TaskState::Running { .. }))
+        .map(|(id, _)| *id)
+        .min();
+    if let Some(id) = oldest_terminal {
+        registry.remove(&id);
+    }
+}
+
+fn worker_outcome(outcome: ProgramOutcome) -> Result<(), String> {
+    match outcome {
+        ProgramOutcome::Value(_) => Ok(()),
+        ProgramOutcome::RuntimeError(error) => Err(format!(
+            "[{}] {}: {}",
+            error.code, error.kind, error.message
+        )),
+        ProgramOutcome::UncaughtException { message } => {
+            Err(format!("Uncaught exception: {}", message))
+        }
+        ProgramOutcome::InvalidControlFlow(flow) => {
+            Err(format!("Invalid top-level control flow: {:?}", flow))
+        }
+        ProgramOutcome::UnstructuredError => Err("Unstructured runtime failure".to_string()),
+    }
+}
+
+fn bounded_worker_error(error: String) -> String {
+    if error.len() <= MAX_TASK_MESSAGE_BYTES {
+        error
+    } else {
+        format!(
+            "[SZ6002] ResourceError: Task worker error exceeds the {} MiB message limit",
+            MAX_TASK_MESSAGE_BYTES / (1024 * 1024)
+        )
+    }
 }
 
 impl super::Evaluator {
     pub(super) fn eval_task_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
-        // En Serez el namespace es "Task"
-        if !self.permissions.contains("Task") {
-            eprintln!(
-                "❌ ERROR: 'Task' requires permission 'Task' — declare it in serez.json \
-                 (\"permissions\": [\"Task\", ...]) or with `use permissions {{ Task }}`"
-            );
-            return EvalResult::Error;
+        if let Some(error) = self.require_permission("Task", "Task") {
+            return error;
         }
 
         match dot_call.method.as_str() {
             "run" => {
-                // Task.run(script_path, arg_string) -> int (taskId)
                 if dot_call.arguments.len() != 2 {
-                    eprintln!("❌ ERROR: Task.run(script_path, arg_string) requires 2 arguments");
-                    return EvalResult::Error;
+                    return self.rt_err_kind(
+                        "TypeError",
+                        "Task.run(script_path, arg_string) requires 2 arguments",
+                    );
                 }
+
                 let path_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    _ => return EvalResult::Error,
+                    EvalResult::Value(value) => value,
+                    other => return other,
                 };
-                let arg_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(v) => v,
-                    _ => return EvalResult::Error,
-                };
-
                 let script_path = match self.resolve(path_ref).cloned() {
-                    Some(ObjectData::Str(s)) => s,
+                    Some(ObjectData::Str(path)) => path,
                     _ => {
-                        eprintln!("❌ ERROR: Task.run: script_path must be a string");
-                        return EvalResult::Error;
+                        return self
+                            .rt_err_kind("TypeError", "Task.run: script_path must be a string");
                     }
                 };
 
+                let arg_ref = match self.eval_expression(&dot_call.arguments[1]) {
+                    EvalResult::Value(value) => value,
+                    other => return other,
+                };
                 let arg_string = match self.resolve(arg_ref).cloned() {
-                    Some(ObjectData::Str(s)) => s,
+                    Some(ObjectData::Str(arg)) => arg,
                     _ => {
-                        eprintln!("❌ ERROR: Task.run: arg_string must be a string");
-                        return EvalResult::Error;
+                        return self
+                            .rt_err_kind("TypeError", "Task.run: arg_string must be a string");
                     }
                 };
 
-                // Obtener un nuevo ID de tarea
-                let task_id = NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-                // Insertar en el registro como Running
-                {
-                    let mut reg = registry().lock().unwrap();
-                    reg.insert(task_id, TaskState::Running);
+                if arg_string.len() > MAX_TASK_MESSAGE_BYTES {
+                    return self.fatal_err_kind(
+                        "ResourceError",
+                        format!(
+                            "Task.run argument exceeds the {} MiB message limit",
+                            MAX_TASK_MESSAGE_BYTES / (1024 * 1024)
+                        ),
+                    );
                 }
 
-                // Lanzar el hilo en segundo plano
-                let script_path_clone = script_path.clone();
-                let arg_string_clone = arg_string.clone();
-                
+                let runtime = Arc::clone(&self.task_runtime);
+                let task_id = {
+                    let mut reg = runtime.lock_registry();
+                    if running_count(&reg) >= MAX_CONCURRENT_TASKS {
+                        drop(reg);
+                        return self.fatal_err_kind(
+                            "ResourceError",
+                            format!(
+                                "Task.run reached the limit of {} concurrent workers",
+                                MAX_CONCURRENT_TASKS
+                            ),
+                        );
+                    }
+                    evict_oldest_terminal_if_full(&mut reg);
+                    let Some(task_id) = runtime.allocate_id() else {
+                        drop(reg);
+                        return self.fatal_err_kind(
+                            "ResourceError",
+                            "Task ID space is exhausted for this runtime",
+                        );
+                    };
+                    reg.insert(task_id, TaskState::Running { reply: None });
+                    task_id
+                };
+
+                let worker_lockdown = self.lockdown;
+                let inherited_permissions: Vec<String> = if worker_lockdown {
+                    self.permissions.iter().cloned().collect()
+                } else {
+                    Vec::new()
+                };
+                let worker_runtime = Arc::clone(&runtime);
+                let worker_path = script_path.clone();
+                let worker_arg = arg_string.clone();
+
                 let builder = std::thread::Builder::new()
                     .name(format!("task-worker-{}", task_id))
-                    .stack_size(16 * 1024 * 1024); // 16 MB para sub-tareas
-                
+                    .stack_size(16 * 1024 * 1024);
+
                 let handle_res = builder.spawn(move || {
                     let run_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        // Cargar y evaluar el script
-                        let input = match std::fs::read_to_string(&script_path_clone) {
-                            Ok(content) => content,
-                            Err(e) => return Err(format!("Error reading file '{}': {}", script_path_clone, e)),
-                        };
+                        let file = std::fs::File::open(&worker_path).map_err(|error| {
+                            format!("Error reading file '{}': {}", worker_path, error)
+                        })?;
+                        let mut input = String::new();
+                        file.take((MAX_TASK_SOURCE_BYTES + 1) as u64)
+                            .read_to_string(&mut input)
+                            .map_err(|error| {
+                                format!("Error reading file '{}': {}", worker_path, error)
+                            })?;
+                        if input.len() > MAX_TASK_SOURCE_BYTES {
+                            return Err(format!(
+                                "[SZ6002] ResourceError: Task worker source exceeds {} MiB",
+                                MAX_TASK_SOURCE_BYTES / (1024 * 1024)
+                            ));
+                        }
 
-                        let source_lines: Vec<String> = input.lines().map(|l| l.to_string()).collect();
+                        let source_lines: Vec<String> = input.lines().map(str::to_string).collect();
                         let lexer = crate::lexer::Lexer::new(input);
                         let mut parser = crate::parser::Parser::new(lexer);
                         parser.set_source(source_lines.clone());
+                        parser.set_source_name(&worker_path);
                         let program = parser.parse_program();
-
                         if parser.has_errors() {
                             return Err("Syntax/Parsing error in worker script".to_string());
                         }
@@ -101,83 +222,100 @@ impl super::Evaluator {
 
                         let mut evaluator = crate::evaluator::Evaluator::new();
                         evaluator.set_source(source_lines);
-                        evaluator.set_task_context(task_id, arg_string_clone);
-                        
-                        // Heredar el archivo actual
-                        let file_path_obj = std::path::Path::new(&script_path_clone);
-                        evaluator.set_current_file(file_path_obj);
+                        evaluator.set_task_runtime_context(
+                            task_id,
+                            worker_arg,
+                            Arc::clone(&worker_runtime),
+                        );
+                        let file_path = std::path::Path::new(&worker_path);
+                        evaluator.set_current_file(file_path);
 
-                        // Cargar permisos locales si existen (de serez.json)
-                        if let Some(dir) = file_path_obj.parent() {
-                            let dir = if dir == std::path::Path::new("") { std::path::Path::new(".") } else { dir };
+                        if worker_lockdown {
+                            evaluator.set_permissions(inherited_permissions);
+                            evaluator.set_lockdown(true);
+                        } else if let Some(dir) = file_path.parent() {
+                            let dir = if dir == std::path::Path::new("") {
+                                std::path::Path::new(".")
+                            } else {
+                                dir
+                            };
                             if let Ok(manifest) = crate::package_manager::SerezManifest::load(dir) {
                                 evaluator.set_permissions(manifest.permissions);
                             }
                         }
-                        
-                        match evaluator.eval_program(&program) {
-                            Some(_) => Ok(()),
-                            None => Err("Runtime execution failed".to_string()),
-                        }
+
+                        worker_outcome(evaluator.eval_program_outcome(&program))
                     }));
 
-                    let mut reg = registry().lock().unwrap();
-                    if let Some(TaskState::Running) = reg.get(&task_id) {
-                        match run_res {
-                            Ok(Ok(())) => {
-                                reg.insert(task_id, TaskState::Finished { result: "".to_string() });
-                            }
-                            Ok(Err(err_msg)) => {
-                                reg.insert(task_id, TaskState::Failed { error: err_msg });
-                            }
-                            Err(_) => {
-                                reg.insert(task_id, TaskState::Failed { error: "Worker thread panicked".to_string() });
-                            }
-                        }
-                    }
+                    let mut reg = worker_runtime.lock_registry();
+                    let reply = match reg.get(&task_id) {
+                        Some(TaskState::Running { reply }) => reply.clone(),
+                        _ => None,
+                    };
+                    let final_state = match run_res {
+                        Ok(Ok(())) => TaskState::Finished {
+                            result: reply.unwrap_or_default(),
+                        },
+                        Ok(Err(error)) => TaskState::Failed {
+                            error: bounded_worker_error(error),
+                        },
+                        Err(_) => TaskState::Failed {
+                            error: "Worker thread panicked".to_string(),
+                        },
+                    };
+                    reg.insert(task_id, final_state);
                 });
 
-                if handle_res.is_err() {
-                    eprintln!("❌ ERROR: Task.run: failed to spawn thread");
-                    let mut reg = registry().lock().unwrap();
-                    reg.insert(task_id, TaskState::Failed { error: "Thread spawn failed".to_string() });
-                    return EvalResult::Error;
+                if let Err(error) = handle_res {
+                    runtime.lock_registry().remove(&task_id);
+                    return self.fatal_err_kind(
+                        "ResourceError",
+                        format!("Task.run failed to spawn a worker thread: {}", error),
+                    );
                 }
 
                 EvalResult::Value(self.int_ref(task_id))
             }
 
             "message" => {
-                // Task.message() -> string
-                if dot_call.arguments.len() != 0 {
-                    eprintln!("❌ ERROR: Task.message() requires 0 arguments");
-                    return EvalResult::Error;
+                if !dot_call.arguments.is_empty() {
+                    return self.rt_err_kind("TypeError", "Task.message() requires 0 arguments");
                 }
-                let msg = self.task_arg.clone().unwrap_or_default();
-                EvalResult::Value(self.alloc(ObjectData::Str(msg)))
+                let message = self.task_arg.clone().unwrap_or_default();
+                EvalResult::Value(self.alloc(ObjectData::Str(message)))
             }
 
             "reply" => {
-                // Task.reply(result_string)
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Task.reply(result_string) requires 1 argument");
-                    return EvalResult::Error;
+                    return self
+                        .rt_err_kind("TypeError", "Task.reply(result_string) requires 1 argument");
                 }
                 let result_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    _ => return EvalResult::Error,
+                    EvalResult::Value(value) => value,
+                    other => return other,
                 };
-                let result_str = match self.resolve(result_ref).cloned() {
-                    Some(ObjectData::Str(s)) => s,
+                let result = match self.resolve(result_ref).cloned() {
+                    Some(ObjectData::Str(result)) => result,
                     _ => {
-                        eprintln!("❌ ERROR: Task.reply result must be a string");
-                        return EvalResult::Error;
+                        return self.rt_err_kind("TypeError", "Task.reply result must be a string");
                     }
                 };
+                if result.len() > MAX_TASK_MESSAGE_BYTES {
+                    return self.fatal_err_kind(
+                        "ResourceError",
+                        format!(
+                            "Task.reply result exceeds the {} MiB message limit",
+                            MAX_TASK_MESSAGE_BYTES / (1024 * 1024)
+                        ),
+                    );
+                }
 
                 if let Some(task_id) = self.task_id {
-                    let mut reg = registry().lock().unwrap();
-                    reg.insert(task_id, TaskState::Finished { result: result_str });
+                    let runtime = Arc::clone(&self.task_runtime);
+                    let mut reg = runtime.lock_registry();
+                    if let Some(TaskState::Running { reply }) = reg.get_mut(&task_id) {
+                        *reply = Some(result);
+                    }
                 } else {
                     eprintln!("⚠️ WARNING: Task.reply called outside of a background task");
                 }
@@ -185,70 +323,196 @@ impl super::Evaluator {
             }
 
             "poll" => {
-                // Task.poll(taskId) -> string | null
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Task.poll(taskId) requires 1 argument");
-                    return EvalResult::Error;
+                    return self.rt_err_kind("TypeError", "Task.poll(taskId) requires 1 argument");
                 }
                 let id_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    _ => return EvalResult::Error,
+                    EvalResult::Value(value) => value,
+                    other => return other,
                 };
                 let task_id = match self.resolve(id_ref).cloned() {
                     Some(ObjectData::Integer(id)) => id,
                     _ => {
-                        eprintln!("❌ ERROR: Task.poll: taskId must be an integer");
-                        return EvalResult::Error;
+                        return self
+                            .rt_err_kind("TypeError", "Task.poll: taskId must be an integer");
                     }
                 };
 
-                let reg = registry().lock().unwrap();
+                let runtime = Arc::clone(&self.task_runtime);
+                let reg = runtime.lock_registry();
                 match reg.get(&task_id) {
-                    Some(TaskState::Running) => EvalResult::Value(self.null_ref),
+                    Some(TaskState::Running { .. }) => EvalResult::Value(self.null_ref),
                     Some(TaskState::Finished { result }) => {
                         EvalResult::Value(self.alloc(ObjectData::Str(result.clone())))
                     }
                     Some(TaskState::Failed { error }) => {
-                        eprintln!("❌ ERROR: Task {} failed: {}", task_id, error);
                         EvalResult::Value(self.alloc(ObjectData::Str(format!("ERROR: {}", error))))
                     }
                     None => {
-                        eprintln!("❌ ERROR: Task.poll: task {} not found", task_id);
-                        EvalResult::Error
+                        drop(reg);
+                        self.rt_err_kind(
+                            "ReferenceError",
+                            format!("Task.poll: task {} not found", task_id),
+                        )
                     }
                 }
             }
 
             "isDone" => {
-                // Task.isDone(taskId) -> bool
                 if dot_call.arguments.len() != 1 {
-                    eprintln!("❌ ERROR: Task.isDone(taskId) requires 1 argument");
-                    return EvalResult::Error;
+                    return self
+                        .rt_err_kind("TypeError", "Task.isDone(taskId) requires 1 argument");
                 }
                 let id_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    _ => return EvalResult::Error,
+                    EvalResult::Value(value) => value,
+                    other => return other,
                 };
                 let task_id = match self.resolve(id_ref).cloned() {
                     Some(ObjectData::Integer(id)) => id,
                     _ => {
-                        eprintln!("❌ ERROR: Task.isDone: taskId must be an integer");
-                        return EvalResult::Error;
+                        return self
+                            .rt_err_kind("TypeError", "Task.isDone: taskId must be an integer");
                     }
                 };
 
-                let reg = registry().lock().unwrap();
+                let runtime = Arc::clone(&self.task_runtime);
+                let reg = runtime.lock_registry();
                 let done = match reg.get(&task_id) {
-                    Some(TaskState::Running) => false,
-                    _ => true,
+                    Some(TaskState::Running { .. }) => false,
+                    Some(TaskState::Finished { .. } | TaskState::Failed { .. }) => true,
+                    None => {
+                        drop(reg);
+                        return self.rt_err_kind(
+                            "ReferenceError",
+                            format!("Task.isDone: task {} not found", task_id),
+                        );
+                    }
                 };
                 EvalResult::Value(if done { self.true_ref } else { self.false_ref })
             }
 
-            _ => {
-                eprintln!("❌ ERROR: Unknown Task method '{}'", dot_call.method);
-                EvalResult::Error
+            method => self.rt_err_kind(
+                "ReferenceError",
+                format!("Unknown Task method '{}'", method),
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn poisoned_registry_is_recovered_without_panicking() {
+        let runtime = Arc::new(TaskRuntime::default());
+        let worker_runtime = Arc::clone(&runtime);
+        let _ = std::thread::spawn(move || {
+            let _guard = worker_runtime.registry.lock().unwrap();
+            panic!("poison task registry for regression coverage");
+        })
+        .join();
+
+        assert!(runtime.registry.is_poisoned());
+        runtime
+            .lock_registry()
+            .insert(1, TaskState::Running { reply: None });
+        assert_eq!(running_count(&runtime.lock_registry()), 1);
+    }
+
+    #[test]
+    fn evaluator_task_runtimes_are_observably_isolated() {
+        let first = super::super::Evaluator::new();
+        let mut second = super::super::Evaluator::new();
+        assert!(!Arc::ptr_eq(&first.task_runtime, &second.task_runtime));
+
+        first.task_runtime.lock_registry().insert(
+            1,
+            TaskState::Finished {
+                result: "private-result".to_string(),
+            },
+        );
+        second.set_permissions(vec!["Task".to_string()]);
+        let lexer = crate::lexer::Lexer::new("Task.poll(1);".to_string());
+        let mut parser = crate::parser::Parser::new(lexer);
+        let program = parser.parse_program();
+        assert!(!parser.has_errors());
+        match second.eval_program_outcome(&program) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4001");
+                assert_eq!(error.kind, "ReferenceError");
             }
+            other => panic!("second evaluator observed first task: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn concurrent_limit_counts_only_live_workers() {
+        let mut registry = HashMap::new();
+        for id in 0..MAX_CONCURRENT_TASKS as i64 {
+            registry.insert(id, TaskState::Running { reply: None });
+        }
+        registry.insert(
+            100,
+            TaskState::Finished {
+                result: String::new(),
+            },
+        );
+        registry.insert(
+            101,
+            TaskState::Failed {
+                error: String::new(),
+            },
+        );
+        assert_eq!(running_count(&registry), MAX_CONCURRENT_TASKS);
+    }
+
+    #[test]
+    fn record_limit_evicts_only_the_oldest_terminal_task() {
+        let mut registry = HashMap::new();
+        registry.insert(0, TaskState::Running { reply: None });
+        for id in 1..MAX_TASK_RECORDS as i64 {
+            registry.insert(
+                id,
+                TaskState::Finished {
+                    result: String::new(),
+                },
+            );
+        }
+
+        evict_oldest_terminal_if_full(&mut registry);
+
+        assert_eq!(registry.len(), MAX_TASK_RECORDS - 1);
+        assert!(registry.contains_key(&0));
+        assert!(!registry.contains_key(&1));
+    }
+
+    #[test]
+    fn concurrent_limit_returns_a_fatal_resource_error_without_spawning() {
+        let src = r#"
+            try { Task.run("unused.sz", ""); }
+            catch (_) { throw "resource limit became catchable"; }
+        "#;
+        let lexer = crate::lexer::Lexer::new(src.to_string());
+        let mut parser = crate::parser::Parser::new(lexer);
+        let program = parser.parse_program();
+        assert!(!parser.has_errors());
+
+        let mut evaluator = super::super::Evaluator::new();
+        evaluator.set_permissions(vec!["Task".to_string()]);
+        {
+            let mut registry = evaluator.task_runtime.lock_registry();
+            for id in 0..MAX_CONCURRENT_TASKS as i64 {
+                registry.insert(id, TaskState::Running { reply: None });
+            }
+        }
+
+        match evaluator.eval_program_outcome(&program) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ6002");
+                assert_eq!(error.kind, "ResourceError");
+            }
+            other => panic!("expected fatal Task resource error, got {other:?}"),
         }
     }
 }

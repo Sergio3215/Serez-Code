@@ -69,8 +69,8 @@ test("abstract class: concrete subclass overrides and works", () => {
         public Car() {}
         public string move() { return "driving"; }
     }
-    // Instantiating Vehicle directly is a non-catchable runtime error by design;
-    // that path is covered by sec_abstract_instantiate.
+    // Instantiating Vehicle directly is catchable TypeError/SZ4002; that path
+    // is covered by unit_catchable_core and sec_abstract_instantiate.
     let c = new Car();
     assert(c.move() == "driving", "concrete subclass works");
 });
@@ -100,8 +100,8 @@ test("sealed class can be instantiated (inheritance is blocked)", () => {
         public Final() {}
         public string name() { return "Final"; }
     }
-    // Inheriting from a sealed class is a non-catchable runtime error by design;
-    // that path is covered by sec_sealed_inherit.
+    // Inheriting from a sealed class is catchable TypeError/SZ4002; that path is
+    // covered by unit_inheritance_errors and sec_sealed_inherit.
     let f = new Final();
     assert(f.name() == "Final", "sealed class instantiation works");
 });
@@ -143,8 +143,8 @@ test("getter-only property: read works (write is blocked)", () => {
         public get int value() { return this._n; }
     }
     let r = new ReadOnly(42);
-    // Writing a getter-only property is a non-catchable runtime error by design;
-    // that path is covered by sec_getter_no_setter.
+    // Writing a getter-only property is catchable TypeError/SZ4002; the complete
+    // path is covered by unit_property_dispatch_errors and sec_getter_no_setter.
     assert(r.value == 42, "getter works");
 });
 

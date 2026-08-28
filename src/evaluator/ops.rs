@@ -1,13 +1,14 @@
 #![allow(unused_imports)]
+use super::{
+    CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
+    obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
+};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::rc::Rc;
-use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str,
-            obj_data_eq, format_decimal, json_stringify_owned, json_parse,
-            operator_to_method_name};
 
 // How an instance renders when concatenated with a string (`"x" + obj`). The
 // built-in Error object (bound in `catch (e)`) renders as its `message`, so the
@@ -19,20 +20,28 @@ fn instance_concat_str(class_name: &str, fields: &[(String, OwnedValue)]) -> Str
             return v.display_str();
         }
     }
-    let parts: Vec<String> = fields.iter().map(|(k, v)| format!("{}: {}", k, v.display_str())).collect();
+    let parts: Vec<String> = fields
+        .iter()
+        .map(|(k, v)| format!("{}: {}", k, v.display_str()))
+        .collect();
     format!("{}{{ {} }}", class_name, parts.join(", "))
 }
 
 impl super::Evaluator {
-    pub(super) fn eval_prefix(&mut self, op: &str, right_ref: ObjectRef, right: ObjectData) -> EvalResult {
+    pub(super) fn eval_prefix(
+        &mut self,
+        op: &str,
+        right_ref: ObjectRef,
+        right: ObjectData,
+    ) -> EvalResult {
         match op {
             "-" => match right {
                 ObjectData::Integer(i) => match i.checked_neg() {
                     Some(v) => EvalResult::Value(self.alloc(ObjectData::Integer(v))),
-                    None => {
-                        eprintln!("❌ ERROR: Integer overflow in negation (i64::MIN has no positive counterpart)");
-                        EvalResult::Error
-                    }
+                    None => self.rt_err_kind(
+                        "Overflow",
+                        "Integer overflow in negation (i64::MIN has no positive counterpart)",
+                    ),
                 },
                 ObjectData::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(-d))),
                 ObjectData::Dec(d) => EvalResult::Value(self.alloc(ObjectData::Dec(-d))),
@@ -41,14 +50,13 @@ impl super::Evaluator {
                     if self.find_method(&cn, "op_neg").is_some() {
                         self.call_op_method(right_ref, &cn, "op_neg", vec![], 0, 0)
                     } else {
-                        eprintln!("❌ ERROR: Prefix '-' not supported for this type (define op_neg to enable it)");
-                        EvalResult::Error
+                        self.rt_err_kind(
+                            "TypeError",
+                            "Prefix '-' not supported for this type (define op_neg to enable it)",
+                        )
                     }
                 }
-                _ => {
-                    eprintln!("❌ ERROR: Prefix '-' not supported for this type");
-                    EvalResult::Error
-                }
+                _ => self.rt_err_kind("TypeError", "Prefix '-' not supported for this type"),
             },
             // `!` niega la regla ÚNICA de truthiness (`is_truthy`), la misma que
             // usan `&&`, `||`, el ternario y las guardas de `match`. Antes exigía
@@ -63,7 +71,9 @@ impl super::Evaluator {
             // la regla general (donde una instancia es truthy → `!inst` es false).
             "!" => match right {
                 ObjectData::Boolean(b) => EvalResult::Value(self.bool_ref(!b)),
-                ObjectData::Instance { ref class_name, .. } if self.find_method(class_name, "op_not").is_some() => {
+                ObjectData::Instance { ref class_name, .. }
+                    if self.find_method(class_name, "op_not").is_some() =>
+                {
                     let cn = class_name.clone();
                     self.call_op_method(right_ref, &cn, "op_not", vec![], 0, 0)
                 }
@@ -74,12 +84,9 @@ impl super::Evaluator {
             },
             "~" => match right {
                 ObjectData::Integer(i) => EvalResult::Value(self.alloc(ObjectData::Integer(!i))),
-                _ => {
-                    eprintln!("❌ ERROR: Prefix '~' only applies to integers");
-                    EvalResult::Error
-                }
+                _ => self.rt_err_kind("TypeError", "Prefix '~' only applies to integers"),
             },
-            _ => EvalResult::Error,
+            _ => self.rt_err_kind("TypeError", format!("Unknown prefix operator: {op}")),
         }
     }
 
@@ -87,11 +94,18 @@ impl super::Evaluator {
     // ignored: 1.50m == 1.5m). Arithmetic is checked (overflow → ❌, like int);
     // `/` rounds to 28 significant digits half-even (rust_decimal default);
     // `**` requires a non-negative integer exponent.
-    pub(super) fn dec_binop(&mut self, op: &str, l: rust_decimal::Decimal, r: rust_decimal::Decimal, line: usize, column: usize) -> EvalResult {
+    pub(super) fn dec_binop(
+        &mut self,
+        op: &str,
+        l: rust_decimal::Decimal,
+        r: rust_decimal::Decimal,
+        line: usize,
+        column: usize,
+    ) -> EvalResult {
         use rust_decimal::prelude::*;
         match op {
-            "<"  => return EvalResult::Value(self.bool_ref(l < r)),
-            ">"  => return EvalResult::Value(self.bool_ref(l > r)),
+            "<" => return EvalResult::Value(self.bool_ref(l < r)),
+            ">" => return EvalResult::Value(self.bool_ref(l > r)),
             "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
             ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
             "==" => return EvalResult::Value(self.bool_ref(l == r)),
@@ -104,39 +118,63 @@ impl super::Evaluator {
             "*" => l.checked_mul(r),
             "%" => {
                 if r.is_zero() {
-                    eprintln!("❌ ERROR: Decimal modulo by zero - [{}:{}]", line, column);
-                    return EvalResult::Error;
+                    return self.rt_err_kind(
+                        "DivisionByZero",
+                        format!("Decimal modulo by zero - [{line}:{column}]"),
+                    );
                 }
                 l.checked_rem(r)
             }
             "/" => {
                 if r.is_zero() {
-                    eprintln!("❌ ERROR: Decimal division by zero - [{}:{}]", line, column);
-                    return EvalResult::Error;
+                    return self.rt_err_kind(
+                        "DivisionByZero",
+                        format!("Decimal division by zero - [{line}:{column}]"),
+                    );
                 }
                 l.checked_div(r)
             }
             "**" => {
                 if r.is_sign_negative() || r.fract() != rust_decimal::Decimal::ZERO {
-                    eprintln!("❌ ERROR: '**' on dec requires a non-negative integer exponent - [{}:{}]", line, column);
-                    return EvalResult::Error;
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!(
+                            "'**' on dec requires a non-negative integer exponent - [{line}:{column}]"
+                        ),
+                    );
                 }
                 let exp = match r.to_u64() {
                     Some(e) => e,
-                    None => { eprintln!("❌ ERROR: dec exponent too large - [{}:{}]", line, column); return EvalResult::Error; }
+                    None => {
+                        return self.rt_err_kind(
+                            "Overflow",
+                            format!("dec exponent too large - [{line}:{column}]"),
+                        );
+                    }
                 };
                 let mut acc = rust_decimal::Decimal::ONE;
                 let mut overflow = false;
                 for _ in 0..exp {
-                    match acc.checked_mul(l) { Some(v) => acc = v, None => { overflow = true; break; } }
+                    match acc.checked_mul(l) {
+                        Some(v) => acc = v,
+                        None => {
+                            overflow = true;
+                            break;
+                        }
+                    }
                 }
                 if overflow { None } else { Some(acc) }
             }
-            _ => { eprintln!("❌ ERROR: Operator '{}' not supported for dec - [{}:{}]", op, line, column); return EvalResult::Error; }
+            _ => {
+                return self.rt_err_kind(
+                    "TypeError",
+                    format!("Operator '{op}' not supported for dec - [{line}:{column}]"),
+                );
+            }
         };
         match result {
             Some(v) => EvalResult::Value(self.alloc(ObjectData::Dec(v))),
-            None => { eprintln!("❌ ERROR: Decimal overflow - [{}:{}]", line, column); EvalResult::Error }
+            None => self.rt_err_kind("Overflow", format!("Decimal overflow - [{line}:{column}]")),
         }
     }
 
@@ -150,24 +188,38 @@ impl super::Evaluator {
     ) -> EvalResult {
         // DateTime ordering/equality: compare two DateTimes by their instant.
         // Arithmetic between dates is intentionally not supported (use fields).
-        if let (ObjectData::DateTime { epoch_ms: a, .. }, ObjectData::DateTime { epoch_ms: b, .. }) = (&left, &right) {
+        if let (
+            ObjectData::DateTime { epoch_ms: a, .. },
+            ObjectData::DateTime { epoch_ms: b, .. },
+        ) = (&left, &right)
+        {
             let (a, b) = (*a, *b);
             match op {
-                "<"  => return EvalResult::Value(self.bool_ref(a < b)),
-                ">"  => return EvalResult::Value(self.bool_ref(a > b)),
+                "<" => return EvalResult::Value(self.bool_ref(a < b)),
+                ">" => return EvalResult::Value(self.bool_ref(a > b)),
                 "<=" => return EvalResult::Value(self.bool_ref(a <= b)),
                 ">=" => return EvalResult::Value(self.bool_ref(a >= b)),
                 "==" => return EvalResult::Value(self.bool_ref(a == b)),
                 "!=" => return EvalResult::Value(self.bool_ref(a != b)),
                 _ => {
-                    eprintln!("❌ ERROR: Operator '{}' cannot be applied to DateTime - [{}:{}]", op, line, column);
-                    return EvalResult::Error;
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!(
+                            "Operator '{op}' cannot be applied to DateTime - [{line}:{column}]"
+                        ),
+                    );
                 }
             }
         }
         // A DateField acts as its integer value in every operator.
-        let left = match left { ObjectData::DateField { value, .. } => ObjectData::Integer(value), other => other };
-        let right = match right { ObjectData::DateField { value, .. } => ObjectData::Integer(value), other => other };
+        let left = match left {
+            ObjectData::DateField { value, .. } => ObjectData::Integer(value),
+            other => other,
+        };
+        let right = match right {
+            ObjectData::DateField { value, .. } => ObjectData::Integer(value),
+            other => other,
+        };
 
         // Null equality: any value can be compared to null with == / !=
         if matches!(left, ObjectData::Null) || matches!(right, ObjectData::Null) {
@@ -177,11 +229,10 @@ impl super::Evaluator {
                     (ObjectData::Str(s), ObjectData::Null) => format!("{}null", s),
                     (ObjectData::Null, ObjectData::Str(s)) => format!("null{}", s),
                     _ => {
-                        eprintln!(
-                            "❌ ERROR: Operator '+' cannot be applied to null - [{}:{}]",
-                            line, column
+                        return self.rt_err_kind(
+                            "TypeError",
+                            format!("Operator '+' cannot be applied to null - [{line}:{column}]"),
                         );
-                        return EvalResult::Error;
                     }
                 };
                 return EvalResult::Value(self.alloc(ObjectData::Str(s)));
@@ -195,13 +246,10 @@ impl super::Evaluator {
                     let eq = matches!(left, ObjectData::Null) && matches!(right, ObjectData::Null);
                     EvalResult::Value(self.bool_ref(!eq))
                 }
-                _ => {
-                    eprintln!(
-                        "❌ ERROR: Operator '{}' cannot be applied to null - [{}:{}]",
-                        op, line, column
-                    );
-                    EvalResult::Error
-                }
+                _ => self.rt_err_kind(
+                    "TypeError",
+                    format!("Operator '{op}' cannot be applied to null - [{line}:{column}]"),
+                ),
             };
         }
         let left_type = left.type_name().to_string();
@@ -209,8 +257,8 @@ impl super::Evaluator {
         match (left, right) {
             (ObjectData::Integer(l), ObjectData::Integer(r)) => {
                 match op {
-                    "<"  => return EvalResult::Value(self.bool_ref(l < r)),
-                    ">"  => return EvalResult::Value(self.bool_ref(l > r)),
+                    "<" => return EvalResult::Value(self.bool_ref(l < r)),
+                    ">" => return EvalResult::Value(self.bool_ref(l > r)),
                     "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
                     ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
                     "==" => return EvalResult::Value(self.bool_ref(l == r)),
@@ -231,83 +279,144 @@ impl super::Evaluator {
                         None => return self.rt_err_kind("Overflow", "Integer overflow"),
                     },
                     "/" => {
-                        if r == 0 { return self.rt_err_kind("DivisionByZero", "Division by zero"); }
+                        if r == 0 {
+                            return self.rt_err_kind("DivisionByZero", "Division by zero");
+                        }
                         match l.checked_div(r) {
                             Some(v) => v,
                             None => return self.rt_err_kind("Overflow", "Integer overflow"),
                         }
                     }
                     "%" => {
-                        if r == 0 { return self.rt_err_kind("DivisionByZero", "Modulus by zero"); }
+                        if r == 0 {
+                            return self.rt_err_kind("DivisionByZero", "Modulus by zero");
+                        }
                         match l.checked_rem(r) {
                             Some(v) => v,
-                            None => return self.rt_err_kind("Overflow", "Modulo overflow (i64::MIN % -1 is undefined)"),
+                            None => {
+                                return self.rt_err_kind(
+                                    "Overflow",
+                                    "Modulo overflow (i64::MIN % -1 is undefined)",
+                                );
+                            }
                         }
                     }
                     "**" => {
                         if r < 0 {
-                            return EvalResult::Value(self.alloc(ObjectData::Decimal((l as f64).powf(r as f64))));
+                            return EvalResult::Value(
+                                self.alloc(ObjectData::Decimal((l as f64).powf(r as f64))),
+                            );
                         } else if r > u32::MAX as i64 {
                             match l {
                                 0 => 0,
                                 1 => 1,
-                                -1 => if r % 2 == 0 { 1 } else { -1 },
-                                _ => { eprintln!("❌ ERROR: Integer overflow in exponentiation"); return EvalResult::Error; }
+                                -1 => {
+                                    if r % 2 == 0 {
+                                        1
+                                    } else {
+                                        -1
+                                    }
+                                }
+                                _ => {
+                                    return self.rt_err_kind(
+                                        "Overflow",
+                                        "Integer overflow in exponentiation",
+                                    );
+                                }
                             }
                         } else {
                             match l.checked_pow(r as u32) {
                                 Some(v) => v,
-                                None => { eprintln!("❌ ERROR: Integer overflow in exponentiation"); return EvalResult::Error; }
+                                None => {
+                                    return self.rt_err_kind(
+                                        "Overflow",
+                                        "Integer overflow in exponentiation",
+                                    );
+                                }
                             }
                         }
                     }
-                    "&"  => l & r,
-                    "|"  => l | r,
-                    "^"  => l ^ r,
+                    "&" => l & r,
+                    "|" => l | r,
+                    "^" => l ^ r,
                     "<<" => {
-                        if r < 0 { eprintln!("❌ ERROR: Left shift by negative amount ({})", r); return EvalResult::Error; }
-                        if r >= 64 { eprintln!("❌ ERROR: Left shift by {} is >= 64 bits", r); return EvalResult::Error; }
+                        if r < 0 {
+                            return self.rt_err_kind(
+                                "TypeError",
+                                format!("Left shift by negative amount ({r})"),
+                            );
+                        }
+                        if r >= 64 {
+                            return self.rt_err_kind(
+                                "TypeError",
+                                format!("Left shift by {r} is >= 64 bits"),
+                            );
+                        }
                         l << r
                     }
                     ">>" => {
-                        if r < 0 { eprintln!("❌ ERROR: Right shift by negative amount ({})", r); return EvalResult::Error; }
-                        if r >= 64 { eprintln!("❌ ERROR: Right shift by {} is >= 64 bits", r); return EvalResult::Error; }
+                        if r < 0 {
+                            return self.rt_err_kind(
+                                "TypeError",
+                                format!("Right shift by negative amount ({r})"),
+                            );
+                        }
+                        if r >= 64 {
+                            return self.rt_err_kind(
+                                "TypeError",
+                                format!("Right shift by {r} is >= 64 bits"),
+                            );
+                        }
                         l >> r
                     }
-                    _ => { eprintln!("❌ ERROR: Unknown operator: {}", op); return EvalResult::Error; }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", format!("Unknown operator: {op}"));
+                    }
                 };
                 EvalResult::Value(self.int_ref(result))
             }
             // Exact base-10 `dec`. `int` mixes in (it is exact); f64 `decimal`
             // is NEVER mixed implicitly — that would re-contaminate exactness.
             (ObjectData::Dec(l), ObjectData::Dec(r)) => self.dec_binop(op, l, r, line, column),
-            (ObjectData::Dec(l), ObjectData::Integer(r)) => self.dec_binop(op, l, rust_decimal::Decimal::from(r), line, column),
-            (ObjectData::Integer(l), ObjectData::Dec(r)) => self.dec_binop(op, rust_decimal::Decimal::from(l), r, line, column),
-            (ObjectData::Dec(_), ObjectData::Decimal(_)) | (ObjectData::Decimal(_), ObjectData::Dec(_)) => {
-                eprintln!("❌ ERROR: cannot mix 'dec' (exact) and 'decimal' (f64) with '{}' — convert explicitly (d.toDecimal() / Dec.parse) - [{}:{}]", op, line, column);
-                EvalResult::Error
+            (ObjectData::Dec(l), ObjectData::Integer(r)) => {
+                self.dec_binop(op, l, rust_decimal::Decimal::from(r), line, column)
             }
-            (ObjectData::Str(s), ObjectData::Dec(d)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, d)))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between String and dec", op); EvalResult::Error }
-                }
+            (ObjectData::Integer(l), ObjectData::Dec(r)) => {
+                self.dec_binop(op, rust_decimal::Decimal::from(l), r, line, column)
             }
-            (ObjectData::Dec(d), ObjectData::Str(s)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", d, s)))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between dec and String", op); EvalResult::Error }
-                }
+            (ObjectData::Dec(_), ObjectData::Decimal(_))
+            | (ObjectData::Decimal(_), ObjectData::Dec(_)) => {
+                self.rt_err_kind(
+                    "TypeError",
+                    format!(
+                        "cannot mix 'dec' (exact) and 'decimal' (f64) with '{op}' — convert explicitly (d.toDecimal() / Dec.parse) - [{line}:{column}]"
+                    ),
+                )
             }
+            (ObjectData::Str(s), ObjectData::Dec(d)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, d)))),
+                _ => self.rt_err_kind(
+                    "TypeError",
+                    format!("Operator '{op}' not supported between String and dec"),
+                ),
+            },
+            (ObjectData::Dec(d), ObjectData::Str(s)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", d, s)))),
+                _ => self.rt_err_kind(
+                    "TypeError",
+                    format!("Operator '{op}' not supported between dec and String"),
+                ),
+            },
             // Decimal arithmetic (decimal op decimal, int op decimal, decimal op int)
             (ObjectData::Decimal(l), ObjectData::Decimal(r)) => {
                 match op {
-                    "<"  => return EvalResult::Value(self.bool_ref(l < r)),
-                    ">"  => return EvalResult::Value(self.bool_ref(l > r)),
+                    "<" => return EvalResult::Value(self.bool_ref(l < r)),
+                    ">" => return EvalResult::Value(self.bool_ref(l > r)),
                     "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
                     ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
                     "==" => return EvalResult::Value(self.bool_ref(l == r)),
@@ -319,23 +428,30 @@ impl super::Evaluator {
                     "-" => ObjectData::Decimal(l - r),
                     "*" => ObjectData::Decimal(l * r),
                     "/" => {
-                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Division by zero"); }
+                        if r == 0.0 {
+                            return self.rt_err_kind("DivisionByZero", "Division by zero");
+                        }
                         ObjectData::Decimal(l / r)
                     }
                     "%" => {
-                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Modulus by zero"); }
+                        if r == 0.0 {
+                            return self.rt_err_kind("DivisionByZero", "Modulus by zero");
+                        }
                         ObjectData::Decimal(l % r)
                     }
                     "**" => ObjectData::Decimal(l.powf(r)),
-                    _ => { eprintln!("❌ ERROR: Unknown operator: {}", op); return EvalResult::Error; }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", format!("Unknown operator: {op}"));
+                    }
                 };
                 EvalResult::Value(self.alloc(result))
             }
             (ObjectData::Integer(l), ObjectData::Decimal(r)) => {
                 let l = l as f64;
                 match op {
-                    "<"  => return EvalResult::Value(self.bool_ref(l < r)),
-                    ">"  => return EvalResult::Value(self.bool_ref(l > r)),
+                    "<" => return EvalResult::Value(self.bool_ref(l < r)),
+                    ">" => return EvalResult::Value(self.bool_ref(l > r)),
                     "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
                     ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
                     "==" => return EvalResult::Value(self.bool_ref(l == r)),
@@ -347,23 +463,30 @@ impl super::Evaluator {
                     "-" => ObjectData::Decimal(l - r),
                     "*" => ObjectData::Decimal(l * r),
                     "/" => {
-                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Division by zero"); }
+                        if r == 0.0 {
+                            return self.rt_err_kind("DivisionByZero", "Division by zero");
+                        }
                         ObjectData::Decimal(l / r)
                     }
                     "%" => {
-                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Modulus by zero"); }
+                        if r == 0.0 {
+                            return self.rt_err_kind("DivisionByZero", "Modulus by zero");
+                        }
                         ObjectData::Decimal(l % r)
                     }
                     "**" => ObjectData::Decimal(l.powf(r)),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported here", op); return EvalResult::Error; }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", format!("Operator '{op}' not supported here"));
+                    }
                 };
                 EvalResult::Value(self.alloc(result))
             }
             (ObjectData::Decimal(l), ObjectData::Integer(r)) => {
                 let r = r as f64;
                 match op {
-                    "<"  => return EvalResult::Value(self.bool_ref(l < r)),
-                    ">"  => return EvalResult::Value(self.bool_ref(l > r)),
+                    "<" => return EvalResult::Value(self.bool_ref(l < r)),
+                    ">" => return EvalResult::Value(self.bool_ref(l > r)),
                     "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
                     ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
                     "==" => return EvalResult::Value(self.bool_ref(l == r)),
@@ -375,136 +498,235 @@ impl super::Evaluator {
                     "-" => ObjectData::Decimal(l - r),
                     "*" => ObjectData::Decimal(l * r),
                     "/" => {
-                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Division by zero"); }
+                        if r == 0.0 {
+                            return self.rt_err_kind("DivisionByZero", "Division by zero");
+                        }
                         ObjectData::Decimal(l / r)
                     }
                     "%" => {
-                        if r == 0.0 { return self.rt_err_kind("DivisionByZero", "Modulus by zero"); }
+                        if r == 0.0 {
+                            return self.rt_err_kind("DivisionByZero", "Modulus by zero");
+                        }
                         ObjectData::Decimal(l % r)
                     }
                     "**" => ObjectData::Decimal(l.powf(r)),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported here", op); return EvalResult::Error; }
+                    _ => {
+                        return self
+                            .rt_err_kind("TypeError", format!("Operator '{op}' not supported here"));
+                    }
                 };
                 EvalResult::Value(self.alloc(result))
             }
 
-            (ObjectData::Str(l), ObjectData::Str(r)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.bool_ref(l == r)),
-                    "!=" => return EvalResult::Value(self.bool_ref(l != r)),
-                    "<"  => return EvalResult::Value(self.bool_ref(l < r)),
-                    ">"  => return EvalResult::Value(self.bool_ref(l > r)),
-                    "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
-                    ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
-                    "+"  => return EvalResult::Value(self.alloc(ObjectData::Str(l + &r))),
-                    _ => {
-                        eprintln!("❌ ERROR: Operator '{}' not supported between strings", op);
-                        return EvalResult::Error;
+            (ObjectData::Str(l), ObjectData::Str(r)) => match op {
+                "==" => return EvalResult::Value(self.bool_ref(l == r)),
+                "!=" => return EvalResult::Value(self.bool_ref(l != r)),
+                "<" => return EvalResult::Value(self.bool_ref(l < r)),
+                ">" => return EvalResult::Value(self.bool_ref(l > r)),
+                "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
+                ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
+                "+" => return EvalResult::Value(self.alloc(ObjectData::Str(l + &r))),
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between strings"),
+                    );
+                }
+            },
+            (ObjectData::Str(s), ObjectData::Integer(n)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, n))));
+                }
+                "*" => {
+                    if n < 0 {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Cannot repeat a string with a negative n",
+                        );
                     }
-                }
-            }
-            (ObjectData::Str(s), ObjectData::Integer(n)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, n)))),
-                    "*" => {
-                        if n < 0 { eprintln!("❌ ERROR: Cannot repeat a string with a negative n"); return EvalResult::Error; }
-                        if n > 10_000_000 { eprintln!("❌ ERROR: String repeat count {} exceeds maximum (10,000,000)", n); return EvalResult::Error; }
-                        return EvalResult::Value(self.alloc(ObjectData::Str(s.repeat(n as usize))));
+                    if n > 10_000_000 {
+                        return self.fatal_err_kind(
+                            "ResourceError",
+                            format!(
+                                "String repeat count {n} exceeds maximum (10,000,000)"
+                            ),
+                        );
                     }
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between String and Integer", op); return EvalResult::Error; }
+                    return EvalResult::Value(self.alloc(ObjectData::Str(s.repeat(n as usize))));
                 }
-            }
-            (ObjectData::Integer(n), ObjectData::Str(s)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", n, s)))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between Integer and String", op); return EvalResult::Error; }
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between String and Integer"),
+                    );
                 }
-            }
-            (ObjectData::Str(s), ObjectData::Decimal(d)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, format_decimal(d))))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between String and Decimal", op); return EvalResult::Error; }
+            },
+            (ObjectData::Integer(n), ObjectData::Str(s)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", n, s))));
                 }
-            }
-            (ObjectData::Decimal(d), ObjectData::Str(s)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", format_decimal(d), s)))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between Decimal and String", op); return EvalResult::Error; }
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between Integer and String"),
+                    );
                 }
-            }
-            (ObjectData::Str(s), ObjectData::Boolean(b)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, b)))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between String and Boolean", op); return EvalResult::Error; }
+            },
+            (ObjectData::Str(s), ObjectData::Decimal(d)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                        "{}{}",
+                        s,
+                        format_decimal(d)
+                    ))));
                 }
-            }
-            (ObjectData::Boolean(b), ObjectData::Str(s)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", b, s)))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between Boolean and String", op); return EvalResult::Error; }
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between String and Decimal"),
+                    );
                 }
-            }
-            (ObjectData::Str(s), ObjectData::Null) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}null", s)))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between String and Null", op); return EvalResult::Error; }
+            },
+            (ObjectData::Decimal(d), ObjectData::Str(s)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                        "{}{}",
+                        format_decimal(d),
+                        s
+                    ))));
                 }
-            }
-            (ObjectData::Null, ObjectData::Str(s)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("null{}", s)))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between Null and String", op); return EvalResult::Error; }
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between Decimal and String"),
+                    );
                 }
-            }
+            },
+            (ObjectData::Str(s), ObjectData::Boolean(b)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, b))));
+                }
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between String and Boolean"),
+                    );
+                }
+            },
+            (ObjectData::Boolean(b), ObjectData::Str(s)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", b, s))));
+                }
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between Boolean and String"),
+                    );
+                }
+            },
+            (ObjectData::Str(s), ObjectData::Null) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}null", s)))),
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between String and Null"),
+                    );
+                }
+            },
+            (ObjectData::Null, ObjectData::Str(s)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("null{}", s)))),
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between Null and String"),
+                    );
+                }
+            },
             // String concatenation with a DateTime renders its ISO 8601 form,
             // matching how int/decimal/bool concatenate.
-            (ObjectData::Str(s), ObjectData::DateTime { epoch_ms, utc }) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, crate::region::format_datetime(epoch_ms, utc))))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between String and DateTime", op); return EvalResult::Error; }
+            (ObjectData::Str(s), ObjectData::DateTime { epoch_ms, utc }) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                        "{}{}",
+                        s,
+                        crate::region::format_datetime(epoch_ms, utc)
+                    ))));
                 }
-            }
-            (ObjectData::DateTime { epoch_ms, utc }, ObjectData::Str(s)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.false_ref),
-                    "!=" => return EvalResult::Value(self.true_ref),
-                    "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", crate::region::format_datetime(epoch_ms, utc), s)))),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between DateTime and String", op); return EvalResult::Error; }
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between String and DateTime"),
+                    );
                 }
-            }
-            (ObjectData::Boolean(l), ObjectData::Boolean(r)) => {
-                match op {
-                    "==" => return EvalResult::Value(self.bool_ref(l == r)),
-                    "!=" => return EvalResult::Value(self.bool_ref(l != r)),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between booleans (use && / ||)", op); return EvalResult::Error; }
+            },
+            (ObjectData::DateTime { epoch_ms, utc }, ObjectData::Str(s)) => match op {
+                "==" => return EvalResult::Value(self.false_ref),
+                "!=" => return EvalResult::Value(self.true_ref),
+                "+" => {
+                    return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                        "{}{}",
+                        crate::region::format_datetime(epoch_ms, utc),
+                        s
+                    ))));
                 }
-            }
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!("Operator '{op}' not supported between DateTime and String"),
+                    );
+                }
+            },
+            (ObjectData::Boolean(l), ObjectData::Boolean(r)) => match op {
+                "==" => return EvalResult::Value(self.bool_ref(l == r)),
+                "!=" => return EvalResult::Value(self.bool_ref(l != r)),
+                _ => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!(
+                            "Operator '{op}' not supported between booleans (use && / ||)"
+                        ),
+                    );
+                }
+            },
             // ── EnumVariant equality ─────────────────────────────────────────
-            (ObjectData::EnumVariant { enum_name: en1, variant: v1 },
-             ObjectData::EnumVariant { enum_name: en2, variant: v2 }) => {
+            (
+                ObjectData::EnumVariant {
+                    enum_name: en1,
+                    variant: v1,
+                },
+                ObjectData::EnumVariant {
+                    enum_name: en2,
+                    variant: v2,
+                },
+            ) => {
                 let eq = en1 == en2 && v1 == v2;
                 match op {
                     "==" => return EvalResult::Value(self.bool_ref(eq)),
                     "!=" => return EvalResult::Value(self.bool_ref(!eq)),
-                    _ => { eprintln!("❌ ERROR: Operator '{}' not supported between enum variants", op); return EvalResult::Error; }
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            format!("Operator '{op}' not supported between enum variants"),
+                        );
+                    }
                 }
             }
 
@@ -514,20 +736,35 @@ impl super::Evaluator {
                 // `money + "x"` formats instead of calling op_add with a string.
                 if op == "+" {
                     let left_opstr = if let ObjectData::Instance { ref class_name, .. } = left {
-                        self.find_method(class_name, "op_str").map(|_| class_name.clone())
-                    } else { None };
+                        self.find_method(class_name, "op_str")
+                            .map(|_| class_name.clone())
+                    } else {
+                        None
+                    };
                     let right_opstr = if let ObjectData::Instance { ref class_name, .. } = right {
-                        self.find_method(class_name, "op_str").map(|_| class_name.clone())
-                    } else { None };
+                        self.find_method(class_name, "op_str")
+                            .map(|_| class_name.clone())
+                    } else {
+                        None
+                    };
 
                     if let (ObjectData::Str(s), Some(cn)) = (&left, &right_opstr) {
                         let prefix = s.clone();
                         let cn = cn.clone();
                         let inst_ref = self.alloc(right);
-                        return match self.call_op_method(inst_ref, &cn, "op_str", vec![], line, column) {
+                        return match self.call_op_method(
+                            inst_ref,
+                            &cn,
+                            "op_str",
+                            vec![],
+                            line,
+                            column,
+                        ) {
                             EvalResult::Value(r) => {
                                 let rs = self.display(r);
-                                EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", prefix, rs))))
+                                EvalResult::Value(
+                                    self.alloc(ObjectData::Str(format!("{}{}", prefix, rs))),
+                                )
                             }
                             other => other,
                         };
@@ -536,10 +773,19 @@ impl super::Evaluator {
                         let suffix = s.clone();
                         let cn = cn.clone();
                         let inst_ref = self.alloc(left);
-                        return match self.call_op_method(inst_ref, &cn, "op_str", vec![], line, column) {
+                        return match self.call_op_method(
+                            inst_ref,
+                            &cn,
+                            "op_str",
+                            vec![],
+                            line,
+                            column,
+                        ) {
                             EvalResult::Value(r) => {
                                 let ls = self.display(r);
-                                EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", ls, suffix))))
+                                EvalResult::Value(
+                                    self.alloc(ObjectData::Str(format!("{}{}", ls, suffix))),
+                                )
                             }
                             other => other,
                         };
@@ -560,35 +806,57 @@ impl super::Evaluator {
                 };
 
                 if let Some(class_name) = maybe_class {
-                    let inst_ref  = self.alloc(left);
-                    let arg_ref   = self.alloc(right);
+                    let inst_ref = self.alloc(left);
+                    let arg_ref = self.alloc(right);
                     let arg_owned = self.extract(arg_ref);
-                    return self.call_op_method(inst_ref, &class_name, method_name, vec![arg_owned], line, column);
+                    return self.call_op_method(
+                        inst_ref,
+                        &class_name,
+                        method_name,
+                        vec![arg_owned],
+                        line,
+                        column,
+                    );
                 }
 
                 // String + instance with NO op_str/op_add overload: render the
                 // instance (built-in Error → its message), so `catch (e) { "x" + e }`
                 // works now that runtime errors bind a structured Error object.
                 if op == "+" {
-                    if let (ObjectData::Str(s), ObjectData::Instance { class_name, fields }) = (&left, &right) {
-                        return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, instance_concat_str(class_name, fields)))));
+                    if let (ObjectData::Str(s), ObjectData::Instance { class_name, fields }) =
+                        (&left, &right)
+                    {
+                        return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                            "{}{}",
+                            s,
+                            instance_concat_str(class_name, fields)
+                        ))));
                     }
-                    if let (ObjectData::Instance { class_name, fields }, ObjectData::Str(s)) = (&left, &right) {
-                        return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", instance_concat_str(class_name, fields), s))));
+                    if let (ObjectData::Instance { class_name, fields }, ObjectData::Str(s)) =
+                        (&left, &right)
+                    {
+                        return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                            "{}{}",
+                            instance_concat_str(class_name, fields),
+                            s
+                        ))));
                     }
                 }
 
                 // Cross-type equality: different types are never equal
-                if op == "==" { return EvalResult::Value(self.false_ref); }
-                if op == "!=" { return EvalResult::Value(self.true_ref); }
-                eprintln!(
-                    "❌ ERROR: Type mismatch — operator '{}' cannot be applied between '{}' and '{}' - [{}:{}]",
-                    op, left_type, right_type, line, column
-                );
-                self.print_call_stack();
-                EvalResult::Error
+                if op == "==" {
+                    return EvalResult::Value(self.false_ref);
+                }
+                if op == "!=" {
+                    return EvalResult::Value(self.true_ref);
+                }
+                self.rt_err_kind(
+                    "TypeError",
+                    format!(
+                        "Type mismatch — operator '{op}' cannot be applied between '{left_type}' and '{right_type}' - [{line}:{column}]"
+                    ),
+                )
             }
         }
     }
-
 }

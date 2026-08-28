@@ -1,0 +1,64 @@
+// Cycles, unresolved parents and sealed inheritance must fail deterministically.
+
+test("self inheritance is catchable TypeError", () => {
+    let caught = false;
+    try { class InheritanceSelf : InheritanceSelf {} }
+    catch (e) {
+        caught = e.code == "SZ4002"
+            && e.kind == "TypeError"
+            && e.message.includes("inheritance cycle");
+    }
+    assert(caught, "self-cycle must be rejected at declaration");
+});
+
+test("indirect inheritance cycle is rejected", () => {
+    class InheritanceCycleA : InheritanceCycleB {}
+    let caught = false;
+    try { class InheritanceCycleB : InheritanceCycleA {} }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "second declaration must not close a cycle");
+
+    class InheritanceCycleB { public int read() { return 7; } }
+    assert(new InheritanceCycleA().read() == 7, "forward reference can recover");
+});
+
+test("unresolved parent cannot be instantiated", () => {
+    class InheritanceMissingChild : InheritanceMissingParent {}
+    let caught = false;
+    try { new InheritanceMissingChild(); }
+    catch (e) { caught = e.code == "SZ4001" && e.kind == "ReferenceError"; }
+    assert(caught, "unresolved hierarchy must not create a partial instance");
+});
+
+test("super() cannot target an unresolved parent", () => {
+    class InheritanceMissingSuper : InheritanceMissingSuperParent {
+        public InheritanceMissingSuper() { super(); }
+    }
+    let caught = false;
+    try { new InheritanceMissingSuper(); }
+    catch (e) { caught = e.code == "SZ4001" && e.kind == "ReferenceError"; }
+    assert(caught, "missing parent is not the same as parent without constructor");
+});
+
+test("unresolved parent blocks method-bearing child construction", () => {
+    class InheritanceMissingMethod : InheritanceMissingMethodParent {
+        public int read() { return super.read(); }
+    }
+    let caught = false;
+    try { new InheritanceMissingMethod().read(); }
+    catch (e) { caught = e.code == "SZ4001" && e.kind == "ReferenceError"; }
+    assert(caught, "construction must reject the unresolved hierarchy before dispatch");
+});
+
+test("sealed inheritance remains refused but is structured", () => {
+    sealed class InheritanceFinal {}
+    let caught = false;
+    try { class InheritanceRejected : InheritanceFinal {} }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "sealed protection must remain enforced");
+
+    class InheritanceHealthy { public int read() { return 8; } }
+    assert(new InheritanceHealthy().read() == 8, "rejection must not poison registry");
+});
+
+summary();

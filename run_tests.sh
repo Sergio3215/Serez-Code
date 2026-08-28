@@ -10,8 +10,9 @@
 #
 # Test types:
 #   tests/NN_*.sz     E2E — run and compare stdout vs NN_*.expected
-#   tests/unit_*.sz   Unit — framework prepended; PASS = no [FAIL] line in stdout
-#   tests/err_*.sz    Error — PASS = at least one ❌ on stderr
+#   tests/unit_*.sz   Unit — PASS = exit 0, Results: summary and no [FAIL] line
+#                      A matching .expected makes it a legacy golden test.
+#   tests/err_*.sz    Error — PASS = non-zero exit and at least one ❌ on stderr
 #   tests/sec_*.sz    Security error tests (same as err)
 #   tests/unit_sec_*  Security unit tests (same as unit)
 #
@@ -40,6 +41,7 @@ TESTS_DIR="$ROOT/tests"
 FRAMEWORK="$TESTS_DIR/framework.sz"
 BINARY="$ROOT/target/debug/sz"
 TEMP_SZ="$TESTS_DIR/~unit_temp_$$.sz"
+TEMP_OUT="/tmp/sz_test_$$_out.txt"
 TEMP_ERR="/tmp/sz_test_$$_err.txt"
 export SEREZ_HOME="$ROOT"
 export SEREZ_PACKAGES="$ROOT/tests/packages"
@@ -75,17 +77,19 @@ run_test() {
         run_file="$TEMP_SZ"
     fi
 
-    local stdout_out stderr_out
-    stdout_out=$("$BINARY" "$run_file" 2>"$TEMP_ERR" || true)
+    local stdout_out stderr_out exit_code
+    "$BINARY" "$run_file" >"$TEMP_OUT" 2>"$TEMP_ERR"
+    exit_code=$?
+    stdout_out=$(cat "$TEMP_OUT")
     stderr_out=$(cat "$TEMP_ERR")
 
     # ── Error / security test ──────────────────────────────────────────────────
     if [[ "$is_err" == "1" ]]; then
-        if echo "$stderr_out" | grep -q "❌"; then
+        if [[ "$exit_code" -ne 0 ]] && echo "$stderr_out" | grep -q "❌"; then
             echo "${GREEN}[PASS]${RESET} $label"
             PASS=$((PASS + 1))
         else
-            echo "${RED}[FAIL]${RESET} $label — expected an error but got none"
+            echo "${RED}[FAIL]${RESET} $label — expected non-zero exit and an error diagnostic (exit $exit_code)"
             FAIL=$((FAIL + 1))
         fi
         return
@@ -96,17 +100,29 @@ run_test() {
         local failures summary
         failures=$(echo "$stdout_out" | grep -F "[FAIL]" || true)
         summary=$(echo "$stdout_out" | grep "^Results:" | tail -1 || true)
-        if [[ -z "$failures" ]]; then
+        if [[ "$exit_code" -eq 0 && -z "$failures" && -n "$summary" ]]; then
             echo "${GREEN}[PASS]${RESET} $label"
-            [[ -n "$summary" ]] && echo "${GRAY}       $summary${RESET}"
+            echo "${GRAY}       $summary${RESET}"
             PASS=$((PASS + 1))
         else
-            echo "${RED}[FAIL]${RESET} $label"
+            local reason="framework reported failures"
+            [[ "$exit_code" -ne 0 ]] && reason="process exited with code $exit_code"
+            [[ "$exit_code" -eq 0 && -z "$failures" && -z "$summary" ]] && reason="missing Results: summary"
+            echo "${RED}[FAIL]${RESET} $label — $reason"
             while IFS= read -r line; do
                 echo "${YELLOW}       $line${RESET}"
             done <<< "$failures"
             FAIL=$((FAIL + 1))
         fi
+        return
+    fi
+
+    if [[ "$exit_code" -ne 0 ]]; then
+        echo "${RED}[FAIL]${RESET} $label — process exited with code $exit_code"
+        head -n 3 "$TEMP_ERR" | while IFS= read -r line; do
+            echo "${YELLOW}       $line${RESET}"
+        done
+        FAIL=$((FAIL + 1))
         return
     fi
 
@@ -144,6 +160,21 @@ run_test() {
     fi
 }
 
+# The runner itself must reject a unit program that aborts before summary().
+echo "${CYAN}═══ Test Runner Integrity ════════════════════${RESET}"
+{ cat "$FRAMEWORK"; printf '\n'; cat "$TESTS_DIR/runner_fixtures/unit_abort_before_summary.sz"; } > "$TEMP_SZ"
+"$BINARY" "$TEMP_SZ" >"$TEMP_OUT" 2>"$TEMP_ERR"
+runner_exit=$?
+runner_summary=$(grep "^Results:" "$TEMP_OUT" | tail -1 || true)
+if [[ "$runner_exit" -ne 0 && -z "$runner_summary" ]]; then
+    echo "${GREEN}[PASS]${RESET} runner rejects abort before summary"
+    PASS=$((PASS + 1))
+else
+    echo "${RED}[FAIL]${RESET} runner accepted abort before summary"
+    FAIL=$((FAIL + 1))
+fi
+echo ""
+
 RUN_ALL=0
 [[ "$ONLY_UNIT" == "0" && "$ONLY_E2E" == "0" && "$ONLY_SECURITY" == "0" ]] && RUN_ALL=1
 
@@ -165,7 +196,11 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_UNIT" == "1" ]]; then
         [[ -f "$f" ]] || continue
         base=$(basename "$f" .sz)
         [[ "$base" == unit_sec_* ]] && continue
-        run_test "$base" "$f" "" 1 0
+        if [[ -f "$TESTS_DIR/$base.expected" ]]; then
+            run_test "$base" "$f" "$TESTS_DIR/$base.expected" 0 0
+        else
+            run_test "$base" "$f" "" 1 0
+        fi
     done
 fi
 
@@ -260,7 +295,7 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_UNIT" == "1" ]]; then
 fi
 
 # ── Cleanup & Summary ─────────────────────────────────────────────────────────
-rm -f "$TEMP_SZ" "$TEMP_ERR"
+rm -f "$TEMP_SZ" "$TEMP_OUT" "$TEMP_ERR"
 
 echo ""
 echo "${CYAN}═══════════════════════════════════════════════${RESET}"

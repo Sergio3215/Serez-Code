@@ -31,9 +31,9 @@
 //! el writeback copia el receptor de vuelta a su contenedor, así que se paga
 //! sólo cuando el método puede escribir en `this`.
 
+use super::{EvalResult, obj_data_to_key_str};
 use crate::ast::{self, Expression};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
-use super::{EvalResult, obj_data_to_key_str};
 
 /// Un salto desde la variable raíz hacia el slot anidado.
 #[derive(Debug, Clone)]
@@ -51,7 +51,10 @@ impl super::Evaluator {
     /// evaluación que ya tenía `dict_slot_ctx` (que también re-evalúa la clave
     /// después del receptor). Por eso se llama SÓLO cuando hace falta escribir:
     /// un método que no toca `this` nunca pasa por acá.
-    pub(super) fn resolve_lvalue_path(&mut self, expr: &Expression) -> Option<(ObjectRef, Vec<PathStep>)> {
+    pub(super) fn resolve_lvalue_path(
+        &mut self,
+        expr: &Expression,
+    ) -> Option<(ObjectRef, Vec<PathStep>)> {
         match expr {
             Expression::Identifier(name) => self.lookup_var(name).map(|r| (r, Vec::new())),
 
@@ -86,7 +89,12 @@ impl super::Evaluator {
     /// (un campo que en realidad era un getter, un índice fuera de rango, una
     /// clave ausente): en ese caso no se escribe nada, que es lo que pasaba
     /// antes de tener writeback.
-    pub(super) fn store_path(&mut self, root: ObjectRef, steps: &[PathStep], value: OwnedValue) -> bool {
+    pub(super) fn store_path(
+        &mut self,
+        root: ObjectRef,
+        steps: &[PathStep],
+        value: OwnedValue,
+    ) -> bool {
         if steps.is_empty() {
             // Sin saltos la "ruta" es la variable misma; ya está escrita.
             return true;
@@ -95,11 +103,15 @@ impl super::Evaluator {
             RegionId::Global => &mut self.global_arena,
             RegionId::Scoped => &mut self.scopes.arena,
         };
-        let Some(data) = arena.get_mut(root.index) else { return false };
+        let Some(data) = arena.get_mut(root.index) else {
+            return false;
+        };
 
         // El primer salto sale de un ObjectData (el slot del arena); los
         // siguientes ya viajan por OwnedValue puro.
-        let Some(mut cur) = obj_child_mut(data, &steps[0]) else { return false };
+        let Some(mut cur) = obj_child_mut(data, &steps[0]) else {
+            return false;
+        };
         for step in &steps[1..] {
             cur = match owned_child_mut(cur, step) {
                 Some(next) => next,
@@ -113,14 +125,23 @@ impl super::Evaluator {
     /// Mira, sin escribir, qué contenedor hay al final de `raíz + saltos`.
     /// Lo usa la asignación indexada anidada para validar índice y tipo con los
     /// mismos mensajes que el camino directo, antes de tocar nada.
-    pub(super) fn peek_path_container(&self, root: ObjectRef, steps: &[PathStep]) -> Option<PathContainer> {
+    pub(super) fn peek_path_container(
+        &self,
+        root: ObjectRef,
+        steps: &[PathStep],
+    ) -> Option<PathContainer> {
         let data = self.resolve(root)?;
         if steps.is_empty() {
             return match data {
-                ObjectData::Array { element_type, elements } =>
-                    Some(PathContainer::Array(element_type.clone(), elements.len())),
-                ObjectData::Dict { key_type, value_type, .. } =>
-                    Some(PathContainer::Dict(key_type.clone(), value_type.clone())),
+                ObjectData::Array {
+                    element_type,
+                    elements,
+                } => Some(PathContainer::Array(element_type.clone(), elements.len())),
+                ObjectData::Dict {
+                    key_type,
+                    value_type,
+                    ..
+                } => Some(PathContainer::Dict(key_type.clone(), value_type.clone())),
                 _ => None,
             };
         }
@@ -129,10 +150,15 @@ impl super::Evaluator {
             cur = owned_child(cur, step)?;
         }
         match cur {
-            OwnedValue::Array { element_type, elements } =>
-                Some(PathContainer::Array(element_type.clone(), elements.len())),
-            OwnedValue::Dict { key_type, value_type, .. } =>
-                Some(PathContainer::Dict(key_type.clone(), value_type.clone())),
+            OwnedValue::Array {
+                element_type,
+                elements,
+            } => Some(PathContainer::Array(element_type.clone(), elements.len())),
+            OwnedValue::Dict {
+                key_type,
+                value_type,
+                ..
+            } => Some(PathContainer::Dict(key_type.clone(), value_type.clone())),
             _ => None,
         }
     }
@@ -151,13 +177,19 @@ impl super::Evaluator {
         key: &OwnedValue,
         value: OwnedValue,
     ) -> bool {
-        if steps.is_empty() { return false; }
+        if steps.is_empty() {
+            return false;
+        }
         let arena = match root.region {
             RegionId::Global => &mut self.global_arena,
             RegionId::Scoped => &mut self.scopes.arena,
         };
-        let Some(data) = arena.get_mut(root.index) else { return false };
-        let Some(mut cur) = obj_child_mut(data, &steps[0]) else { return false };
+        let Some(data) = arena.get_mut(root.index) else {
+            return false;
+        };
+        let Some(mut cur) = obj_child_mut(data, &steps[0]) else {
+            return false;
+        };
         for step in &steps[1..] {
             cur = match owned_child_mut(cur, step) {
                 Some(next) => next,
@@ -166,9 +198,13 @@ impl super::Evaluator {
         }
         match cur {
             OwnedValue::Array { elements, .. } => {
-                let OwnedValue::Integer(i) = key else { return false };
+                let OwnedValue::Integer(i) = key else {
+                    return false;
+                };
                 let i = *i;
-                if i < 0 || i as usize >= elements.len() { return false; }
+                if i < 0 || i as usize >= elements.len() {
+                    return false;
+                }
                 elements[i as usize] = value;
                 true
             }
@@ -216,15 +252,21 @@ pub(super) enum PathContainer {
 /// Primer salto en sólo lectura, para `peek_path_container`.
 fn obj_child<'a>(data: &'a ObjectData, step: &PathStep) -> Option<&'a OwnedValue> {
     match (data, step) {
-        (ObjectData::Instance { fields, .. }, PathStep::Field(name)) =>
-            fields.iter().find(|(k, _)| k == name).map(|(_, v)| v),
+        (ObjectData::Instance { fields, .. }, PathStep::Field(name)) => {
+            fields.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+        }
         (ObjectData::Array { elements, .. }, PathStep::Key(OwnedValue::Integer(i))) => {
-            if *i < 0 { return None; }
+            if *i < 0 {
+                return None;
+            }
             elements.get(*i as usize)
         }
         (ObjectData::Dict { entries, .. }, PathStep::Key(k)) => {
             let want = owned_key_str(k);
-            entries.iter().find(|(ek, _)| owned_key_str(ek) == want).map(|(_, v)| v)
+            entries
+                .iter()
+                .find(|(ek, _)| owned_key_str(ek) == want)
+                .map(|(_, v)| v)
         }
         _ => None,
     }
@@ -233,15 +275,21 @@ fn obj_child<'a>(data: &'a ObjectData, step: &PathStep) -> Option<&'a OwnedValue
 /// Saltos siguientes en sólo lectura.
 fn owned_child<'a>(v: &'a OwnedValue, step: &PathStep) -> Option<&'a OwnedValue> {
     match (v, step) {
-        (OwnedValue::Instance { fields, .. }, PathStep::Field(name)) =>
-            fields.iter().find(|(k, _)| k == name).map(|(_, v)| v),
+        (OwnedValue::Instance { fields, .. }, PathStep::Field(name)) => {
+            fields.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+        }
         (OwnedValue::Array { elements, .. }, PathStep::Key(OwnedValue::Integer(i))) => {
-            if *i < 0 { return None; }
+            if *i < 0 {
+                return None;
+            }
             elements.get(*i as usize)
         }
         (OwnedValue::Dict { entries, .. }, PathStep::Key(k)) => {
             let want = owned_key_str(k);
-            entries.iter().find(|(ek, _)| owned_key_str(ek) == want).map(|(_, v)| v)
+            entries
+                .iter()
+                .find(|(ek, _)| owned_key_str(ek) == want)
+                .map(|(_, v)| v)
         }
         _ => None,
     }
@@ -250,18 +298,24 @@ fn owned_child<'a>(v: &'a OwnedValue, step: &PathStep) -> Option<&'a OwnedValue>
 /// Primer salto: de `ObjectData` (slot del arena) al hijo `OwnedValue`.
 fn obj_child_mut<'a>(data: &'a mut ObjectData, step: &PathStep) -> Option<&'a mut OwnedValue> {
     match (data, step) {
-        (ObjectData::Instance { fields, .. }, PathStep::Field(name)) =>
-            fields.iter_mut().find(|(k, _)| k == name).map(|(_, v)| v),
+        (ObjectData::Instance { fields, .. }, PathStep::Field(name)) => {
+            fields.iter_mut().find(|(k, _)| k == name).map(|(_, v)| v)
+        }
         (ObjectData::Array { elements, .. }, PathStep::Key(OwnedValue::Integer(i))) => {
             let i = *i;
-            if i < 0 { return None; }
+            if i < 0 {
+                return None;
+            }
             elements.get_mut(i as usize)
         }
         // Reemplazar un VALOR en su lugar no mueve ninguna clave, así que el
         // índice hash residente en el slot sigue siendo válido.
         (ObjectData::Dict { entries, .. }, PathStep::Key(k)) => {
             let want = owned_key_str(k);
-            entries.iter_mut().find(|(ek, _)| owned_key_str(ek) == want).map(|(_, v)| v)
+            entries
+                .iter_mut()
+                .find(|(ek, _)| owned_key_str(ek) == want)
+                .map(|(_, v)| v)
         }
         _ => None,
     }
@@ -270,16 +324,22 @@ fn obj_child_mut<'a>(data: &'a mut ObjectData, step: &PathStep) -> Option<&'a mu
 /// Saltos siguientes: de `OwnedValue` a `OwnedValue`.
 fn owned_child_mut<'a>(v: &'a mut OwnedValue, step: &PathStep) -> Option<&'a mut OwnedValue> {
     match (v, step) {
-        (OwnedValue::Instance { fields, .. }, PathStep::Field(name)) =>
-            fields.iter_mut().find(|(k, _)| k == name).map(|(_, v)| v),
+        (OwnedValue::Instance { fields, .. }, PathStep::Field(name)) => {
+            fields.iter_mut().find(|(k, _)| k == name).map(|(_, v)| v)
+        }
         (OwnedValue::Array { elements, .. }, PathStep::Key(OwnedValue::Integer(i))) => {
             let i = *i;
-            if i < 0 { return None; }
+            if i < 0 {
+                return None;
+            }
             elements.get_mut(i as usize)
         }
         (OwnedValue::Dict { entries, .. }, PathStep::Key(k)) => {
             let want = owned_key_str(k);
-            entries.iter_mut().find(|(ek, _)| owned_key_str(ek) == want).map(|(_, v)| v)
+            entries
+                .iter_mut()
+                .find(|(ek, _)| owned_key_str(ek) == want)
+                .map(|(_, v)| v)
         }
         _ => None,
     }
@@ -322,21 +382,31 @@ fn owned_as_data(v: &OwnedValue) -> ObjectData {
 
 fn writes_self_block(b: &ast::BlockStatement, found: &mut bool) {
     for s in &b.statements {
-        if *found { return; }
+        if *found {
+            return;
+        }
         writes_self_stmt(s, found);
     }
 }
 
 fn writes_self_stmt(s: &ast::Statement, found: &mut bool) {
     use ast::Statement as St;
-    if *found { return; }
+    if *found {
+        return;
+    }
     match s {
         St::FieldAssign(fa) => {
-            if fa.object == "this" { *found = true; return; }
+            if fa.object == "this" {
+                *found = true;
+                return;
+            }
             writes_self_expr(&fa.value, found);
         }
         St::IndexAssign(ia) => {
-            if roots_at_this(&ia.target) { *found = true; return; }
+            if roots_at_this(&ia.target) {
+                *found = true;
+                return;
+            }
             writes_self_expr(&ia.target, found);
             writes_self_expr(&ia.index, found);
             writes_self_expr(&ia.value, found);
@@ -371,7 +441,9 @@ fn writes_self_stmt(s: &ast::Statement, found: &mut bool) {
 
 fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
     use ast::Expression as Ex;
-    if *found { return; }
+    if *found {
+        return;
+    }
     match e {
         Ex::DotCall(d) => {
             // Cualquier LLAMADA cuyo receptor arranque en `this` cuenta como
@@ -392,19 +464,42 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
                 return;
             }
             writes_self_expr(&d.object, found);
-            for a in &d.arguments { writes_self_expr(a, found); }
+            for a in &d.arguments {
+                writes_self_expr(a, found);
+            }
         }
-        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) =>
-            writes_self_expr(inner, found),
-        Ex::Infix(i) => { writes_self_expr(&i.left, found); writes_self_expr(&i.right, found); }
+        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) => {
+            writes_self_expr(inner, found)
+        }
+        Ex::Infix(i) => {
+            writes_self_expr(&i.left, found);
+            writes_self_expr(&i.right, found);
+        }
         Ex::Call(c) => {
             writes_self_expr(&c.function, found);
-            for a in &c.arguments { writes_self_expr(a, found); }
+            for a in &c.arguments {
+                writes_self_expr(a, found);
+            }
         }
-        Ex::Index(ix) => { writes_self_expr(&ix.left, found); writes_self_expr(&ix.index, found); }
-        Ex::ArrayLiteral(al) => { for el in &al.elements { writes_self_expr(el, found); } }
-        Ex::DictLiteral(dl) => { for (k, v) in &dl.entries { writes_self_expr(k, found); writes_self_expr(v, found); } }
-        Ex::EntryLiteral(k, v) => { writes_self_expr(k, found); writes_self_expr(v, found); }
+        Ex::Index(ix) => {
+            writes_self_expr(&ix.left, found);
+            writes_self_expr(&ix.index, found);
+        }
+        Ex::ArrayLiteral(al) => {
+            for el in &al.elements {
+                writes_self_expr(el, found);
+            }
+        }
+        Ex::DictLiteral(dl) => {
+            for (k, v) in &dl.entries {
+                writes_self_expr(k, found);
+                writes_self_expr(v, found);
+            }
+        }
+        Ex::EntryLiteral(k, v) => {
+            writes_self_expr(k, found);
+            writes_self_expr(v, found);
+        }
         Ex::Ternary(t) => {
             writes_self_expr(&t.condition, found);
             writes_self_expr(&t.then_expr, found);
@@ -413,21 +508,35 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
         Ex::If(ife) => {
             writes_self_expr(&ife.condition, found);
             writes_self_block(&ife.consequence, found);
-            if let Some(alt) = &ife.alternative { writes_self_block(alt, found); }
+            if let Some(alt) = &ife.alternative {
+                writes_self_block(alt, found);
+            }
         }
         Ex::InterpolatedString(parts) => {
             for p in parts {
-                if let ast::StringPart::Expr(ex) = p { writes_self_expr(ex, found); }
+                if let ast::StringPart::Expr(ex) = p {
+                    writes_self_expr(ex, found);
+                }
             }
         }
         Ex::New(n) => match &n.args {
-            ast::NewArgs::Positional(v) => { for a in v { writes_self_expr(a, found); } }
-            ast::NewArgs::Fields(f) => { for (_, a) in f { writes_self_expr(a, found); } }
+            ast::NewArgs::Positional(v) => {
+                for a in v {
+                    writes_self_expr(a, found);
+                }
+            }
+            ast::NewArgs::Fields(f) => {
+                for (_, a) in f {
+                    writes_self_expr(a, found);
+                }
+            }
         },
         Ex::Match(m) => {
             writes_self_expr(&m.subject, found);
             for arm in &m.arms {
-                if let Some(g) = &arm.guard { writes_self_expr(g, found); }
+                if let Some(g) = &arm.guard {
+                    writes_self_expr(g, found);
+                }
                 writes_self_block(&arm.body, found);
             }
         }
@@ -437,7 +546,11 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
             ast::LambdaBody::Expr(ex) => writes_self_expr(ex, found),
         },
         Ex::UnsafeBlock(b) => writes_self_block(b, found),
-        Ex::ObjectPatch(fields) => { for (_, ex) in fields { writes_self_expr(ex, found); } }
+        Ex::ObjectPatch(fields) => {
+            for (_, ex) in fields {
+                writes_self_expr(ex, found);
+            }
+        }
         _ => {}
     }
 }
@@ -450,20 +563,27 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
 
 pub(super) fn calls_super_block(b: &ast::BlockStatement, found: &mut bool) {
     for s in &b.statements {
-        if *found { return; }
+        if *found {
+            return;
+        }
         calls_super_stmt(s, found);
     }
 }
 
 fn calls_super_stmt(s: &ast::Statement, found: &mut bool) {
     use ast::Statement as St;
-    if *found { return; }
+    if *found {
+        return;
+    }
     match s {
         St::Expression(e) | St::Throw(e) | St::Yield(e) => calls_super_expr(e, found),
         St::Let(l) => calls_super_expr(&l.value, found),
         St::Assign(a) => calls_super_expr(&a.value, found),
         St::FieldAssign(fa) => calls_super_expr(&fa.value, found),
-        St::NestedFieldAssign(fa) => { calls_super_expr(&fa.object, found); calls_super_expr(&fa.value, found); }
+        St::NestedFieldAssign(fa) => {
+            calls_super_expr(&fa.object, found);
+            calls_super_expr(&fa.value, found);
+        }
         St::IndexAssign(ia) => {
             calls_super_expr(&ia.target, found);
             calls_super_expr(&ia.index, found);
@@ -472,22 +592,33 @@ fn calls_super_stmt(s: &ast::Statement, found: &mut bool) {
         St::Block(b) | St::Unsafe(b) => calls_super_block(b, found),
         St::Return(r) => calls_super_expr(&r.return_value, found),
         St::Out(o) => calls_super_expr(&o.value, found),
-        St::While(w) | St::DoWhile(w) => { calls_super_expr(&w.condition, found); calls_super_block(&w.body, found); }
+        St::While(w) | St::DoWhile(w) => {
+            calls_super_expr(&w.condition, found);
+            calls_super_block(&w.body, found);
+        }
         St::For(f) => {
             calls_super_expr(&f.init.value, found);
             calls_super_expr(&f.condition, found);
             calls_super_expr(&f.update.value, found);
             calls_super_block(&f.body, found);
         }
-        St::ForEach(fe) => { calls_super_expr(&fe.iterable, found); calls_super_block(&fe.body, found); }
-        St::DerefAssign { ptr, value } => { calls_super_expr(ptr, found); calls_super_expr(value, found); }
+        St::ForEach(fe) => {
+            calls_super_expr(&fe.iterable, found);
+            calls_super_block(&fe.body, found);
+        }
+        St::DerefAssign { ptr, value } => {
+            calls_super_expr(ptr, found);
+            calls_super_expr(value, found);
+        }
         _ => {}
     }
 }
 
 fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
     use ast::Expression as Ex;
-    if *found { return; }
+    if *found {
+        return;
+    }
     match e {
         Ex::Call(c) => {
             if matches!(c.function.as_ref(), Ex::Identifier(n) if n == "super") {
@@ -495,19 +626,42 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
                 return;
             }
             calls_super_expr(&c.function, found);
-            for a in &c.arguments { calls_super_expr(a, found); }
+            for a in &c.arguments {
+                calls_super_expr(a, found);
+            }
         }
-        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) =>
-            calls_super_expr(inner, found),
-        Ex::Infix(i) => { calls_super_expr(&i.left, found); calls_super_expr(&i.right, found); }
+        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) => {
+            calls_super_expr(inner, found)
+        }
+        Ex::Infix(i) => {
+            calls_super_expr(&i.left, found);
+            calls_super_expr(&i.right, found);
+        }
         Ex::DotCall(d) => {
             calls_super_expr(&d.object, found);
-            for a in &d.arguments { calls_super_expr(a, found); }
+            for a in &d.arguments {
+                calls_super_expr(a, found);
+            }
         }
-        Ex::Index(ix) => { calls_super_expr(&ix.left, found); calls_super_expr(&ix.index, found); }
-        Ex::ArrayLiteral(al) => { for el in &al.elements { calls_super_expr(el, found); } }
-        Ex::DictLiteral(dl) => { for (k, v) in &dl.entries { calls_super_expr(k, found); calls_super_expr(v, found); } }
-        Ex::EntryLiteral(k, v) => { calls_super_expr(k, found); calls_super_expr(v, found); }
+        Ex::Index(ix) => {
+            calls_super_expr(&ix.left, found);
+            calls_super_expr(&ix.index, found);
+        }
+        Ex::ArrayLiteral(al) => {
+            for el in &al.elements {
+                calls_super_expr(el, found);
+            }
+        }
+        Ex::DictLiteral(dl) => {
+            for (k, v) in &dl.entries {
+                calls_super_expr(k, found);
+                calls_super_expr(v, found);
+            }
+        }
+        Ex::EntryLiteral(k, v) => {
+            calls_super_expr(k, found);
+            calls_super_expr(v, found);
+        }
         Ex::Ternary(t) => {
             calls_super_expr(&t.condition, found);
             calls_super_expr(&t.then_expr, found);
@@ -516,19 +670,35 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
         Ex::If(ife) => {
             calls_super_expr(&ife.condition, found);
             calls_super_block(&ife.consequence, found);
-            if let Some(alt) = &ife.alternative { calls_super_block(alt, found); }
+            if let Some(alt) = &ife.alternative {
+                calls_super_block(alt, found);
+            }
         }
         Ex::InterpolatedString(parts) => {
-            for p in parts { if let ast::StringPart::Expr(ex) = p { calls_super_expr(ex, found); } }
+            for p in parts {
+                if let ast::StringPart::Expr(ex) = p {
+                    calls_super_expr(ex, found);
+                }
+            }
         }
         Ex::New(n) => match &n.args {
-            ast::NewArgs::Positional(v) => { for a in v { calls_super_expr(a, found); } }
-            ast::NewArgs::Fields(f) => { for (_, a) in f { calls_super_expr(a, found); } }
+            ast::NewArgs::Positional(v) => {
+                for a in v {
+                    calls_super_expr(a, found);
+                }
+            }
+            ast::NewArgs::Fields(f) => {
+                for (_, a) in f {
+                    calls_super_expr(a, found);
+                }
+            }
         },
         Ex::Match(m) => {
             calls_super_expr(&m.subject, found);
             for arm in &m.arms {
-                if let Some(g) = &arm.guard { calls_super_expr(g, found); }
+                if let Some(g) = &arm.guard {
+                    calls_super_expr(g, found);
+                }
                 calls_super_block(&arm.body, found);
             }
         }
@@ -538,7 +708,11 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
             ast::LambdaBody::Expr(ex) => calls_super_expr(ex, found),
         },
         Ex::UnsafeBlock(b) => calls_super_block(b, found),
-        Ex::ObjectPatch(fields) => { for (_, ex) in fields { calls_super_expr(ex, found); } }
+        Ex::ObjectPatch(fields) => {
+            for (_, ex) in fields {
+                calls_super_expr(ex, found);
+            }
+        }
         _ => {}
     }
 }
@@ -548,7 +722,9 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
 fn roots_at_this(e: &Expression) -> bool {
     match e {
         Expression::Identifier(n) => n == "this",
-        Expression::DotCall(d) if d.arguments.is_empty() && !d.has_parens => roots_at_this(&d.object),
+        Expression::DotCall(d) if d.arguments.is_empty() && !d.has_parens => {
+            roots_at_this(&d.object)
+        }
         Expression::Index(ix) => roots_at_this(&ix.left),
         _ => false,
     }

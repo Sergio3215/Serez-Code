@@ -14,7 +14,11 @@ pub fn find_szx_translator(szx: &std::path::Path) -> Option<std::path::PathBuf> 
         roots.push(cwd.join("packages"));
     }
     if let Some(dir) = szx.parent() {
-        let dir = if dir == std::path::Path::new("") { std::path::Path::new(".") } else { dir };
+        let dir = if dir == std::path::Path::new("") {
+            std::path::Path::new(".")
+        } else {
+            dir
+        };
         roots.push(dir.join("packages"));
     }
     roots.push(crate::package_manager::packages_dir());
@@ -139,7 +143,11 @@ pub fn translate_szx_to_string(szx: &std::path::Path) -> Option<String> {
             }
         }
     }
-    let translated = if ok { std::fs::read_to_string(&out_sz).ok() } else { None };
+    let translated = if ok {
+        std::fs::read_to_string(&out_sz).ok()
+    } else {
+        None
+    };
     let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
     translated
 }

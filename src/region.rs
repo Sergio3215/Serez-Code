@@ -58,10 +58,18 @@ pub enum OwnedValue {
     Tensor {
         shape: Vec<usize>,
         data: Vec<f64>,
-        tid: u64,        // stable identity — assigned at creation, survives extract/plant
+        tid: u64, // stable identity — assigned at creation, survives extract/plant
     },
-    DateTime { epoch_ms: i64, utc: bool },
-    DateField { epoch_ms: i64, utc: bool, field: u8, value: i64 },
+    DateTime {
+        epoch_ms: i64,
+        utc: bool,
+    },
+    DateField {
+        epoch_ms: i64,
+        utc: bool,
+        field: u8,
+        value: i64,
+    },
     Ptr(String), // pointer to a named variable
     Null,
 }
@@ -71,8 +79,9 @@ impl OwnedValue {
         match self {
             OwnedValue::Integer(i) => format!("{}", i),
             OwnedValue::Decimal(d) => {
-                if d.fract() == 0.0 { format!("{:.1}", d) }
-                else {
+                if d.fract() == 0.0 {
+                    format!("{:.1}", d)
+                } else {
                     let s = format!("{:.10}", d);
                     s.trim_end_matches('0').trim_end_matches('.').to_string()
                 }
@@ -86,14 +95,16 @@ impl OwnedValue {
                 format!("[{}]", inner.join(", "))
             }
             OwnedValue::Dict { entries, .. } => {
-                let pairs: Vec<String> = entries.iter()
+                let pairs: Vec<String> = entries
+                    .iter()
                     .map(|(k, v)| format!("{}: {}", k.display_str(), v.display_str()))
                     .collect();
                 format!("{{{}}}", pairs.join(", "))
             }
             OwnedValue::Function { .. } => "Function".to_string(),
             OwnedValue::Instance { class_name, fields } => {
-                let pairs: Vec<String> = fields.iter()
+                let pairs: Vec<String> = fields
+                    .iter()
                     .map(|(n, v)| format!("{}: {}", n, v.display_str()))
                     .collect();
                 format!("{}{{ {} }}", class_name, pairs.join(", "))
@@ -319,18 +330,26 @@ pub enum ObjectData {
     Tensor {
         shape: Vec<usize>,
         data: Vec<f64>,
-        tid: u64,        // stable identity — assigned at creation, survives extract/plant
+        tid: u64, // stable identity — assigned at creation, survives extract/plant
     },
     /// Internal date/time value. `epoch_ms` is the wall-clock instant frozen as
     /// milliseconds-since-epoch on the UTC timeline (deterministic, DST-free);
     /// `utc` records whether it originated as UTC (utcNow) or local (now/from) —
     /// used only for display labeling.
-    DateTime { epoch_ms: i64, utc: bool },
+    DateTime {
+        epoch_ms: i64,
+        utc: bool,
+    },
     /// A single field of a DateTime (year/month/day/hour/minute/second/ms). Acts
     /// as an int under operators (coerced in eval_infix) but carries
     /// `.add/.reduce/.remove` methods that return a new DateTime. `field` is the
     /// field code: 0=year 1=month 2=day 3=hour 4=minute 5=second 6=ms.
-    DateField { epoch_ms: i64, utc: bool, field: u8, value: i64 },
+    DateField {
+        epoch_ms: i64,
+        utc: bool,
+        field: u8,
+        value: i64,
+    },
     Ptr(String), // pointer to a named variable
     Null,
 }
@@ -343,17 +362,28 @@ impl std::fmt::Display for ObjectData {
             ObjectData::Dec(d) => write!(f, "Dec({})", d),
             ObjectData::Boolean(b) => write!(f, "Boolean({})", b),
             ObjectData::Str(s) => write!(f, "String(\"{}\")", s),
-            ObjectData::Array { element_type: Some(t), .. } => write!(f, "[{}]([...])", t),
+            ObjectData::Array {
+                element_type: Some(t),
+                ..
+            } => write!(f, "[{}]([...])", t),
             ObjectData::Array { .. } => write!(f, "Array([...])"),
-            ObjectData::Dict { key_type, value_type, .. } => {
+            ObjectData::Dict {
+                key_type,
+                value_type,
+                ..
+            } => {
                 write!(f, "Dict<{},{}>{{...}}", key_type, value_type)
             }
             ObjectData::Function { .. } => write!(f, "Function"),
             ObjectData::Instance { class_name, .. } => write!(f, "{}{{...}}", class_name),
-            ObjectData::EnumVariant { enum_name, variant } => write!(f, "{}.{}", enum_name, variant),
+            ObjectData::EnumVariant { enum_name, variant } => {
+                write!(f, "{}.{}", enum_name, variant)
+            }
             ObjectData::Set { .. } => write!(f, "Set{{...}}"),
             ObjectData::Tensor { shape, data, .. } => write!(f, "{}", format_tensor(shape, data)),
-            ObjectData::DateTime { epoch_ms, utc } => write!(f, "DateTime({})", format_datetime(*epoch_ms, *utc)),
+            ObjectData::DateTime { epoch_ms, utc } => {
+                write!(f, "DateTime({})", format_datetime(*epoch_ms, *utc))
+            }
             ObjectData::DateField { value, .. } => write!(f, "DateField({})", value),
             ObjectData::Ptr(name) => write!(f, "Ptr(&{})", name),
             ObjectData::Null => write!(f, "Null"),
@@ -367,7 +397,9 @@ pub struct Arena {
 
 impl Arena {
     pub fn new() -> Self {
-        Arena { storage: Vec::with_capacity(64) }
+        Arena {
+            storage: Vec::with_capacity(64),
+        }
     }
 
     pub fn alloc(&mut self, data: ObjectData) -> usize {
@@ -406,15 +438,24 @@ impl Arena {
 /// `epoch_ms` is interpreted on the UTC timeline (the value was frozen that way
 /// at construction), so this is deterministic regardless of the host timezone.
 pub fn format_datetime(epoch_ms: i64, utc: bool) -> String {
-    use chrono::{DateTime, Utc, Datelike, Timelike};
+    use chrono::{DateTime, Datelike, Timelike, Utc};
     let dt: DateTime<Utc> = DateTime::<Utc>::from_timestamp_millis(epoch_ms)
         .unwrap_or_else(|| DateTime::<Utc>::from_timestamp_millis(0).unwrap());
     let ms = dt.timestamp_subsec_millis();
     let base = format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-        dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), dt.second()
+        dt.year(),
+        dt.month(),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second()
     );
-    let base = if ms != 0 { format!("{}.{:03}", base, ms) } else { base };
+    let base = if ms != 0 {
+        format!("{}.{:03}", base, ms)
+    } else {
+        base
+    };
     if utc { format!("{}Z", base) } else { base }
 }
 

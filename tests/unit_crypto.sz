@@ -47,8 +47,8 @@ test("Crypto.base64encode known value", () => {
 });
 
 test("Crypto.base64decode known value", () => {
-    let dec = Crypto.base64decode("aGVsbG8=");
-    assert(dec == "hello", "base64decode('aGVsbG8=') should be 'hello'");
+    let decoded = Crypto.base64decode("aGVsbG8=");
+    assert(decoded == "hello", "base64decode('aGVsbG8=') should be 'hello'");
 });
 
 test("Crypto.base64decode invalid input throws", () => {

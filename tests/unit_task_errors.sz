@@ -1,0 +1,69 @@
+// Task API errors, worker failures and lifecycle must be deterministic.
+use permissions { Task, Time }
+
+fn catches(any callback, string code, string kind, string messagePart) {
+    let caught = false;
+    try { callback(); }
+    catch (e) {
+        caught = e.code == code
+            && e.kind == kind
+            && e.message.includes(messagePart);
+    }
+    return caught;
+}
+
+test("Task validates arity and types", () => {
+    assert(catches(() => Task.run(), "SZ4002", "TypeError", "2 arguments"), "run arity");
+    assert(catches(() => Task.run(1, ""), "SZ4002", "TypeError", "script_path"), "run path type");
+    assert(catches(() => Task.run("missing.sz", 1), "SZ4002", "TypeError", "arg_string"), "run message type");
+    assert(catches(() => Task.message(1), "SZ4002", "TypeError", "0 arguments"), "message arity");
+    assert(catches(() => Task.reply(), "SZ4002", "TypeError", "1 argument"), "reply arity");
+    assert(catches(() => Task.reply(1), "SZ4002", "TypeError", "string"), "reply type");
+    assert(catches(() => Task.poll(), "SZ4002", "TypeError", "1 argument"), "poll arity");
+    assert(catches(() => Task.poll("bad"), "SZ4002", "TypeError", "integer"), "poll type");
+    assert(catches(() => Task.isDone(), "SZ4002", "TypeError", "1 argument"), "isDone arity");
+    assert(catches(() => Task.isDone("bad"), "SZ4002", "TypeError", "integer"), "isDone type");
+});
+
+test("unknown Task IDs and members are ReferenceError", () => {
+    assert(catches(() => Task.poll(-9223372036854775807), "SZ4001", "ReferenceError", "not found"), "poll unknown");
+    assert(catches(() => Task.isDone(-9223372036854775807), "SZ4001", "ReferenceError", "not found"), "isDone unknown");
+    assert(catches(() => Task.missing(), "SZ4001", "ReferenceError", "Unknown Task"), "unknown member");
+});
+
+test("Task arguments preserve nested errors and user throw", () => {
+    fn string boom() { throw "task-boom"; return ""; }
+    let userThrow = false;
+    try { Task.run(boom(), ""); }
+    catch (e) { userThrow = e == "task-boom"; }
+    assert(userThrow, "user throw must propagate unchanged");
+
+    let runtime = false;
+    try { Task.poll(1 / 0); }
+    catch (e) { runtime = e.code == "SZ4004" && e.kind == "DivisionByZero"; }
+    assert(runtime, "nested runtime error must propagate unchanged");
+});
+
+test("worker runtime diagnostics survive polling", () => {
+    let id = Task.run("tests/task_worker_error.sz", "");
+    while (!Task.isDone(id)) { Time.sleep(1); }
+    let result = Task.poll(id);
+    assert(result.includes("SZ4004") && result.includes("DivisionByZero"), "worker diagnostic payload");
+});
+
+test("reply is provisional until the worker exits successfully", () => {
+    let id = Task.run("tests/task_worker_reply_then_fail.sz", "");
+    while (!Task.isDone(id)) { Time.sleep(1); }
+    let result = Task.poll(id);
+    assert(result.includes("SZ4004"), "failure after reply must win");
+    assert(!result.includes("premature-success"), "provisional reply must not hide failure");
+});
+
+test("caught Task errors do not poison later valid workers", () => {
+    try { Task.poll(-9223372036854775807); } catch (_) {}
+    let id = Task.run("tests/task_worker_simple.sz", "recovered");
+    while (!Task.isDone(id)) { Time.sleep(1); }
+    assert(Task.poll(id) == "Hello from worker: recovered", "valid worker after recovery");
+});
+
+summary();

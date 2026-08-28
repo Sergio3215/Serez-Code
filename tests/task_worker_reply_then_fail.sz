@@ -1,0 +1,5 @@
+use permissions { Task, Time }
+
+Task.reply("premature-success");
+Time.sleep(50);
+let failure = 1 / 0;

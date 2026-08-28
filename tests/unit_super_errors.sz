@@ -1,0 +1,96 @@
+// Structured and catchable validation errors for super()/super.method().
+
+test("super() outside a constructor is TypeError", () => {
+    let caught = false;
+    try { super(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "top-level super() must be catchable");
+});
+
+test("super.method() outside a class method is TypeError", () => {
+    let caught = false;
+    try { super.missing(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "top-level super.method() must be catchable");
+});
+
+test("super() on a root class is TypeError", () => {
+    class SuperErrorRootCtor { public SuperErrorRootCtor() { super(); } }
+    let caught = false;
+    try { new SuperErrorRootCtor(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "root constructor has no parent");
+});
+
+test("super.method() on a root class is TypeError", () => {
+    class SuperErrorRootMethod {
+        public any fail() { return super.missing(); }
+    }
+    let caught = false;
+    try { new SuperErrorRootMethod().fail(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "root method has no parent");
+});
+
+test("missing parent method is ReferenceError", () => {
+    class SuperErrorMethodParent {}
+    class SuperErrorMethodChild : SuperErrorMethodParent {
+        public any fail() { return super.missing(); }
+    }
+    let caught = false;
+    try { new SuperErrorMethodChild().fail(); }
+    catch (e) { caught = e.code == "SZ4001" && e.kind == "ReferenceError"; }
+    assert(caught, "missing parent member must be ReferenceError");
+});
+
+test("super() constructor arity is TypeError", () => {
+    class SuperErrorCtorParent { public SuperErrorCtorParent(int value) {} }
+    class SuperErrorCtorChild : SuperErrorCtorParent {
+        public SuperErrorCtorChild() { super(); }
+    }
+    let caught = false;
+    try { new SuperErrorCtorChild(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "super() arity must be catchable");
+});
+
+test("super.method() arity is TypeError", () => {
+    class SuperErrorArityParent { public int read(int value) { return value; } }
+    class SuperErrorArityChild : SuperErrorArityParent {
+        public int fail() { return super.read(); }
+    }
+    let caught = false;
+    try { new SuperErrorArityChild().fail(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "super.method() arity must be catchable");
+});
+
+test("implicit super requiring arguments is TypeError", () => {
+    class SuperErrorRequiredParent { public SuperErrorRequiredParent(int value) {} }
+    class SuperErrorImplicitChild : SuperErrorRequiredParent {}
+    let caught = false;
+    try { new SuperErrorImplicitChild(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "impossible implicit chaining must be catchable");
+});
+
+test("arguments to a parent without constructor are rejected", () => {
+    class SuperErrorEmptyParent {}
+    class SuperErrorEmptyChild : SuperErrorEmptyParent {
+        public SuperErrorEmptyChild() { super(1); }
+    }
+    let caught = false;
+    try { new SuperErrorEmptyChild(); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "super(args) cannot silently target no constructor");
+});
+
+test("cleanup preserves later valid super dispatch", () => {
+    class SuperErrorHealthyParent { public int read() { return 7; } }
+    class SuperErrorHealthyChild : SuperErrorHealthyParent {
+        public int readParent() { return super.read(); }
+    }
+    assert(new SuperErrorHealthyChild().readParent() == 7, "dispatch remains healthy");
+});
+
+summary();

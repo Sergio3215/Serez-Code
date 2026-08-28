@@ -1,5 +1,51 @@
 // Unit tests: default parameter values
 
+fn int defaultFailure(string message) {
+    throw message;
+    return 0;
+}
+
+fn int functionDefaultThrow(int value = defaultFailure("function-default")) {
+    return value;
+}
+
+fn int functionDefaultRuntime(int value = 1 / 0) {
+    return value;
+}
+
+class CallbackDefaultContract {
+    public decimal fail() { throw "callback-default"; return 0.0; }
+    public decimal apply(decimal value, decimal ignored = this.fail()) { return value; }
+}
+
+class ConstructorDefaultContract {
+    public ConstructorDefaultContract(int value = defaultFailure("constructor-default")) {
+        this.value = value;
+    }
+}
+
+class SuperConstructorDefaultBase {
+    public SuperConstructorDefaultBase(int value = defaultFailure("super-constructor-default")) {
+        this.value = value;
+    }
+}
+
+class SuperConstructorDefaultChild : SuperConstructorDefaultBase {
+    public SuperConstructorDefaultChild() { super(); }
+}
+
+class SuperMethodDefaultBase {
+    public int value(int fallback = defaultFailure("super-method-default")) { return fallback; }
+}
+
+class SuperMethodDefaultChild : SuperMethodDefaultBase {
+    public int read() { return super.value(); }
+}
+
+class MethodDefaultContract {
+    public int read(int value = defaultFailure("method-default")) { return value; }
+}
+
 test("single default param — omitted uses default", () => {
     fn int greet(int x = 10) { return x; }
     assert(greet() == 10,    "no arg → default 10");
@@ -33,6 +79,12 @@ test("default param expression (arithmetic)", () => {
     assert(compute(7) == 14, "override 7 * 2 = 14");
 });
 
+test("defaults evaluate left-to-right and can read earlier parameters", () => {
+    fn int dependent(int base, int offset = base + 1) { return offset; }
+    assert(dependent(10) == 11, "default reads the already-bound base parameter");
+    assert(dependent(10, 30) == 30, "explicit argument skips the default");
+});
+
 test("default param null", () => {
     fn any maybe(any val = null) { return val; }
     assert(maybe() == null,    "default null");
@@ -59,6 +111,43 @@ test("default param in lambda-passed function", () => {
     fn int apply(any f, int x) { return f(x); }
     fn int double(int n = 1) { return n * 2; }
     assert(apply(double, 4) == 8, "lambda with explicit arg");
+});
+
+test("default expressions preserve user throw across every call path", () => {
+    let functionMessage = "";
+    try { functionDefaultThrow(); } catch (e) { functionMessage = e; }
+
+    let handler = new CallbackDefaultContract();
+    let source = GPU.createBufferFromArray([1.0]);
+    let callbackMessage = "";
+    try { GPU.map(source, handler.apply); } catch (e) { callbackMessage = e; }
+    GPU.freeBuffer(source);
+
+    let constructorMessage = "";
+    try { new ConstructorDefaultContract(); } catch (e) { constructorMessage = e; }
+
+    let superConstructorMessage = "";
+    try { new SuperConstructorDefaultChild(); } catch (e) { superConstructorMessage = e; }
+
+    let superMethodMessage = "";
+    try { new SuperMethodDefaultChild().read(); } catch (e) { superMethodMessage = e; }
+
+    let methodMessage = "";
+    try { new MethodDefaultContract().read(); } catch (e) { methodMessage = e; }
+
+    assert(functionMessage == "function-default", "function default throw");
+    assert(callbackMessage == "callback-default", "callback default throw");
+    assert(constructorMessage == "constructor-default", "constructor default throw");
+    assert(superConstructorMessage == "super-constructor-default", "super ctor default throw");
+    assert(superMethodMessage == "super-method-default", "super method default throw");
+    assert(methodMessage == "method-default", "method default throw");
+});
+
+test("runtime errors in defaults stay structured and catchable", () => {
+    let caught = false;
+    try { functionDefaultRuntime(); }
+    catch (e) { caught = e.code == "SZ4004" && e.kind == "DivisionByZero"; }
+    assert(caught, "division error from default keeps its stable payload");
 });
 
 summary();

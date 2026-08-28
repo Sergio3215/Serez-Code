@@ -1,5 +1,6 @@
 // Security: un permiso denegado NO debe ser capturable — el catch no puede
-// convertir una violacion del sandbox en flujo normal.
+// convertir una denegacion de capacidad en flujo normal. El manifest no es una
+// sandbox; este test fija solamente la fatalidad del guard.
 try {
     Socket.connect("127.0.0.1", 80);
     out "unreachable: permiso bypasseado";

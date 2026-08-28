@@ -5,6 +5,198 @@ Order: most recent to oldest.
 
 ---
 
+## [Unreleased] — maturity hardening
+
+### String padding can no longer grow without a bound
+
+- `padStart(-1, "x")` and `padEnd(-1, "x")` cast the negative target to
+  `usize` and entered effectively unbounded, quadratic growth. Padding now
+  rejects negative targets with catchable `RangeError` (`SZ4000`), builds in
+  linear time, uses fallible capacity reservation and applies a fatal
+  10,000,000-character ceiling (`SZ6002`) before allocating the result.
+- Valid Unicode and multi-character padding results remain compatible,
+  including the historical `padStart` truncation direction.
+- Every String method now validates arity and types structurally (`SZ4002`), an
+  unknown member is `ReferenceError` (`SZ4001`), and nested runtime failures or
+  user `throw` propagate unchanged. Invalid padding/types are no longer silently
+  converted to zero, space or omitted bounds.
+- README incorrectly claimed `.replace` changed every occurrence despite the
+  implementation and regression suite defining first-only replacement. The
+  guide now matches `.replace`/`.replaceAll` reality; `spec/strings.md` freezes
+  the Unicode/index/error contract.
+
+### Random no longer crashes on the complete integer domain
+
+- `Random.int(i64::MIN, i64::MAX)` previously overflowed while calculating
+  `max - min + 1`, panicking the debug host (exit 101) and reaching modulo by
+  zero in wrapping builds. Width arithmetic now occurs outside `i64`, and wide
+  ranges combine enough deterministic LCG output for every integer to be
+  reachable.
+- Seeded sequences for established ranges of width at most 2³¹ remain byte-for-
+  byte compatible. Wider ranges use rejection sampling rather than the previous
+  truncated 31-bit result.
+- Every Random validation path is now structured and catchable: arity/types use
+  `TypeError` (`SZ4002`), invalid domains use `RangeError` (`SZ4000`), and an
+  unknown member uses `ReferenceError` (`SZ4001`). Nested errors and user
+  `throw` propagate unchanged; arity failures do not evaluate arguments.
+- The shared Tensor shape parser now reports structured type/range diagnostics,
+  while product overflow and the element ceiling remain fatal resource errors.
+
+### Task workers have an isolated, bounded runtime contract
+
+- Task state moved from one process-global registry into an evaluator-owned
+  runtime shared only with descendant workers. Independent embedders can no
+  longer observe or poll each other's predictable task IDs; nested tasks remain
+  compatible.
+- Workers inherit parent lockdown and its granted permissions. Previously a
+  restricted evaluator with Task permission spawned an unrestricted child that
+  could read files and load manifest permissions.
+- `Task.reply` is provisional until successful worker exit. Runtime failure or
+  panic after a reply now wins instead of exposing a premature success. Worker
+  runtime diagnostics retain `[code] kind: message` in the compatible `ERROR: `
+  polling result.
+- All Task API validation is structured and catchable (`SZ4001`/`SZ4002`), while
+  nested errors/throws propagate unchanged. Registry poison no longer panics the
+  host.
+- Per-runtime limits are now explicit: 32 live workers, 256 retained records,
+  1 MiB arguments/replies and 16 MiB worker source. Concurrency/message/thread
+  creation ceilings are fatal `ResourceError` (`SZ6002`).
+
+### Test runners no longer accept aborted unit files
+
+- The Windows and Unix runners now require exit code 0, a `Results:` summary and
+  no `[FAIL]` output for every framework-based unit file. Previously a parse or
+  runtime abort before `summary()` produced no `[FAIL]` line and was reported as
+  PASS—the exact defect recorded in the 9.16.0 changelog.
+- Error/security fixtures now require both a non-zero exit and an error
+  diagnostic. E2E output cannot be accepted or regenerated after a failed
+  process.
+- Every invocation runs a deliberately aborting fixture and proves the runner
+  rejects it, so this quality-gate regression cannot silently return.
+- The first honest run exposed 24 prior false positives: 16 legacy golden files
+  were being treated as framework suites, three suites omitted `summary()`, and
+  five fixtures did not parse. They are now correctly classified or repaired;
+  the complete runner now passes 459/459.
+
+### DateTime failures have a stable contract
+
+- DateTime/DateField wrong arity and types now raise catchable `TypeError`
+  (`SZ4002`); invalid calendars/epochs raise `RangeError` (`SZ4000`); field
+  overflow raises `Overflow` (`SZ4000`); unknown members raise `ReferenceError`
+  (`SZ4001`). The previous paths stopped with an unstructured sentinel.
+- All members validate arity before evaluating argument expressions. This fixes
+  zero-argument operations that previously accepted and silently skipped extra
+  arguments and their side effects.
+- Valid arguments preserve nested runtime errors and user `throw` unchanged.
+  Rust, language and CLI regressions cover classification, capture and recovery.
+
+### Cyclic inheritance can no longer hang the runtime
+
+- Self and indirect cycles are rejected atomically at class declaration with
+  catchable `TypeError` (`SZ4002`). Before this change, missing method/getter/
+  setter lookup on a cycle looped indefinitely.
+- All three ancestor lookup helpers are bounded defensively, including against a
+  corrupt legacy/internal registry.
+- Forward parent references remain compatible. Using the child before its parent
+  is declared now raises catchable `ReferenceError` (`SZ4001`) instead of
+  constructing a partial object or treating a missing parent as constructorless.
+- Extending a sealed class now preserves the rejection but reports structured
+  catchable `TypeError` (`SZ4002`).
+
+### Property-write failures are structured
+
+- Assignment to a getter-only property and field assignment on a non-instance
+  now raise catchable `TypeError` (`SZ4002`) instead of an unstructured fatal
+  sentinel. The write is still refused.
+- Private accessors, malformed accessor arity and getter return mismatches share
+  the same structured method-dispatch contract; accessor `throw`/runtime errors
+  propagate unchanged.
+- The specification now records, without changing, three broader compatibility
+  debts: typed class fields are not enforced on later writes, interfaces can be
+  extended after exact construction, and inherited private access is keyed to
+  runtime rather than declaring class.
+
+### Member-dispatch failures have stable diagnostics
+
+- Missing instance members and missing static methods now raise catchable
+  `ReferenceError` (`SZ4001`). A missing static method identifies the actual
+  class/member instead of falling through to “Variable not found: Class”.
+- Instance/static arity, external private-method calls/references and declared
+  return mismatches now raise catchable `TypeError` (`SZ4002`). Resolution,
+  argument evaluation, privacy enforcement and successful dispatch are
+  unchanged.
+- Rust, language and CLI regressions pin all seven paths and verify that caught
+  failures do not corrupt later valid instance/static calls.
+
+### `super` validation is structured and no longer ignores arguments
+
+- Invalid `super()`/`super.method()` context, missing parents, impossible
+  implicit chaining and constructor/method arity now raise catchable
+  `TypeError` (`SZ4002`). A missing method in the parent chain raises catchable
+  `ReferenceError` (`SZ4001`).
+- `super(args...)` against a parent with no constructor no longer succeeds while
+  discarding the arguments. Empty `super()` remains the compatible no-op; a
+  non-empty call is `SZ4002`.
+- The README now matches the implemented implicit-super contract instead of
+  claiming every child constructor must call it explicitly. The conservative
+  branch scan and the compatible manual-initialization exception remain visible
+  rather than being changed silently.
+- Rust, language and CLI regressions cover all nine error paths and verify that
+  caught failures do not corrupt a later valid parent-method dispatch.
+
+### Construction validation now has stable errors
+
+- An unknown `new` target now raises catchable `ReferenceError` (`SZ4001`).
+- Invalid interface construction, abstract-class instantiation, class
+  field-form construction, constructor arity and arguments passed to a class
+  without a constructor now raise catchable `TypeError` (`SZ4002`). These nine
+  paths previously stopped with an unstructured, non-catchable sentinel.
+- Human messages retain their identifying text, while Rust and Serez
+  regressions pin `code`, `kind`, catchability and evaluator reuse. Successful
+  class/interface construction and the eight official package suites remain
+  compatibility gates.
+
+### Default argument failures no longer become `null`
+
+- User `throw` and runtime failures from a default expression now propagate
+  unchanged through ordinary functions, native callbacks, constructors,
+  `super()` constructors, `super.method()` and instance methods. Previously all
+  six paths silently bound `null` and continued execution.
+- Default evaluation now uses one cleanup-aware internal result contract, with
+  regressions for the structured error payload and every call path.
+- The parser now enforces the already documented ordering rule: a required
+  parameter cannot follow a default parameter (`SZ2000`). A final `...rest`
+  parameter remains valid after defaults; a non-final rest now also reports a
+  syntax error instead of disappearing without a diagnostic. The official
+  ecosystem has no signatures that depend on either invalid form.
+
+### Resource and security failures are structured
+
+- Call-depth checks now cover functions, methods, `super`, native callbacks and
+  operator overloads through one fatal `ResourceError` (`SZ6002`) path. The
+  ceiling is 512 frames: the former nominal 1000-frame contract allowed the
+  Windows debug CLI to overflow its native stack around 800 callback frames
+  before it could report an error.
+- Tensor shapes and GPU matrix dimensions use checked multiplication before
+  allocation. Tensors retain the 10,000,000-element ceiling. GPU buffers now
+  enforce the documented 256 MiB **byte** ceiling (33,554,432 `f64` values) on
+  creation, upload and matmul output; the old comparison admitted about 2 GiB.
+- `Memory.alloc` above 256 MiB and `File.read`/`read_asBinary` above 256 MiB now
+  report fatal structured `SZ6002`. `Memory.alloc(0)` remains a catchable
+  invalid-argument `SZ4002`.
+- Protected targets in `OS.exec` and `OS.spawn` now report fatal
+  `SecurityError` (`SZ6004`). The existing substring guard remains explicitly a
+  defense-in-depth heuristic, not a sandbox or canonical path policy.
+- Array spread now matches call-argument spread: a non-array operand reports a
+  catchable `TypeError` (`SZ4002`) instead of an unstructured fatal sentinel;
+  user `throw` from the operand still propagates unchanged.
+- Invalid `for-in` iterables, non-array rows in destructured `for-in`, and
+  invalid array/object declaration destructuring now report catchable
+  `TypeError` (`SZ4002`). Loop scope cleanup and nested user `throw` propagation
+  are pinned by regressions.
+- Rust runtime-outcome regressions pin each fatal payload and verify that
+  `try/catch` cannot swallow it.
+
 ## [9.17.0] — 2026-08-16
 
 ### A subclass now chains to its parent's constructor on its own

@@ -2,6 +2,13 @@
 
 import "std/iter";
 
+class DestructurePoint {
+    public DestructurePoint(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
 test("array destructuring — basic", () => {
     let [a, b, c] = [1, 2, 3];
     assert(a == 1, "a");
@@ -27,6 +34,18 @@ test("array destructuring — rest empty", () => {
     let [only, ...rest] = [42];
     assert(only == 42, "only");
     assert(rest.length() == 0, "rest empty");
+});
+
+test("const destructuring makes every binding immutable", () => {
+    const [head, ...tail] = [1, 2, 3];
+    let caught = false;
+    try {
+        head = 9;
+    } catch (e) {
+        caught = e.code == "SZ4002" && e.kind == "TypeError";
+    }
+    assert(caught, "const positional binding cannot be reassigned");
+    assert(head == 1 && tail.length() == 2, "bindings keep their values");
 });
 
 test("array destructuring — shorter source gives null", () => {
@@ -55,6 +74,12 @@ test("dict destructuring — missing key gives null", () => {
     let {x, y} = d;
     assert(x == 1, "x");
     assert(y == null, "missing key is null");
+});
+
+test("object destructuring accepts class instances", () => {
+    let {x: px, y: py, missing} = new DestructurePoint(4, 7);
+    assert(px == 4 && py == 7, "instance fields are available by name");
+    assert(missing == null, "missing instance field is null");
 });
 
 test("for-in array destructuring — zip", () => {
@@ -87,6 +112,36 @@ test("for-in array destructuring — rest in item", () => {
     }
     assert(first_cols[0] == 1, "row0 col0");
     assert(first_cols[1] == 4, "row1 col0");
+});
+
+test("array destructuring rejects a non-array with catchable SZ4002", () => {
+    let caught = false;
+    try {
+        let [item] = 42;
+    } catch (e) {
+        caught = e.code == "SZ4002" && e.kind == "TypeError";
+    }
+    assert(caught, "array destructuring must validate its source");
+});
+
+test("object destructuring rejects unsupported values with catchable SZ4002", () => {
+    let caught = false;
+    try {
+        let {field} = 42;
+    } catch (e) {
+        caught = e.code == "SZ4002" && e.kind == "TypeError";
+    }
+    assert(caught, "object destructuring must validate its source");
+});
+
+test("for-in array destructuring validates every item", () => {
+    let caught = false;
+    try {
+        for (let [item] in [[1], 2, [3]]) {}
+    } catch (e) {
+        caught = e.code == "SZ4002" && e.kind == "TypeError";
+    }
+    assert(caught, "a non-array row must stop destructuring with SZ4002");
 });
 
 summary();

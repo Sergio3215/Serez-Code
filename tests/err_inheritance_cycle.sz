@@ -1,0 +1,2 @@
+class CycleA : CycleB {}
+class CycleB : CycleA {}

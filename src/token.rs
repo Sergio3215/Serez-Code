@@ -7,9 +7,9 @@ pub enum TokenType {
     Ident,
     Int,
     Decimal,
-    Dec,        // exact base-10 literal: 12.50m, 5m, 1e-7m
+    Dec, // exact base-10 literal: 12.50m, 5m, 1e-7m
     String,
-    RawString,  // r"..." — no interpolation, braces are literal
+    RawString, // r"..." — no interpolation, braces are literal
 
     // Operators
     Assign,
@@ -76,7 +76,7 @@ pub enum TokenType {
     KwVoid,
     KwInt,
     KwDecimal,
-    KwDec,       // exact base-10 decimal type
+    KwDec, // exact base-10 decimal type
     KwString,
     KwBool,
     KwAny,
@@ -190,24 +190,24 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "catch" => TokenType::KwCatch,
         "finally" => TokenType::KwFinally,
         "throw" => TokenType::KwThrow,
-        "in"       => TokenType::KwIn,
-        "const"    => TokenType::KwConst,
-        "enum"     => TokenType::KwEnum,
+        "in" => TokenType::KwIn,
+        "const" => TokenType::KwConst,
+        "enum" => TokenType::KwEnum,
         "abstract" => TokenType::KwAbstract,
-        "sealed"   => TokenType::KwSealed,
-        "get"      => TokenType::KwGet,
-        "set"      => TokenType::KwSet,
-        "do"       => TokenType::KwDo,
-        "static"   => TokenType::KwStatic,
-        "is"       => TokenType::KwIs,
-        "unsafe"   => TokenType::KwUnsafe,
-        "sizeof"   => TokenType::KwSizeof,
-        "native"   => TokenType::KwNative,
-        "import"   => TokenType::KwImport,
-        "export"   => TokenType::KwExport,
-        "yield"    => TokenType::KwYield,
-        "match"    => TokenType::KwMatch,
-        "use"      => TokenType::KwUse,
+        "sealed" => TokenType::KwSealed,
+        "get" => TokenType::KwGet,
+        "set" => TokenType::KwSet,
+        "do" => TokenType::KwDo,
+        "static" => TokenType::KwStatic,
+        "is" => TokenType::KwIs,
+        "unsafe" => TokenType::KwUnsafe,
+        "sizeof" => TokenType::KwSizeof,
+        "native" => TokenType::KwNative,
+        "import" => TokenType::KwImport,
+        "export" => TokenType::KwExport,
+        "yield" => TokenType::KwYield,
+        "match" => TokenType::KwMatch,
+        "use" => TokenType::KwUse,
         _ => TokenType::Ident,
     }
 }

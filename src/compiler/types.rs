@@ -42,7 +42,10 @@ impl SzType {
     /// Returns true if this type can be stored directly on the LLVM stack
     /// (i.e. has a fixed, known size at compile time).
     pub fn is_primitive(&self) -> bool {
-        matches!(self, SzType::Int | SzType::Decimal | SzType::Bool | SzType::Null)
+        matches!(
+            self,
+            SzType::Int | SzType::Decimal | SzType::Bool | SzType::Null
+        )
     }
 
     /// Human-readable name — used in error messages.
@@ -69,13 +72,13 @@ impl SzType {
     /// Parse a type annotation string (from AST) into an SzType.
     pub fn from_annotation(s: &str) -> SzType {
         match s {
-            "int"     => SzType::Int,
+            "int" => SzType::Int,
             "decimal" => SzType::Decimal,
-            "bool"    => SzType::Bool,
-            "string"  => SzType::Str,
-            "void"    => SzType::Void,
-            "null"    => SzType::Null,
-            other     => SzType::Class(other.to_string()),
+            "bool" => SzType::Bool,
+            "string" => SzType::Str,
+            "void" => SzType::Void,
+            "null" => SzType::Null,
+            other => SzType::Class(other.to_string()),
         }
     }
 }
@@ -103,26 +106,32 @@ mod tests {
         assert!(!SzType::Class("Foo".to_string()).is_primitive());
         assert!(!SzType::Enum("Color".to_string()).is_primitive());
         assert!(!SzType::Dict(Box::new(SzType::Str), Box::new(SzType::Int)).is_primitive());
-        assert!(!SzType::Function { params: vec![], ret: Box::new(SzType::Void) }.is_primitive());
+        assert!(
+            !SzType::Function {
+                params: vec![],
+                ret: Box::new(SzType::Void)
+            }
+            .is_primitive()
+        );
     }
 
     // ── display ───────────────────────────────────────────────────────────────
 
     #[test]
     fn display_scalar_types() {
-        assert_eq!(SzType::Int.display(),     "int");
+        assert_eq!(SzType::Int.display(), "int");
         assert_eq!(SzType::Decimal.display(), "decimal");
-        assert_eq!(SzType::Bool.display(),    "bool");
-        assert_eq!(SzType::Str.display(),     "string");
-        assert_eq!(SzType::Null.display(),    "null");
-        assert_eq!(SzType::Void.display(),    "void");
+        assert_eq!(SzType::Bool.display(), "bool");
+        assert_eq!(SzType::Str.display(), "string");
+        assert_eq!(SzType::Null.display(), "null");
+        assert_eq!(SzType::Void.display(), "void");
         assert_eq!(SzType::Unknown.display(), "?");
     }
 
     #[test]
     fn display_named_types() {
         assert_eq!(SzType::Class("Point".to_string()).display(), "Point");
-        assert_eq!(SzType::Enum("Color".to_string()).display(),  "Color");
+        assert_eq!(SzType::Enum("Color".to_string()).display(), "Color");
     }
 
     #[test]
@@ -146,14 +155,17 @@ mod tests {
     fn display_function_type() {
         let ty = SzType::Function {
             params: vec![SzType::Int, SzType::Bool],
-            ret:    Box::new(SzType::Decimal),
+            ret: Box::new(SzType::Decimal),
         };
         assert_eq!(ty.display(), "fn(int, bool) -> decimal");
     }
 
     #[test]
     fn display_function_no_params() {
-        let ty = SzType::Function { params: vec![], ret: Box::new(SzType::Void) };
+        let ty = SzType::Function {
+            params: vec![],
+            ret: Box::new(SzType::Void),
+        };
         assert_eq!(ty.display(), "fn() -> void");
     }
 
@@ -161,35 +173,44 @@ mod tests {
 
     #[test]
     fn from_annotation_builtin_types() {
-        assert_eq!(SzType::from_annotation("int"),     SzType::Int);
+        assert_eq!(SzType::from_annotation("int"), SzType::Int);
         assert_eq!(SzType::from_annotation("decimal"), SzType::Decimal);
-        assert_eq!(SzType::from_annotation("bool"),    SzType::Bool);
-        assert_eq!(SzType::from_annotation("string"),  SzType::Str);
-        assert_eq!(SzType::from_annotation("void"),    SzType::Void);
-        assert_eq!(SzType::from_annotation("null"),    SzType::Null);
+        assert_eq!(SzType::from_annotation("bool"), SzType::Bool);
+        assert_eq!(SzType::from_annotation("string"), SzType::Str);
+        assert_eq!(SzType::from_annotation("void"), SzType::Void);
+        assert_eq!(SzType::from_annotation("null"), SzType::Null);
     }
 
     #[test]
     fn from_annotation_unknown_name_becomes_class() {
-        assert_eq!(SzType::from_annotation("Animal"), SzType::Class("Animal".to_string()));
-        assert_eq!(SzType::from_annotation("Vec2"),   SzType::Class("Vec2".to_string()));
-        assert_eq!(SzType::from_annotation("MyType"), SzType::Class("MyType".to_string()));
+        assert_eq!(
+            SzType::from_annotation("Animal"),
+            SzType::Class("Animal".to_string())
+        );
+        assert_eq!(
+            SzType::from_annotation("Vec2"),
+            SzType::Class("Vec2".to_string())
+        );
+        assert_eq!(
+            SzType::from_annotation("MyType"),
+            SzType::Class("MyType".to_string())
+        );
     }
 
     // ── equality ─────────────────────────────────────────────────────────────
 
     #[test]
     fn same_scalars_are_equal() {
-        assert_eq!(SzType::Int,  SzType::Int);
+        assert_eq!(SzType::Int, SzType::Int);
         assert_eq!(SzType::Bool, SzType::Bool);
         assert_eq!(SzType::Void, SzType::Void);
     }
 
     #[test]
     fn different_scalars_are_not_equal() {
-        assert_ne!(SzType::Int,  SzType::Decimal);
+        assert_ne!(SzType::Int, SzType::Decimal);
         assert_ne!(SzType::Bool, SzType::Int);
-        assert_ne!(SzType::Str,  SzType::Null);
+        assert_ne!(SzType::Str, SzType::Null);
     }
 
     #[test]
@@ -206,7 +227,13 @@ mod tests {
 
     #[test]
     fn classes_compared_by_name() {
-        assert_eq!(SzType::Class("A".to_string()), SzType::Class("A".to_string()));
-        assert_ne!(SzType::Class("A".to_string()), SzType::Class("B".to_string()));
+        assert_eq!(
+            SzType::Class("A".to_string()),
+            SzType::Class("A".to_string())
+        );
+        assert_ne!(
+            SzType::Class("A".to_string()),
+            SzType::Class("B".to_string())
+        );
     }
 }

@@ -30,3 +30,4 @@ fuzz_failures/
 vscode-serez/node_modules/
 MEMORIA_SESION_WORKERS.md
 fuzz_parser.py
+documentacion-internal-082026.md

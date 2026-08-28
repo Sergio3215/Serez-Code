@@ -1,13 +1,14 @@
 #![allow(unused_imports)]
+use super::{
+    CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
+    obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
+};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::rc::Rc;
-use super::{EvalResult, StoredClass, CallFrame, type_matches, obj_data_to_key_str,
-            obj_data_eq, format_decimal, json_stringify_owned, json_parse,
-            operator_to_method_name};
 
 impl super::Evaluator {
     pub fn check_program(&self, program: &ast::Program) {
@@ -43,7 +44,12 @@ impl super::Evaluator {
         println!("📊 Estimated Global Memory: {} bytes", total_memory);
     }
 
-    pub(super) fn analyze_function(&self, name: &str, func: &ast::FunctionLiteral, total: &mut usize) {
+    pub(super) fn analyze_function(
+        &self,
+        name: &str,
+        func: &ast::FunctionLiteral,
+        total: &mut usize,
+    ) {
         let mut local_mem = 0;
 
         // Estimar memoria de parámetros
@@ -198,13 +204,21 @@ impl super::Evaluator {
             }
             ast::Expression::New(n) => {
                 let arg_cost: usize = match &n.args {
-                    ast::NewArgs::Positional(args) => args.iter().map(|e| self.estimate_expression(e)).sum(),
-                    ast::NewArgs::Fields(fields) => fields.iter().map(|(_, e)| self.estimate_expression(e)).sum(),
+                    ast::NewArgs::Positional(args) => {
+                        args.iter().map(|e| self.estimate_expression(e)).sum()
+                    }
+                    ast::NewArgs::Fields(fields) => fields
+                        .iter()
+                        .map(|(_, e)| self.estimate_expression(e))
+                        .sum(),
                 };
                 32 + arg_cost
             }
             ast::Expression::ObjectPatch(fields) => {
-                32 + fields.iter().map(|(_, e)| self.estimate_expression(e)).sum::<usize>()
+                32 + fields
+                    .iter()
+                    .map(|(_, e)| self.estimate_expression(e))
+                    .sum::<usize>()
             }
             ast::Expression::Ternary(t) => {
                 self.estimate_expression(&t.condition)
@@ -214,21 +228,32 @@ impl super::Evaluator {
                     )
             }
             ast::Expression::Spread(inner) => self.estimate_expression(inner),
-            ast::Expression::SizeOf(_)    => 8,
+            ast::Expression::SizeOf(_) => 8,
             ast::Expression::AddressOf(inner) => 8 + self.estimate_expression(inner),
-            ast::Expression::Deref(inner)     => 8 + self.estimate_expression(inner),
+            ast::Expression::Deref(inner) => 8 + self.estimate_expression(inner),
             ast::Expression::Match(m) => {
                 let subject_cost = self.estimate_expression(&m.subject);
-                let arms_cost: usize = m.arms.iter().map(|arm| {
-                    arm.body.statements.iter().filter_map(|s| {
-                        if let ast::Statement::Expression(e) = s { Some(self.estimate_expression(e)) }
-                        else { None }
-                    }).sum::<usize>()
-                }).max().unwrap_or(0);
+                let arms_cost: usize = m
+                    .arms
+                    .iter()
+                    .map(|arm| {
+                        arm.body
+                            .statements
+                            .iter()
+                            .filter_map(|s| {
+                                if let ast::Statement::Expression(e) = s {
+                                    Some(self.estimate_expression(e))
+                                } else {
+                                    None
+                                }
+                            })
+                            .sum::<usize>()
+                    })
+                    .max()
+                    .unwrap_or(0);
                 subject_cost + arms_cost
             }
             ast::Expression::UnsafeBlock(_) => 32,
         }
     }
-
 }

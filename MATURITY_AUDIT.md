@@ -1,0 +1,276 @@
+# Serez Code maturity audit
+
+Status: initial repository-wide audit, 2026-08-25.
+
+This document is a living engineering record. It separates observed behavior from
+the desired architecture and keeps unresolved debt visible. A finding is not
+considered fixed until implementation, tests and public documentation agree.
+
+## Evidence and baseline
+
+The audit inspected the Rust frontend, evaluator/runtime, optional compiler, CLI,
+REPL, LSP, package manager, native namespaces, CI/release workflows, documentation,
+benchmarks and the local official-package repositories.
+
+Current verified baseline on Windows (re-measured 2026-08-27):
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --check` | PASS |
+| `cargo check` | PASS, one Rust warning (`namespaces_gui.rs:851`, unused assignment) |
+| `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
+| `cargo test --all-targets` | PASS, 224 tests (144 library, 33 LSP binary, 8 frontend robustness, 39 runtime outcome) |
+| Serez test runner | PASS, 459 files/groups; 0 failed; 0 skipped |
+| Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
+
+The ecosystem row is the compatibility evidence for the frontend depth ceiling
+introduced below: every official package still parses, type-checks and runs
+unchanged against it.
+
+The Rust codebase contains approximately 50,860 lines across 60 files. The largest
+files are `namespaces_gui.rs` (6,036), `parser.rs` (3,880),
+`methods_tensor.rs` (3,653), `namespaces_autodiff.rs` (2,929),
+`namespaces_gui/render.rs` (2,527), `package_manager.rs` (2,311) and
+`evaluator/mod.rs` (2,215).
+
+## Severity model
+
+- **critical**: plausible crash, corruption, privilege/boundary failure or silent
+  miscompilation affecting supported use.
+- **high**: major correctness, compatibility, security-contract or quality-gate
+  risk.
+- **medium**: maintainability, consistency, coverage or developer-experience debt
+  likely to cause future defects.
+- **low**: localized cleanup or presentation issue with limited operational risk.
+
+## Findings by subsystem
+
+| Area | Severity | Classification | Evidence / impact | Required direction |
+|---|---|---|---|---|
+| Lexer | medium | bug/DX fixed, semantic contract | `spec/lexical-grammar.md` now freezes token/Unicode behavior and `SZ1001`–`SZ1004`. Regressions cover incomplete tokens, embedded NUL, base-integer corruption and comment-stack exhaustion; CLI and LSP consume the same coded shape. | Fuzz Unicode boundaries and decide identifier normalization plus numeric-separator strictness through an explicit compatibility process. |
+| Parser | high | architectural debt, diagnostics | The large parser now exposes coded positional errors through one CLI/LSP shape, and recovery is bounded, but recovery rules remain ad hoc and many AST nodes still lack uniform spans/notes. | Introduce a common frontend `Diagnostic` type and uniform AST spans incrementally while preserving current text and codes. |
+| Frontend robustness | critical | bug (fixed) | **Resolved.** Ordinary source killed the process with no diagnostic — no message, no span, no CLI-chosen exit code. Two shapes reached it: nesting (`((((…))))`, one parser stack frame per level, measured crash at 32k–50k levels) and operator chains (`1+1+1+…`, which parse in a flat loop but leave a tree one level deeper per operator for the type checker, the evaluator and the AST's drop glue to recurse over — crash at ~32k terms evaluated, ~1M type-checked). `MAX_PARSE_DEPTH` now bounds AST depth for both shapes, charging one level per operator in a chain. | Keep the ceiling covered by `tests/frontend_robustness.rs` and the two `err_parse_depth_*.sz` conformance tests. Making infix evaluation iterative would remove the limit rather than bound it, and remains the better long-term fix. |
+| AST | medium | architectural debt | One broad AST is shared by interpreter, tooling and an incomplete compiler. Nodes carry inconsistent source positions. | Add spans uniformly before changing syntax; keep AST source-oriented and lower to separate semantic IR. |
+| Type checker | high | semantic inconsistency | The checker is intentionally partial and runtime checks remain authoritative. CLI/LSP can therefore describe a program differently from execution. | Publish which checks are sound/advisory; add differential tests between `--check` and execution. |
+| Evaluator | high | architectural problem | `Evaluator` owns arenas, modules, permissions, sockets, GPU buffers, raw memory, autodiff, GUI, processes, audio and tasks in addition to language semantics. | Extract service-owned state incrementally behind runtime interfaces; do not rewrite evaluation. |
+| Control flow | medium | semantic debt | `EvalResult` mixes normal values, return/break/continue, user throw and an untyped `Error` sentinel. | Separate internal control flow from structured runtime failure without changing catch behavior. |
+| Runtime errors | high | bug risk, DX, architecture | Structured errors preserve `code`, `kind`, `message`, `span`, `stack`, and `notes`; an internal recoverability bit prevents structured security/resource failures from becoming catchable. Complete programs return `ProgramOutcome`, and `run_source_detailed` exposes the same information without breaking the exit-only API. Direct operators, exact decimals, scalar Math, spread/iteration/destructuring operands, default evaluation, construction/`super`/member/property/inheritance/DateTime/Random/String/Task validation, permission/unsafe gates and the audited resource/security ceilings now preserve stable structured diagnostics. Internally, 318 textual `EvalResult::Error` producer/propagation occurrences across 311 source lines and mutable pending-error/`try_depth` state remain across other subsystems. This is an inventory, not a monotonic quality metric: explicit propagation can legitimately add occurrences while silent fallbacks are removed. | Migrate producers and then the internal carrier in tested slices; preserve the boundary and fatal/catchable distinction while eliminating the side channel. See `spec/errors.md`. |
+| Classes / properties | high | semantic inconsistency, compatibility risk | Construction and audited dispatch errors are now structured, but property schemas are not enforced after construction: typed class fields accept later values of another type and interface instances accept new/wrongly typed fields. Internal private access compares against the runtime receiver class, so subclasses can reach inherited private members. Official packages make extensive use of dynamic fields; none currently declares getters/setters, while core tests cover accessors and nested receiver writeback. | Do not tighten silently. Add declaring-owner metadata and a property-schema design, measure dynamic-field dependencies, then use an explicit compatibility/deprecation process. See `spec/classes.md`. |
+| Inheritance graph | critical | denial-of-service bug (fixed), semantic contract | **Resolved.** Forward declarations allowed cycles (`A:B`, `B:A`) and the method/getter/setter walkers had no visited/bounded condition; all three reproduced a process timeout, including `A:A`. Cycles are now rejected before registry insertion, lookup is bounded defensively, unresolved parents raise `SZ4001` on use, and sealed inheritance raises `SZ4002`. | Keep the declaration, corrupt-registry and deep-valid-inheritance regressions. Owner-aware private lookup and abstract-method completeness remain separate work. |
+| Scopes / closures | high | compatibility risk | Scope, closure-cell and receiver-writeback behavior has a long regression history and is heavily used by `serez-ui`. | Treat existing regression tests and `serez-ui` as the compatibility contract before refactoring. |
+| Strings | critical | denial-of-service bug fixed, semantic/documentation contract | **Resolved.** Negative padding targets were cast to `usize` and grew in a quadratic loop toward the platform maximum; a one-second subprocess probe did not terminate. Padding now rejects negatives, constructs linearly with fallible reservations and has a fatal 10M-character ceiling. String validation is structured and preserves nested outcomes. README's claim that `replace` changed all occurrences contradicted implementation/tests and now correctly distinguishes `replaceAll`. | Keep Unicode scalar/index, first-only replacement and multi-character padding compatibility covered; aggregate string memory remains an explicit gap. See `spec/strings.md`. |
+| Regions / arenas | high | correctness risk | Region promotion and scratch watermarks are central to value lifetime. Prior bugs included dangling refs and lost mutations. | Add invariants/property tests around promotion, nested containers, loop watermarks and returned closures. |
+| Modules / imports | high | security, compatibility | Import state, current directory and export tracking live in `Evaluator`. Canonicalization prevents duplicate imports/cycles, while package and relative resolution have separate paths. | Extract a module loader interface; specify resolution order, cache identity, cycles, exports and path boundaries. |
+| Optional compiler | high | correctness, compatibility | Checked AST-to-HIR lowering now returns atomically and reports `SZ7001`/`SZ7002` instead of mapping unsupported syntax to `Null` or no-op. Its 76 HIR/MIR/compiler tests now run in normal builds. LLVM emission remains experimental, feature-gated and absent from the CLI; parity is still unproven. | Keep the accepted subset in `spec/compiler.md`; require differential tests and explicit later-stage diagnostics before exposing a compile command. |
+| Filesystem | high | security contract | `File` does not require a permission in normal execution; lockdown blocks it. Delete/rename additionally require `unsafe`. Reads above 256 MiB are rejected before loading with fatal `SZ6002`. | Document manifest vs lockdown precisely; centralize path policy and test symlink/junction traversal on every OS. |
+| Permissions | high | security contract | Permissions are additive declarations and source can self-grant outside lockdown. They are not an isolation boundary. All guarded namespaces now use one fatal structured `SZ6001` check. | Keep the centralized check; enumerate every native operation and close uncovered capabilities only through an explicit compatibility process. |
+| Lockdown | high | security / documentation | Lockdown closes self-granting, File, import and Autodiff weight I/O, but intentionally permits `fetch`. The process still shares host resources. | Never call it a sandbox. Consider a future compatible `Network` permission/deprecation path; require external isolation for hostile code. |
+| Network / sockets | high | security, robustness | `fetch` under lockdown has SSRF shape. Socket/WebSocket has frame-size and permission tests, but network egress is not a boundary. | Add loopback/link-local policy guidance, time/size limits and platform integration tests. |
+| Raw memory | high | security / correctness | Memory operations require `unsafe`, but live in evaluator-owned registries and are not process isolation. `Memory.alloc` now distinguishes a catchable zero-size `TypeError` from a fatal allocation above 256 MiB. | Keep explicitly trusted-only; test use-after-free, overflow, allocation caps and copy overlap. |
+| Tasks / concurrency | high | security/architecture bugs partly fixed, remaining lifecycle debt | **Resolved:** the process-global registry leaked predictable IDs/results across embedders; workers dropped parent lockdown; `reply` published success before worker completion; poisoned locks could panic; validation was unstructured; resources were unbounded. Task state is now an evaluator-owned service shared only down the worker tree, lockdown/permissions propagate, reply is provisional, panics/poison are contained, and concurrency/source/message/record ceilings are explicit. **Remaining:** no cancellation/join/timeout, terminal retention is eviction-based, paths use the process working directory, and `message`/`reply` outside worker context retain permissive compatibility fallbacks. | Add cooperative cancellation and explicit cleanup through a compatibility design; keep OS isolation mandatory for hostile/non-terminating workers. See `spec/tasks.md`. |
+| GUI / media | medium | architecture, portability | GUI is the largest subsystem and shares evaluator state; audio is a default feature and needs platform packages. | Move state behind capability services; keep GUI behavior covered by `serez-ui` canary tests. |
+| GPU / Tensor / Autodiff | high | resource robustness | Large native surfaces have explicit caps and broad tests, but share evaluator state; compiler parity is incomplete. Tensor construction now checks shape multiplication and the 10M-element cap. Every GPU creation path and matmul output enforces a real 256 MiB per-buffer ceiling with checked dimension products. Malformed `.szw` metadata is checked before allocation. | Add aggregate runtime budgets; move numeric services and the format contract out of evaluator internals. |
+| Random | critical | crash bug fixed, semantic/security contract | **Resolved.** `Random.int(i64::MIN, i64::MAX)` overflowed its inclusive-width calculation and panicked the debug host; wide ranges were also truncated to 31 bits. Width arithmetic is now overflow-safe, wide draws cover the complete integer domain, established small-range seeded sequences remain compatible, and all Random/shape validation is structured. The LCG remains deliberately predictable and is not cryptographic entropy. | Keep seeded compatibility and full-domain regressions; use `Crypto.randomBytes` for secrets and treat any future generator replacement as compatibility-impacting. See `spec/random.md`. |
+| CLI | medium | DX | CLI, eval, REPL and package commands have tests and mostly coherent exit behavior. Human diagnostics are coupled to printed strings/emojis. | Define exit-code and stdout/stderr contracts; offer machine-readable diagnostics without changing defaults. |
+| REPL | medium | semantic consistency | State and recovery tests pass, but REPL and file execution need a declared parity contract. | Add multiline/parser/error/exit behavior tests and document deliberate differences. |
+| LSP | medium | tooling consistency | LSP reconstructs symbols from partial frontend information and duplicates builtin knowledge. Diagnostics now carry the frontend's stable `SZ2xxx`/`SZ3xxx` code in the standard LSP `code` field, so a client no longer has to match on wording. | Consume the same structured diagnostics and generated capability metadata as CLI/runtime. |
+| Package manager | high | supply-chain/security | Strict 1 MiB JSON manifests, identifier/path containment, canonical `bin` targets, ZIP traversal/symlink checks and archive expansion limits now have Rust regressions. Installation is still non-atomic and packages have no lockfile, integrity/signature policy or minimum-runtime field. | Add staging plus atomic replacement, then specify integrity, yanks and runtime/spec constraints without changing resolution silently. |
+| Tests | medium | organization | Coverage is unusually broad (459 passing) but categories remain filename conventions in one directory and some tests depend on output text. Legacy `unit_*.expected` pairs are now explicitly treated as golden tests rather than fake framework suites. | Emit a machine-readable conformance summary and gradually create explicit suites without mass moves. |
+| Test runner integrity | critical | quality-gate bug (fixed) | **Resolved.** Both platform runners defined unit PASS as absence of `[FAIL]` on stdout. A parse/runtime abort before `summary()` therefore passed—the repository had recorded this defect since 9.16.0. The first strict run exposed 24 false positives (428 pass/24 fail): 16 mislabeled golden tests, three missing summaries and five parser-invalid fixtures. After repair, the baseline was 452/452; the current suite is 459/459. Unit files now require exit 0, a summary and no failures; error tests require non-zero plus a diagnostic; E2E requires exit 0. A deliberately aborting fixture self-tests the runner on every invocation. | Keep Windows and Unix classification aligned and retain the runner-integrity probe in every quality gate. |
+| Benchmarks | medium | performance governance | Sixteen workload files exist, but CI has no regression budget or stored baseline. | Separate smoke benchmarks from tracked performance runs; record platform/runtime/version. |
+| CI | high | quality gate | CI previously ran only build/check. It now runs format, check, Clippy, Rust tests and the full Serez runner on Windows/Linux/macOS. UI/HTTP/AI/AgentAI pass locally but are not executed as floating external code in this workflow. | Add isolated, commit-pinned ecosystem canaries after reviewing their CI trust boundary; add artifact summaries. |
+| Releases | medium | release integrity | Tag builds are cross-platform, publish checksums and now depend on format/check/Clippy/Rust/Serez verification plus exact tag-to-Cargo-version matching. Ecosystem and changelog/spec compatibility are not yet automated. | Add isolated ecosystem evidence and validate changelog/spec compatibility before publication. |
+| Documentation | high | trust / DX | Documentation is extensive but mixes normative contracts, implementation notes and historical behavior. One public section called permissions a default sandbox despite explicit caveats elsewhere. | Split normative `spec/` from guides and internals; test runnable examples. |
+| Versioning | high | compatibility | Runtime is 9.17.0. Only `serez-ui` declares a core floor (`>= 9.17.0`); most official packages declare no language/runtime requirement. | Version the language specification separately and require compatible runtime/spec ranges in official manifests. |
+
+## Confirmed public contracts that must not change silently
+
+- Truthiness and operand-returning `&&` / `||`.
+- Value semantics, closure cells and receiver writeback.
+- Runtime catch behavior for recoverable failures versus fatal permission,
+  unsafe and resource-limit failures.
+- Import/export visibility and import caching.
+- `fetch` currently remains available under lockdown. Changing this is desirable
+  to evaluate, but is breaking behavior and requires migration and ecosystem tests.
+- `serez-ui >= 4.36.0` requires Serez Code `>= 9.17.0`, specifically relying
+  on recent constructor, closure, truthiness and receiver fixes.
+
+## Ecosystem inventory
+
+| Package | Current declared status / risk |
+|---|---|
+| `serez-ui 4.36.0` | PASS 36/36 with core 9.17.0; explicit core floor `>= 9.17.0`. |
+| `serez-http 1.0.6` | PASS 3/3; uses Socket and Time; no core floor. |
+| `serez-ai 1.0.7` | PASS 3/3; Tensor/Autodiff consumer; no core floor. |
+| `serez-agentai 1.0.4` | PASS 3/3; depends on `serez-ai`; no core floor. |
+| `serez-pack 1.2.8` | Trusted tooling using OS/File/Env and embedding the runtime. |
+| `serez-apipack 1.1.6` | Trusted deployment tooling using OS/File/Env. |
+| `serez-dotenv 1.0.2` | Filesystem/environment consumer; manifest declares only Env. |
+| `serez-graph 1.0.0` | Pure library plus persistence examples; has unit/security runner. |
+
+The strict manifest parser accepts all ten local official manifests inspected
+(`agentai`, `ai`, `apipack`, `cobol`, `dotenv`, `graph`, `http`, `pack`, `strike`,
+`ui`). Additional package-owned suites passed against the current core: Cobol
+23/23, Graph 122/122 and Strike 113/113. These are recorded separately from the
+eight-package aggregate canary because their runners are not yet entries in the
+shared ecosystem script.
+
+Proposed public tiers:
+
+- **Stable**: language specification, default interpreter pipeline, CLI execution,
+  modules and documented core value semantics.
+- **Official**: maintained libraries/frameworks with declared runtime/spec ranges
+  and mandatory compatibility suites.
+- **Experimental / Labs**: LLVM compiler, native renderer variants and any API
+  that may reject unsupported language constructs. Experimental must mean explicit
+  diagnostics, not silent semantic degradation.
+
+## Maturity plan
+
+### P0 — prevent false security and silent corruption
+
+1. **Implemented:** checked lowering rejects unsupported statements/expressions
+   atomically with `SZ7001`/`SZ7002`; HIR/MIR tests are part of default Rust tests.
+   Native LLVM parity remains a release blocker if a compile command is exposed.
+2. **Implemented:** source can no longer crash the process through unbounded
+   recursion over the AST. `MAX_PARSE_DEPTH` (512) bounds tree depth for both
+   nesting and operator chains; `tests/frontend_robustness.rs` holds the ceiling
+   and asserts the frontend never panics on 43 shapes of malformed input, and
+   `tests/err_parse_depth_{nesting,chain}.sz` cover it from the conformance
+   runner. The ceiling clears real code by more than 20×: across the 999
+   `.sz`/`.szx` files in the official ecosystem the deepest nesting is 19 levels
+   and the longest operator chain is 25.
+3. **Implemented:** package identifiers can no longer escape install/uninstall
+   roots, `bin` targets and ZIP members are package-contained, remote archives
+   have compressed/entry/expanded limits, and malformed manifests are rejected
+   as complete typed JSON. `.szw` tensor metadata is likewise bounded and uses
+   checked arithmetic before allocation. See `spec/packages.md` and the package/
+   Autodiff Rust regressions.
+4. **Implemented:** cyclic class graphs can no longer hang method/getter/setter
+   lookup. Declaration rejects self/indirect cycles atomically, all walkers are
+   bounded by registry size, and unresolved forward parents fail on use while
+   remaining resolvable by a later declaration. Timeout reproductions and
+   `unit_inheritance_errors` pin the boundary.
+5. Audit the remaining runtime panic/unwrap reachable from user input; add
+   regression tests before replacing each one. 298 `unwrap`/`expect`/`panic!`
+   sites remain, concentrated in `namespaces_gui.rs` (60), `llvm_emit.rs` (37),
+   `hir_lower.rs` (29), `lsp/server.rs` (24) and `package_manager.rs` (23).
+   Reachability from user input has not been established site by site.
+6. Publish the exact trusted/untrusted execution contract. Treat permissions,
+   `unsafe`, lockdown and OS isolation as different mechanisms.
+
+### P1 — enforce quality and diagnostic contracts
+
+1. Retain the format/Clippy/check/Rust/Serez gates and add a machine-readable
+   conformance summary.
+2. **Partly implemented:** the frontend now carries stable codes. Lexical
+   failures emit `SZ1001`–`SZ1004`; `SZ2000`/`SZ3000` remain the generic parser/
+   type fallbacks and `SZ2001` is the AST depth ceiling. All reach the editor
+   through the LSP's standard `code` field instead of existing only as prose on
+   stderr. Unterminated strings/comments, embedded NUL, invalid `0x`/`0b` values
+   and 50,000 consecutive comments have regressions. Narrower `SZ2xxx`/`SZ3xxx`
+   codes are split out one at a time, each with a test pinning its meaning,
+   rather than freezing distinctions nothing checks. See `spec/errors.md`.
+3. **Partly implemented:** complete-program evaluation now returns a structured
+   `ProgramOutcome`; it separates success, recoverable runtime errors, uncaught
+   user exceptions, invalid top-level control flow and legacy unstructured
+   failures. `run_source_detailed` carries that distinction to embedders while
+   the original exit-only API stays source-compatible. Error generations prevent
+   a reused evaluator (notably the REPL) from attributing a stale pending error to
+   a later failure. Pending payload now includes an internal `catchable` bit, so
+   fatal security/resource errors can be structured without being swallowed by
+   `try/catch`. The payload still needs to move into `EvalResult`: 318 textual
+   producer/propagation occurrences across 311 source lines remain, so migration
+   must proceed in tested slices rather than as one mass semantic edit. This
+   crude count includes six
+   newly explicit default-error propagations that replaced silent `null`
+   fallbacks, so it must not be treated as a burndown metric. Migrated slices include
+   exact-decimal arithmetic, all direct operator diagnostics, scalar Math
+   argument resolution, every native permission/unsafe gate, all six default
+   call paths plus the existing invocation depth checks, Tensor/GPU/Memory/File
+   ceilings and the protected OS target
+   policy. Ordinary operator faults remain catchable; resource and security
+   ceilings are structured but fatal. Math type failures use `SZ4002`, and
+   nested user exceptions survive `sin`/`min`/`max`/`pow` argument evaluation.
+   Array/call spread, invalid `for-in` inputs and declaration destructuring now
+   agree on catchable `TypeError` / `SZ4002` while preserving nested user
+   `throw`. Unknown-target, eight class/interface construction validations and
+   eight ordinary `super` producers, five member-dispatch producers, two
+   property-write producers and sealed/invalid inheritance now use catchable
+   `SZ4001`/`SZ4002`. DateTime/DateField validation now distinguishes catchable
+   type, range, overflow and reference failures and preserves nested outcomes.
+   Task validation now uses the same channel, while worker failures preserve
+   structured payload text across the asynchronous polling boundary.
+   Property-schema enforcement, declaring-owner privacy,
+   static inheritance/references and the internal missing-`this` invariant
+   remain in the legacy inventory.
+4. Add malformed-input and error-path tests for every migrated diagnostic.
+
+### P2 — boundaries and compatibility
+
+1. Extract module loading, permissions and native registries behind small runtime
+   service interfaces while keeping a single executable/repository.
+2. **Partly implemented:** `run_ecosystem.ps1` / `run_ecosystem.sh` run every
+   official package's own suite against the freshly built core and report one
+   table, preferring each runner's tally over its exit code (a green exit with
+   failures in the log is the worst outcome for a canary) and reporting absent
+   checkouts as SKIP rather than failure. Still local-only: automating
+   commit-pinned revisions in CI needs an explicit trust policy for running
+   external code, which has not been decided.
+3. Specify CLI exit codes, stdout/stderr and machine-readable diagnostics.
+4. Add minimum runtime and language-spec fields to official package manifests.
+
+### P3 — normative specification and documentation
+
+`spec/` exists and holds ten documents so far:
+
+- `errors.md` — diagnostic code ranges, what is emitted today, and the public
+  shape of a caught runtime error.
+- `limits.md` — every ceiling that is now part of the language contract, and an
+  explicit list of the dimensions that are **not** bounded (memory, wall-clock
+  time, handle counts).
+- `security.md` — the trusted/untrusted execution contract, separating the
+  permission manifest, `unsafe`, lockdown and OS isolation, and stating plainly
+  that there is no sandbox.
+- `compiler.md` — the accepted subset of the experimental AOT pipeline.
+- `packages.md` — typed manifest fields, resolution order, package-contained
+  paths, archive limits and the explicit supply-chain/atomicity gaps.
+- `lexical-grammar.md` — token forms, Unicode behavior, comment/string rules and
+  the stable `SZ1001`–`SZ1004` failure modes.
+- `variables.md` — normative declaration destructuring, accepted sources,
+  missing-value behavior and `SZ4002` failures.
+- `control-flow.md` — the audited `for-in` subset: accepted iterables, snapshot/
+  copy behavior, array-pattern iteration and propagation.
+- `functions.md` — parameter ordering and arity, call-time default evaluation,
+  rest collection and failure propagation across every invocation route.
+- `classes.md` — construction targets, exact interface shapes, abstract/no-
+  constructor rules, implicit chaining and stable recoverable `super`
+  diagnostics.
+
+Still to write: `syntax.md`, `values.md`, `types.md`, `operators.md`,
+`scopes.md`, `modules.md` and `compatibility.md`.
+The remaining sections of variables and control flow also need expansion. All
+of these describe semantics that are load-bearing for the whole ecosystem, so
+each rule has to be checked
+against the implementation and pointed at a conformance test before it is
+written down — publishing a rule the implementation does not follow is worse
+than publishing nothing.
+
+### P3/P4 — performance and features
+
+Establish reproducible benchmark baselines only after correctness gates are stable.
+New syntax or builtins remain last priority; functionality implementable in Serez
+belongs in official libraries.
+
+## Definition of a releasable change
+
+A core change is releasable only when:
+
+1. formatting, check, Clippy and Rust tests pass;
+2. language conformance, regression, error-path and security suites pass;
+3. affected official-package canaries pass;
+4. public semantics have a spec entry or an explicit experimental marker;
+5. diagnostics and exit behavior remain compatible or follow a documented
+   deprecation;
+6. the release workflow consumes those same results rather than rebuilding from an
+   unverified tag alone.

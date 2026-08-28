@@ -47,6 +47,17 @@ test("for-in does not mutate the source array", () => {
     assert(doubled[2] == 6, "doubled[2] = 6");
 });
 
+test("for-in traverses an array snapshot", () => {
+    let values = [1, 2];
+    let visited = 0;
+    for (let value in values) {
+        visited++;
+        values.push(value + 10);
+    }
+    assert(visited == 2, "items appended during iteration are not revisited");
+    assert(values.length() == 4, "mutations still write back to the source array");
+});
+
 test("for-in closures capture each iteration independently", () => {
     fn [any] makeAdders([int] vals) {
         let result = [];
@@ -181,6 +192,16 @@ test("++ and -- in nested while loops", () => {
     }
     assert(outer == 3, "outer ran 3 times");
     assert(inner_total == 9, "inner ran 3*3 = 9 times");
+});
+
+test("for-in rejects non-iterables with catchable SZ4002", () => {
+    let caught = false;
+    try {
+        for (let item in 42) {}
+    } catch (e) {
+        caught = e.code == "SZ4002" && e.kind == "TypeError";
+    }
+    assert(caught, "non-iterable for-in must be a catchable TypeError");
 });
 
 summary();

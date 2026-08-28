@@ -24,3 +24,5 @@ test("env missing var returns empty", () => {
     let v = env("__SEREZ_NOT_A_REAL_VAR_XYZ__");
     assert(v == "", "empty for unknown var");
 });
+
+summary();

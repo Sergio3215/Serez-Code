@@ -44,7 +44,11 @@ fn run() -> i32 {
         // ── `sz install [pkg@version] [-g/--global]` subcommand ───────────────
         if args[1] == "install" {
             let global = args.iter().any(|a| a == "-g" || a == "--global");
-            let spec = args.iter().skip(2).find(|a| !a.starts_with('-')).map(|s| s.as_str());
+            let spec = args
+                .iter()
+                .skip(2)
+                .find(|a| !a.starts_with('-'))
+                .map(|s| s.as_str());
             return subcommand_code(match spec {
                 Some(s) => package_manager::install_package(s, !global, global),
                 None => package_manager::install_all(),
@@ -57,14 +61,20 @@ fn run() -> i32 {
         // `sz uninstall -g`        → remove ALL global packages
         if args[1] == "uninstall" {
             let global = args.iter().any(|a| a == "-g" || a == "--global");
-            let name = args.iter().skip(2).find(|a| !a.starts_with('-')).map(|s| s.as_str());
+            let name = args
+                .iter()
+                .skip(2)
+                .find(|a| !a.starts_with('-'))
+                .map(|s| s.as_str());
             if let Some(n) = name {
                 return subcommand_code(package_manager::uninstall_package(n, global));
             }
             if global {
                 return subcommand_code(package_manager::uninstall_all_global());
             }
-            eprintln!("❌ ERROR: Usage: sz uninstall <package-name> [-g]  (or `sz uninstall -g` to remove all global packages)");
+            eprintln!(
+                "❌ ERROR: Usage: sz uninstall <package-name> [-g]  (or `sz uninstall -g` to remove all global packages)"
+            );
             return 1;
         }
 
@@ -73,7 +83,11 @@ fn run() -> i32 {
         // No name → updates all project deps (or all global packages with -g).
         if args[1] == "update" {
             let global = args.iter().any(|a| a == "-g" || a == "--global");
-            let name = args.iter().skip(2).find(|a| !a.starts_with('-')).map(|s| s.as_str());
+            let name = args
+                .iter()
+                .skip(2)
+                .find(|a| !a.starts_with('-'))
+                .map(|s| s.as_str());
             return subcommand_code(match name {
                 Some(n) => package_manager::update_package(n, global),
                 None => package_manager::update_all(global),

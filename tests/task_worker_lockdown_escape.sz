@@ -1,0 +1,3 @@
+// Must inherit lockdown from the evaluator that spawned this worker.
+let ignored = File.read("README.md");
+Task.reply("escaped");

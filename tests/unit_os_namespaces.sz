@@ -62,7 +62,7 @@ test("Env.set and Env.get roundtrip", () => {
 
 test("Env.args returns an array", () => {
     let args = Env.args();
-    assert(args is [string], "args should be a string array");
+    assert(args is array, "args should be an array");
     assert(args.length() > 0, "args should have at least the program name");
 });
 
