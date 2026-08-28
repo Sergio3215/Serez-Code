@@ -249,7 +249,12 @@ stale; `ls spec/` is the inventory.
   shape of a caught runtime error.
 - `limits.md` — every ceiling that is now part of the language contract, and an
   explicit list of the dimensions that are **not** bounded (memory, wall-clock
-  time, handle counts).
+  time, handle counts). Audited against the constants: every documented number
+  matched, five enforced ceilings were missing (the four `.szw` weights-file
+  limits and `Crypto.randomBytes`), and the "999 files, 19 levels deep"
+  measurement had gone stale at 1,255 files — replaced with the durable claim
+  that the only two files in the whole ecosystem reaching the AST ceiling are
+  the two fixtures written to test it, which a `--check` sweep re-verifies.
 - `security.md` — the trusted/untrusted execution contract, separating the
   permission manifest, `unsafe`, lockdown and OS isolation, and stating plainly
   that there is no sandbox.

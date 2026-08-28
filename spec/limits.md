@@ -32,10 +32,17 @@ the tree is what every later stage walks. Two shapes of source reach it:
 Exceeding the limit is a parse error: the file does not run, exactly as with any
 other syntax error.
 
-The ceiling is far above real code. Across the 999 `.sz`/`.szx` files in the
-official ecosystem, the deepest nesting is 19 levels and the longest operator
-chain is 25 operators. Source that genuinely needs more should build the
-structure at runtime rather than spell it out.
+The ceiling is far above real code, and that is checked rather than asserted:
+parse-checking every `.sz` file across the official packages and this
+repository, the **only** two that reach it are
+`tests/err_parse_depth_chain.sz` and `tests/err_parse_depth_nesting.sz` — the
+two fixtures written to test the ceiling. Source that genuinely needs more
+should build the structure at runtime rather than spell it out.
+
+The measurement is stated that way on purpose. An earlier version of this
+document named a file count and a deepest-nesting figure, and both went stale
+as the ecosystem grew; "nothing real reaches it" stays true or fails loudly,
+and re-checking it is a `--check` sweep for `SZ2001`.
 
 ## Runtime limits
 
@@ -56,6 +63,11 @@ structure at runtime rather than spell it out.
 | Task argument, reply or stored worker error | 1 MiB | Larger messages become `SZ6002`; worker error text is bounded before retention. |
 | Task worker source | 16 MiB | Worker enters failed state before parsing. |
 | Retained Task records, per runtime | 256 | Oldest terminal record is evicted; active workers remain. |
+| `Crypto.randomBytes` request | 1 MiB (1,048,576 bytes) | Rejected — see the note below on its shape. |
+| Autodiff weights file (`.szw`) | 256 MiB | Rejected before the file is read. |
+| Tensors in one weights file | 100,000 | Load fails. |
+| Tensor rank in a weights file | 64 | Load fails. |
+| Total values in a weights file | 10,000,000 | Load fails. |
 
 Value nesting bounds how deeply *data* may nest, which a program reaches by
 nesting containers rather than by nesting code — `v = [v]` in a loop. It is
@@ -93,6 +105,20 @@ evaluator arenas. The concurrency ceiling therefore also bounds reserved worker
 stack space. Terminal replies remain repeat-pollable within a 256-record window;
 the oldest completed/failed record is evicted before a new task is registered.
 See `tasks.md` for the lifecycle contract.
+
+`Crypto.randomBytes` bounds a single request at 1 MiB and also rejects a
+count below 1. Unlike every other limit in this table it does not report a
+structured error: it throws a **plain string**, `"Crypto.randomBytes: n must
+be between 1 and 1048576"`, with no `kind` and no `code`. It is catchable —
+the same shape as a missing module — so a caller can recover from it but
+cannot classify it without matching English. Recorded as a diagnostic gap in
+`errors.md`, not as a separate contract.
+
+The weights-file ceilings guard `.szw` loading specifically: the file size is
+checked from its metadata before any bytes are read, and the tensor count,
+rank and total value count are checked while parsing the header, so a
+malformed or hostile file cannot make the loader allocate first and validate
+afterwards.
 
 The two regex limits bound the matcher rather than the pattern: a pattern with
 catastrophic backtracking fails to match instead of running until the process is

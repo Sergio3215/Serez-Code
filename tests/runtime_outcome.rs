@@ -2996,3 +2996,53 @@ fn lockdown_denials_split_into_catchable_and_fatal() {
         other => panic!("a guarded namespace must stay fatally denied, got {other:?}"),
     }
 }
+
+#[test]
+fn the_string_and_crypto_ceilings_are_the_ones_the_document_names() {
+    // Memory, GPU, Tensor and call-depth ceilings are covered above. These four
+    // were only pinned by `err_*`/`sec_*` fixtures, which assert "non-zero exit
+    // and a ❌ line" — enough to catch a crash, not enough to catch a limit
+    // changing its code, its kind, or whether a program may catch it.
+
+    // Fatal: try/catch cannot turn a resource ceiling into control flow.
+    let fatal = [
+        ("string repetition", r#""x" * 10000001;"#),
+        ("string padding", r#""x".padStart(10000001, "y");"#),
+    ];
+    for (what, call) in fatal {
+        let src = format!(
+            r#"
+                try {{ {call} }} catch (e) {{ out("unreachable: the limit was caught"); }}
+                out("unreachable: execution continued");
+            "#
+        );
+        match evaluate(&src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ6002", "{what}: {error:?}");
+                assert_eq!(error.kind, "ResourceError", "{what}: {error:?}");
+            }
+            other => panic!("{what} must be a fatal SZ6002, got {other:?}"),
+        }
+    }
+
+    // Crypto.randomBytes bounds a request at 1 MiB and reports it as a plain
+    // catchable string — the one ceiling in limits.md with no kind and no code.
+    // Pinned as the gap it is: making it structured should be a deliberate
+    // change that updates this test, limits.md and errors.md together.
+    match evaluate(
+        r#"
+        let shape = "";
+        try { Crypto.randomBytes(1048577); } catch (e) { shape = type_of(e); }
+        if (shape != "string") { throw "randomBytes reported as " + shape; }
+        "#,
+    ) {
+        ProgramOutcome::Value(_) => {}
+        other => panic!("over the cap must throw a catchable string, got {other:?}"),
+    }
+
+    // And the cap really is 1 MiB, not merely "large".
+    match evaluate(r#"Crypto.randomBytes(1048576).length();"#) {
+        ProgramOutcome::Value(_) => {}
+        other => panic!("exactly 1 MiB must be accepted, got {other:?}"),
+    }
+}

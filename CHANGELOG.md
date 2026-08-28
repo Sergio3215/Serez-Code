@@ -7,6 +7,39 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The limits document is audited: five ceilings were missing, one figure was stale
+
+- Every number in `spec/limits.md` checked against its constant in the source.
+  All of them matched — AST and call depth 512, value nesting 500, string
+  repetition and padding 10,000,000, tensor elements 10,000,000, regex 1,000,000
+  steps and 8,000 backtracking levels, `Memory.alloc` and GPU buffers and
+  `File.read` at 256 MiB, WebSocket frames at 16 MiB, and the five Task
+  ceilings.
+- **Five enforced ceilings were not documented at all:** the `.szw` weights file
+  (256 MiB, 100,000 tensors, rank 64, 10,000,000 total values) and
+  `Crypto.randomBytes` (1 MiB per request, and a count below 1 rejected). All
+  five are now in the table, with a note on where the weights-file checks happen
+  — file size from metadata before any bytes are read, the rest while parsing
+  the header, so a malformed file cannot make the loader allocate first.
+- `Crypto.randomBytes` is also the one ceiling that reports a **plain catchable
+  string** rather than a structured error: no `kind`, no `code`, classifiable
+  only by matching English. Recorded in `errors.md` beside `ModuleNotFound`,
+  which has the same shape for the opposite reason — that one is pinned and
+  deliberate, this one is a gap to close.
+- The claim "across the 999 `.sz`/`.szx` files in the official ecosystem, the
+  deepest nesting is 19 levels" had gone stale: there are 1,255 files now. A
+  number that drifts every release is worse than no number, so it is replaced by
+  the durable version, verified by parse-checking every `.sz` file across the
+  official packages and this repository: **the only two that reach the AST
+  ceiling are `err_parse_depth_chain.sz` and `err_parse_depth_nesting.sz`**, the
+  fixtures written to test it. Re-checking it is a `--check` sweep for `SZ2001`.
+- `the_string_and_crypto_ceilings_are_the_ones_the_document_names` pins the
+  string repetition and padding ceilings as fatal `SZ6002`, and both the shape
+  and the exact value of the `Crypto.randomBytes` cap. Those four were covered
+  only by `err_*`/`sec_*` fixtures, which assert "non-zero exit and a ❌ line" —
+  enough to catch a crash, not a limit changing its code or its catchability.
+- No behaviour changed.
+
 ### The execution contract is audited, and one claim in it was wrong
 
 - Every concrete claim in `spec/security.md` was checked against the running

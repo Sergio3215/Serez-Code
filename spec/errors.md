@@ -249,6 +249,13 @@ A module that was found but cannot be *loaded* — it does not parse, it is a
 `.szx` the translator cannot handle, or it cannot be read — is a recoverable
 `ImportError` / `SZ5002`.
 
+`Crypto.randomBytes` has the same shape for a different reason: a request
+outside `1..=1_048_576` throws the plain string `"Crypto.randomBytes: n must
+be between 1 and 1048576"`. It is catchable and carries no `kind` or `code`,
+so a caller can recover but cannot classify without matching English. Unlike
+`ModuleNotFound` nothing pins its message form, so this one is a diagnostic
+gap to close rather than a shape to preserve. See `limits.md`.
+
 A missing import is now reported once. The module paths printed the failure
 themselves *and* threw it, so a single bad import produced two lines on stderr:
 an `❌ ERROR:` from the import and an `❌ UNCAUGHT EXCEPTION:` from the program
