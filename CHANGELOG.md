@@ -7,6 +7,40 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Constructor chaining reaches one level, not the whole hierarchy
+
+- `spec/classes.md` said each constructor in a multi-level chain "must itself
+  call `super(...)`, **or rely on the compatibility rule above when invoked
+  through ordinary construction**". The second half is false past the first
+  level. Implicit chaining happens only at the outermost `new`; a constructor
+  reached *as a parent* — by an explicit `super()` or by the implicit call — gets
+  no implicit call of its own. A middle class with no constructor at all stops
+  the chain the same way.
+- The failure mode is quiet: the grandparent's field initialization simply does
+  not happen, and it surfaces as a `ReferenceError` wherever that field is first
+  read, far from the constructor that should have set it. In a hierarchy deeper
+  than two levels, write `super(...)` in every intermediate constructor.
+- Pinned by `implicit_constructor_chaining_reaches_exactly_one_level`.
+- Also recorded: a **declared** class field wins over a getter of the same name,
+  and that is the only way the two can coexist, because the getter-only check
+  fires on any write. The same check means a subclass getter named after a field
+  the parent assigns breaks the parent's constructor — `new Child()` raises
+  `TypeError` / `SZ4002` from the parent's own `this.v = …`.
+
+### A deep stack trace is readable again
+
+- Runaway recursion printed all 512 frames, three lines each — around fifteen
+  hundred lines of stderr that buried the one-line error explaining them. The
+  human rendering now shows the innermost ten and then `... N more frame(s) not
+  shown`. A getter that recursed printed twenty thousand characters; it prints
+  thirteen lines.
+- A frame with no recorded position (`line 0`) used to index `saturating_sub(1)`
+  back to line 1 and confidently underline the **first line of the file**. Those
+  frames now print their name and no snippet, which is the honest output.
+- Only the human rendering changed. `RuntimeError::stack` still carries every
+  frame, so tooling reading the structured payload is unaffected, and both
+  renderers share one function instead of two copies that had already drifted.
+
 ### Every README example is parse-checked, and five had drifted
 
 - `readme_serez_examples_parse` extracts all 198 ```serez blocks from README.md

@@ -789,20 +789,47 @@ impl Evaluator {
     }
 
     fn print_call_stack(&self) {
-        for frame in self.call_stack.iter().rev() {
-            eprintln!(
-                "    called from '{}' [line {}:{}]",
-                frame.name, frame.line, frame.column
-            );
-            if let Some(src) = self.source_lines.get(frame.line.saturating_sub(1)) {
-                let ln = frame.line.to_string();
+        let frames: Vec<(&str, usize, usize)> = self
+            .call_stack
+            .iter()
+            .rev()
+            .map(|f| (f.name.as_str(), f.line, f.column))
+            .collect();
+        Self::print_frames(&frames, &self.source_lines);
+    }
+
+    /// Render call frames for a human.
+    ///
+    /// Two things this deliberately does not do. It does not print every frame:
+    /// the usual way to get a deep stack is runaway recursion, and 512 frames
+    /// times three lines each buries the error message that explains them under
+    /// fifteen hundred lines of scrollback. And it does not print a source
+    /// snippet for a frame with no recorded position — `line == 0` used to index
+    /// `saturating_sub(1)` back to line 1 and confidently underline the first
+    /// line of the file, which is worse than showing nothing.
+    ///
+    /// The structured payload keeps every frame; only this rendering is
+    /// abbreviated, so tooling reading `RuntimeError::stack` is unaffected.
+    fn print_frames(frames: &[(&str, usize, usize)], source_lines: &[String]) {
+        const SHOWN: usize = 10;
+
+        for &(name, line, column) in frames.iter().take(SHOWN) {
+            eprintln!("    called from '{name}' [line {line}:{column}]");
+            if line == 0 {
+                continue;
+            }
+            if let Some(src) = source_lines.get(line - 1) {
+                let ln = line.to_string();
                 eprintln!("    {} | {}", ln, src.trim_end());
                 eprintln!(
                     "    {}   {}^",
                     " ".repeat(ln.len()),
-                    " ".repeat(frame.column.saturating_sub(1))
+                    " ".repeat(column.saturating_sub(1))
                 );
             }
+        }
+        if frames.len() > SHOWN {
+            eprintln!("    ... {} more frame(s) not shown", frames.len() - SHOWN);
         }
         eprintln!();
     }
@@ -1577,22 +1604,12 @@ impl Evaluator {
             ProgramOutcome::Value(_) | ProgramOutcome::UnstructuredError => {}
             ProgramOutcome::RuntimeError(error) => {
                 eprintln!("❌ ERROR [{}]: {}", error.code, error.message);
-                for frame in &error.stack {
-                    eprintln!(
-                        "    called from '{}' [line {}:{}]",
-                        frame.name, frame.line, frame.column
-                    );
-                    if let Some(src) = self.source_lines.get(frame.line.saturating_sub(1)) {
-                        let line_number = frame.line.to_string();
-                        eprintln!("    {} | {}", line_number, src.trim_end());
-                        eprintln!(
-                            "    {}   {}^",
-                            " ".repeat(line_number.len()),
-                            " ".repeat(frame.column.saturating_sub(1))
-                        );
-                    }
-                }
-                eprintln!();
+                let frames: Vec<(&str, usize, usize)> = error
+                    .stack
+                    .iter()
+                    .map(|f| (f.name.as_str(), f.line, f.column))
+                    .collect();
+                Self::print_frames(&frames, &self.source_lines);
             }
             ProgramOutcome::UncaughtException { message } => {
                 eprintln!("❌ UNCAUGHT EXCEPTION: {message}");

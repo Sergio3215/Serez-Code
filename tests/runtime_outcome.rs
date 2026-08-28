@@ -3046,3 +3046,67 @@ fn the_string_and_crypto_ceilings_are_the_ones_the_document_names() {
         other => panic!("exactly 1 MiB must be accepted, got {other:?}"),
     }
 }
+
+#[test]
+fn implicit_constructor_chaining_reaches_exactly_one_level() {
+    // spec/classes.md said each constructor in a multi-level chain "must itself
+    // call super(...), or rely on the compatibility rule above when invoked
+    // through ordinary construction". The second half is false past the first
+    // level: the implicit call happens only at the outermost `new`. A
+    // constructor reached *as a parent* gets no implicit call of its own, so a
+    // grandparent's field initialization silently does not happen and surfaces
+    // wherever that field is first read.
+    let hierarchy = r#"
+        class G { public G() { this.a = "G"; } }
+    "#;
+
+    // Two levels: the implicit call runs the parent.
+    match evaluate(&format!(
+        "{hierarchy}
+         class Mid : G {{ public Mid() {{ this.b = \"b\"; }} }}
+         if (new Mid().a != \"G\") {{ throw \"two levels must chain\"; }}"
+    )) {
+        ProgramOutcome::Value(_) => {}
+        other => panic!("two-level implicit chaining must work, got {other:?}"),
+    }
+
+    // Three levels without an explicit super() in the middle: the grandparent
+    // never runs, so its field is missing.
+    for (what, mid) in [
+        (
+            "a middle constructor with no super()",
+            "class Mid : G { public Mid() { this.b = \"b\"; } }",
+        ),
+        (
+            "a middle class with no constructor at all",
+            "class Mid : G { }",
+        ),
+    ] {
+        match evaluate(&format!(
+            "{hierarchy}
+             {mid}
+             class Leaf : Mid {{ public Leaf() {{ this.c = \"c\"; }} }}
+             new Leaf().a;"
+        )) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4001", "{what}: {error:?}");
+                assert_eq!(error.kind, "ReferenceError", "{what}: {error:?}");
+            }
+            other => panic!("{what} must leave the grandparent unrun, got {other:?}"),
+        }
+    }
+
+    // An explicit super() in the middle carries the chain up.
+    match evaluate(&format!(
+        "{hierarchy}
+         class Mid : G {{ public Mid() {{ super(); this.b = \"b\"; }} }}
+         class Leaf : Mid {{ public Leaf() {{ this.c = \"c\"; }} }}
+         let leaf = new Leaf();
+         if (leaf.a != \"G\" || leaf.b != \"b\" || leaf.c != \"c\") {{
+             throw \"an explicit super() must carry the chain\";
+         }}"
+    )) {
+        ProgramOutcome::Value(_) => {}
+        other => panic!("explicit super() must chain, got {other:?}"),
+    }
+}

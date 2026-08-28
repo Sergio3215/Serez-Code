@@ -108,10 +108,36 @@ them and raises catchable `TypeError` (`SZ4002`). Calling `super()` outside a
 constructor, on a class without a parent, or with invalid arity raises the same
 error.
 
+### Implicit chaining reaches exactly one level
+
 Running one parent's constructor does not synthesize a call to the next
-ancestor. Each constructor body in a required multi-level chain must itself
-call `super(...)`, or rely on the compatibility rule above when invoked through
-ordinary construction.
+ancestor, and the implicit rule above applies **only at the outermost `new`**.
+A constructor invoked *as a parent* — reached by an explicit `super()` or by the
+implicit call — does not get an implicit call of its own.
+
+The chain therefore continues past the first level only through an explicit
+`super(...)` in each intermediate constructor:
+
+```serez
+class G   { public G()   { this.a = "G"; } }
+
+class MidNo  : G      { public MidNo()  { this.b = "b"; } }          // no super()
+class LeafNo : MidNo  { public LeafNo() { this.c = "c"; } }
+new LeafNo().a;          // ReferenceError — G's constructor never ran
+
+class MidYes  : G       { public MidYes()  { super(); this.b = "b"; } }
+class LeafYes : MidYes  { public LeafYes() { this.c = "c"; } }
+new LeafYes().a;         // "G" — the explicit super() carried the chain up
+```
+
+A class with **no constructor at all** in the middle stops the chain the same
+way: `class MidNone : G { }` leaves `G`'s constructor unrun when `MidNone` is
+reached as a parent, even though `new MidNone()` on its own would run it.
+
+The failure mode is a field that was never initialized, so it surfaces wherever
+that field is first read rather than at construction. In a hierarchy deeper than
+two levels, write `super(...)` in every intermediate constructor and do not rely
+on the implicit rule.
 
 ## Parent-method dispatch
 
@@ -158,6 +184,23 @@ For `obj.name` without parentheses, an existing stored field takes precedence
 over a getter of the same name. Otherwise a matching getter is invoked with no
 implicit arguments. `obj.name = value` invokes a matching setter with the
 assigned value; if no accessor exists, the stored field is updated or created.
+
+A **declared** class field wins over a getter of the same name; that is the only
+way the two can coexist, because the getter-only check fires on any write:
+
+```serez
+class D {
+    stored: string = "declared-field";      // read wins over the getter
+    public D() { }
+    public get string stored() { return "getter"; }
+}
+```
+
+The same check makes a subclass getter break an inherited constructor. A parent
+that stores `this.v` and a child that declares `get v()` cannot be constructed:
+the parent's own `this.v = …` is refused as a write to a getter-only property,
+raising `TypeError` (`SZ4002`) from `new Child()`. Naming a getter after a field
+the parent assigns is therefore a breaking change to the parent.
 
 Getter/setter lookup walks the same inheritance chain as methods. External use
 of a private accessor, malformed getter/setter arity and an incompatible declared
