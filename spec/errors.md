@@ -159,6 +159,20 @@ are recoverable `ReferenceError` / `SZ4001`. Padding result/allocation ceilings
 are fatal `ResourceError` / `SZ6002`. Valid argument failures propagate
 unchanged. See `strings.md`.
 
+Array method arity/type mismatches, values rejected by a declared element type,
+non-function callbacks and a comparator returning a non-number are recoverable
+`TypeError` / `SZ4002`; a `sort` order string other than `"asc"`/`"desc"` is
+recoverable `RangeError` / `SZ4000`; `pop`/`shift` on an empty array and an
+out-of-range `remove` index are recoverable `IndexOutOfBounds` / `SZ4003`;
+unknown members are recoverable `ReferenceError` / `SZ4001`. Arity is rejected
+before arguments are evaluated, callbacks are validated before iteration, and a
+comparator that fails leaves the receiver unsorted. Valid argument failures
+propagate unchanged. See `arrays.md`.
+
+The shared argument helpers used by Array, `Crypto.randomBytes` and `Regex.*`
+return the original outcome when evaluation does not yield a value, so a user
+`throw` inside an argument is no longer collapsed into a generic error.
+
 ## Recoverable and fatal runtime errors
 
 Structured does not imply catchable. Runtime failures carry the same public

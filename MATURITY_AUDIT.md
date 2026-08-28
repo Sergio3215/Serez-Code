@@ -12,15 +12,15 @@ The audit inspected the Rust frontend, evaluator/runtime, optional compiler, CLI
 REPL, LSP, package manager, native namespaces, CI/release workflows, documentation,
 benchmarks and the local official-package repositories.
 
-Current verified baseline on Windows (re-measured 2026-08-27):
+Current verified baseline on Windows (re-measured 2026-08-28):
 
 | Gate | Result |
 |---|---|
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS, one Rust warning (`namespaces_gui.rs:851`, unused assignment) |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
-| `cargo test --all-targets` | PASS, 224 tests (144 library, 33 LSP binary, 8 frontend robustness, 39 runtime outcome) |
-| Serez test runner | PASS, 459 files/groups; 0 failed; 0 skipped |
+| `cargo test --all-targets` | PASS, 228 tests (144 library, 33 LSP binary, 8 frontend robustness, 43 runtime outcome) |
+| Serez test runner | PASS, 461 files/groups; 0 failed; 0 skipped |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
 The ecosystem row is the compatibility evidence for the frontend depth ceiling
@@ -54,11 +54,12 @@ files are `namespaces_gui.rs` (6,036), `parser.rs` (3,880),
 | Type checker | high | semantic inconsistency | The checker is intentionally partial and runtime checks remain authoritative. CLI/LSP can therefore describe a program differently from execution. | Publish which checks are sound/advisory; add differential tests between `--check` and execution. |
 | Evaluator | high | architectural problem | `Evaluator` owns arenas, modules, permissions, sockets, GPU buffers, raw memory, autodiff, GUI, processes, audio and tasks in addition to language semantics. | Extract service-owned state incrementally behind runtime interfaces; do not rewrite evaluation. |
 | Control flow | medium | semantic debt | `EvalResult` mixes normal values, return/break/continue, user throw and an untyped `Error` sentinel. | Separate internal control flow from structured runtime failure without changing catch behavior. |
-| Runtime errors | high | bug risk, DX, architecture | Structured errors preserve `code`, `kind`, `message`, `span`, `stack`, and `notes`; an internal recoverability bit prevents structured security/resource failures from becoming catchable. Complete programs return `ProgramOutcome`, and `run_source_detailed` exposes the same information without breaking the exit-only API. Direct operators, exact decimals, scalar Math, spread/iteration/destructuring operands, default evaluation, construction/`super`/member/property/inheritance/DateTime/Random/String/Task validation, permission/unsafe gates and the audited resource/security ceilings now preserve stable structured diagnostics. Internally, 318 textual `EvalResult::Error` producer/propagation occurrences across 311 source lines and mutable pending-error/`try_depth` state remain across other subsystems. This is an inventory, not a monotonic quality metric: explicit propagation can legitimately add occurrences while silent fallbacks are removed. | Migrate producers and then the internal carrier in tested slices; preserve the boundary and fatal/catchable distinction while eliminating the side channel. See `spec/errors.md`. |
+| Runtime errors | high | bug risk, DX, architecture | Structured errors preserve `code`, `kind`, `message`, `span`, `stack`, and `notes`; an internal recoverability bit prevents structured security/resource failures from becoming catchable. Complete programs return `ProgramOutcome`, and `run_source_detailed` exposes the same information without breaking the exit-only API. Direct operators, exact decimals, scalar Math, spread/iteration/destructuring operands, default evaluation, construction/`super`/member/property/inheritance/DateTime/Random/String/Task validation, permission/unsafe gates and the audited resource/security ceilings now preserve stable structured diagnostics. Internally, 261 textual `EvalResult::Error` producer/propagation occurrences across 254 source lines and mutable pending-error/`try_depth` state remain across other subsystems. This is an inventory, not a monotonic quality metric: explicit propagation can legitimately add occurrences while silent fallbacks are removed. | Migrate producers and then the internal carrier in tested slices; preserve the boundary and fatal/catchable distinction while eliminating the side channel. See `spec/errors.md`. |
 | Classes / properties | high | semantic inconsistency, compatibility risk | Construction and audited dispatch errors are now structured, but property schemas are not enforced after construction: typed class fields accept later values of another type and interface instances accept new/wrongly typed fields. Internal private access compares against the runtime receiver class, so subclasses can reach inherited private members. Official packages make extensive use of dynamic fields; none currently declares getters/setters, while core tests cover accessors and nested receiver writeback. | Do not tighten silently. Add declaring-owner metadata and a property-schema design, measure dynamic-field dependencies, then use an explicit compatibility/deprecation process. See `spec/classes.md`. |
 | Inheritance graph | critical | denial-of-service bug (fixed), semantic contract | **Resolved.** Forward declarations allowed cycles (`A:B`, `B:A`) and the method/getter/setter walkers had no visited/bounded condition; all three reproduced a process timeout, including `A:A`. Cycles are now rejected before registry insertion, lookup is bounded defensively, unresolved parents raise `SZ4001` on use, and sealed inheritance raises `SZ4002`. | Keep the declaration, corrupt-registry and deep-valid-inheritance regressions. Owner-aware private lookup and abstract-method completeness remain separate work. |
 | Scopes / closures | high | compatibility risk | Scope, closure-cell and receiver-writeback behavior has a long regression history and is heavily used by `serez-ui`. | Treat existing regression tests and `serez-ui` as the compatibility contract before refactoring. |
 | Strings | critical | denial-of-service bug fixed, semantic/documentation contract | **Resolved.** Negative padding targets were cast to `usize` and grew in a quadratic loop toward the platform maximum; a one-second subprocess probe did not terminate. Padding now rejects negatives, constructs linearly with fallible reservations and has a fatal 10M-character ceiling. String validation is structured and preserves nested outcomes. README's claim that `replace` changed all occurrences contradicted implementation/tests and now correctly distinguishes `replaceAll`. | Keep Unicode scalar/index, first-only replacement and multi-character padding compatibility covered; aggregate string memory remains an explicit gap. See `spec/strings.md`. |
+| Arrays | high | semantic inconsistency fixed, contract | **Resolved.** Array was the last large public surface reporting failures with stderr prints and an untyped sentinel, so no Array failure was catchable and tooling had to match on prose. Worse, `slice("x")` used index 0, `flat("x")` used depth 1 and `sort("ascending")` sorted ascending — silently doing what the program had not asked for. All 21 methods now validate structurally, arity is checked before arguments are evaluated, callbacks are validated before iteration so `[].find(1)` cannot hide, and a failed comparator leaves the receiver unsorted. The shared `eval_str_arg`/`eval_int_arg` helpers no longer collapse a nested `throw`, which also fixed the same latent defect in `Crypto.randomBytes` and `Regex.*`. | Keep `spec/arrays.md` and the Array/helper regressions. The `remove`-on-empty null remains a documented inconsistency awaiting an explicit compatibility process. |
 | Regions / arenas | high | correctness risk | Region promotion and scratch watermarks are central to value lifetime. Prior bugs included dangling refs and lost mutations. | Add invariants/property tests around promotion, nested containers, loop watermarks and returned closures. |
 | Modules / imports | high | security, compatibility | Import state, current directory and export tracking live in `Evaluator`. Canonicalization prevents duplicate imports/cycles, while package and relative resolution have separate paths. | Extract a module loader interface; specify resolution order, cache identity, cycles, exports and path boundaries. |
 | Optional compiler | high | correctness, compatibility | Checked AST-to-HIR lowering now returns atomically and reports `SZ7001`/`SZ7002` instead of mapping unsupported syntax to `Null` or no-op. Its 76 HIR/MIR/compiler tests now run in normal builds. LLVM emission remains experimental, feature-gated and absent from the CLI; parity is still unproven. | Keep the accepted subset in `spec/compiler.md`; require differential tests and explicit later-stage diagnostics before exposing a compile command. |
@@ -152,9 +153,9 @@ Proposed public tiers:
    remaining resolvable by a later declaration. Timeout reproductions and
    `unit_inheritance_errors` pin the boundary.
 5. Audit the remaining runtime panic/unwrap reachable from user input; add
-   regression tests before replacing each one. 298 `unwrap`/`expect`/`panic!`
+   regression tests before replacing each one. 290 `unwrap`/`expect`/`panic!`
    sites remain, concentrated in `namespaces_gui.rs` (60), `llvm_emit.rs` (37),
-   `hir_lower.rs` (29), `lsp/server.rs` (24) and `package_manager.rs` (23).
+   `package_manager.rs` (33), `hir_lower.rs` (29) and `lsp/server.rs` (24).
    Reachability from user input has not been established site by site.
 6. Publish the exact trusted/untrusted execution contract. Treat permissions,
    `unsafe`, lockdown and OS isolation as different mechanisms.
@@ -179,8 +180,8 @@ Proposed public tiers:
    a reused evaluator (notably the REPL) from attributing a stale pending error to
    a later failure. Pending payload now includes an internal `catchable` bit, so
    fatal security/resource errors can be structured without being swallowed by
-   `try/catch`. The payload still needs to move into `EvalResult`: 318 textual
-   producer/propagation occurrences across 311 source lines remain, so migration
+   `try/catch`. The payload still needs to move into `EvalResult`: 261 textual
+   producer/propagation occurrences across 254 source lines remain, so migration
    must proceed in tested slices rather than as one mass semantic edit. This
    crude count includes six
    newly explicit default-error propagations that replaced silent `null`
@@ -222,7 +223,7 @@ Proposed public tiers:
 
 ### P3 — normative specification and documentation
 
-`spec/` exists and holds ten documents so far:
+`spec/` exists and holds fifteen documents so far:
 
 - `errors.md` — diagnostic code ranges, what is emitted today, and the public
   shape of a caught runtime error.
@@ -246,6 +247,9 @@ Proposed public tiers:
 - `classes.md` — construction targets, exact interface shapes, abstract/no-
   constructor rules, implicit chaining and stable recoverable `super`
   diagnostics.
+- `arrays.md` — value semantics, element types, mutating versus
+  non-mutating methods, callback arities, evaluation order and the stable
+  Array failure modes.
 
 Still to write: `syntax.md`, `values.md`, `types.md`, `operators.md`,
 `scopes.md`, `modules.md` and `compatibility.md`.

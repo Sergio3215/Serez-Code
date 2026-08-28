@@ -7,6 +7,33 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Array failures are structured, catchable and no longer silently ignored
+
+- Array was the last large public surface still reporting failures by printing
+  to stderr and returning an untyped sentinel. Those failures could not be
+  caught: `try { a.push() } catch (e)` aborted the process instead of running
+  the handler. All 21 methods now use the structured channel, so `e.code` and
+  `e.kind` classify the failure without matching on wording.
+- Three methods silently did something the program had not asked for.
+  `slice("x")` used index 0, `flat("x")` used depth 1 and `sort("ascending")`
+  sorted ascending. All three are now errors.
+- Arity is validated before arguments are evaluated, so `a.pop(f())`,
+  `a.reverse(f())` and `a.sort(cmp, f())` reject the call without running `f`.
+- Callbacks are validated before iteration, so `[].find(1)` is a type error
+  instead of a silent `null`.
+- A comparator that fails leaves the receiver untouched; a failed sort never
+  publishes a half-ordered array.
+- `eval_str_arg` / `eval_int_arg` returned `Option`, collapsing a user `throw`
+  and a nested runtime error into the same `None`. They now propagate the
+  original outcome, which also fixes the same latent defect in
+  `Crypto.randomBytes` and `Regex.*`; their type errors now name the call that
+  rejected the argument.
+- Unchanged: `remove` on an empty array still yields null, `reduce(initial,
+  callback)` keeps its argument order, `sort` and `reverse` still return the
+  receiver, negative `slice` indices still count from the end, negative `flat`
+  depth still clamps to 0, and every valid result is byte-identical.
+  `spec/arrays.md` freezes the contract.
+
 ### String padding can no longer grow without a bound
 
 - `padStart(-1, "x")` and `padEnd(-1, "x")` cast the negative target to
