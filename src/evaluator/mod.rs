@@ -210,7 +210,7 @@ pub struct Evaluator {
     // registered native function names
     native_fns: HashSet<String>,
     // set of already-imported canonical paths (prevents re-import and cycles)
-    imported_files: HashSet<PathBuf>,
+    imported_files: crate::modules::LoadedModules,
     // the directory of the currently executing file (for relative import resolution)
     current_dir: Option<PathBuf>,
     // Some(set) while executing an imported module — tracks exported names.
@@ -522,7 +522,7 @@ impl Evaluator {
             source_lines: Vec::new(),
             in_unsafe_block: false,
             native_fns: HashSet::new(),
-            imported_files: HashSet::new(),
+            imported_files: crate::modules::LoadedModules::new(),
             current_dir: None,
             current_module_exports: None,
             yield_collector: None,
@@ -770,7 +770,7 @@ impl Evaluator {
             self.current_dir = Some(dir.to_path_buf());
         }
         if let Ok(canonical) = path.canonicalize() {
-            self.imported_files.insert(canonical);
+            self.imported_files.mark(&canonical);
         }
     }
 

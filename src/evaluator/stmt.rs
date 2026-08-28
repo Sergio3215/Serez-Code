@@ -1460,10 +1460,10 @@ impl super::Evaluator {
         };
 
         // Use the cache_file path as canonical ID to prevent re-imports
-        if self.imported_files.contains(&cache_file) {
+        // Recorded before the body runs, which is what makes a cycle terminate.
+        if !self.imported_files.mark(&cache_file) {
             return EvalResult::Value(self.null_ref);
         }
-        self.imported_files.insert(cache_file.clone());
 
         let prev_dir = self.current_dir.clone();
         self.current_dir = Some(
@@ -1551,64 +1551,13 @@ impl super::Evaluator {
             return self.eval_import_url(path);
         }
 
-        // Resolve .sz extension once
-        let path_with_ext = if path.ends_with(".sz") {
-            path.to_string()
-        } else {
-            format!("{}.sz", path)
-        };
-
-        // Candidate directories to search, in priority order:
-        //  1. Current file's directory (relative import)
-        //  2. Process working directory (project root)
-        //  3. <cwd>/packages/ (local project packages — installed with `sz install`)
-        //  4. SEREZ_HOME env var (installed stdlib / workspace root)
-        //  5. Executable's directory (bundled stdlib)
-        //  6. ~/.serez/packages/ (global fallback)
-        let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
-
-        if let Some(ref d) = self.current_dir {
-            search_dirs.push(d.clone());
-        }
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        search_dirs.push(cwd.clone());
-        search_dirs.push(cwd.join("packages"));
-        if let Ok(home) = std::env::var("SEREZ_HOME") {
-            search_dirs.push(std::path::PathBuf::from(home));
-        }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(exe_dir) = exe.parent() {
-                search_dirs.push(exe_dir.to_path_buf());
-            }
-        }
-        search_dirs.push(crate::package_manager::packages_dir());
-
-        // Try each candidate directory. For each base, also try <base>/<pkg>/index.sz
-        // so that `import "pkg-name"` resolves to `<packages>/pkg-name/index.sz`.
-        // Each name is tried as `.sz` first, then `.szx` (serez-ui JSX): plain source
-        // wins over JSX in the same spot, and `.szx` is purely additive — an import
-        // can now pull in a JSX component file, not just plain `.sz`.
-        let stem = path.trim_end_matches(".sz").trim_end_matches(".szx");
-        let canonical = search_dirs
-            .iter()
-            .flat_map(|base| {
-                vec![
-                    base.join(&path_with_ext),          // <base>/<path>.sz
-                    base.join(format!("{}.szx", stem)), // <base>/<path>.szx
-                    base.join(stem).join("index.sz"),   // <base>/<path>/index.sz
-                    base.join(stem).join("index.szx"),  // <base>/<path>/index.szx
-                ]
-            })
-            .find_map(|p| {
-                if p.exists() {
-                    p.canonicalize().ok()
-                } else {
-                    None
-                }
-            });
-
-        let canonical = match canonical {
-            Some(c) => c,
+        // Which file this path means is a pure question — the importing file's
+        // directory, the environment, and the candidate order — so it lives in
+        // `crate::modules`, where it is unit-tested without an evaluator. What
+        // stays here is the part that genuinely needs one: executing the module
+        // against these arenas, registries and export tracking.
+        let canonical = match crate::modules::resolve(path, self.current_dir.as_deref()) {
+            Some(canonical) => canonical,
             None => {
                 let msg = format!("ModuleNotFound: Cannot find module '{}'", path);
                 let msg_ref = self.alloc(ObjectData::Str(msg));
@@ -1616,10 +1565,12 @@ impl super::Evaluator {
             }
         };
 
-        if self.imported_files.contains(&canonical) {
+        // Recorded before the body runs: that is what makes an import cycle
+        // terminate instead of recursing, and what makes a second import of the
+        // same file a no-op. See spec/modules.md.
+        if !self.imported_files.mark(&canonical) {
             return EvalResult::Value(self.null_ref); // already imported — skip
         }
-        self.imported_files.insert(canonical.clone());
 
         // A `.szx` module is JSX — translate it to `.sz` source before parsing (the
         // interpreter only understands `.sz`). Its relative imports are preserved
