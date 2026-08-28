@@ -7,6 +7,54 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The type contract is written down, and two holes in it are closed
+
+- `spec/types.md` is new: the seven type keywords, where an annotation may
+  appear, what a declared type accepts at a call, `type_of`/`is`, and exactly
+  how far the static checker reaches. Pinned by `tests/unit_types.sz` (13 cases)
+  and four new tests in `tests/runtime_outcome.rs`.
+
+- **BREAKING (see the sweep below): a constructor now enforces its declared
+  parameter types.** It already checked arity; it never checked types. So
+  `new Point("x")` against `public Point(int x)` bound a string into an `int`
+  field and the program failed only wherever that field was later used as a
+  number — or never, if it was just read back out. It is now the same catchable
+  `TypeError` / `SZ4002` a function parameter raises, naming the constructor.
+
+- **Fixed: an enum value did not satisfy its own enum's type.** `type_matches`
+  had no arm for an enum variant, so `fn rank(Priority p)` rejected
+  `Priority.Low` and said so in the one way nobody can act on — *"expected
+  'Priority' but received 'Priority'"* — and `Priority.Low is Priority` was
+  `false`. Enum-typed parameters were unusable. This is a previously-invalid
+  program becoming valid; nothing that worked before changes.
+
+  The two are related: the constructor hole is what hid the enum bug. Adding the
+  constructor check turned `38_real_programs.sz` red with the contradictory
+  message above, which is how the enum arm was found.
+
+- **The sweep required by `spec/compatibility.md` for a breaking change in a
+  minor release**, run after both fixes:
+
+  | Suite | Result |
+  | --- | --- |
+  | Conformance runner | 474 passed, 0 failed (473 at sweep time, plus `unit_types.sz`) |
+  | Ecosystem canary (8 packages) | 8/8, serez-ui 36/36 |
+  | serez-cobol | 23/23 |
+  | serez-strike | 113/113 |
+  | `cargo test --all-targets` | 251 passed, 0 failed |
+
+  No official package passes a mistyped argument to a typed constructor. The one
+  affected file in the repository was `38_real_programs.sz`, and it was affected
+  by the enum bug rather than by a genuine type violation.
+
+- Recorded in `spec/types.md` and left unchanged, because each needs a decision
+  rather than a fix: numeric types do not widen at a parameter although
+  arithmetic mixes them (`half(1)` fails for `fn decimal half(decimal d)`); a
+  declared class or interface name matches **exactly** and never a subclass, so
+  a hierarchy can only cross a call as `any`; an unknown type name is accepted
+  and then matches nothing; `[T]` on a parameter accepts any array; and declared
+  class-field types are defaults, not constraints.
+
 ### Scope and name resolution are written down, including one surprise
 
 - `spec/scopes.md` is new: block scoping and shadowing, globals being writable

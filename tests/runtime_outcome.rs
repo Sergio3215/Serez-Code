@@ -2769,3 +2769,169 @@ fn detailed_pipeline_exposes_frontend_diagnostics() {
         other => panic!("expected frontend diagnostics, got {other:?}"),
     }
 }
+
+/// `ProgramOutcome::Value` carries an arena ref, not a comparable value, so a
+/// fixture states its expectation in Serez: it throws when the expectation
+/// fails, and success is simply "the program finished".
+fn expect_ok(src: &str, what: &str) {
+    match evaluate(src) {
+        ProgramOutcome::Value(_) => {}
+        other => panic!("{what}: expected the program to finish, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_constructor_enforces_its_declared_parameter_types() {
+    // Arity was checked on the constructor path; the declared type was not. So
+    // `new Point("x")` bound a string into an `int` field and the program only
+    // failed later, wherever that field was used as a number — or never, if it
+    // was just read back out.
+    match evaluate(
+        r#"
+        class Point { public Point(int x) { this.x = x; } }
+        new Point("not an int");
+        "#,
+    ) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4002", "{error:?}");
+            assert_eq!(error.kind, "TypeError", "{error:?}");
+            assert!(
+                error.message.contains("constructor 'Point'")
+                    && error.message.contains("expected 'int'")
+                    && error.message.contains("received 'string'"),
+                "{error:?}"
+            );
+        }
+        other => panic!("a mistyped constructor argument must fail, got {other:?}"),
+    }
+
+    // The failure is catchable, like every other parameter mismatch.
+    expect_ok(
+        r#"
+        class Point { public Point(int x) { this.x = x; } }
+        let caught = "";
+        try { new Point("nope"); } catch (e) { caught = e.kind; }
+        if (caught != "TypeError") { throw "expected a caught TypeError, got " + caught; }
+        "#,
+        "constructor mismatch is catchable",
+    );
+
+    // A correctly typed argument still constructs, and an untyped parameter
+    // still accepts anything.
+    expect_ok(
+        r#"
+        class Point { public Point(int x, any tag) { this.x = x; this.tag = tag; } }
+        let p = new Point(1, "free");
+        if (p.x != 1 || p.tag != "free") { throw "well-typed construction broke"; }
+        "#,
+        "well-typed construction",
+    );
+}
+
+#[test]
+fn an_enum_value_satisfies_a_parameter_declared_with_its_enum() {
+    // `type_matches` had no arm for an enum variant, so a `Priority` parameter
+    // rejected `Priority.Low` and reported it in the one way nobody can act on:
+    // "expected 'Priority' but received 'Priority'". `x is Priority` was false
+    // for the same reason. Enum-typed parameters were simply unusable.
+    expect_ok(
+        r#"
+        enum Priority { Low, High }
+        fn string rank(Priority p) { if (p == Priority.Low) { return "low"; } return "high"; }
+        if (rank(Priority.High) != "high") { throw "an enum must satisfy its own enum type"; }
+        if (!(Priority.Low is Priority)) { throw "`is` must see an enum's own type"; }
+        "#,
+        "enum satisfies its own type",
+    );
+
+    // It stays a type: a different enum and a plain value are still rejected.
+    for (src, what) in [
+        (
+            r#"
+            enum Priority { Low }
+            enum Other { A }
+            fn string rank(Priority p) { return "ok"; }
+            rank(Other.A);
+            "#,
+            "a different enum",
+        ),
+        (
+            r#"
+            enum Priority { Low }
+            fn string rank(Priority p) { return "ok"; }
+            rank(1);
+            "#,
+            "an int",
+        ),
+    ] {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{what}: {error:?}");
+                assert_eq!(error.kind, "TypeError", "{what}: {error:?}");
+            }
+            other => panic!("{what} must still be rejected, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_declared_type_matches_exactly_and_never_a_subclass() {
+    // Recorded, not endorsed. Inheritance drives method dispatch, but a declared
+    // class name is an exact match: a `Base` parameter rejects a `Derived`, and
+    // `d is Base` is false. Writing a function over a class hierarchy means
+    // typing the parameter `any`.
+    //
+    // Pinned so the behavior cannot change in either direction by accident; see
+    // spec/types.md, which records it as an open inconsistency.
+    let hierarchy = r#"
+        class Base { public Base() { this.v = 1; } }
+        class Derived : Base { public Derived() { this.v = 2; } }
+    "#;
+
+    expect_ok(
+        &format!(
+            "{hierarchy}
+             if (new Derived() is Base) {{ throw \"`is` started honouring inheritance\"; }}"
+        ),
+        "`is` ignores inheritance",
+    );
+
+    match evaluate(&format!(
+        "{hierarchy} fn any take(Base b) {{ return 1; }} take(new Derived());"
+    )) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4002", "{error:?}");
+            assert!(error.message.contains("expected 'Base'"), "{error:?}");
+        }
+        other => panic!("a Base parameter must reject a Derived today, got {other:?}"),
+    }
+
+    // `any` is the escape hatch that makes a hierarchy usable across a call.
+    expect_ok(
+        &format!(
+            "{hierarchy} fn any take(any b) {{ return b.v; }}
+             if (take(new Derived()) != 2) {{ throw \"`any` must accept a subclass\"; }}"
+        ),
+        "any accepts a subclass",
+    );
+}
+
+#[test]
+fn a_type_name_that_names_nothing_rejects_every_value() {
+    // A misspelled type in an annotation parses. It then matches nothing, so the
+    // function can never be called successfully — and nothing says so until a
+    // call happens. Pinned because the alternative (rejecting unknown names at
+    // parse time) is a change worth making deliberately, not by drift.
+    match evaluate(
+        r#"
+        fn any f(Frobnicate x) { return "reached"; }
+        f(1);
+        "#,
+    ) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4002", "{error:?}");
+            assert!(error.message.contains("expected 'Frobnicate'"), "{error:?}");
+        }
+        other => panic!("an unknown type name must reject its argument, got {other:?}"),
+    }
+}

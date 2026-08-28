@@ -210,6 +210,32 @@ impl super::Evaluator {
                 } else {
                     self.null_ref
                 };
+                // A declared constructor parameter type is enforced exactly as a
+                // function's is. Arity was already checked above, but the type was
+                // not, so `new Point("x", 1)` bound a string into an `int` field
+                // and only surfaced wherever that field was later used as a number.
+                // Defaults are always trailing, so a supplied argument never comes
+                // after one: checking here matches the function path's "validate
+                // every supplied argument before running any default".
+                if i < arg_vals.len() {
+                    if let Some(expected_type) = &param.type_name {
+                        // Classify before raising: `resolve` holds an immutable
+                        // borrow that must end before a diagnostic is recorded.
+                        let mismatch = match self.resolve(arg_ref) {
+                            Some(data) if type_matches(expected_type.as_str(), data) => None,
+                            Some(data) => Some(data.type_name().to_string()),
+                            None => Some("null".to_string()),
+                        };
+                        if let Some(actual) = mismatch {
+                            let message = format!(
+                                "Parameter '{}' of constructor '{}' expected '{}' but received '{}'",
+                                param.name, new_expr.class_name, expected_type, actual
+                            );
+                            self.scopes.pop();
+                            return self.rt_err_kind("TypeError", message);
+                        }
+                    }
+                }
                 self.scopes.declare(param.name.clone(), arg_ref);
             }
 

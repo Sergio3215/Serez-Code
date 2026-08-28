@@ -2090,6 +2090,12 @@ fn type_matches(expected: &str, data: &ObjectData) -> bool {
             type_matches(base, d)
         }
         (t, ObjectData::Instance { class_name, .. }) => t == class_name.as_str(),
+        // An enum variant satisfies its own enum's name. Without this arm a
+        // `Priority`-typed parameter rejected `Priority.Low` and said so in the
+        // one way that cannot be acted on: "expected 'Priority' but received
+        // 'Priority'", because `type_name()` already reports the enum name.
+        // `x is Priority` was false for the same reason.
+        (t, ObjectData::EnumVariant { enum_name, .. }) => t == enum_name.as_str(),
         // `x is function` — closures and named functions both report as "function"
         // (matches type_of), so the introspection is symmetric.
         ("function", ObjectData::Function { .. }) => true,

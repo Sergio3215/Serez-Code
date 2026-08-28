@@ -1,0 +1,155 @@
+// Type-annotation conformance. Every assertion pins a rule in spec/types.md.
+// The Rust side (tests/runtime_outcome.rs) pins the structured codes; this file
+// pins the behaviour a program actually observes.
+
+fn string kind_of(any f) {
+    try {
+        f();
+    } catch (e) {
+        if (e.kind == null) { return "throw"; }
+        return e.kind + "/" + e.code;
+    }
+    return "no-error";
+}
+
+test("a declared parameter type is enforced at the call", () => {
+    fn int takesInt(int n) { return n; }
+    assert(takesInt(1) == 1, "a matching argument passes");
+    assert(kind_of(() => { return takesInt("s"); }) == "TypeError/SZ4002",
+           "a mismatched argument is a catchable TypeError");
+});
+
+test("a constructor enforces its parameter types too", () => {
+    class Point {
+        public Point(int x, any tag) { this.x = x; this.tag = tag; }
+    }
+    let p = new Point(1, "free");
+    assert(p.x == 1 && p.tag == "free", "a well-typed construction works");
+    assert(kind_of(() => { return new Point("s", 1); }) == "TypeError/SZ4002",
+           "a mistyped constructor argument is rejected");
+});
+
+test("numeric types do not widen at a parameter", () => {
+    // Arithmetic mixes int and decimal freely; parameter binding does not.
+    fn decimal half(decimal d) { return d / 2.0; }
+    assert(half(1.0) == 0.5, "a decimal passes");
+    assert(kind_of(() => { return half(1); }) == "TypeError/SZ4002",
+           "an int does not widen to decimal");
+    assert(kind_of(() => { return half(1m); }) == "TypeError/SZ4002",
+           "a dec does not convert to decimal");
+    assert(1 + 1.5 == 2.5, "but the operator mixes them without complaint");
+});
+
+test("an enum value satisfies its own enum type", () => {
+    enum Priority { Low, High }
+    enum Other { A }
+    fn string rank(Priority p) { if (p == Priority.Low) { return "low"; } return "high"; }
+    assert(rank(Priority.High) == "high", "its own enum is accepted");
+    assert(Priority.Low is Priority, "`is` sees the enum's own type");
+    assert(!(Priority.Low is Other), "a different enum is not the same type");
+    assert(kind_of(() => { return rank(Other.A); }) == "TypeError/SZ4002",
+           "a different enum is rejected");
+    assert(kind_of(() => { return rank(1); }) == "TypeError/SZ4002",
+           "a plain value is rejected");
+});
+
+test("a declared class type matches exactly, never a subclass", () => {
+    // Recorded, not endorsed — see spec/types.md. Inheritance drives dispatch,
+    // the type system does not see it, and `any` is the way across a hierarchy.
+    class Base { public Base() { this.v = 1; } }
+    class Derived : Base { public Derived() { this.v = 2; } }
+    let d = new Derived();
+    assert(d is Derived, "an instance is its own class");
+    assert(!(d is Base), "and is NOT its parent class");
+
+    fn any strict(Base b) { return b.v; }
+    assert(kind_of(() => { return strict(d); }) == "TypeError/SZ4002",
+           "a Base parameter rejects a Derived");
+
+    fn any loose(any b) { return b.v; }
+    assert(loose(d) == 2, "`any` is the escape hatch");
+});
+
+test("a type name that names nothing rejects every value", () => {
+    fn any f(Frobnicate x) { return "reached"; }
+    assert(kind_of(() => { return f(1); }) == "TypeError/SZ4002",
+           "an unknown type name matches nothing");
+});
+
+test("a nullable type accepts its base type and null", () => {
+    fn any maybe(int? n) { if (n == null) { return "null"; } return "int"; }
+    assert(maybe(1) == "int", "the base type passes");
+    assert(maybe(null) == "null", "so does null");
+    assert(kind_of(() => { return maybe("s"); }) == "TypeError/SZ4002",
+           "nothing else does");
+});
+
+test("a binding has no type to violate", () => {
+    let x = 5;
+    x = "now a string";
+    assert(x == "now a string", "reassignment to another type is accepted");
+    assert(type_of(x) == "string", "and the value really changed type");
+});
+
+test("[T] on a parameter accepts any array", () => {
+    fn int size([int] a) { return a.length(); }
+    let strings [string] = ["a", "b"];
+    assert(size(strings) == 2, "a [string] satisfies a [int] parameter");
+    assert(size(["x"]) == 1, "so does an untyped array");
+    // The element type is enforced where the array is built, not at the call.
+    assert(kind_of(() => { let a [int] = [1, "x"]; return 1; }) == "TypeError/SZ4002",
+           "a literal violating its own element type is rejected");
+});
+
+test("declared field types are defaults, not constraints", () => {
+    class Config {
+        timeout: int = 30;
+        public Config() { }
+        public void setBad() { this.timeout = "not an int"; }
+    }
+    let c = new Config();
+    assert(c.timeout == 30, "the declaration supplies a default");
+    c.timeout = "str";
+    assert(c.timeout == "str", "assignment from outside ignores the type");
+    let c2 = new Config();
+    c2.setBad();
+    assert(c2.timeout == "not an int", "so does assignment from inside");
+    c2.brandNew = 1;
+    assert(c2.brandNew == 1, "and a new field can be added by assignment");
+});
+
+test("an interface field is checked at construction and never again", () => {
+    interface P { n: int; }
+    assert(kind_of(() => { return new P({ n: "not an int" }); }) == "TypeError/SZ4002",
+           "construction checks the field type");
+    let p = new P({ n: 1 });
+    p.n = "str";
+    assert(p.n == "str", "assignment does not");
+});
+
+test("type_of and is agree", () => {
+    assert(type_of(1) == "int" && (1 is int), "int");
+    assert(type_of(1.5) == "decimal" && (1.5 is decimal), "decimal");
+    assert(type_of(1m) == "dec" && (1m is dec), "dec");
+    assert(type_of("s") == "string" && ("s" is string), "string");
+    assert(type_of(true) == "bool" && (true is bool), "bool");
+    assert(type_of(null) == "null" && (null is null), "null");
+    assert(type_of([1]) == "array", "array");
+    assert(!(1 is decimal), "an int is not a decimal");
+    assert(!(1m is decimal), "a dec is not a decimal either");
+    assert(1 is any && null is any && [1] is any, "everything is any");
+});
+
+test("a function must return what it declares", () => {
+    fn int missing() { let a = 1; }
+    assert(kind_of(() => { return missing(); }) == "TypeError/SZ4002",
+           "declaring int and returning nothing is a TypeError");
+    fn int wrong() { return "s"; }
+    assert(kind_of(() => { return wrong(); }) == "TypeError/SZ4002",
+           "so is returning the wrong type");
+    fn void nothing() { return 5; }
+    assert(kind_of(() => { return nothing(); }) == "TypeError/SZ4002",
+           "and so is returning a value from void");
+});
+
+summary();
