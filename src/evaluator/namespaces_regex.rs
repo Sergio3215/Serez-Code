@@ -651,13 +651,14 @@ impl super::Evaluator {
             return self.rt_err(format!("Regex.{} requires {} arguments", method, need));
         }
 
-        let pattern = match self.eval_str_arg(&dot_call.arguments[0]) {
-            Some(s) => s,
-            None => return self.rt_err("Regex: pattern must be a string"),
+        let context = format!("Regex.{method}");
+        let pattern = match self.eval_str_arg(&dot_call.arguments[0], &context, "pattern") {
+            Ok(s) => s,
+            Err(error) => return error,
         };
-        let text_s = match self.eval_str_arg(&dot_call.arguments[1]) {
-            Some(s) => s,
-            None => return self.rt_err("Regex: text must be a string"),
+        let text_s = match self.eval_str_arg(&dot_call.arguments[1], &context, "text") {
+            Ok(s) => s,
+            Err(error) => return error,
         };
 
         // Parse + compile once for this call.
@@ -743,10 +744,12 @@ impl super::Evaluator {
                 }))
             }
             "replace" => {
-                let repl = match self.eval_str_arg(&dot_call.arguments[2]) {
-                    Some(s) => s,
-                    None => return self.rt_err("Regex: replacement must be a string"),
-                };
+                let repl =
+                    match self.eval_str_arg(&dot_call.arguments[2], "Regex.replace", "replacement")
+                    {
+                        Ok(s) => s,
+                        Err(error) => return error,
+                    };
                 let repl_chars: Vec<char> = repl.chars().collect();
                 let mut result = String::new();
                 let mut last = 0;

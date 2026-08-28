@@ -159,9 +159,9 @@ impl super::Evaluator {
                     return self
                         .rt_err_kind("TypeError", "Crypto.randomBytes(n) requires 1 argument");
                 }
-                let n = match self.eval_int_arg(&dot_call.arguments[0]) {
-                    Some(v) => v,
-                    None => return EvalResult::Error,
+                let n = match self.eval_int_arg(&dot_call.arguments[0], "Crypto.randomBytes", "n") {
+                    Ok(v) => v,
+                    Err(error) => return error,
                 };
                 const MAX_RANDOM_BYTES: i64 = 1_048_576; // 1 MB: evita DoS por asignación gigante
                 if n < 1 || n > MAX_RANDOM_BYTES {

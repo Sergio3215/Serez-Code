@@ -1646,6 +1646,207 @@ fn string_padding_is_bounded_linear_and_preserves_valid_results() {
 }
 
 #[test]
+fn array_method_failures_are_structured_and_catchable() {
+    let cases = [
+        (
+            "let values = [1]; values.push();",
+            "SZ4002",
+            "TypeError",
+            "push expects 1 argument",
+        ),
+        (
+            "let values [int] = [1]; values.push(\"bad\");",
+            "SZ4002",
+            "TypeError",
+            "Cannot push 'string' into [int] array",
+        ),
+        (
+            "let values = []; values.pop();",
+            "SZ4003",
+            "IndexOutOfBounds",
+            "empty array",
+        ),
+        (
+            "let values = [1]; values.remove(4);",
+            "SZ4003",
+            "IndexOutOfBounds",
+            "out of bounds",
+        ),
+        (
+            "let values = [1, \"x\"]; values.sort();",
+            "SZ4002",
+            "TypeError",
+            "homogeneous array",
+        ),
+        (
+            "let values = [1]; values.sort(\"sideways\");",
+            "SZ4000",
+            "RangeError",
+            "asc",
+        ),
+        (
+            "[1].slice(\"bad\");",
+            "SZ4002",
+            "TypeError",
+            "start must be an int",
+        ),
+        (
+            "[1].flat(\"bad\");",
+            "SZ4002",
+            "TypeError",
+            "depth must be an int",
+        ),
+        (
+            "[1].missing();",
+            "SZ4001",
+            "ReferenceError",
+            "Unknown array method",
+        ),
+    ];
+
+    for (src, expected_code, expected_kind, expected_message) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, expected_code, "{src}");
+                assert_eq!(error.kind, expected_kind, "{src}");
+                assert!(error.message.contains(expected_message), "{src}: {error:?}");
+            }
+            other => panic!("{src}: expected structured Array error, got {other:?}"),
+        }
+    }
+
+    let caught = r#"
+        let caughtCount = 0;
+        let values = [1];
+        try { values.push(); }
+        catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caughtCount++; } }
+        try { values.remove(9); }
+        catch (e) { if (e.code == "SZ4003" && e.kind == "IndexOutOfBounds") { caughtCount++; } }
+        try { values.missing(); }
+        catch (e) { if (e.code == "SZ4001" && e.kind == "ReferenceError") { caughtCount++; } }
+        if (caughtCount != 3) { throw "Array errors were not catchable"; }
+        values.push(2);
+        if (values.length() != 2) { throw "Array did not recover"; }
+    "#;
+    assert!(matches!(evaluate(caught), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn array_arguments_and_callbacks_preserve_nested_outcomes() {
+    let runtime_cases = [
+        "let values = [1]; values.remove(1 / 0);",
+        "[1].join(1 / 0);",
+        "[1].slice(1 / 0);",
+        "[1].flat(1 / 0);",
+        "[1].map(x => 1 / 0);",
+        "[1].filter(x => 1 / 0);",
+        "[1].reduce(0, (a, x) => 1 / 0);",
+        "[1].find(x => 1 / 0);",
+        "[1].every(x => 1 / 0);",
+    ];
+    for src in runtime_cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4004", "{src}");
+                assert_eq!(error.kind, "DivisionByZero", "{src}");
+            }
+            other => panic!("{src}: expected original Array runtime error, got {other:?}"),
+        }
+    }
+
+    let throw_cases = [
+        r#"fn int boom() { throw "array-boom"; return 0; } let values = [1]; values.remove(boom());"#,
+        r#"fn string boom() { throw "array-boom"; return ""; } [1].join(boom());"#,
+        r#"fn int boom() { throw "array-boom"; return 0; } [1].slice(boom());"#,
+        r#"fn int boom() { throw "array-boom"; return 0; } [1].flat(boom());"#,
+        r#"fn bool boom(any value) { throw "array-boom"; return false; } [1].some(boom);"#,
+    ];
+    for src in throw_cases {
+        assert!(matches!(
+            evaluate(src),
+            ProgramOutcome::UncaughtException { message } if message == "array-boom"
+        ));
+    }
+}
+
+#[test]
+fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
+    let src = r#"
+        let touched = 0;
+        fn int touch() { touched++; return 1; }
+        let values = [3, 1, 2];
+        try { values.pop(touch()); } catch (e) {}
+        try { values.reverse(touch()); } catch (e) {}
+        try { values.sort((a, b) => a - b, touch()); } catch (e) {}
+        if (touched != 0) { throw "Array evaluated arguments after arity failure"; }
+
+        fn string invalidComparator(int a, int b) { return "bad"; }
+        try { values.sort(invalidComparator); } catch (e) {
+            if (e.code != "SZ4002" || e.kind != "TypeError") { throw "wrong comparator error"; }
+        }
+        if (values[0] != 3 || values[1] != 1 || values[2] != 2) {
+            throw "failed comparator partially mutated the receiver";
+        }
+
+        let empty = [];
+        let callbackValidated = false;
+        try { empty.find(1); }
+        catch (e) { callbackValidated = e.code == "SZ4002" && e.kind == "TypeError"; }
+        if (!callbackValidated) { throw "empty Array skipped callback validation"; }
+    "#;
+    assert!(matches!(evaluate(src), ProgramOutcome::Value(_)));
+}
+
+#[test]
+fn shared_argument_helpers_preserve_nested_outcomes() {
+    // `eval_str_arg` / `eval_int_arg` used to collapse every outcome that was
+    // not a value into a bare `EvalResult::Error`, so a user `throw` raised
+    // while evaluating an argument vanished and the caller reported its own
+    // generic message instead. Array reaches these helpers through
+    // remove/join/slice/flat; Crypto and Regex are the other two consumers.
+    let throw_cases = [
+        r#"fn int boom() { throw "arg-boom"; return 0; } Crypto.randomBytes(boom());"#,
+        r#"fn string boom() { throw "arg-boom"; return ""; } Regex.test(boom(), "x");"#,
+        r#"fn string boom() { throw "arg-boom"; return ""; } Regex.test("x", boom());"#,
+        r#"fn string boom() { throw "arg-boom"; return ""; } Regex.replace("x", "x", boom());"#,
+    ];
+    for src in throw_cases {
+        assert!(
+            matches!(
+                evaluate(src),
+                ProgramOutcome::UncaughtException { message } if message == "arg-boom"
+            ),
+            "{src}: the user exception must survive argument evaluation"
+        );
+    }
+
+    let runtime_cases = ["Crypto.randomBytes(1 / 0);", "Regex.test(1 / 0, \"x\");"];
+    for src in runtime_cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4004", "{src}");
+                assert_eq!(error.kind, "DivisionByZero", "{src}");
+            }
+            other => panic!("{src}: expected the nested runtime error, got {other:?}"),
+        }
+    }
+
+    // A well-formed value of the wrong type still names the call that rejected
+    // it, instead of the old context-free "Expected int argument".
+    match evaluate("Crypto.randomBytes(\"nope\");") {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4002");
+            assert_eq!(error.kind, "TypeError");
+            assert!(
+                error.message.contains("Crypto.randomBytes"),
+                "message must name the call: {error:?}"
+            );
+        }
+        other => panic!("expected a structured TypeError, got {other:?}"),
+    }
+}
+
+#[test]
 fn task_api_failures_are_structured_and_preserve_argument_outcomes() {
     let cases = [
         ("Task.run();", "SZ4002", "TypeError", "requires 2"),

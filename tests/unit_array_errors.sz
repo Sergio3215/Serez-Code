@@ -1,0 +1,90 @@
+// Regression contract for Array validation, propagation and atomic mutation.
+use permissions { }
+
+test("Array arity and types are structured", () => {
+    let caught = 0;
+    let values = [1, 2];
+    try { values.push(); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { values.slice("bad"); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { values.flat("bad"); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    try { values.join(",", ";"); }
+    catch (e) { if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; } }
+    assert(caught == 4, "Array validation must be catchable TypeError");
+});
+
+test("Array bounds failures are IndexOutOfBounds", () => {
+    let caught = 0;
+    let empty = [];
+    try { empty.pop(); }
+    catch (e) { if (e.code == "SZ4003" && e.kind == "IndexOutOfBounds") { caught++; } }
+    try { empty.shift(); }
+    catch (e) { if (e.code == "SZ4003" && e.kind == "IndexOutOfBounds") { caught++; } }
+    let values = [1];
+    try { values.remove(9); }
+    catch (e) { if (e.code == "SZ4003" && e.kind == "IndexOutOfBounds") { caught++; } }
+    assert(caught == 3, "Array bounds errors must be classified");
+});
+
+test("typed mutators fail structurally without mutation", () => {
+    let values [int] = [1];
+    let caught = false;
+    try { values.push("bad"); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "typed push must be catchable");
+    assert(values.length() == 1 && values[0] == 1, "failed push must be atomic");
+});
+
+test("Array preserves nested errors and throws", () => {
+    let divided = false;
+    try { [1].join(1 / 0); }
+    catch (e) { divided = e.code == "SZ4004" && e.kind == "DivisionByZero"; }
+    fn int explode() { throw "array-boom"; return 0; }
+    let thrown = false;
+    try { [1].slice(explode()); }
+    catch (e) { thrown = e == "array-boom"; }
+    assert(divided, "nested runtime error must survive");
+    assert(thrown, "user throw must survive");
+});
+
+test("Array validates arity before side effects", () => {
+    let touched = 0;
+    fn int touch() { touched++; return 1; }
+    let values = [1];
+    try { values.pop(touch()); } catch (e) {}
+    try { values.reverse(touch()); } catch (e) {}
+    try { values.sort((a, b) => a - b, touch()); } catch (e) {}
+    assert(touched == 0, "invalid arity must not evaluate arguments");
+});
+
+test("failed comparator does not partially sort", () => {
+    let values = [3, 1, 2];
+    fn string invalid(int a, int b) { return "bad"; }
+    let caught = false;
+    try { values.sort(invalid); }
+    catch (e) { caught = e.code == "SZ4002" && e.kind == "TypeError"; }
+    assert(caught, "comparator return type must be validated");
+    assert(values[0] == 3 && values[1] == 1 && values[2] == 2, "sort is atomic");
+});
+
+test("callbacks are validated even for empty arrays", () => {
+    let empty = [];
+    let caught = 0;
+    try { empty.find(1); } catch (e) { if (e.kind == "TypeError") { caught++; } }
+    try { empty.every(1); } catch (e) { if (e.kind == "TypeError") { caught++; } }
+    try { empty.reduce(0, 1); } catch (e) { if (e.kind == "TypeError") { caught++; } }
+    assert(caught == 3, "empty arrays must not hide invalid callbacks");
+});
+
+test("Array recovers after caught errors", () => {
+    let values = [1];
+    try { values.missing(); } catch (e) {
+        assert(e.code == "SZ4001" && e.kind == "ReferenceError", "unknown member contract");
+    }
+    values.push(2);
+    assert(values.join(",") == "1,2", "later mutation works");
+});
+
+summary();

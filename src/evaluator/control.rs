@@ -11,31 +11,51 @@ use std::io::{self, Write};
 use std::rc::Rc;
 
 impl super::Evaluator {
-    pub(super) fn eval_str_arg(&mut self, expr: &ast::Expression) -> Option<String> {
-        match self.eval_expression(expr) {
-            EvalResult::Value(r) => match self.resolve(r).cloned() {
-                Some(ObjectData::Str(s)) => Some(s),
-                // rt_err_kind records the recoverable error; callers turn the
-                // None into EvalResult::Error, which try/catch can then bind.
-                _ => {
-                    self.rt_err_kind("TypeError", "Expected string argument");
-                    None
-                }
-            },
-            _ => None,
+    /// Evaluate one argument that must be a string.
+    ///
+    /// `Err` carries the *original* outcome when evaluation did not produce a
+    /// value: a user `throw` stays a `Throw` and a nested runtime failure keeps
+    /// its own structured payload. Only a well-formed value of the wrong type
+    /// becomes a fresh, contextual `TypeError`. Collapsing either case into a
+    /// bare `EvalResult::Error` is what used to make `f(boom())` lose the
+    /// exception the program actually raised.
+    pub(super) fn eval_str_arg(
+        &mut self,
+        expr: &ast::Expression,
+        context: &str,
+        parameter: &str,
+    ) -> Result<String, EvalResult> {
+        let value = match self.eval_expression(expr) {
+            EvalResult::Value(value) => value,
+            other => return Err(other),
+        };
+        match self.resolve(value).cloned() {
+            Some(ObjectData::Str(s)) => Ok(s),
+            _ => Err(self.rt_err_kind(
+                "TypeError",
+                format!("{context}: {parameter} must be a string"),
+            )),
         }
     }
 
-    pub(super) fn eval_int_arg(&mut self, expr: &ast::Expression) -> Option<i64> {
-        match self.eval_expression(expr) {
-            EvalResult::Value(r) => match self.resolve(r).cloned() {
-                Some(ObjectData::Integer(i)) => Some(i),
-                _ => {
-                    self.rt_err_kind("TypeError", "Expected int argument");
-                    None
-                }
-            },
-            _ => None,
+    /// Evaluate one argument that must be an int. Propagation contract matches
+    /// [`Self::eval_str_arg`].
+    pub(super) fn eval_int_arg(
+        &mut self,
+        expr: &ast::Expression,
+        context: &str,
+        parameter: &str,
+    ) -> Result<i64, EvalResult> {
+        let value = match self.eval_expression(expr) {
+            EvalResult::Value(value) => value,
+            other => return Err(other),
+        };
+        match self.resolve(value).cloned() {
+            Some(ObjectData::Integer(i)) => Ok(i),
+            _ => Err(self.rt_err_kind(
+                "TypeError",
+                format!("{context}: {parameter} must be an int"),
+            )),
         }
     }
 
