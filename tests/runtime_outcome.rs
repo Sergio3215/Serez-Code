@@ -2935,3 +2935,64 @@ fn a_type_name_that_names_nothing_rejects_every_value() {
         other => panic!("an unknown type name must reject its argument, got {other:?}"),
     }
 }
+
+#[test]
+fn lockdown_denials_split_into_catchable_and_fatal() {
+    // spec/security.md used to say every lockdown refusal surfaced as a
+    // catchable `PermissionError` / `SZ6001`. Three of the four do. The fourth
+    // does not: `use permissions` is the gate that would *grant* capability, so
+    // it is a `SecurityError` / `SZ6004` that `try/catch` cannot consume — which
+    // is what errors.md said all along. A security document that under-states a
+    // gate's strength is worse than one that says nothing, so the split is
+    // pinned here.
+
+    // Catchable: refusing an action. Catching records the denial and the
+    // program continues without the capability.
+    let catchable = [
+        ("File", r#"File.read("nope.txt");"#, "File"),
+        ("import", r#"import "nope";"#, "import"),
+        (
+            "Autodiff weights",
+            r#"Autodiff.saveWeights("w.szw");"#,
+            "Autodiff",
+        ),
+    ];
+    for (what, call, _hint) in catchable {
+        let src = format!(
+            r#"
+                let kind = "";
+                let code = "";
+                try {{ {call} }} catch (e) {{ kind = e.kind; code = e.code; }}
+                if (kind != "PermissionError") {{ throw "{what}: kind was " + kind; }}
+                if (code != "SZ6001") {{ throw "{what}: code was " + code; }}
+            "#
+        );
+        match evaluate_with_permissions_and_lockdown(&src, &[]) {
+            ProgramOutcome::Value(_) => {}
+            other => panic!("{what} must be a catchable SZ6001 under lockdown, got {other:?}"),
+        }
+    }
+
+    // Fatal: refusing to *grant*. `try/catch` cannot turn it into control flow.
+    let src = r#"
+        try { use permissions { Time } } catch (e) { out("unreachable: the gate was caught"); }
+        out("unreachable: execution continued");
+    "#;
+    match evaluate_with_permissions_and_lockdown(src, &[]) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ6004", "{error:?}");
+            assert_eq!(error.kind, "SecurityError", "{error:?}");
+        }
+        other => panic!("`use permissions` under lockdown must be fatal, got {other:?}"),
+    }
+
+    // And lockdown starts with an empty permission set, so a guarded namespace
+    // is still refused the ordinary fatal way — lockdown does not grant.
+    match evaluate_with_permissions_and_lockdown(r#"Terminal.getSize();"#, &[]) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ6001", "{error:?}");
+            assert_eq!(error.kind, "PermissionError", "{error:?}");
+        }
+        other => panic!("a guarded namespace must stay fatally denied, got {other:?}"),
+    }
+}

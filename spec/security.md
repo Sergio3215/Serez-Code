@@ -81,17 +81,23 @@ intent from.
 
 Under lockdown:
 
-- `use permissions { … }` is refused instead of granting.
 - `File`, `import` and Autodiff weight I/O are refused — the three capabilities
-  that otherwise reach the disk with nothing declared.
-- All of the above currently surface as catchable `PermissionError` (`SZ6001`).
-  Catching records the denial but cannot grant the capability. This differs from
-  missing namespace permissions, which are fatal today; the distinction is
-  documented because silently unifying recoverability would be a semantic
-  change.
+  that otherwise reach the disk with nothing declared. These three are
+  **catchable** `PermissionError` (`SZ6001`): catching records the denial, and
+  the program continues without the capability.
+- `use permissions { … }` is refused instead of granting, and this one is
+  **fatal**: `SecurityError` (`SZ6004`), which `try/catch` cannot consume. The
+  other three refuse an *action*; this one refuses to hand out *capability*, so
+  it is not something a program may catch and route around.
+- Lockdown starts with an empty permission set and does not grant anything, so
+  a guarded namespace is still refused the ordinary fatal way (`SZ6001`).
 - A Task worker inherits lockdown and the parent's granted permission set; it
   cannot load extra permissions from its manifest or inline source. Workers
   remain native threads in the same process, not an isolation boundary.
+
+The split between catchable and fatal is deliberate and pinned by
+`lockdown_denials_split_into_catchable_and_fatal` in `tests/runtime_outcome.rs`.
+Unifying it in either direction would be a semantic change.
 
 Deliberately **still allowed** under lockdown:
 

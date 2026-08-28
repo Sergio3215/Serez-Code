@@ -7,6 +7,27 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The execution contract is audited, and one claim in it was wrong
+
+- Every concrete claim in `spec/security.md` was checked against the running
+  binary rather than re-read: the nine enforced namespaces match the source
+  exactly, self-granting works outside lockdown, the `unsafe` gate is fatal
+  `SZ6003`, the protected-path heuristic on `OS.exec`/`OS.spawn` is fatal
+  `SZ6004`, and `fetch` really does reach the network under lockdown.
+- **One claim was wrong, in the direction that matters.** The document said all
+  lockdown refusals surface as *catchable* `PermissionError` / `SZ6001`. Three
+  of the four do — `File`, `import` and Autodiff weight I/O. The fourth,
+  `use permissions`, is **fatal** `SecurityError` / `SZ6004` and `try/catch`
+  cannot consume it, which is what `errors.md` said all along. A security
+  document that under-states a gate's strength is worse than one that says
+  nothing about it.
+- The split is now stated with its reason — the first three refuse an *action*,
+  the fourth refuses to hand out *capability* — and pinned by
+  `lockdown_denials_split_into_catchable_and_fatal` in
+  `tests/runtime_outcome.rs`, so unifying it in either direction has to be a
+  deliberate semantic change.
+- No behaviour changed. The implementation was right; the document was not.
+
 ### The grammar is written down, including what does not parse
 
 - `spec/syntax.md` is new: the statement and expression grammar, checked form by
