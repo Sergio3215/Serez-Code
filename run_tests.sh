@@ -132,6 +132,24 @@ fi
 echo "${GREEN}Build OK${RESET}"
 echo ""
 
+# ── Paths handed to the binary ────────────────────────────────────────────────
+# MSYS2 / Git Bash rewrites POSIX paths into Windows paths when it calls a
+# native executable, but it declines to rewrite an argument whose final
+# component begins with `~`. The unit temp file is named `~unit_temp_$$.sz`
+# precisely so the `unit_*.sz` glob skips it, so `sz` received a literal
+# `/e/...` path it cannot open and every unit test on this platform died with
+# "ERROR reading file" — 168 of 474 tests that never executed here while
+# run_tests.ps1 reported 474 green. Convert explicitly instead of relying on
+# the heuristic. `cygpath` is absent on Linux and macOS, where the path is
+# already native.
+to_native_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
 # ── run_test <label> <file> <expected> <is_unit:0|1> <is_err:0|1> ─────────────
 run_test() {
     local label="$1" file="$2" expected="$3" is_unit="$4" is_err="$5"
@@ -145,7 +163,7 @@ run_test() {
     fi
 
     local stdout_out stderr_out exit_code
-    "$BINARY" "$run_file" >"$TEMP_OUT" 2>"$TEMP_ERR"
+    "$BINARY" "$(to_native_path "$run_file")" >"$TEMP_OUT" 2>"$TEMP_ERR"
     exit_code=$?
     stdout_out=$(cat "$TEMP_OUT")
     stderr_out=$(cat "$TEMP_ERR")
@@ -179,6 +197,15 @@ run_test() {
             while IFS= read -r line; do
                 echo "${YELLOW}       $line${RESET}"
             done <<< "$failures"
+            # A unit program that dies before summary() prints its diagnostic on
+            # stderr, and $failures is empty — without this the whole report is
+            # "process exited with code 1" and nothing else. The PowerShell
+            # runner has always shown it here; this side had not.
+            if [[ "$exit_code" -ne 0 ]]; then
+                head -n 3 "$TEMP_ERR" | while IFS= read -r line; do
+                    echo "${YELLOW}       $line${RESET}"
+                done
+            fi
             record fail "$label" "$reason"
         fi
         return
@@ -231,15 +258,24 @@ run_test() {
 echo "${CYAN}═══ Test Runner Integrity ════════════════════${RESET}"
 CATEGORY="runner-integrity"
 { cat "$FRAMEWORK"; printf '\n'; cat "$TESTS_DIR/runner_fixtures/unit_abort_before_summary.sz"; } > "$TEMP_SZ"
-"$BINARY" "$TEMP_SZ" >"$TEMP_OUT" 2>"$TEMP_ERR"
+"$BINARY" "$(to_native_path "$TEMP_SZ")" >"$TEMP_OUT" 2>"$TEMP_ERR"
 runner_exit=$?
 runner_summary=$(grep "^Results:" "$TEMP_OUT" | tail -1 || true)
-if [[ "$runner_exit" -ne 0 && -z "$runner_summary" ]]; then
+# A non-zero exit with no summary is not enough on its own: a path the binary
+# cannot open satisfies both, and that is exactly what happened here while the
+# tilde in the temp name defeated MSYS2 path conversion — this guard reported
+# PASS for a file-read error rather than for the abort it exists to detect.
+# Require the fixture's own diagnostic, so the check can only pass by actually
+# running the program.
+runner_diag=$(grep -c "SZ4004" "$TEMP_ERR" || true)
+if [[ "$runner_exit" -ne 0 && -z "$runner_summary" && "$runner_diag" -gt 0 ]]; then
     echo "${GREEN}[PASS]${RESET} runner rejects abort before summary"
     record pass "runner rejects abort before summary"
 else
-    echo "${RED}[FAIL]${RESET} runner accepted abort before summary"
-    record fail "runner rejects abort before summary" "the runner accepted a suite that aborted before summary()"
+    reason="the runner accepted a suite that aborted before summary()"
+    [[ "$runner_diag" -eq 0 ]] && reason="the fixture never reached the interpreter: $(head -n 1 "$TEMP_ERR")"
+    echo "${RED}[FAIL]${RESET} runner rejects abort before summary — $reason"
+    record fail "runner rejects abort before summary" "$reason"
 fi
 echo ""
 

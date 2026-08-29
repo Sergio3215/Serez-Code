@@ -529,12 +529,21 @@ $src = Get-Content $runnerFixture -Raw
 Set-Content $tempFile ($fw + "`n" + $src) -NoNewline
 $runnerProbe = Invoke-Sz $tempFile
 $runnerReason = Get-UnitFailureReason $runnerProbe
-if ($null -ne $runnerReason -and $runnerProbe.exitCode -ne 0) {
+# A non-zero exit with no summary is not enough on its own: a path the binary
+# cannot open satisfies both, which is how the bash runner reported PASS here
+# for a file-read error rather than for the abort this guard exists to detect.
+# Require the fixture's own diagnostic, so it can only pass by actually running.
+$runnerDiag = @($runnerProbe.stderr | Where-Object { $_ -match "SZ4004" }).Count
+if ($null -ne $runnerReason -and $runnerProbe.exitCode -ne 0 -and $runnerDiag -gt 0) {
     Write-Host "[PASS] runner rejects abort before summary" -ForegroundColor Green
     Add-Result "pass" "runner rejects abort before summary"
 } else {
-    Write-Host "[FAIL] runner accepted abort before summary" -ForegroundColor Red
-    Add-Result "fail" "runner rejects abort before summary" "the runner accepted a suite that aborted before summary()"
+    $reason = "the runner accepted a suite that aborted before summary()"
+    if ($runnerDiag -eq 0) {
+        $reason = "the fixture never reached the interpreter: $($runnerProbe.stderr | Select-Object -First 1)"
+    }
+    Write-Host "[FAIL] runner rejects abort before summary — $reason" -ForegroundColor Red
+    Add-Result "fail" "runner rejects abort before summary" $reason
 }
 Write-Host ""
 
