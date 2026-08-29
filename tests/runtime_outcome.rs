@@ -3145,3 +3145,83 @@ fn a_datefield_reports_as_an_int_and_its_arithmetic_returns_a_datetime() {
         other => panic!("the DateField contract must hold, got {other:?}"),
     }
 }
+
+#[test]
+fn an_interface_shadows_a_class_of_the_same_name_in_both_orders() {
+    // Classes and interfaces live in separate registries, so both declarations
+    // are accepted and `new Name(...)` consults the interface — whichever was
+    // declared last. The class becomes unreachable, and the failure surfaces at
+    // the construction site as an argument-form TypeError with nothing pointing
+    // back at the declaration that shadowed it. The evaluator now warns at the
+    // second declaration; this pins the behaviour the warning is about.
+    for (what, src) in [
+        (
+            "class then interface",
+            r#"
+            class Shape { public Shape() { this.tag = "class"; } }
+            interface Shape { tag: int; }
+            new Shape();
+            "#,
+        ),
+        (
+            "interface then class",
+            r#"
+            interface Shape { tag: int; }
+            class Shape { public Shape() { this.tag = "class"; } }
+            new Shape();
+            "#,
+        ),
+    ] {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{what}: {error:?}");
+                assert_eq!(error.kind, "TypeError", "{what}: {error:?}");
+            }
+            other => panic!("{what}: the class must be unreachable, got {other:?}"),
+        }
+
+        // And the field form builds the interface, in either order.
+        let field_form = src.replace("new Shape();", "new Shape({ tag: 1 }).tag;");
+        match evaluate(&field_form) {
+            ProgramOutcome::Value(_) => {}
+            other => panic!("{what}: the interface must construct, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn an_enum_shares_a_name_with_a_class_or_interface_harmlessly() {
+    // Only class-vs-interface collides. `new Name(...)` and `Name.Variant` are
+    // different syntax reaching different registries, so an enum coexists with
+    // either — which is why the shadowing warning is scoped to the one pair
+    // that actually breaks.
+    for (what, src) in [
+        (
+            "enum and class",
+            r#"
+            enum Color { Red }
+            class Color { public Color() { this.v = "class"; } }
+            let made = new Color();
+            let variant = Color.Red;
+            if (made.v != "class") { throw "the class must still construct"; }
+            if (type_of(variant) != "Color") { throw "the variant must still resolve"; }
+            "#,
+        ),
+        (
+            "enum and interface",
+            r#"
+            enum Mode { Fast }
+            interface Mode { n: int; }
+            let made = new Mode({ n: 1 });
+            let variant = Mode.Fast;
+            if (made.n != 1) { throw "the interface must still construct"; }
+            if (type_of(variant) != "Mode") { throw "the variant must still resolve"; }
+            "#,
+        ),
+    ] {
+        match evaluate(src) {
+            ProgramOutcome::Value(_) => {}
+            other => panic!("{what} must coexist, got {other:?}"),
+        }
+    }
+}

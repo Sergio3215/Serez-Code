@@ -663,6 +663,7 @@ impl super::Evaluator {
             Statement::Try(try_stmt) => self.eval_try(try_stmt),
 
             Statement::InterfaceDeclaration(decl) => {
+                self.warn_if_shadowed_declaration(&decl.name, "interface");
                 self.interface_registry
                     .insert(decl.name.clone(), decl.fields.clone());
                 EvalResult::Value(self.null_ref)
@@ -701,6 +702,7 @@ impl super::Evaluator {
                         methods.insert(m.name.clone(), m.clone());
                     }
                 }
+                self.warn_if_shadowed_declaration(&decl.name, "class");
                 self.class_registry.insert(
                     decl.name.clone(),
                     StoredClass {

@@ -7,6 +7,23 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A class shadowed by an interface says so
+
+- Classes and interfaces live in separate registries, so both declarations of a
+  shared name are accepted — and `new Name(...)` resolves to the **interface**,
+  regardless of which came last. The class becomes unreachable, and the failure
+  arrives at the construction site as an argument-form `TypeError` with nothing
+  pointing back at the declaration that shadowed it.
+- It now warns at the second declaration, naming the consequence. A warning
+  rather than a refusal: refusing would be breaking, and no official package has
+  such a collision — the ecosystem canary reports zero warnings.
+- Scoped to the one pair that actually breaks. `class`/`enum` and
+  `interface`/`enum` were checked and coexist correctly, because `new Name(...)`
+  and `Name.Variant` are different syntax reaching different registries. Both
+  facts are pinned in `tests/runtime_outcome.rs`, along with the shadowing in
+  both declaration orders, and written down in `spec/classes.md`.
+- Redeclaring the *same* kind twice is unchanged: ordinary shadowing, later wins.
+
 ### A permission that does nothing now says so
 
 - `src/permissions.rs` is new: the permission vocabulary in one place. The nine

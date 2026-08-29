@@ -12,6 +12,32 @@ Normative words such as "must" describe compatibility requirements.
 a separately documented built-in construction target such as `Set` or `Tensor`.
 An unknown target raises catchable `ReferenceError` (`SZ4001`).
 
+### A class and an interface cannot share a name
+
+They live in separate registries, so both declarations are accepted — and
+`new Name(...)` consults the **interface**, regardless of which was declared
+last. The class becomes unreachable:
+
+```serez
+class Shape { public Shape() { this.tag = "class"; } }
+interface Shape { tag: int; }
+
+new Shape();              // TypeError / SZ4002 — the interface wants field form
+new Shape({ tag: 1 });    // builds the interface; the class is dead code
+```
+
+The failure appears at the construction site as an argument-form error, with
+nothing pointing back at the declaration that shadowed it, so the evaluator now
+warns at the second declaration. It is a warning rather than a refusal because
+refusing would be a breaking change; no official package has such a collision.
+
+Only this pair collides. An `enum` may share a name with a class or an interface
+harmlessly, because `new Name(...)` and `Name.Variant` are different syntax
+reaching different registries. Both are pinned in `tests/runtime_outcome.rs`.
+
+Redeclaring the *same* kind twice is ordinary shadowing: the later declaration
+wins, as it does for a `let`.
+
 ## Interface instances
 
 An interface is constructed with exactly one field-form argument:

@@ -241,7 +241,19 @@ Proposed public tiers:
    inert because the runtime does not gate files, not because the author erred,
    and a warning on every run of correct-by-convention code would drown the one
    that matters. Zero warnings across the ecosystem confirms the calibration.
-   The native registries are still evaluator-owned.
+   **Third slice measured and deliberately not taken.** The three declaration
+   registries have 43 touchpoints across five files and are woven through
+   construction, dispatch and the inheritance walk; moving them would be the
+   rewrite this section warns against, and probing found no defect that owning
+   the *storage* would fix. What it did find is a defect in the *policy*: a
+   class and an interface may share a name, `new Name(...)` always resolves to
+   the interface regardless of declaration order, and the class becomes
+   unreachable with the failure appearing at the construction site as an
+   argument-form `TypeError`. That is one rule at two registration sites, so it
+   is a documented helper beside the registries rather than a module — creating
+   one for a single predicate is the theatre this section forbids. `class`/`enum`
+   and `interface`/`enum` were checked and coexist correctly, so the warning is
+   scoped to the one pair that breaks.
 2. **Partly implemented:** `run_ecosystem.ps1` / `run_ecosystem.sh` run every
    official package's own suite against the freshly built core and report one
    table, preferring each runner's tally over its exit code (a green exit with

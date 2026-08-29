@@ -654,6 +654,37 @@ impl Evaluator {
         }
     }
 
+    /// Warn when a class and an interface end up sharing a name.
+    ///
+    /// The two live in separate registries, so both declarations are accepted
+    /// and `new Name(...)` consults the interface first — **whichever was
+    /// declared last**. The class is then unreachable: positional construction
+    /// fails with a TypeError about argument form, at the call site, with
+    /// nothing pointing back at the declaration that shadowed it.
+    ///
+    /// Only this pair collides. A class or an interface can share a name with an
+    /// `enum` harmlessly, because `new Name(...)` and `Name.Variant` are
+    /// different syntax and reach different registries; both were checked.
+    ///
+    /// A warning, not a refusal: refusing would be a breaking change, and no
+    /// official package has such a collision today — which is also why the
+    /// warning stays quiet in practice.
+    pub(crate) fn warn_if_shadowed_declaration(&self, name: &str, declaring: &str) {
+        let (other, loser) = match declaring {
+            "class" => (self.interface_registry.contains_key(name), "class"),
+            "interface" => (self.class_registry.contains_key(name), "class"),
+            _ => return,
+        };
+        if !other {
+            return;
+        }
+        eprintln!(
+            "⚠️  WARNING: '{name}' is declared as both a class and an interface. \
+             `new {name}(...)` resolves to the interface, so the {loser} cannot be \
+             constructed — rename one of them."
+        );
+    }
+
     /// Print the diagnostic for a permission name that gates nothing.
     ///
     /// A warning, never a refusal: the ecosystem declares `File` in twenty-three
