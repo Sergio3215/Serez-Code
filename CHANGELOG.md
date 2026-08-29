@@ -7,6 +7,65 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A third of the suite never ran on one platform
+
+- `run_tests.sh` reported 306 passed / 168 failed where `run_tests.ps1` reported
+  474 / 0. Nothing in the language differed: every unit test on the bash side
+  failed to start. A unit file is run from a temp file named `~unit_temp_$$.sz`,
+  and MSYS2 refuses to rewrite a POSIX path into a Windows path when the last
+  component begins with `~`, so `sz` was handed a literal
+  `/e/01 Proyectos/.../tests/~unit_temp_792.sz` and answered
+  `ERROR reading file ... (os error 3)`. Paths are now converted with `cygpath`
+  explicitly; `cygpath` is absent on Linux and macOS, where the path is already
+  native. Both runners: 474 / 0.
+- Two things kept it invisible, and both are fixed:
+  - The bash runner printed the first three stderr lines for a failing E2E test
+    but not for a failing unit test, so the entire report for 168 failures was
+    `process exited with code 1` and a blank line. The PowerShell runner had
+    always shown it. It now does on both.
+  - The runner's own integrity guard — the check whose only job is to catch a
+    suite that passes for the wrong reason — accepted *any* non-zero exit with
+    no `Results:` line. A file that cannot be opened satisfies that, so the
+    guard reported PASS throughout. Both runners now also require the fixture's
+    own `SZ4004` diagnostic, so the guard can only pass by actually running the
+    program. Verified from both sides: with the conversion reverted it fails and
+    names the cause.
+
+### The build is warning-free
+
+- `namespaces_gui.rs` initialized `tw` to `0i32` outside a `match` when the only
+  read is in the same arm as the only write. It was the sole `rustc` warning in
+  the project, and it was recorded in the audit as a known state rather than
+  fixed. Removed — a build with zero warnings is the only baseline on which a
+  new warning is visible. GUI tests unchanged: 13/13.
+
+### A malformed `Content-Length` no longer kills the language server
+
+- `sz-lsp` allocated a JSON-RPC message body at exactly the length the client
+  advertised, with no ceiling. Reproduced against the built binary:
+
+      $ printf 'Content-Length: 9999999999999
+
+' | sz-lsp
+      memory allocation of 9999999999999 bytes failed
+
+  An allocator abort, not a diagnostic — no code, no context, and the editor's
+  language server simply vanishes.
+- It was the only input-sized allocation in the project without a bound.
+  `File.read` (256 MiB), package archives (64 MiB), a task worker's source
+  (16 MiB) and WebSocket frames (16 MiB) all have one, and all are in
+  `limits.md`. This one is now 64 MiB and in `limits.md` too — generous on
+  purpose, since the largest legitimate message carries a whole document in a
+  `didOpen`, and a file near that size is far past the AST ceiling already.
+- An over-limit header prints why and exits, rather than exiting silently: a
+  silent exit is indistinguishable from the editor closing the pipe, which is
+  the wrong thing to go looking for.
+- Verified both ways: a 1 MiB `didOpen` is still accepted, and ordinary
+  `initialize` traffic is unaffected. Three framing tests cover the ceiling, EOF,
+  a non-numeric length, a negative length and a truncated body.
+- The rest of the LSP audit found nothing: exactly one panic site in production
+  code, and it is guarded by the `!new_name.is_empty()` check beside it.
+
 ### `errors.md` said unstructured failures remained; they do not
 
 - The document stated that "class `super`/dispatch paths and other native
