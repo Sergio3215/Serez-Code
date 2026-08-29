@@ -260,10 +260,27 @@ fn run() -> i32 {
             let _ = run_file(&file_path, is_check);
 
             let (tx, rx) = mpsc::channel();
-            let mut watcher = recommended_watcher(tx).expect("Failed to create watcher");
-            watcher
-                .watch(Path::new(&file_path), RecursiveMode::NonRecursive)
-                .expect("Failed to watch file");
+            // Both of these used to be `.expect(...)`. A mistyped filename ran
+            // the file (which printed the right diagnostic), then panicked:
+            //
+            //     thread '<unnamed>' panicked at src/main.rs:266
+            //     Failed to watch file: ... Input watch path is neither a file
+            //     nor a directory.
+            //
+            // A raw panic with a backtrace note, after the actual problem had
+            // already been reported properly one line above. `cli.md` says every
+            // failure exits 1 with a diagnostic on stderr.
+            let mut watcher = match recommended_watcher(tx) {
+                Ok(watcher) => watcher,
+                Err(error) => {
+                    eprintln!("❌ ERROR: cannot start the file watcher: {error}");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(error) = watcher.watch(Path::new(&file_path), RecursiveMode::NonRecursive) {
+                eprintln!("❌ ERROR: cannot watch '{file_path}': {error}");
+                std::process::exit(1);
+            }
 
             let mut last_run = Instant::now();
             loop {
