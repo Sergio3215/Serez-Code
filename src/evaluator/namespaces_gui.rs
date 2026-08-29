@@ -848,7 +848,6 @@ impl GuiState {
         let (lx0, ly0, lx1, ly1);
         // Coverage de texto (local, relativo a n.x/n.y) si es Text.
         let mut tcells: Vec<(i32, i32, u8)> = Vec::new();
-        let mut tw = 0i32;
         match &n.kind {
             SceneNodeKind::Rect { w, h }
             | SceneNodeKind::RectAlpha { w, h, .. }
@@ -890,10 +889,9 @@ impl GuiState {
                 let (cells, w) = Self::text_cells(fonts, text, *px, *style, *spacing);
                 fonts.current = prev;
                 tcells = cells;
-                tw = w;
                 lx0 = nx;
                 ly0 = ny;
-                lx1 = nx + tw as f32;
+                lx1 = nx + w as f32;
                 ly1 = ny + (*px as f32);
             }
             _ => {
