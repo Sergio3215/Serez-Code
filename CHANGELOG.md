@@ -7,6 +7,49 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `--watch` on a mistyped filename panicked
+
+- `sz --watch nosuchfile.sz` ran the file, printed the correct diagnostic, and
+  then panicked:
+
+      thread '<unnamed>' panicked at src/main.rs:266
+      Failed to watch file: ... Input watch path is neither a file nor a directory.
+
+  A raw Rust panic with a backtrace note, immediately after the actual problem
+  had already been reported properly. Both `.expect(...)` calls in the watch
+  setup now report and exit 1, which is what `cli.md` says every failure does.
+- Covered on both runners; the case fails against the previous binary.
+
+### Running a `.szx` destroyed a file next to it
+
+- The translated output went to `szx.with_extension("szx.sz")` — a fixed name
+  derived from the source. So `sz app.szx` overwrote an existing `app.szx.sz`
+  and then deleted it, with no prompt and no warning. Measured against the built
+  binary, with a file holding user text: gone, on the success path and on the
+  failure path alike.
+- Two concurrent runs of the same source raced for that one path, and `--watch`
+  re-runs on every save.
+- The import path in the same 153-line file had always generated a unique name
+  from the pid and a counter, for exactly this reason. The run path now does the
+  same, and still writes beside the source, which it must: the translation
+  carries the app's relative imports, so a temp directory would break every
+  `import "comp/Chip"`. Only the generated path is ever removed.
+- Pinned by five unit tests on the naming function, which need no serez-ui
+  installed to run. Verified end to end against the built binary with serez-ui
+  present, and against the canary: 8/8, serez-ui 36/36.
+
+### `spec/cli.md` says what running a `.szx` actually does
+
+- Its one table row read "Lex, parse, type-check, run", the same as for a `.sz`.
+  What actually happens is materially different and visible to the user: it
+  requires serez-ui installed, it spawns a second `sz` process to run serez-ui's
+  own translator, and it writes a file beside the source.
+- Diagnostics from a `.szx` carry the **translated** file's name, line numbers
+  and source snippet — a line the user never wrote, in a file that is removed
+  before they can open it. A note after the diagnostic now says so. Keeping the
+  translated file for inspection is recorded as known debt rather than invented
+  here; it needs a flag, and that is a product decision.
+
 ### The REPL ran what the parser rejected, and died on a pasted character
 
 - **A line with parse errors was evaluated anyway.** `out "x"; let y = ;` printed
