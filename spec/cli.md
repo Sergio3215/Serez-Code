@@ -48,7 +48,8 @@ code. See `errors.md` for the ranges.
 
 | Invocation | Behavior |
 | --- | --- |
-| `sz <file.sz>` / `sz <file.szx>` | Lex, parse, type-check, run. |
+| `sz <file.sz>` | Lex, parse, type-check, run. |
+| `sz <file.szx>` | Translate to `.sz` first, then the same. See below. |
 | `sz --check <file>` | Same pipeline without evaluation; prints a report. |
 | `sz --watch <file>` | Re-runs the file whenever it changes. |
 | `sz --eval "<code>"` / `sz -e "<code>"` | Runs a snippet. |
@@ -70,6 +71,31 @@ states plainly that lockdown is not a sandbox.
 
 Running your own file is unaffected: `sz file.sz` still honours an inline
 `use permissions` block.
+
+### `.szx` is translated before it runs
+
+A `.szx` file is serez-ui's JSX dialect, and the core does not parse it. Running
+one is a two-step operation, and the differences from `sz file.sz` are visible
+to the user:
+
+- **It requires serez-ui.** The translator is serez-ui's own `tools/translate.sz`
+  — written in Serez, not linked into the core — so `sz app.szx` spawns a second
+  `sz` process to run it. Without serez-ui installed the command fails with an
+  install hint. It is looked for under `packages/` in the working directory,
+  then `packages/` beside the source, then the global store, then the
+  executable's own directory.
+- **It writes a file beside the source.** The translation has the app's relative
+  imports in it, so it only resolves from the source's own directory; a temp
+  directory would break every `import "comp/Chip"`. The name is generated and
+  unique per process and per call — it is not derived from the source name, so
+  it cannot collide with a file you own, and two concurrent runs cannot race for
+  it. It is removed when the run ends.
+- **Diagnostics refer to the translated source.** A parse or runtime error
+  carries the translated file's name, line numbers and source snippet, not the
+  `.szx` as written. A note after the diagnostic says so. There is currently no
+  way to keep the translated file and read it.
+
+`--check` and `--watch` accept `.szx` and translate it the same way.
 
 ### The REPL
 

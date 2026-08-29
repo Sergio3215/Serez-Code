@@ -36,6 +36,33 @@ pub fn find_szx_translator(szx: &std::path::Path) -> Option<std::path::PathBuf> 
     None
 }
 
+/// Where to write the translated `.sz`: next to the source, so the app's
+/// relative imports still resolve, and unique per process and per call.
+///
+/// This used to be `szx.with_extension("szx.sz")` — a fixed name derived from
+/// the source, so `sz app.szx` overwrote and then deleted any `app.szx.sz` the
+/// user already had, with no prompt and no warning, on both the success and the
+/// failure path. Two concurrent runs of the same file also raced for it.
+/// `translate_szx_to_string` below had always made its own temp name unique
+/// with the pid and a counter, for exactly this reason.
+fn translated_path(szx: &std::path::Path) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let stem = szx
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "app".to_string());
+    // The `.szx.sz` tail is kept so an existing ignore rule for the old name
+    // still covers this one.
+    let name = format!("{stem}.{}.{n}.szx.sz", std::process::id());
+    match szx.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.join(name),
+        _ => std::path::PathBuf::from(name),
+    }
+}
+
 /// Run a `.szx` (serez-ui JSX) file directly: translate it to `.sz` with
 /// serez-ui's translator, run the result, then clean up. This is what the old
 /// `szx.ps1` / `szx.sh` wrappers did — now the runtime does it itself, so
@@ -63,8 +90,7 @@ pub fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
             return 1;
         }
     };
-    // Translate next to the source so the app's relative imports still resolve.
-    let out_sz = szx.with_extension("szx.sz");
+    let out_sz = translated_path(szx);
     let mut cmd = std::process::Command::new(&sz_exe);
     cmd.arg(&translator)
         .arg(szx)
@@ -98,6 +124,15 @@ pub fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
         return 1;
     }
     let code = crate::run::run_file(out_sz.to_string_lossy().as_ref(), is_check);
+    if code != 0 {
+        // Diagnostics from a translated program carry the translated file's
+        // name, line numbers and source snippet, and that file is removed a
+        // line below — so the message named a path the reader could not open
+        // and quoted a line they never wrote. Say so.
+        eprintln!(
+            "\u{2139}\u{fe0f}  the diagnostics above refer to the translated form of '{szx_path}', not to the source as written."
+        );
+    }
     let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
     code
 }
@@ -150,4 +185,71 @@ pub fn translate_szx_to_string(szx: &std::path::Path) -> Option<String> {
     };
     let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
     translated
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn the_translated_file_never_takes_a_name_the_user_could_own() {
+        // The whole defect in one line: this used to be
+        // `szx.with_extension("szx.sz")`, so running `sz app.szx` overwrote and
+        // then deleted an existing `app.szx.sz` — on the success path and on the
+        // failure path — with no prompt and no warning. Measured against the
+        // built binary before the fix: a file holding user text was gone
+        // afterwards.
+        let szx = Path::new("proj/app.szx");
+        let out = translated_path(szx);
+        assert_ne!(out, Path::new("proj/app.szx.sz"));
+        assert_ne!(out, szx.with_extension("szx.sz"));
+    }
+
+    #[test]
+    fn the_translated_file_sits_beside_the_source() {
+        // Not a detail: the translator's output has the app's relative imports
+        // in it, so it only resolves from the source's own directory. A temp
+        // directory would break every `import "comp/Chip"`.
+        let out = translated_path(Path::new("proj/sub/app.szx"));
+        assert_eq!(out.parent(), Some(Path::new("proj/sub")));
+
+        // A bare filename has an empty parent, which must not become an
+        // absolute-looking join.
+        let bare = translated_path(Path::new("app.szx"));
+        assert_eq!(bare.parent(), Some(Path::new("")));
+    }
+
+    #[test]
+    fn two_runs_of_the_same_source_do_not_share_a_path() {
+        // A fixed name meant two concurrent runs raced to write and delete the
+        // same file. The import path in this module had always been unique for
+        // this reason; the run path had not.
+        let a = translated_path(Path::new("app.szx"));
+        let b = translated_path(Path::new("app.szx"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn the_name_still_ends_in_the_extension_an_ignore_rule_would_match() {
+        // `.szx.sz` is kept so a project that already ignores the old artifact
+        // keeps ignoring this one, and so `run_file` accepts it as `.sz`.
+        let out = translated_path(Path::new("app.szx"));
+        let name = out.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.ends_with(".szx.sz"), "{name}");
+        assert!(name.starts_with("app."), "{name}");
+    }
+
+    #[test]
+    fn a_missing_translator_is_reported_not_guessed() {
+        // find_szx_translator returns None rather than a path that does not
+        // exist, so the caller can print the install hint instead of failing to
+        // spawn something.
+        let found = find_szx_translator(Path::new("no/such/place/app.szx"));
+        if let Some(path) = found {
+            assert!(
+                path.exists(),
+                "returned a translator that is not there: {path:?}"
+            );
+        }
+    }
 }
