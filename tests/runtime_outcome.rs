@@ -3432,3 +3432,53 @@ fn a_supplied_gui_argument_of_the_wrong_type_is_rejected_not_defaulted() {
         }
     }
 }
+
+#[test]
+fn zero_argument_native_methods_reject_arguments() {
+    // The same gap the 31 Gui readers had, found by sweeping every native
+    // namespace: 894 hostile calls across twelve namespaces produced zero
+    // panics and zero unstructured errors, but five zero-argument methods
+    // outside Gui accepted extras and ignored them.
+    //
+    // `DateTime.from(1, 2, 3, 4, 5)` is *not* in this list and must not be:
+    // three through seven arguments is its documented arity, and a sweep that
+    // flagged it was the probe being blunt, not a defect.
+    for (call, ns) in [
+        (r#"OS.platform("x");"#, "OS"),
+        (r#"OS.pid(1);"#, "OS"),
+        (r#"OS.tick(1, 2);"#, "OS"),
+        (r#"Media.playingCount(1);"#, "Media"),
+        (r#"Media.stopAll("all");"#, "Media"),
+    ] {
+        let src = format!("use permissions {{ OS, Media }}\n{call}");
+        match evaluate_with_permissions(&src, &["OS", "Media"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
+                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert!(
+                    error.message.contains("takes no arguments") && error.message.contains(ns),
+                    "{call}: {}",
+                    error.message
+                );
+            }
+            other => panic!("{call} must be rejected, got {other:?}"),
+        }
+    }
+
+    // The same calls with no arguments still work, and DateTime.from keeps its
+    // five-argument form.
+    for call in [
+        "OS.platform();",
+        "OS.pid();",
+        "OS.tick();",
+        "Media.playingCount();",
+        "Media.stopAll();",
+        "DateTime.from(2026, 2, 28, 13, 5);",
+    ] {
+        let src = format!("use permissions {{ OS, Media }}\n{call}");
+        match evaluate_with_permissions(&src, &["OS", "Media"]) {
+            ProgramOutcome::Value(_) => {}
+            other => panic!("{call} must still be accepted, got {other:?}"),
+        }
+    }
+}

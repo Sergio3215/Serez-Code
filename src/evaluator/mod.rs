@@ -685,6 +685,31 @@ impl Evaluator {
         );
     }
 
+    /// Reject arguments passed to a method that takes none.
+    ///
+    /// Shared by the namespaces whose zero-argument readers used to accept
+    /// anything and ignore it. Every other namespace rejects a wrong argument
+    /// count with `TypeError` / `SZ4002` — `strings.md`, `random.md` and
+    /// `datetime.md` all state it normatively — so silence here was the odd one
+    /// out, and it is the same shape as the Array defects fixed earlier in this
+    /// cycle: input the caller believed meant something, discarded without a
+    /// word.
+    pub(crate) fn reject_arguments(
+        &mut self,
+        dot_call: &ast::DotCallExpression,
+        namespace: &str,
+    ) -> Option<EvalResult> {
+        if dot_call.arguments.is_empty() {
+            return None;
+        }
+        let method = dot_call.method.clone();
+        let got = dot_call.arguments.len();
+        Some(self.rt_err_kind(
+            "TypeError",
+            format!("{namespace}.{method}() takes no arguments but received {got}"),
+        ))
+    }
+
     /// Print the diagnostic for a permission name that gates nothing.
     ///
     /// A warning, never a refusal: the ecosystem declares `File` in twenty-three

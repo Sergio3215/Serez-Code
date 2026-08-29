@@ -467,10 +467,18 @@ impl super::Evaluator {
         }
         match dot_call.method.as_str() {
             "platform" => {
+                if let Some(error) = self.reject_arguments(dot_call, "OS") {
+                    return error;
+                }
                 EvalResult::Value(self.alloc(ObjectData::Str(std::env::consts::OS.to_string())))
             }
 
-            "pid" => EvalResult::Value(self.alloc(ObjectData::Integer(std::process::id() as i64))),
+            "pid" => {
+                if let Some(error) = self.reject_arguments(dot_call, "OS") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Integer(std::process::id() as i64)))
+            }
 
             "exec" => {
                 if let Some(error) =
@@ -606,6 +614,9 @@ impl super::Evaluator {
             }
 
             "tick" => {
+                if let Some(error) = self.reject_arguments(dot_call, "OS") {
+                    return error;
+                }
                 // Cosecha (no bloqueante) los procesos de OS.spawn ya terminados y los
                 // DEVUELVE como datos: array de [pid, code, errMsg]. La app reacciona
                 // (p.ej. en onFrame). No requiere `unsafe` (no lanza nada nuevo).

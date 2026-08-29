@@ -379,6 +379,25 @@ in this pass: the dynamic-scoping surprise, the nested-receiver data loss, the
 unenforced constructor types and the unusable enum parameters were all found by
 probing a claim rather than by reading code.
 
+#### The native-surface sweep
+
+Every method of twelve native namespaces was called with no arguments, a string,
+`i64::MIN`, an array, `null` and five arguments — 894 calls in total, plus the
+198 already run against `Gui`.
+
+- **Zero panics.**
+- **Zero unstructured errors.** `errors.md` lists unstructured producers as
+  active debt; in the namespaces reachable this way there are none left.
+- **Zero silent defaults.** The `_arg(..).unwrap_or(..)` pattern that turned a
+  wrong-typed argument into 0 or `""` is gone from every namespace.
+- Five zero-argument methods outside `Gui` accepted extras and ignored them —
+  `OS.pid`, `OS.platform`, `OS.tick`, `Media.playingCount`, `Media.stopAll` —
+  and now reject them through a shared `reject_arguments` helper.
+
+One flagged case was **not** a defect: `DateTime.from(1, 2, 3, 4, 5)` is inside
+its documented three-to-seven arity. The sweep was blunt there, and the pinning
+test records that so it is not "fixed" later.
+
 #### The panic-site audit
 
 The repository carries 311 `unwrap` / `expect` / `panic!` / `unreachable!`

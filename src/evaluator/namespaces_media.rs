@@ -165,6 +165,9 @@ impl super::Evaluator {
             }
 
             "stopAll" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Media") {
+                    return error;
+                }
                 if let Some(m) = self.media.as_mut() {
                     for (_, s) in m.sinks.drain() {
                         s.stop();
@@ -238,6 +241,9 @@ impl super::Evaluator {
 
             // Media.playingCount() -> int (sonidos activos)
             "playingCount" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Media") {
+                    return error;
+                }
                 let n = self
                     .media
                     .as_mut()

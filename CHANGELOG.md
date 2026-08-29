@@ -7,6 +7,29 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The whole native surface swept; five more zero-argument gaps closed
+
+- Every method of twelve native namespaces called with no arguments, a string,
+  `i64::MIN`, an array, `null` and five arguments — **894 calls**. Result: zero
+  panics and **zero unstructured errors** anywhere in the native surface, which
+  is worth recording because `errors.md` still lists unstructured producers as
+  active debt. In the namespaces reachable this way, there are none left.
+- The silent-default pattern (`_arg(..).unwrap_or(..)`) is now **gone from every
+  namespace** — the only two matches left in the tree are inside the doc comment
+  explaining why it was removed.
+- Five more zero-argument methods accepted extras and ignored them, the same gap
+  as Gui's thirty-one: `OS.pid`, `OS.platform`, `OS.tick`, `Media.playingCount`,
+  `Media.stopAll`. They now raise `TypeError` / `SZ4002` through a shared
+  `reject_arguments` helper. Swept first: no official package passes an argument
+  to any of them.
+- `DateTime.from(1, 2, 3, 4, 5)` was flagged by the sweep and is **not** a
+  defect — three through seven arguments is its documented arity. The probe was
+  blunt, not the implementation, and the pinning test says so explicitly so
+  nobody "fixes" it later.
+- Pinned by `zero_argument_native_methods_reject_arguments`, which also asserts
+  the zero-argument forms still work and that `DateTime.from` keeps its
+  five-argument shape.
+
 ### A wrong-typed Gui argument is an error, not a silent default
 
 - Eleven `Gui` call sites wrote `gui_int_arg(..).unwrap_or(0)` or
