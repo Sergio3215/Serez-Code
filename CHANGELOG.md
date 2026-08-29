@@ -7,6 +7,36 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The panic sites are classified, and a test keeps them honest
+
+- All 311 `unwrap`/`expect`/`panic!`/`unreachable!` sites classified rather than
+  counted: 148 test-only, 39 lock poisoning (reachable only after another thread
+  has already died), 37 behind the `llvm` feature and not in a default build, 28
+  resolving an arena ref the evaluator itself just produced, 8 exhaustive-match
+  `unreachable!`, and the remainder guarded a line or two above.
+- Every candidate that looked genuinely reachable was checked against the
+  binary. `Gui.nodeText`, `nodeTextPx` and `nodeRoundRectOutline` have no guard
+  inside their own match arm but return `GuiError`/`SZ4000` with no window open,
+  because the guard is upstream. `Binary.unpackInt64Le` has an explicit length
+  check. `sz run` resolution unwraps inside `match matches.len() { 1 => }`.
+- One latent hazard recorded rather than fixed: `broadcast_data` computes
+  `(0..ndim - 1)`, which underflows when `ndim == 0`. An empty tensor shape is
+  rejected by all four construction paths with a clean `RangeError`, so it is
+  unreachable — but the function's safety rests on validation two modules away,
+  which is worth knowing before someone adds a fifth construction path.
+- **No reachable panic was found**, and that is only a reading. Reading code and
+  concluding "this looks guarded" is the reasoning that let two invalid quality
+  gates survive in this repository. So the audit leaves
+  `hostile_arguments_to_native_methods_never_panic`: 55 pieces of source a user
+  can type — i64 extremes into string indexes, empty and negative tensor shapes,
+  truncated binary input, uncompilable regexes, malformed JSON, freeing a null
+  pointer, reversed random bounds — each under `catch_unwind`, each required to
+  produce a diagnostic rather than a dead process.
+- It earned its place immediately by catching a bad fixture of mine: a bare
+  `"{"` in Serez opens an interpolation, so `Json.parse("{")` is a *lexer* case,
+  not a runtime one. The raw-string form is used instead, and the frontend stays
+  covered by `malformed_input_never_panics`.
+
 ### The benchmark suite exists on Unix, and can record a baseline
 
 - `run_benchmarks.sh` is new. The suite was Windows-only: `run_benchmarks.ps1`

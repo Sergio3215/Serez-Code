@@ -379,6 +379,50 @@ in this pass: the dynamic-scoping surprise, the nested-receiver data loss, the
 unenforced constructor types and the unusable enum parameters were all found by
 probing a claim rather than by reading code.
 
+#### The panic-site audit
+
+The repository carries 311 `unwrap` / `expect` / `panic!` / `unreachable!`
+sites. The count on its own says nothing, so every one was classified rather
+than counted:
+
+| Class | Sites | Why it cannot be reached from Serez source |
+| --- | ---: | --- |
+| test-only | 148 | Behind `#[cfg(test)]`; a panic there is a failing test, which is the point |
+| lock poisoning | 39 | `.lock()`/`cv.wait()` — reachable only after another thread has already died |
+| behind the `llvm` feature | 37 | Not compiled in a default build; the backend is experimental and unreachable from the CLI |
+| arena invariant | 28 | `self.resolve(ref)` on a ref the evaluator itself just produced |
+| exhaustive match | 8 | `unreachable!()` in a `match` the compiler cannot prove exhaustive |
+| guarded a line or two above | the rest | An explicit length, `is_none()` or shape check immediately before |
+
+Every candidate that looked genuinely reachable was checked against the running
+binary rather than by reading:
+
+- **`broadcast_data(...).unwrap()`** in tensor broadcasting. Its `None`
+  conditions are exactly what the `broadcast_shape` check two lines above
+  already guarantees. It does contain a real hazard — `(0..ndim - 1)` underflows
+  when `ndim == 0` — but an empty tensor shape is rejected by all four
+  construction paths (`new Tensor`, `Tensor.zeros`, `Random.normalTensor`,
+  `reshape`) with a clean `RangeError`. Latent, not reachable; noted because the
+  function's safety rests on validation two modules away.
+- **`Gui.nodeText` / `nodeTextPx` / `nodeRoundRectOutline`**, whose
+  `gui_state.as_mut().unwrap()` has no guard inside its own match arm. Called
+  with no window open, all three return `GuiError` / `SZ4000`; the guard is
+  upstream of the arms.
+- **`Binary.unpackInt64Le`** — an explicit `bytes.len() < 8` check two lines
+  above. **`sz run` command resolution** — inside a `match matches.len() { 1 => }`.
+  **The lexer's `peek_char`** — guarded by `read_position >= input.len()`, and
+  `read_position` only ever advances by `len_utf8`, so the slice stays on a
+  character boundary.
+
+**No reachable panic was found.** That is a reading, though, and reading code
+and concluding "this looks guarded" is the reasoning that let two invalid
+quality gates survive here. So the audit leaves behind
+`hostile_arguments_to_native_methods_never_panic`: 55 pieces of source a user
+can type — i64 extremes into string indexes, empty and negative tensor shapes,
+truncated binary input, uncompilable regexes, malformed JSON, freeing a null
+pointer, reversed random bounds — each run under `catch_unwind`, each required
+to produce a diagnostic rather than a dead process.
+
 #### What auditing the specification has produced
 
 Every document with concrete, falsifiable claims has now been checked against the

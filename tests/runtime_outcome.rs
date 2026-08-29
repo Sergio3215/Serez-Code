@@ -3225,3 +3225,114 @@ fn an_enum_shares_a_name_with_a_class_or_interface_harmlessly() {
         }
     }
 }
+
+/// Hostile arguments to native methods produce diagnostics, not a dead process.
+///
+/// The repository carries 311 `unwrap`/`expect`/`panic!` sites. Classifying them
+/// found none reachable from Serez source — 148 are test-only, 39 are lock
+/// poisoning (another thread already died), 37 are behind the `llvm` feature,
+/// 28 resolve an arena ref the evaluator itself just produced, and the rest are
+/// guarded a line or two above. But *reading* code and concluding "this looks
+/// guarded" is exactly the reasoning that let two invalid quality gates survive
+/// in this repository, so the audit leaves behind something that keeps checking.
+///
+/// Every case below is source a user can type. None of it is valid Serez. What
+/// none of it may do is take the process down: a panic is not a diagnostic — it
+/// has no code, no span, and no exit status the CLI chose.
+#[test]
+fn hostile_arguments_to_native_methods_never_panic() {
+    let cases = [
+        // Tensor: shapes and element counts are the classic overflow surface.
+        "new Tensor([], 0.0);",
+        "new Tensor([0], 0.0);",
+        "new Tensor([-1], 0.0);",
+        "Tensor.zeros([]);",
+        "Tensor.zeros([0, 0]);",
+        r#"Tensor.zeros("not a shape");"#,
+        "let a = Tensor.zeros([2, 2]); a.reshape([]);",
+        "let a = Tensor.zeros([2, 2]); a.reshape([7]);",
+        "let a = Tensor.zeros([2]); let b = Tensor.zeros([3]); a.broadcastAddNd(b);",
+        "let a = Tensor.zeros([2]); a.broadcastAddNd(5);",
+        "let a = Tensor.zeros([2]); a.matmul(a, a, a);",
+        // Binary: unpacking fewer bytes than the width needs.
+        "Binary.unpackInt64Le([]);",
+        "Binary.unpackInt64Le([1, 2, 3]);",
+        r#"Binary.unpackInt64Le("not bytes");"#,
+        "Binary.unpackInt32Le([1]);",
+        // Crypto: block functions chunk their input.
+        r#"Crypto.sha256("");"#,
+        "Crypto.randomBytes(0);",
+        "Crypto.randomBytes(-1);",
+        r#"Crypto.randomBytes("many");"#,
+        // Regex: the matcher's own limits, and a pattern that will not compile.
+        r#"Regex.match("(", "x");"#,
+        r#"Regex.match("[", "x");"#,
+        r#"Regex.replace("(?<", "x", "y");"#,
+        r#"Regex.match(5, "x");"#,
+        // Strings: the index and padding domain, including i64 extremes.
+        r#""abc".substring(0 - 9223372036854775807 - 1, 9223372036854775807);"#,
+        r#""abc".slice(0 - 9223372036854775807 - 1);"#,
+        r#""abc".charAt(0 - 9223372036854775807 - 1);"#,
+        r#""abc".padStart(0 - 1, "x");"#,
+        r#""abc".repeat(0 - 1);"#,
+        // Arrays and dicts on empty or mistyped receivers.
+        "[].pop();",
+        "[].shift();",
+        "[][0];",
+        "[1, 2].slice(0 - 9223372036854775807 - 1, 9223372036854775807);",
+        r#"let d <string, int> = ({"a", 1}); d.Remove();"#,
+        // Numbers: the parse and conversion boundary.
+        r#"parseInt("");"#,
+        r#"parseInt("999999999999999999999999999");"#,
+        r#"parseDecimal("nope");"#,
+        r#"dec("not a number");"#,
+        // DateTime: out-of-range calendar values.
+        "DateTime.from(0, 0, 0);",
+        "DateTime.from(9999, 12, 31, 99, 99, 99, 999);",
+        "DateTime.fromEpoch(0 - 9223372036854775807 - 1);",
+        // Memory and pointers, which are the unsafe surface.
+        "unsafe { Memory.alloc(0); }",
+        "unsafe { Memory.alloc(0 - 1); }",
+        "unsafe { Memory.read(0, 1); }",
+        "unsafe { Memory.free(0); }",
+        // Random's bounds and distribution parameters.
+        "Random.int(10, 1);",
+        "Random.uniform(2.0, 1.0);",
+        "Random.normal(0.0, 0 - 1.0);",
+        "Random.choice([]);",
+        "Random.shuffle(5);",
+        // JSON on text that is not JSON. The raw-string form is required: a
+        // bare `"{"` in Serez opens an interpolation, so it would be a *lexer*
+        // fixture, and the frontend is covered by malformed_input_never_panics.
+        r##"Json.parse(r"{");"##,
+        r##"Json.parse(r"[1,");"##,
+        r#"Json.parse("");"#,
+        r#"Json.parse(5);"#,
+        // Permission-gated namespaces: denial is the expected outcome, and a
+        // denial must also not be a panic.
+        "Gui.nodeText(0, 0, \"hi\", 0);",
+        "Gui.renderScene();",
+        "Socket.close(0 - 1);",
+        "OS.exec(\"\");",
+        "Terminal.getSize();",
+        "Task.poll(0 - 1);",
+    ];
+
+    let mut crashed: Vec<&str> = Vec::new();
+    for src in cases {
+        let outcome = std::panic::catch_unwind(|| {
+            // Any structured outcome is fine — including success. The contract
+            // under test is only that the process survives with a result.
+            let _ = evaluate(src);
+        });
+        if outcome.is_err() {
+            crashed.push(src);
+        }
+    }
+
+    assert!(
+        crashed.is_empty(),
+        "these inputs panicked instead of producing a diagnostic:\n{}",
+        crashed.join("\n")
+    );
+}
