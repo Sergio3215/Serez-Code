@@ -464,6 +464,8 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     run_cli_test "cli: non-.sz file rejected" "" ".sz extension" "" "" readme.txt
     run_cli_test "cli: missing .sz file reports error" "" "ERROR reading file" "" "" \
         "$TESTS_DIR/this_file_does_not_exist.sz"
+    run_cli_test "cli: --watch on a missing file reports, not panics" "" \
+        "cannot watch" "" "" --watch nosuchfile_for_the_watch_test.sz
     # Regression 2026-07-14: the message must reach stderr intact
     # (previously "Referencia inválida" in `out f()`, and silence in f(g())).
     run_cli_test "cli: uncaught throw en out f() conserva el mensaje" "" "boom out con local 7" "" "" \

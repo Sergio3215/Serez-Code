@@ -718,6 +718,9 @@ if ($runAll -or $cli) {
     $noSz = "`"$(Join-Path $testsDir 'this_file_does_not_exist.sz')`""
     Run-CLI-Test "cli: missing .sz file reports error" @($noSz) `
                  -expectErr "ERROR reading file"
+    Run-CLI-Test "cli: --watch on a missing file reports, not panics" `
+                 @("--watch", "nosuchfile_for_the_watch_test.sz") `
+                 -expectErr "cannot watch"
     # Regresión throw 2026-07-14: el mensaje debe llegar ÍNTEGRO a stderr
     # (antes: "Referencia inválida" en `out f()`, y silencio total en f(g())).
     $thrOut = "`"$(Join-Path $testsDir 'err_throw_out_stmt.sz')`""
