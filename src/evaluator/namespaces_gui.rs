@@ -4343,13 +4343,22 @@ impl super::Evaluator {
                 let text = self.gui_str_arg(&dot_call.arguments[2]);
                 let scale = self.gui_int_arg(&dot_call.arguments[3]);
                 let c = self.gui_int_arg(&dot_call.arguments[4]);
+                // Omitted is 0; *supplied and not an int* is an error. The
+                // two cases used to be the same value.
                 let style = if n >= 6 {
-                    self.gui_int_arg(&dot_call.arguments[5]).unwrap_or(0)
+                    match self.gui_required_int(&dot_call.arguments[5], "drawText", "style") {
+                        Ok(v) => v,
+                        Err(e) => return e,
+                    }
                 } else {
                     0
                 };
                 let spacing = if n == 7 {
-                    self.gui_int_arg(&dot_call.arguments[6]).unwrap_or(0)
+                    match self.gui_required_int(&dot_call.arguments[6], "drawText", "letterSpacing")
+                    {
+                        Ok(v) => v,
+                        Err(e) => return e,
+                    }
                 } else {
                     0
                 };
@@ -4532,9 +4541,19 @@ impl super::Evaluator {
                     EvalResult::Value(v) => v,
                     other => return other,
                 };
-                let sheet_h = self.gui_int_arg(&dot_call.arguments[1]).unwrap_or(0);
-                let w = self.gui_int_arg(&dot_call.arguments[2]).unwrap_or(0) as i32;
-                let h = self.gui_int_arg(&dot_call.arguments[3]).unwrap_or(0) as i32;
+                let sheet_h =
+                    match self.gui_required_int(&dot_call.arguments[1], "renderTree", "sheet") {
+                        Ok(v) => v,
+                        Err(e) => return e,
+                    };
+                let w = match self.gui_required_int(&dot_call.arguments[2], "renderTree", "w") {
+                    Ok(v) => v as i32,
+                    Err(e) => return e,
+                };
+                let h = match self.gui_required_int(&dot_call.arguments[3], "renderTree", "h") {
+                    Ok(v) => v as i32,
+                    Err(e) => return e,
+                };
                 let ctx: Vec<(String, String)> = if dot_call.arguments.len() >= 5 {
                     self.gui_read_ctx(&dot_call.arguments[4])
                 } else {
@@ -5238,7 +5257,11 @@ impl super::Evaluator {
                     return self
                         .rt_err_kind("TypeError", "Gui.clipboardSet(text) requires 1 argument");
                 }
-                let text = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
+                let text =
+                    match self.gui_required_str(&dot_call.arguments[0], "clipboardSet", "text") {
+                        Ok(v) => v,
+                        Err(e) => return e,
+                    };
                 if let Some(st) = self.gui_state.as_mut() {
                     if st.clipboard.is_none() {
                         st.clipboard = arboard::Clipboard::new().ok();
@@ -5792,7 +5815,10 @@ impl super::Evaluator {
                 if dot_call.arguments.len() != 1 {
                     return self.rt_err_kind("TypeError", "Gui.setTitle(text) requires 1 argument");
                 }
-                let t = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
+                let t = match self.gui_required_str(&dot_call.arguments[0], "setTitle", "text") {
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
                 if let Some(h) = host() {
                     let mut g = h.inner.lock().unwrap();
                     g.cmds.push_back(GuiCmd::SetTitle(t));
@@ -5806,7 +5832,11 @@ impl super::Evaluator {
                     return self
                         .rt_err_kind("TypeError", "Gui.setCursor(style) requires 1 argument");
                 }
-                let name = self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default();
+                let name = match self.gui_required_str(&dot_call.arguments[0], "setCursor", "name")
+                {
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
                 if let Some(h) = host() {
                     let mut g = h.inner.lock().unwrap();
                     g.cmds.push_back(GuiCmd::SetCursor(name));
@@ -5833,6 +5863,48 @@ impl super::Evaluator {
     }
 
     // ── arg helpers ──────────────────────────────────────────────────────────────
+
+    /// An `int` argument that was **supplied**, or the error to return.
+    ///
+    /// Eleven `Gui` call sites used to write `gui_int_arg(..).unwrap_or(0)` or
+    /// `gui_str_arg(..).unwrap_or_default()`. Omission was already handled
+    /// separately above each of them, so those defaults fired only when the
+    /// caller *did* pass an argument and it was of the wrong type: the value
+    /// became 0 or "" and the call carried on. `Gui.setTitle(5)` silently
+    /// cleared the title; `Gui.renderTree(root, sheet, "800", 600)` silently
+    /// rendered at width 0. That is the shape of the Array defects fixed at the
+    /// start of this cycle — a wrong type quietly becoming a plausible-looking
+    /// value — and it is the one failure mode this audit exists to remove.
+    pub(super) fn gui_required_int(
+        &mut self,
+        expr: &ast::Expression,
+        method: &str,
+        param: &str,
+    ) -> Result<i64, EvalResult> {
+        match self.gui_int_arg(expr) {
+            Some(n) => Ok(n),
+            None => {
+                Err(self.rt_err_kind("TypeError", format!("Gui.{method}: {param} must be an int")))
+            }
+        }
+    }
+
+    /// A `string` argument that was **supplied**, or the error to return.
+    /// See `gui_required_int`.
+    pub(super) fn gui_required_str(
+        &mut self,
+        expr: &ast::Expression,
+        method: &str,
+        param: &str,
+    ) -> Result<String, EvalResult> {
+        match self.gui_str_arg(expr) {
+            Some(v) => Ok(v),
+            None => Err(self.rt_err_kind(
+                "TypeError",
+                format!("Gui.{method}: {param} must be a string"),
+            )),
+        }
+    }
 
     pub(super) fn gui_int_arg(&mut self, expr: &ast::Expression) -> Option<i64> {
         match self.eval_expression(expr) {
@@ -6049,18 +6121,28 @@ impl super::Evaluator {
             return self.rt_err_kind("GuiError", "Gui file dialog: no window open");
         }
         let n = dot_call.arguments.len();
+        // Omitted is empty; supplied and not a string is an error.
         let filter_name = if n >= 1 {
-            self.gui_str_arg(&dot_call.arguments[0]).unwrap_or_default()
+            match self.gui_required_str(&dot_call.arguments[0], "fileDialog", "filterName") {
+                Ok(v) => v,
+                Err(e) => return e,
+            }
         } else {
             String::new()
         };
         let exts_csv = if n >= 2 {
-            self.gui_str_arg(&dot_call.arguments[1]).unwrap_or_default()
+            match self.gui_required_str(&dot_call.arguments[1], "fileDialog", "extensions") {
+                Ok(v) => v,
+                Err(e) => return e,
+            }
         } else {
             String::new()
         };
         let default_name = if save && n >= 3 {
-            self.gui_str_arg(&dot_call.arguments[2]).unwrap_or_default()
+            match self.gui_required_str(&dot_call.arguments[2], "fileDialog", "defaultName") {
+                Ok(v) => v,
+                Err(e) => return e,
+            }
         } else {
             String::new()
         };

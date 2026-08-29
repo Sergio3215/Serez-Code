@@ -7,6 +7,33 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A wrong-typed Gui argument is an error, not a silent default
+
+- Eleven `Gui` call sites wrote `gui_int_arg(..).unwrap_or(0)` or
+  `gui_str_arg(..).unwrap_or_default()`. Omission was already handled separately
+  above each of them, so those defaults fired only when the caller **did** pass
+  an argument and it was the wrong type:
+
+      Gui.setTitle(5)                          // silently cleared the title
+      Gui.clipboardSet(42)                     // silently wrote an empty string
+      Gui.setCursor(7)                         // silently selected no cursor
+      Gui.renderTree(root, "800", 600, 400)    // silently rendered at width 0
+
+  All four now raise `TypeError` / `SZ4002` naming the method and the parameter.
+- This is the same shape as the Array defects fixed at the start of this cycle —
+  `slice("x")` becoming index 0 — and it is the failure mode this whole audit
+  exists to remove: a wrong type quietly becoming a plausible-looking value, so
+  the program does something the author never asked for and nothing says so.
+- `drawText`'s `style`/`letterSpacing` and the file dialog's three strings keep
+  their defaults when **omitted**; only a supplied-and-wrong argument errors. The
+  two cases used to be indistinguishable.
+- `renderTree` was the risky one — serez-ui calls it constantly — so the change
+  was measured rather than assumed: conformance 474/474, ecosystem 8/8 with
+  serez-ui 36/36, serez-strike 113/113, serez-cobol 23/23.
+- Pinned by `a_supplied_gui_argument_of_the_wrong_type_is_rejected_not_defaulted`,
+  which also asserts correct types still pass and omitted optionals still
+  default.
+
 ### Gui readers that take no arguments now say so
 
 - `namespaces_gui.rs` is the largest subsystem — 6,036 lines, 120 exposed

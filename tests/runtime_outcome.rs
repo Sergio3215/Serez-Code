@@ -3384,3 +3384,51 @@ fn zero_argument_gui_methods_reject_arguments() {
         }
     }
 }
+
+#[test]
+fn a_supplied_gui_argument_of_the_wrong_type_is_rejected_not_defaulted() {
+    // Eleven Gui call sites wrote `gui_int_arg(..).unwrap_or(0)` or
+    // `gui_str_arg(..).unwrap_or_default()`. Omission was handled separately
+    // above each of them, so the default fired only when the caller *did* pass
+    // an argument of the wrong type: `Gui.setTitle(5)` silently cleared the
+    // title, `Gui.renderTree(root, "800", w, h)` silently rendered at 0. The
+    // same shape as the Array defects fixed at the start of this cycle.
+    for (call, param) in [
+        (r#"Gui.setTitle(5);"#, "text must be a string"),
+        (r#"Gui.clipboardSet(42);"#, "text must be a string"),
+        (r#"Gui.setCursor(7);"#, "name must be a string"),
+        (
+            r#"Gui.renderTree(null, "800", 600, 400);"#,
+            "sheet must be an int",
+        ),
+        (
+            r#"Gui.renderTree(null, 1, "600", 400);"#,
+            "w must be an int",
+        ),
+        (r#"Gui.renderTree(null, 1, 600, []);"#, "h must be an int"),
+    ] {
+        let src = format!("use permissions {{ Gui }}\n{call}");
+        match evaluate_with_permissions(&src, &["Gui"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
+                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert!(error.message.contains(param), "{call}: {}", error.message);
+            }
+            other => panic!("{call} must be rejected, got {other:?}"),
+        }
+    }
+
+    // Correct types are untouched, and an *omitted* optional argument still
+    // takes its default rather than becoming an error.
+    for call in [
+        r#"Gui.setTitle("hello");"#,
+        r#"Gui.clipboardSet("text");"#,
+        r#"Gui.setCursor("hand");"#,
+    ] {
+        let src = format!("use permissions {{ Gui }}\n{call}");
+        match evaluate_with_permissions(&src, &["Gui"]) {
+            ProgramOutcome::Value(_) => {}
+            other => panic!("{call} must still be accepted, got {other:?}"),
+        }
+    }
+}
