@@ -3336,3 +3336,51 @@ fn hostile_arguments_to_native_methods_never_panic() {
         crashed.join("\n")
     );
 }
+
+#[test]
+fn zero_argument_gui_methods_reject_arguments() {
+    // Thirty-one Gui readers accepted anything and ignored it, while every
+    // other namespace in the language rejects a wrong argument count with
+    // TypeError / SZ4002. `mouseRightDown` existing as a separate method makes
+    // `mouseDown(RIGHT)` a plausible thing to write, and it used to be answered
+    // with silence.
+    for call in [
+        r#"Gui.mouseDown("left");"#,
+        r#"Gui.size([]);"#,
+        r#"Gui.isOpen(1, 2, 3);"#,
+        r#"Gui.scroll(5);"#,
+        r#"Gui.keysPressed(null);"#,
+        r#"Gui.scaleFactor(1);"#,
+    ] {
+        let src = format!("use permissions {{ Gui }}\n{call}");
+        match evaluate_with_permissions(&src, &["Gui"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
+                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert!(
+                    error.message.contains("takes no arguments"),
+                    "{call}: {}",
+                    error.message
+                );
+            }
+            other => panic!("{call} must be rejected, got {other:?}"),
+        }
+    }
+
+    // The same calls with no arguments still work, and the two methods that do
+    // read arguments are untouched.
+    for call in [
+        "Gui.mouseDown();",
+        "Gui.size();",
+        "Gui.isOpen();",
+        "Gui.scroll();",
+        "Gui.close();",
+        r#"Gui.font("nonexistent-font");"#,
+    ] {
+        let src = format!("use permissions {{ Gui }}\n{call}");
+        match evaluate_with_permissions(&src, &["Gui"]) {
+            ProgramOutcome::Value(_) => {}
+            other => panic!("{call} must still be accepted, got {other:?}"),
+        }
+    }
+}

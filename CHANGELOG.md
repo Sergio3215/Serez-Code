@@ -7,6 +7,33 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Gui readers that take no arguments now say so
+
+- `namespaces_gui.rs` is the largest subsystem — 6,036 lines, 120 exposed
+  methods — and the thinnest-covered: about 27 conformance tests across the
+  whole surface. Auditing it systematically found nothing that crashes: every
+  one of the 120 methods was called with no arguments and no window, and then
+  the 33 reachable without a window were called with a string, an array, `null`,
+  `i64::MIN`, a dict and eight arguments — 198 combinations, zero panics, zero
+  unstructured errors.
+- What it did find: **31 of those readers accepted anything and ignored it**.
+  `Gui.mouseDown("left")`, `Gui.size([])` and `Gui.isOpen(1, 2, 3)` all returned
+  normally, while every other namespace in the language rejects a wrong argument
+  count with `TypeError` / `SZ4002` — `strings.md`, `random.md` and
+  `datetime.md` all state it normatively. It is the same silent-acceptance shape
+  as the Array defects fixed at the start of this cycle, and a plausible mistake
+  to make here in particular: `mouseRightDown` exists as a *separate* method, so
+  writing `mouseDown(RIGHT)` is a natural guess and used to be met with silence.
+- One guard before the dispatch rather than thirty-one edits in a 6,000-line
+  file, with the list and its reasoning in `GUI_ZERO_ARG_METHODS`. `close` and
+  `font` are excluded because they really do read arguments — that distinction
+  came from checking each arm for `dot_call.arguments`, not from the names.
+- **Breaking in principle, empty in practice.** Swept before enforcing: no
+  official package passes an argument to any of the 31. Verified after:
+  ecosystem 8/8 with serez-ui 36/36, serez-strike 113/113, serez-cobol 23/23.
+- Pinned by `zero_argument_gui_methods_reject_arguments`, which also asserts the
+  same calls still work with no arguments and that `close`/`font` are untouched.
+
 ### The panic sites are classified, and a test keeps them honest
 
 - All 311 `unwrap`/`expect`/`panic!`/`unreachable!` sites classified rather than

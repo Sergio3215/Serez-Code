@@ -3162,12 +3162,76 @@ fn cursor_icon(name: &str) -> CursorIcon {
     }
 }
 
+/// `Gui` methods that take no arguments at all.
+///
+/// Every other namespace in the language rejects a wrong argument count with
+/// `TypeError` / `SZ4002` — `strings.md`, `random.md` and `datetime.md` all say
+/// so normatively — but these thirty-one readers accepted anything and ignored
+/// it: `Gui.mouseDown("left")`, `Gui.size([])` and `Gui.isOpen(1, 2, 3)` all
+/// returned normally. That is the same silent-acceptance shape as the Array
+/// defects fixed earlier in this cycle, and it is a plausible mistake to make
+/// here in particular, because `mouseRightDown` exists as a *separate* method:
+/// somebody will reasonably write `mouseDown(RIGHT)` and be told nothing.
+///
+/// `close` and `font` are deliberately absent — they do read arguments.
+///
+/// Swept against the whole official ecosystem before being enforced: no package
+/// passes an argument to any of these, so nothing that works today stops
+/// working. Kept honest by `zero_argument_gui_methods_reject_arguments`.
+const GUI_ZERO_ARG_METHODS: &[&str] = &[
+    "charsTyped",
+    "clipboardGet",
+    "clipboardGetImage",
+    "currentWindow",
+    "dragWindow",
+    "droppedFiles",
+    "focused",
+    "hoveredFiles",
+    "imePreedit",
+    "isOpen",
+    "keysPressed",
+    "keysReleased",
+    "keysRepeated",
+    "monitors",
+    "mouse",
+    "mouseBackDown",
+    "mouseDown",
+    "mouseForwardDown",
+    "mouseInWindow",
+    "mouseMiddleDown",
+    "mousePressed",
+    "mouseRightDown",
+    "nodeCount",
+    "pinchDelta",
+    "popClip",
+    "scaleFactor",
+    "sceneClear",
+    "scroll",
+    "size",
+    "time",
+    "touches",
+];
+
 impl super::Evaluator {
     // ── Gui ─────────────────────────────────────────────────────────────────────
 
     pub(super) fn eval_gui_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
         if let Some(error) = self.require_permission("Gui", "Gui") {
             return error;
+        }
+
+        // One check rather than thirty-one: these readers take nothing, and
+        // until now accepted anything and ignored it. GUI_ZERO_ARG_METHODS
+        // records why that was worth changing and what was swept first.
+        if !dot_call.arguments.is_empty()
+            && GUI_ZERO_ARG_METHODS.contains(&dot_call.method.as_str())
+        {
+            let method = dot_call.method.clone();
+            let got = dot_call.arguments.len();
+            return self.rt_err_kind(
+                "TypeError",
+                format!("Gui.{method}() takes no arguments but received {got}"),
+            );
         }
 
         match dot_call.method.as_str() {
