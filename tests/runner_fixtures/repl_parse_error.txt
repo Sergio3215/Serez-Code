@@ -1,0 +1,2 @@
+out "SIDE_EFFECT_RAN"; let x = ;
+out "the session continues";

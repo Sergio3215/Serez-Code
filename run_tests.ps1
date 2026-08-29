@@ -520,6 +520,42 @@ function Run-CLI-Test([string]$label, [string[]]$binArgs, [string]$expectOut = "
     else     { Write-Host "[FAIL] $label — $reason" -ForegroundColor Red; Add-Result "fail" $label $reason }
 }
 
+function Run-Repl-Test([string]$label, [string]$expectOut, [string]$forbidOut,
+                      [string]$expectErr, [string]$stdinFixture) {
+    # These cases can only be stated as an absence: that a line the parser
+    # rejected did NOT run, and that a line the process could not decode did NOT
+    # kill the session. Run-CLI-Test asserts containment only, which is why
+    # neither defect was visible to the five REPL cases that already existed.
+    # The input comes from a fixture file because one of them is deliberately
+    # not UTF-8 and cannot survive being carried as a string.
+    if ($filter -and $label -notlike "*$filter*") { return }
+    $inFile  = Join-Path $testsDir "runner_fixtures\$stdinFixture"
+    $outFile = [System.IO.Path]::GetTempFileName()
+    $errFile = [System.IO.Path]::GetTempFileName()
+    Start-Process -FilePath $binary -WorkingDirectory $root `
+        -NoNewWindow -Wait `
+        -RedirectStandardInput  $inFile `
+        -RedirectStandardOutput $outFile `
+        -RedirectStandardError  $errFile
+    $out = if (Test-Path $outFile) { (Get-Content $outFile -Raw) } else { "" }
+    $err = if (Test-Path $errFile) { (Get-Content $errFile -Raw) } else { "" }
+    Remove-Item $outFile, $errFile -ErrorAction SilentlyContinue
+    $out = ($out ?? ""); $err = ($err ?? "")
+
+    $ok = $true; $reason = ""
+    if ($expectOut -ne "" -and $out -notmatch [regex]::Escape($expectOut)) {
+        $ok = $false; $reason = "stdout missing '$expectOut'"
+    }
+    if ($forbidOut -ne "" -and $out -match [regex]::Escape($forbidOut)) {
+        $ok = $false; $reason = "stdout contains '$forbidOut', which must not have run"
+    }
+    if ($expectErr -ne "" -and $err -notmatch [regex]::Escape($expectErr)) {
+        $ok = $false; $reason = "stderr missing '$expectErr'"
+    }
+    if ($ok) { Write-Host "[PASS] $label" -ForegroundColor Green; Add-Result "pass" $label }
+    else     { Write-Host "[FAIL] $label - $reason" -ForegroundColor Red; Add-Result "fail" $label $reason }
+}
+
 # The runner itself must reject a unit program that aborts before summary().
 Write-Host "═══ Test Runner Integrity ════════════════════" -ForegroundColor Cyan
 $script:category = "runner-integrity"
@@ -762,6 +798,28 @@ if ($runAll -or $cli) {
     Run-CLI-Test "repl: error recovery continues"       @() `
                  -expectOut "survived" -expectErr "❌" `
                  -stdinContent "out undefined_xyz_var;`nout `"survived`";"
+    Run-Repl-Test "repl: a parse error does not run the line" `
+                  -expectOut "the session continues" `
+                  -forbidOut "SIDE_EFFECT_RAN" `
+                  -expectErr "Aborted: fix the parse errors" `
+                  -stdinFixture "repl_parse_error.txt"
+    Run-Repl-Test "repl: a parse error shows the source and caret" `
+                  -expectOut "the session continues" `
+                  -expectErr "let x = ;" `
+                  -stdinFixture "repl_parse_error.txt"
+    Run-Repl-Test "repl: a non-UTF-8 line is skipped, not fatal" `
+                  -expectOut "after the bad line" `
+                  -expectErr "did not contain valid UTF-8" `
+                  -stdinFixture "repl_invalid_utf8.txt"
+    Run-CLI-Test "repl: without a grant a namespace is denied" @() `
+                 -expectErr "SZ6001" `
+                 -stdinContent "out DateTime.now();"
+    Run-CLI-Test "repl: a grant persists across lines" @() `
+                 -expectOut "true" `
+                 -stdinContent "use permissions { Time }`nout DateTime.now() != null;`nout OS.platform();"
+    Run-CLI-Test "repl: a grant opens only what it names" @() `
+                 -expectOut "true" -expectErr "requires permission 'OS'" `
+                 -stdinContent "use permissions { Time }`nout DateTime.now() != null;`nout OS.platform();"
 }
 
 # ── --check Mode Tests ────────────────────────────────────────────────────────

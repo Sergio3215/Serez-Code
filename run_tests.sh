@@ -415,6 +415,39 @@ run_cli_test() {
     fi
 }
 
+
+# -- run_repl_test <label> <expect_out> <forbid_out> <expect_err> <stdin_fixture>
+# The REPL cases below can only be stated as an absence: proving that a line the
+# parser rejected did NOT run, and that a line the process could not decode did
+# NOT kill the session. `run_cli_test` asserts containment only, which is why
+# neither defect was visible to the five REPL cases that already existed. The
+# input comes from a fixture file because one of them is deliberately not UTF-8
+# and cannot survive being carried as a shell or PowerShell string.
+run_repl_test() {
+    local label="$1" expect_out="$2" forbid_out="$3" expect_err="$4" stdin_fixture="$5"
+    [[ -n "$FILTER" && "$label" != *"$FILTER"* ]] && return
+
+    local out err ok=1 reason=""
+    out=$("$BINARY" < "$TESTS_DIR/runner_fixtures/$stdin_fixture" 2>"$TEMP_ERR" || true)
+    err=$(cat "$TEMP_ERR")
+
+    if [[ -n "$expect_out" && "$out" != *"$expect_out"* ]]; then
+        ok=0; reason="stdout missing '$expect_out'"
+    fi
+    if [[ -n "$forbid_out" && "$out" == *"$forbid_out"* ]]; then
+        ok=0; reason="stdout contains '$forbid_out', which must not have run"
+    fi
+    if [[ -n "$expect_err" && "$err" != *"$expect_err"* ]]; then
+        ok=0; reason="stderr missing '$expect_err'"
+    fi
+
+    if [[ "$ok" == "1" ]]; then
+        echo "${GREEN}[PASS]${RESET} $label"; record pass "$label"
+    else
+        echo "${RED}[FAIL]${RESET} $label - $reason"; record fail "$label" "$reason"
+    fi
+}
+
 # ── CLI Tests ─────────────────────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ CLI Tests ════════════════════════════════${RESET}"
@@ -492,6 +525,19 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
         $'fn int add(int a, int b) { return a + b; }\nout add(5, 7);' ""
     run_cli_test "repl: error recovery continues" "survived" "❌" \
         $'out undefined_xyz_var;\nout "survived";' ""
+    run_repl_test "repl: a parse error does not run the line" \
+        "the session continues" "SIDE_EFFECT_RAN" \
+        "Aborted: fix the parse errors" "repl_parse_error.txt"
+    run_repl_test "repl: a parse error shows the source and caret" \
+        "the session continues" "" "let x = ;" "repl_parse_error.txt"
+    run_repl_test "repl: a non-UTF-8 line is skipped, not fatal" \
+        "after the bad line" "" "did not contain valid UTF-8" "repl_invalid_utf8.txt"
+    run_cli_test "repl: without a grant a namespace is denied" "" "SZ6001" \
+        'out DateTime.now();' ""
+    run_cli_test "repl: a grant persists across lines" "true" "" \
+        $'use permissions { Time }\nout DateTime.now() != null;\nout OS.platform();' ""
+    run_cli_test "repl: a grant opens only what it names" "true" "requires permission 'OS'" \
+        $'use permissions { Time }\nout DateTime.now() != null;\nout OS.platform();' ""
 fi
 
 # ── --check Mode Tests ────────────────────────────────────────────────────────

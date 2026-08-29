@@ -7,6 +7,53 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The REPL ran what the parser rejected, and died on a pasted character
+
+- **A line with parse errors was evaluated anyway.** `out "x"; let y = ;` printed
+  `x` at the prompt, while the identical line in a file printed
+  `Aborted: fix the parse errors above before running.` and executed nothing.
+  `run_source` states the rule in a comment — "a program with parse errors must
+  not half-run: statements after the broken one would execute against missing
+  definitions" — and the REPL simply never called `parser.has_errors()`. It does
+  now, and prints the same abort line.
+- **A line that was not UTF-8 killed the session.** `read_line().unwrap()` turned
+  `InvalidData` into `thread '<unnamed>' panicked at src/repl.rs:17` with a
+  backtrace note, on an interactive surface, from one pasted Latin-1 character.
+  The REPL reads raw bytes now and reports the line it could not decode, in the
+  same shape its siblings use (`ERROR reading file`, `ERROR reading stdin`), then
+  carries on at the next prompt. Consuming the line before validating it also
+  guarantees progress, so a bad line cannot be re-read forever. It was the only
+  entry point that panicked here: a file, an imported module and `--eval -` all
+  answer with a diagnostic and exit 1.
+- **A closed terminal was a panic.** `flush().unwrap()`. Ending a session is not
+  a failure to report.
+- **Diagnostics had no source line and no caret**, because `set_source` was never
+  called on the parser or the evaluator. They now match the file path's shape.
+- `spec/cli.md` gains the REPL contract this had been missing: each line is a
+  complete program against a persistent evaluator, a line that does not parse
+  does not run, a runtime error abandons only that line, and the REPL is **not**
+  under lockdown — it grants like `sz file.sz`, unlike `--eval`. One deliberate
+  difference is recorded rather than smoothed over: the REPL does not run the
+  type checker, because each line is parsed independently and a per-line checker
+  would report functions declared on earlier lines as unknown. The checker is
+  advisory everywhere, so nothing enforced is lost.
+- `DEVELOPMENT.md` said the REPL "reuses the same pipeline per line". It did not,
+  in four separate respects. Corrected.
+
+### The runners can now assert that something did *not* happen
+
+- Both defects above are absences — a line that must not run, a session that must
+  not die — and all five existing REPL cases assert containment, so neither was
+  visible to them. A new `run_repl_test` / `Run-Repl-Test` helper takes a
+  forbid-in-stdout assertion and reads stdin from a fixture file, since one
+  fixture is deliberately not valid UTF-8 and cannot survive being carried as a
+  shell or PowerShell string.
+- REPL coverage goes from 5 cases to 11 on **both** runners. All three new
+  behavioural cases were confirmed to fail against the previous REPL.
+- Three of the new cases cover the REPL's permission boundary, which had no
+  coverage at all: it denies by default, honours an inline `use permissions`,
+  carries the grant across lines, and opens nothing it was not asked for.
+
 ### A third of the suite never ran on one platform
 
 - `run_tests.sh` reported 306 passed / 168 failed where `run_tests.ps1` reported

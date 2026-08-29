@@ -71,6 +71,40 @@ states plainly that lockdown is not a sandbox.
 Running your own file is unaffected: `sz file.sz` still honours an inline
 `use permissions` block.
 
+### The REPL
+
+`sz` with no arguments starts the REPL. Each line is lexed, parsed and
+evaluated as a **complete program of its own**, against an evaluator that
+persists across lines — so a `let` or `fn` on one line is visible on the next,
+and the value of the line is echoed (a line whose value is nothing echoes
+`null`).
+
+The REPL is **not** under lockdown. It is the user typing on their own machine,
+so it grants like `sz file.sz` and unlike `--eval`: an inline
+`use permissions` block is honoured.
+
+Two rules it shares with `sz file.sz`:
+
+- **A line with parse errors does not run.** The diagnostic is printed with the
+  offending source and a caret, followed by `Aborted: fix the parse errors
+  above before running.`, and the session continues at the next prompt. Until
+  this was fixed the REPL printed the diagnostic and then evaluated anyway, so
+  `out "x"; let y = ;` printed `x` here while the identical line in a file
+  aborted without running anything.
+- **A runtime error is reported and the session continues.** Only the line that
+  raised it is abandoned.
+
+One deliberate difference: the REPL does **not** run the type checker. Each
+line is parsed as an independent program, so a checker running per line would
+see calls to functions declared on earlier lines as unknown and report
+diagnostics that are simply wrong. The checker is advisory everywhere
+(`types.md`), so nothing is enforced that would otherwise be caught — runtime
+checks remain authoritative, and they run.
+
+Input that is not valid UTF-8 is reported and the line is skipped; the session
+survives it. `sz file.sz`, an imported module and `--eval -` all reject
+non-UTF-8 input with a diagnostic and exit 1.
+
 ## Package commands
 
 | Command | Behavior |

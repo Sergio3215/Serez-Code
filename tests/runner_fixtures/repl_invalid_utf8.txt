@@ -1,0 +1,3 @@
+out "before the bad line";
+ÿş
+out "after the bad line";

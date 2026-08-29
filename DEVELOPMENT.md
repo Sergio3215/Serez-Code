@@ -236,8 +236,21 @@ or silently discards the expression around it.
 
 ### REPL
 
-The REPL reuses the same pipeline per line. It keeps a persistent `Evaluator`
-across lines so that variables declared on one line are visible on the next.
+The REPL runs the same lex/parse/evaluate pipeline per line, with the same
+parse-error rule as `run_source`: a line that does not parse is not evaluated.
+It keeps a persistent `Evaluator` across lines so that variables declared on one
+line are visible on the next.
+
+It does **not** run the type checker, and that is deliberate rather than an
+oversight: each line is parsed as an independent program, so a per-line checker
+would report calls to functions declared on earlier lines as unknown. The
+checker is advisory everywhere, so nothing enforced is lost. `spec/cli.md`
+states the REPL's contract, including this difference.
+
+This paragraph used to read "reuses the same pipeline per line", which was not
+true: the REPL skipped `parser.set_source` (no source line, no caret in
+diagnostics), skipped `parser.has_errors()` (a rejected line still executed) and
+skipped `evaluator.set_source`.
 
 ---
 
