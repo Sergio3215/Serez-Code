@@ -316,9 +316,27 @@ The evaluator still propagates failures *internally* with an
 `EvalResult::Error` sentinel and temporarily stores structured payload in
 `last_error` until a matching `catch` or program boundary consumes it. A
 generation counter prevents stale payload reuse, but the side channel remains
-transitional implementation debt, not a public semantic guarantee. Producers
-that have not migrated to `rt_err_kind` are surfaced explicitly as
-`UnstructuredError`; class `super`/dispatch paths and other native subsystems
-still contain examples under active audit.
+transitional implementation debt, not a public semantic guarantee.
+
+A producer that never recorded a payload surfaces as `UnstructuredError`, which
+is the one outcome the boundary prints **nothing** for — a non-zero exit with no
+diagnostic, the least actionable thing the runtime can do.
+
+**Nothing reachable produces one today.** This document used to say that class
+`super`/dispatch paths and other native subsystems still contained examples; they
+were migrated, and the claim was measured rather than retired on faith. Thirty-one
+language constructs — construction, method and accessor bodies, `super` in both
+directions, operator overloads, native callbacks, generators, `match`,
+destructuring, nested writes, pipes and a failing default argument — and 894
+hostile calls across twelve native namespaces produced zero unstructured
+outcomes. `no_reachable_construct_produces_an_unstructured_outcome` in
+`tests/runtime_outcome.rs` keeps it that way.
+
+Thirty-four `return EvalResult::Error` sites remain in the evaluator. Every one
+*propagates* a failure recorded structured further in — they run cleanup and pass
+the sentinel outward — rather than originating an unstructured one. The variant
+stays in `ProgramOutcome` because an embedder must still be able to receive it,
+and because removing it would be a public API change.
+
 A future internal refactor may carry the payload directly, provided the public
 fields and control-flow behavior remain compatible.

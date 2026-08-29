@@ -7,6 +7,29 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `errors.md` said unstructured failures remained; they do not
+
+- The document stated that "class `super`/dispatch paths and other native
+  subsystems still contain examples under active audit" of producers that had
+  not migrated to structured errors. They were migrated, and the claim outlived
+  the work.
+- Retired by measurement rather than on faith. `ProgramOutcome::UnstructuredError`
+  is the one outcome the boundary prints **nothing** for — a non-zero exit with
+  no diagnostic, the least actionable thing the runtime can do — so it is worth
+  knowing whether anything still reaches it. Thirty-one language constructs
+  (construction, method and accessor bodies, `super` in both directions,
+  operator overloads, native callbacks, generators, `match`, destructuring,
+  nested writes, pipes, ternaries, spreads, a failing default argument) plus the
+  894 hostile native calls from the previous sweep: **zero unstructured
+  outcomes**.
+- Thirty-four `return EvalResult::Error` sites remain in the evaluator, and the
+  document now says what they are: every one *propagates* a failure already
+  recorded structured further in, running cleanup and passing the sentinel
+  outward. None originates an unstructured one. The variant stays in
+  `ProgramOutcome` because an embedder must still be able to receive it and
+  removing it would be a public API change.
+- Pinned by `no_reachable_construct_produces_an_unstructured_outcome`.
+
 ### The whole native surface swept; five more zero-argument gaps closed
 
 - Every method of twelve native namespaces called with no arguments, a string,

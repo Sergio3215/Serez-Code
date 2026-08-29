@@ -3482,3 +3482,84 @@ fn zero_argument_native_methods_reject_arguments() {
         }
     }
 }
+
+#[test]
+fn no_reachable_construct_produces_an_unstructured_outcome() {
+    // `ProgramOutcome::UnstructuredError` is what the boundary returns when an
+    // `EvalResult::Error` arrives with no structured payload recorded. It is
+    // the one outcome `report_program_outcome` deliberately prints nothing for,
+    // on the assumption that a legacy producer already printed its own message
+    // — so an unstructured failure is a non-zero exit with no diagnostic, which
+    // is the least actionable thing the runtime can do.
+    //
+    // `errors.md` said "class `super`/dispatch paths and other native
+    // subsystems still contain examples under active audit". They do not any
+    // more. Thirty-four `return EvalResult::Error` sites remain, but every one
+    // of them *propagates* a failure that was already recorded structured
+    // further in; none originates one.
+    //
+    // This walks the paths that would show it: construction, method and
+    // accessor bodies, `super` in both directions, operator overloads, native
+    // callbacks, generators, `match`, destructuring, nested writes, pipes,
+    // spreads and a failing default argument.
+    let cases = [
+        // Construction and lifecycle.
+        r#"class A { public A() { let x = 1 / 0; } } new A();"#,
+        r#"class A { public A(int n) { this.n = n; } } new A("s");"#,
+        r#"class A { public A() { this.v = [1]; } public int m() { return this.v[9]; } } new A().m();"#,
+        r#"class B { public B() { } public int m() { return 1 / 0; } } new B().m();"#,
+        r#"class B { public B() { } public int m() { return this.nope(); } } new B().m();"#,
+        // `super`, in a body and in a constructor.
+        r#"class P { public P() { } public int m() { return 1 / 0; } }
+           class C : P { public C() { } public int go() { return super.m(); } } new C().go();"#,
+        r#"class P { public P(int n) { this.n = 1 / 0; } }
+           class C : P { public C() { super(1); } } new C();"#,
+        r#"abstract class A { public int m() { return 1 / 0; } }
+           class C : A { public C() { } } new C().m();"#,
+        // Accessors.
+        r#"class G { public G() { } public get int v() { return 1 / 0; } } new G().v;"#,
+        r#"class S { public S() { } public set v(int n) { let x = 1 / 0; } }
+           let s = new S(); s.v = 1;"#,
+        // Operator overloads, including the one `out` reaches.
+        r#"class V { public V() { } public V op_add(V o) { return 1 / 0; } } new V() + new V();"#,
+        r#"class V { public V() { } public string op_str() { return 1 / 0; } } out "{new V()}";"#,
+        // Native higher-order callbacks.
+        r#"fn int bad(int x) { return 1 / 0; } [1].map(bad);"#,
+        r#"fn int bad(int x) { return 1 / 0; } [1].filter(bad);"#,
+        r#"fn int bad(any a, any b) { return 1 / 0; } [2, 1].sort(bad);"#,
+        r#"fn int bad(int x) { return 1 / 0; } [1].reduce(0, bad);"#,
+        // Generators and the control-flow forms.
+        r#"fn* int g() { yield 1 / 0; } for (let v in g()) { }"#,
+        r#"let r = match 1 { 1 => 1 / 0, _ => 0 };"#,
+        r#"for (let x in [1]) { let y = 1 / 0; }"#,
+        r#"while (true) { let y = 1 / 0; }"#,
+        r#"switch (1) { case 1: { let y = 1 / 0; } }"#,
+        r#"try { let y = 1 / 0; } finally { let z = 1 / 0; }"#,
+        // Defaults and destructuring.
+        r#"fn int f(int a = 1 / 0) { return a; } f();"#,
+        r#"let [a] = 5;"#,
+        r#"let {x} = 5;"#,
+        // Writes through a nested path.
+        r#"class H { public H() { this.f = [1]; } } let h = new H(); h.f[9] = 1;"#,
+        r#"let d <string, any> = ({"k", [1]}); d["k"][9] = 1;"#,
+        r#"let a = [[1]]; a[0][9] = 1;"#,
+        // Pipes, ternaries, spreads.
+        r#"fn int bad(int x) { return 1 / 0; } out 1 |> bad;"#,
+        r#"fn int bad() { return 1 / 0; } out (bad() > 0) ? 1 : 2;"#,
+        r#"fn int f(...r) { return 1 / 0; } let a = [1]; f(...a);"#,
+    ];
+
+    let mut unstructured: Vec<&str> = Vec::new();
+    for src in cases {
+        if matches!(evaluate(src), ProgramOutcome::UnstructuredError) {
+            unstructured.push(src);
+        }
+    }
+
+    assert!(
+        unstructured.is_empty(),
+        "these constructs produced an unstructured outcome — a non-zero exit \
+         with no diagnostic:\n{}",
+        unstructured.join("\n")
+    );
+}
