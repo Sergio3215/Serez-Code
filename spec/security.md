@@ -46,6 +46,41 @@ Read the manifest as documentation of intent — useful for review, for tooling,
 and for catching a dependency doing something unexpected. Do not read it as a
 list of what a program is *able* to do.
 
+### Names that are accepted and do nothing
+
+The nine above are the whole enforced vocabulary. Three other things a manifest
+may contain are accepted and gate nothing, which matters because all three look
+like they work:
+
+- **`File`.** It is the second-most-declared capability across the official
+  packages — twenty-three `use permissions` blocks and four manifests — and it
+  is inert. `File.read` succeeds with no permissions declared at all, and
+  declaring `File` changes nothing. It is accepted because removing it would
+  break those declarations for no security gain, and it deliberately produces
+  **no warning**: the author followed the documented convention, and it is the
+  runtime that does not gate file access.
+- **A dotted name** such as `OS.exec` or `File.delete`. The grammar accepts it —
+  the parser's own comment advertises the form — and nothing ever checks it. It
+  does **not** imply its prefix, so `use permissions { OS.exec }` leaves `OS`
+  denied and the program fails at its first `OS` call. No official package
+  writes one.
+- **Any other name.** A misspelling is inserted and never looked at. Before this
+  was diagnosed, `use permissions { Termnal }` granted nothing and the program
+  then failed at its first `Terminal` call telling the author to declare a
+  permission they believed they had declared, one character away in the same
+  file.
+
+The last two now produce a warning at the point of the grant, naming the likely
+intended permission where one is within edit distance 2 and unambiguous. A
+warning, not a refusal: rejecting an unrecognised name would break any program
+that declares one today. `src/permissions.rs` holds the vocabulary, and
+`enforced_permissions_match_the_evaluator` keeps it equal to what
+`require_permission` actually checks.
+
+Making `File` — or per-operation dotted permissions — genuinely enforced is a
+capability decision, not a diagnostics one. It would break existing programs
+and needs the process in `compatibility.md`.
+
 ## `unsafe { }`
 
 An operation-level gate on things that are destructive rather than merely

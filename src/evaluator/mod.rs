@@ -641,9 +641,27 @@ impl Evaluator {
         (self.global_arena.watermark(), self.scopes.arena.watermark())
     }
 
+    /// Grant the permissions a manifest or embedder declared.
+    ///
+    /// A name that will not do what its author expects is reported here rather
+    /// than left to surface as a denial later. A misspelled `Termnal` used to
+    /// be inserted silently and the program then failed at its first `Terminal`
+    /// call, telling the author to declare something they believed they had.
     pub fn set_permissions(&mut self, perms: Vec<String>) {
         for p in perms {
+            self.warn_about_grant(&p);
             self.permissions.insert(p);
+        }
+    }
+
+    /// Print the diagnostic for a permission name that gates nothing.
+    ///
+    /// A warning, never a refusal: the ecosystem declares `File` in twenty-three
+    /// places and four manifests, and rejecting it would break working programs
+    /// to no security end, since it is inert either way.
+    pub(crate) fn warn_about_grant(&self, name: &str) {
+        if let Some(message) = crate::permissions::grant_warning(name) {
+            eprintln!("⚠️  WARNING: {message}");
         }
     }
 

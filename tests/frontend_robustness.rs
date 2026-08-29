@@ -841,3 +841,70 @@ fn readme_serez_examples_parse() {
         failures.join("\n")
     );
 }
+
+/// `permissions::ENFORCED` is the list `require_permission` actually checks.
+///
+/// The nine enforced namespaces existed only as string literals at their call
+/// sites. Naming them in one place is only an improvement while the name stays
+/// true: a list that drifts would make `grant_warning` tell an author their
+/// correct declaration does nothing, which is worse than the silence it
+/// replaced.
+#[test]
+fn enforced_permissions_match_the_evaluator() {
+    use serez_code::permissions::ENFORCED;
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found: Vec<String> = Vec::new();
+
+    for entry in walk_rust_sources(&root.join("src")) {
+        let source = std::fs::read_to_string(&entry).unwrap_or_default();
+        // `require_permission("OS.exec", "OS")` — the second argument is the
+        // permission; the first is the operation being reported.
+        for (index, _) in source.match_indices("require_permission(") {
+            // Skip the definition itself: its body holds the format string that
+            // every call site's message comes from, and the scan would read that
+            // as a permission name.
+            if source[..index].trim_end().ends_with("fn") {
+                continue;
+            }
+            let tail = &source[index..];
+            let args: Vec<&str> = tail.split('"').skip(1).step_by(2).take(2).collect();
+            if let Some(permission) = args.get(1) {
+                found.push((*permission).to_string());
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+
+    assert!(
+        !found.is_empty(),
+        "no require_permission call sites found — the scan itself broke"
+    );
+
+    let mut declared: Vec<String> = ENFORCED.iter().map(|p| (*p).to_string()).collect();
+    declared.sort();
+
+    assert_eq!(
+        declared, found,
+        "permissions::ENFORCED and the require_permission call sites disagree.\n  \
+         declared: {declared:?}\n  in source: {found:?}"
+    );
+}
+
+fn walk_rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(walk_rust_sources(&path));
+        } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+            out.push(path);
+        }
+    }
+    out
+}

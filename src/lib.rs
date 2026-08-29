@@ -18,6 +18,7 @@ pub mod lexer;
 pub mod modules;
 pub mod package_manager;
 pub mod parser;
+pub mod permissions;
 pub mod region;
 pub mod repl;
 pub mod run;

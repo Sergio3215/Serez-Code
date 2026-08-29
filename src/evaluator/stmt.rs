@@ -165,6 +165,7 @@ impl super::Evaluator {
                     );
                 }
                 for p in perms {
+                    self.warn_about_grant(p);
                     self.permissions.insert(p.clone());
                 }
                 EvalResult::Value(self.null_ref)

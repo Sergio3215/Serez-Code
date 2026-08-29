@@ -7,6 +7,38 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A permission that does nothing now says so
+
+- `src/permissions.rs` is new: the permission vocabulary in one place. The nine
+  enforced names existed only as string literals at their `require_permission`
+  call sites, and anything else a program declared went into a `HashSet` and was
+  never looked at again. Three things were hiding in that silence.
+- **A misspelling was accepted.** `use permissions { Termnal }` granted nothing,
+  and the program then failed at its first `Terminal` call telling the author to
+  declare a permission they believed they had declared — one character away in
+  the same file. It now warns at the grant, and suggests the intended name when
+  exactly one enforced name is within edit distance 2. A tie suggests nothing: a
+  wrong guess in a security-adjacent message is worse than none.
+- **A dotted name grants nothing and does not imply its prefix.** `OS.exec`
+  parses — the parser's own comment advertises the form — and leaves `OS` denied.
+  It warns, and names `OS` as what to declare instead. No official package writes
+  one.
+- **`File` gates nothing**, and it is the second-most-declared capability across
+  the official packages: 23 `use permissions` blocks and four manifests.
+  `File.read` succeeds with no permissions declared at all. This one deliberately
+  **does not warn**: it is inert because the runtime does not gate file access,
+  not because the author wrote anything wrong, and a warning on every run of
+  correct-by-convention code is the noise that teaches people to ignore the typo
+  warning two lines below. The fact lives in `spec/security.md` and in
+  `classify`, where it stays testable, rather than on stderr.
+- Warnings, never refusals — rejecting an unrecognised name would break any
+  program that declares one today. Calibration confirmed against the ecosystem:
+  **zero permission warnings** across all eight official packages, and 8/8 still
+  green.
+- `enforced_permissions_match_the_evaluator` reads the `require_permission` call
+  sites out of `src/` and asserts they equal `permissions::ENFORCED`, so the list
+  cannot drift into telling an author their correct declaration does nothing.
+
 ### The specification audit is complete
 
 - `spec/tasks.md` and `spec/compiler.md` checked, both clean. tasks: a later
