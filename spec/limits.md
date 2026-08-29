@@ -64,6 +64,7 @@ and re-checking it is a `--check` sweep for `SZ2001`.
 | Task worker source | 16 MiB | Worker enters failed state before parsing. |
 | Retained Task records, per runtime | 256 | Oldest terminal record is evicted; active workers remain. |
 | `Crypto.randomBytes` request | 1 MiB (1,048,576 bytes) | Rejected — see the note below on its shape. |
+| `sz-lsp` message body | 64 MiB | The message is refused and the server exits. |
 | Autodiff weights file (`.szw`) | 256 MiB | Rejected before the file is read. |
 | Tensors in one weights file | 100,000 | Load fails. |
 | Tensor rank in a weights file | 64 | Load fails. |
@@ -113,6 +114,18 @@ be between 1 and 1048576"`, with no `kind` and no `code`. It is catchable —
 the same shape as a missing module — so a caller can recover from it but
 cannot classify it without matching English. Recorded as a diagnostic gap in
 `errors.md`, not as a separate contract.
+
+The `sz-lsp` ceiling bounds the `Content-Length` header of a JSON-RPC
+message. It was the one input-sized allocation in the project with no
+ceiling: the body was allocated at exactly the advertised length, so a
+header reading `Content-Length: 9999999999999` aborted the process with
+`memory allocation of 9999999999999 bytes failed` — an allocator message
+rather than a diagnostic, and the editor's language server simply
+disappeared. An over-limit header now prints why and exits, which is the
+same outcome the framing already had for a malformed header. 64 MiB is
+generous on purpose: the largest legitimate message carries a whole
+document in a `didOpen`, and a source file near that size is far past the
+AST ceiling already.
 
 The weights-file ceilings guard `.szw` loading specifically: the file size is
 checked from its metadata before any bytes are read, and the tensor count,
