@@ -4,6 +4,8 @@
 #   .\run_benchmarks.ps1 -NoBuild     # skip cargo build (binary must already exist)
 #   .\run_benchmarks.ps1 -N 10        # 10 warm-up+timed iterations
 #   .\run_benchmarks.ps1 -Filter oop  # only benchmarks whose name contains "oop"
+#   .\run_benchmarks.ps1 -Json b.json # also write a machine-readable run
+#   .\run_benchmarks.ps1 -Baseline b.json   # compare against a recorded run
 #
 # Each benchmark is run -N times.  The first run is counted (no warm-up discard)
 # because the binary is already a native executable — the JIT-less interpreter
@@ -15,8 +17,15 @@
 
 param(
     [switch]$NoBuild,
-    [int]   $N      = 5,
-    [string]$Filter = ""
+    [int]   $N        = 5,
+    [string]$Filter   = "",
+    [string]$Json     = "",
+    [string]$Baseline = "",
+    # A run has to be this much slower than its baseline to be called a
+    # regression. 25% is wide on purpose: on an idle desktop `00_startup` was
+    # observed between 35 ms and 69 ms across two runs, and a threshold tighter
+    # than the machine's own noise reports noise.
+    [int]   $Threshold = 25
 )
 
 $ErrorActionPreference = "Stop"
@@ -197,5 +206,75 @@ Pad ("Net avg : sum minus startup overhead = {0} ms  ({1:F2}s interpreter work)"
     (($sumAvg - $startupAvg * $results.Count) / 1000.0))
 Write-Host ""
 Ruler
+
+# ── Optional comparison against a recorded run ────────────────────────────────
+# The comparison uses `min`, not `avg`: a process is only ever slowed down by
+# its neighbours, never sped up, so the fastest of N runs is the
+# least-contaminated estimate of the work itself.
+if ($Baseline -ne "") {
+    if (-not (Test-Path $Baseline)) {
+        Write-Host "Baseline '$Baseline' not found." -ForegroundColor Red
+        exit 1
+    }
+    $base = Get-Content $Baseline -Raw | ConvertFrom-Json
+    $byName = @{}
+    foreach ($b in $base.benchmarks) { $byName[$b.name] = $b.min }
+
+    Write-Host ""
+    Pad "Comparing against $Baseline (threshold ${Threshold}%)"
+    Write-Host ("  " + ("─" * ($W - 2)))
+    $regressed = 0
+    foreach ($r in $results) {
+        if (-not $byName.ContainsKey($r.Name)) { continue }
+        $b = [int]$byName[$r.Name]
+        if ($b -le 0) { continue }
+        $delta = [int]((($r.Min - $b) * 100) / $b)
+        if ($delta -gt $Threshold) {
+            Write-Host ("  {0,-33} {1,6} ms -> {2,6} ms  +{3}%" -f $r.Name, $b, $r.Min, $delta) `
+                       -ForegroundColor Red
+            $regressed++
+        } elseif ($delta -lt (0 - $Threshold)) {
+            Write-Host ("  {0,-33} {1,6} ms -> {2,6} ms  {3}%" -f $r.Name, $b, $r.Min, $delta) `
+                       -ForegroundColor Green
+        }
+    }
+    if ($regressed -eq 0) {
+        Write-Host "  No benchmark exceeded the threshold." -ForegroundColor Green
+    } else {
+        Write-Host "  $regressed benchmark(s) slower than the threshold." -ForegroundColor Red
+    }
+    Write-Host ""
+}
+
+# ── Optional machine-readable run ─────────────────────────────────────────────
+if ($Json -ne "") {
+    $versionLine = (& $binary "--version") 2>&1 | Select-Object -First 1
+    # Built by index assignment: nesting a list inside an `[ordered]@{...}`
+    # literal fails with "Argument types do not match" on this PowerShell.
+    $report = [ordered]@{}
+    $report["schema"]     = "serez-benchmarks/1"
+    $report["runner"]     = "run_benchmarks.ps1"
+    $report["platform"]   = "windows"
+    $report["core"]       = "$versionLine".Trim()
+    $report["startedAt"]  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $report["iterations"] = $N
+    $report["statistic"]  = "min"
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($r in $results) {
+        # Cast: Measure-Object returns doubles, and run_benchmarks.sh emits
+        # integers. The same schema must not carry a different type per runner.
+        $rows.Add([ordered]@{
+            name   = $r.Name
+            min    = [int]$r.Min
+            avg    = [int]$r.Avg
+            max    = [int]$r.Max
+            status = $(if ($r.Ok) { "pass" } else { "fail" })
+        })
+    }
+    $report["benchmarks"] = $rows.ToArray()
+    $report | ConvertTo-Json -Depth 5 | Set-Content -Path $Json -Encoding UTF8
+    Pad "Report written to $Json"
+    Write-Host ""
+}
 
 exit $(if ($failed -gt 0) { 1 } else { 0 })

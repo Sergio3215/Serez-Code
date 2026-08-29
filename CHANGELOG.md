@@ -7,6 +7,30 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The benchmark suite exists on Unix, and can record a baseline
+
+- `run_benchmarks.sh` is new. The suite was Windows-only: `run_benchmarks.ps1`
+  had no counterpart, so nobody on Linux or macOS could run it at all — the same
+  platform gap the conformance runners had, where a missing half means nobody
+  outside one OS can reproduce a number, let alone a regression.
+- Both runners take `--json`/`-Json` and `--baseline`/`-Baseline`, emit the same
+  `serez-benchmarks/1` document with the same field types, and read each other's
+  output: a baseline recorded by the bash runner is compared correctly by the
+  PowerShell one, verified in both directions including a deliberate regression
+  and a deliberate improvement.
+- **The reported statistic is the minimum of N runs, not the mean.** A process is
+  only ever slowed down by its neighbours, never sped up, so the fastest run is
+  the least-contaminated estimate of the work. Mean and max are recorded beside
+  it because their spread says how much to trust the number.
+- **A wall-clock budget is deliberately not wired into CI**, and TESTS.md says
+  why with the measurement rather than an opinion: on an idle desktop with
+  nothing else running, `00_startup` ranged 35 ms to 69 ms across two consecutive
+  runs — a factor of two. Shared CI runners are worse. A threshold wide enough
+  not to fire on that noise would not catch a real regression either. This
+  repository has already paid for two gates that reported invalid results; a
+  flaky third would teach people to re-run until green, which is the habit that
+  let the first two survive.
+
 ### A class shadowed by an interface says so
 
 - Classes and interfaces live in separate registries, so both declarations of a

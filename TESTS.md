@@ -85,6 +85,52 @@ They are tracked now, both runners refuse to start when one is missing, and
 if a fixture exists on disk but not in git. **Anything a test loads has to be
 tracked, and a new fixture tree needs its own `!` line in `.gitignore`.**
 
+### Benchmarks
+
+```powershell
+.\run_benchmarks.ps1                          # all 17 workloads, 5 iterations
+.\run_benchmarks.ps1 -NoBuild -Filter oop     # skip the build, one workload
+.\run_benchmarks.ps1 -Json bench.json         # record a run
+.\run_benchmarks.ps1 -Baseline bench.json     # compare against a recorded run
+```
+
+`./run_benchmarks.sh` takes `--no-build`, `-n`, `--filter`, `--json`,
+`--baseline` and `--threshold`. Both emit the same `serez-benchmarks/1`
+document, with the same field types, so a baseline recorded on one platform can
+be read by the other.
+
+**The reported statistic is the minimum of N runs, not the mean.** A process is
+only ever slowed down by its neighbours, never sped up, so the fastest run is
+the least-contaminated estimate of the work itself. The mean and max are
+recorded alongside it because their spread is the honest measure of how much to
+trust the number.
+
+A benchmark that fails to run is an error; a benchmark that got slower is not.
+`--baseline` reports what crossed the threshold and the default is a deliberately
+wide 25%.
+
+#### Why this is not a CI gate
+
+It would be easy to wire `--baseline` into CI and call performance governed. It
+would also produce a gate that fails on noise, and this repository has already
+paid for two gates that reported invalid results — a conformance suite whose
+fixtures were not in the repository, and a unit-test category that passed when a
+program aborted before asserting anything. A third would be worse than none:
+a flaky gate teaches people to re-run until green, which is the habit that let
+the first two survive.
+
+The measurement that settles it, taken on an idle desktop with nothing else
+running: `00_startup` ranged **35 ms to 69 ms** across two consecutive runs, a
+factor of two. GitHub-hosted runners are shared vCPUs with variable neighbours
+and are considerably worse. A threshold wide enough not to fire on that noise
+would not catch a real regression either.
+
+What is useful, and what these flags are for: recording a baseline on a machine
+you control, and comparing against it deliberately when you have changed
+something you expect to affect performance. `MATURITY_AUDIT.md` keeps
+"reproducible baselines" as open work, because doing it properly means a
+dedicated runner, not a threshold bolted onto shared CI.
+
 ### Platform parity
 
 `run_tests.ps1` and `run_tests.sh` must execute the same logical suite. A
