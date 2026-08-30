@@ -1,0 +1,119 @@
+// The rules spec/control-flow.md freezes that nothing in the running suite
+// pinned. Switch fallthrough was only ever checked in tests/_bug_hunt10.sz,
+// which the runner does not glob — it matches unit_*, err_*, sec_* and the
+// numbered e2e files, so a file starting with `_` never runs.
+
+test("switch — exactly one case body runs, no fallthrough", () => {
+    let seen = "";
+    switch (2) {
+        case 1: { seen = seen + "one"; }
+        case 2: { seen = seen + "two"; }
+        case 3: { seen = seen + "three"; }
+    }
+    assert(seen == "two", "only the matching case; got " + seen);
+});
+
+test("switch — default runs only when nothing matched, wherever it is written", () => {
+    let first = "";
+    switch (1) {
+        default: { first = first + "default"; }
+        case 1: { first = first + "one"; }
+    }
+    assert(first == "one", "a default written first must not pre-empt; got " + first);
+
+    let none = "";
+    switch (99) {
+        case 1: { none = none + "one"; }
+        default: { none = none + "default"; }
+    }
+    assert(none == "default", "default when nothing matched; got " + none);
+});
+
+test("switch — no match and no default does nothing and reports nothing", () => {
+    let touched = "untouched";
+    switch (99) { case 1: { touched = "one"; } }
+    assert(touched == "untouched", "got " + touched);
+});
+
+test("switch — the subject is evaluated once", () => {
+    let calls = 0;
+    fn int subject() { calls = calls + 1; return 1; }
+    switch (subject()) { case 1: { } case 2: { } }
+    assert(calls == 1, "evaluated " + calls + " times");
+});
+
+test("finally — runs on continue and on break", () => {
+    let onContinue = "";
+    for (let i in [1, 2, 3]) {
+        try { if (i == 2) { continue; } onContinue = onContinue + i; }
+        finally { onContinue = onContinue + "f"; }
+    }
+    assert(onContinue == "1ff3f", "continue must not skip finally; got " + onContinue);
+
+    let onBreak = "";
+    for (let i in [1, 2, 3]) {
+        try { if (i == 2) { break; } onBreak = onBreak + i; }
+        finally { onBreak = onBreak + "f"; }
+    }
+    assert(onBreak == "1ff", "break must not skip finally; got " + onBreak);
+});
+
+test("finally — a return in finally overrides the one in the try", () => {
+    fn string decide() {
+        try { return "try"; } finally { return "finally"; }
+    }
+    assert(decide() == "finally", "got " + decide());
+});
+
+test("finally — runs before the function actually returns", () => {
+    let order = "";
+    fn string run() {
+        try { order = order + "t"; return "r"; } finally { order = order + "f"; }
+    }
+    let got = run();
+    assert(order == "tf", "order was " + order);
+    assert(got == "r", "return value was " + got);
+});
+
+test("catch — a user throw binds the value, a runtime error binds an Error", () => {
+    let thrown = null;
+    try { throw "plain"; } catch (e) { thrown = e; }
+    assert(thrown == "plain", "a thrown string stays a string");
+
+    let code = "";
+    let kind = "";
+    try { let a = [1]; out a[9]; } catch (e) { code = e.code; kind = e.kind; }
+    assert(code == "SZ4003", "code was " + code);
+    assert(kind == "IndexOutOfBounds", "kind was " + kind);
+});
+
+test("match — an arm binding is scoped to its own arm", () => {
+    let n = "outer";
+    let bound = match 5 { n => n };
+    assert(bound == 5, "the pattern binds the subject; got " + bound);
+    assert(n == "outer", "and does not leak; outer n became " + n);
+});
+
+test("match — arms are tried in order, so a later duplicate is unreachable", () => {
+    let picked = match 1 { 1 => "first", 1 => "second", _ => "neither" };
+    assert(picked == "first", "got " + picked);
+});
+
+test("generators — calling one returns an array, already fully built", () => {
+    // Not a lazy iterator, despite the borrowed fn*/yield syntax. The whole
+    // body runs at the call, which is why an unbounded generator never
+    // returns — see spec/control-flow.md.
+    fn* count(int n) {
+        let i = 0;
+        while (i < n) { yield i; i = i + 1; }
+    }
+    let produced = count(4);
+    assert(produced.length() == 4, "length was " + produced.length());
+    assert(produced[0] == 0, "first was " + produced[0]);
+    assert(produced[3] == 3, "last was " + produced[3]);
+
+    fn* nothing() { }
+    assert(nothing().length() == 0, "a generator that yields nothing gives []");
+});
+
+summary();

@@ -7,6 +7,42 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Control flow is frozen; two hazards came out of freezing it
+
+- `control-flow.md` froze only `for-in` and listed everything else — `if`,
+  `while`, C-style `for`, `do-while`, `switch`, `match`, generators,
+  `try/catch/finally` and labelled flow — as unaudited. All are now probed
+  against the binary and written down. Almost everything held; two things did
+  not have a written contract at all, and both are recorded as hazards rather
+  than smoothed over.
+- **`match` is not exhaustive-checked.** A subject that matches no arm evaluates
+  to `null`, with no diagnostic and exit 0 — indistinguishable from an arm that
+  legitimately returned null. Making it an error would break any code relying on
+  that null, so it is documented and left as a decision.
+- **`fn*` is not lazy.** Calling a generator runs the body to completion and
+  returns an ordinary array of everything it yielded. The syntax is borrowed
+  from languages where it means the opposite, so the consequence is worth
+  stating plainly: an unbounded generator never returns. Measured — no result
+  after 20 seconds — and nothing bounds what it accumulates, because the
+  collector is an unbounded vector and `limits.md` has no entry for it.
+- Frozen alongside them, all measured: `finally` runs on every exit from the
+  `try`, including `break`, `continue` and `return`, and before the function
+  actually returns; a `throw` from a `finally` **replaces** the failure in
+  flight; a `return` in a `finally` **overrides** the try's; `catch (e)` binds
+  the thrown value itself for a user `throw` and an `Error` object carrying
+  `code`/`kind`/`message` for a runtime error, and never runs at all for a fatal
+  failure; `switch` has no fallthrough, evaluates its subject once, and a
+  `default` written first does not pre-empt a matching case below it; `match` is
+  an expression whose arms are tried in order, whose subject is evaluated once,
+  and whose pattern bindings do not leak out of their arm.
+- Pinned by `tests/unit_control_flow_contract.sz`, 11 cases covering what the
+  running suite did not. Switch fallthrough, for instance, had only ever been
+  checked in `tests/_bug_hunt10.sz` — a file the runner does not glob, so it has
+  never run.
+- The two new spec checkers caught two of the new document's own examples on
+  their first run, which is what they are for; both were made self-contained
+  rather than marked.
+
 ### Spec examples must run, not only parse
 
 - The parse checker added one stage earlier recorded its own blind spot: a block
