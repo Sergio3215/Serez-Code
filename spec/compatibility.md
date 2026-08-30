@@ -71,7 +71,14 @@ Within a major version, unless a changelog entry says otherwise:
   arrays, dicts and sets; closures capture as they do today; receiver writeback
   behaves as it does today.
 - Diagnostic **codes** (`SZ1xxx`–`SZ7xxx`) and **kinds** are stable. A failure
-  keeps its code and kind, or the change is treated as breaking.
+  keeps its code and kind, or the change is treated as breaking. This is now
+  enforced rather than promised: `tests/diagnostic_codes.rs` drives the built
+  binary and pins the code every documented construct produces, and checks the
+  registry in `errors.md` against the suite in both directions, so a code cannot
+  be changed, dropped or added without a test saying so. The 63 `err_*` and 85
+  `sec_*` conformance programs assert only that the exit was non-zero and a `❌`
+  appeared, so before this a failure could move from `SZ4003` to `SZ4009` and all
+  148 would still pass.
 - A recoverable failure stays recoverable. Making a catchable error fatal is
   breaking; making a fatal error catchable is not, because no program could have
   caught it before.
@@ -130,6 +137,11 @@ on, which is the version whose spec documents describe it.
 
 These are stated so nobody mistakes silence for a guarantee.
 
+- **No filesystem confinement.** `File` reaches anywhere the invoking user can
+  read or write: `..` walks out of the working directory and an absolute path
+  goes wherever it points. A relative `File` path is measured from the process
+  working directory, while a relative `import` is measured from the file. See
+  `security.md`; both are pinned by `tests/filesystem_reach.rs`.
 - **No lockfile.** Installing twice can resolve differently when the registry
   changes, because `sz install name` picks the greatest available version.
 - **No integrity or signature check** on downloaded packages. See `packages.md`.
@@ -142,5 +154,9 @@ These are stated so nobody mistakes silence for a guarantee.
   works and is tested; the other packages have not adopted it yet, so their
   manifests state no minimum.
 - **The spec is incomplete.** Behavior with no document is unstable by the rule
-  above, and that currently includes syntax, the type system, operators, scopes
-  and modules.
+  above. This entry used to name syntax, the type system, operators, scopes and
+  modules; `syntax.md`, `types.md`, `operators.md`, `scopes.md` and `modules.md`
+  have since been written, so all five are frozen and the entry was understating
+  what a release promises. What remains undocumented is genuinely unstable, and
+  the honest way to find it is to look for behaviour no file in `spec/`
+  describes rather than to trust a list here.

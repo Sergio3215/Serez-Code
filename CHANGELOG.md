@@ -7,6 +7,68 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The compatibility promise about diagnostic codes is now enforced
+
+- `compatibility.md` says: "Diagnostic **codes** and **kinds** are stable. A
+  failure keeps its code and kind, or the change is treated as breaking."
+  Nothing enforced it. The 63 `err_*` and 85 `sec_*` conformance programs assert
+  only that the exit was non-zero and a `❌` appeared somewhere — never which
+  code. A failure could move from `SZ4003` to `SZ4009`, or lose its code
+  entirely, and all 148 would still pass. Eight of the twenty documented codes
+  were named by no Rust test at all.
+- `tests/diagnostic_codes.rs` drives the built binary and pins the code every
+  documented construct produces, so what is frozen is the code a user sees. A
+  second test reads the registry table out of `errors.md` and compares it with
+  the suite in both directions: a code the registry lists and nothing pins is a
+  failure, and so is a code pinned here that the registry no longer lists.
+- Every fixture was derived by running it, not by trusting the registry. Three
+  first attempts were wrong — `"x".repeat(...)` is not a method and reported
+  `SZ4001`, a traversal read reported `SZ4005` rather than a security code, and
+  the import fixture had been deleted by its own setup.
+- Confirmed not decorative: changing `IndexOutOfBounds` to `SZ4093` turns the
+  suite red and names the change.
+- Two codes are recorded as unemitted with their reasons, a list that may shrink
+  and must not grow: `SZ5001`, because a missing module is thrown as the
+  historical `ModuleNotFound:` string, and `SZ4999`, which is unreachable by
+  design.
+
+### Two security tests were passing for the wrong reason
+
+- `sec_path_traversal.sz` said traversal via relative segments "must be
+  rejected" and named escaping "the sandbox". `sec_path_traversal_abs.sz` said
+  the same for absolute paths. There is no such guard: measured directly,
+  `File.read("../outside.txt")` reads a file one directory up and exits 0, and
+  so does an absolute path to it.
+- Both passed on all three CI platforms only because the paths they named
+  (`../../etc/passwd`, `/etc/shadow`) do not exist there. A security test that
+  passes for an unrelated reason is worse than no test, because the suite then
+  reads as proof.
+- Neither was deleted or weakened. They now state what they actually prove — a
+  read of a path that is not there fails with a structured `SZ4005` — and the
+  real behaviour is pinned by `tests/filesystem_reach.rs`, so confining `File`
+  later is a deliberate change with a test to update.
+- `security.md` and `compatibility.md`'s gap list now say plainly that there is
+  no filesystem confinement.
+
+### A relative `File` path and a relative `import` are measured from different places
+
+- Found while probing the above. `import "./lib"` resolves against the **file**,
+  so it works wherever `sz` was invoked from. `File.read("./data.txt")` resolves
+  against the **process working directory**, so the same program reads its own
+  data file when run from its folder and fails with `SZ4005` when run from one
+  level up — and that failure does not look like a working-directory problem
+  when you hit it.
+- Documented in `security.md`, pinned by
+  `a_relative_file_path_is_measured_from_the_caller_but_an_import_is_not`.
+  Changing the base is a breaking change and is left as a decision, not taken.
+
+### `compatibility.md` was understating what a release promises
+
+- Its "Known gaps" said the spec did not cover syntax, the type system,
+  operators, scopes or modules. All five documents have since been written, so
+  by the document's own rule ("if it is not written down, it is unstable") the
+  entry was telling readers that frozen behaviour was not frozen. Corrected.
+
 ### `--help` stated an exit-code contract the binary does not honour
 
 - It listed "type error" among the things that exit `1`. It is not one: the

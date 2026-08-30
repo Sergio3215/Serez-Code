@@ -1,4 +1,15 @@
-// Security: path traversal via relative segments must be rejected (❌)
-// An attacker might try to escape the sandbox with ../../
-let content = File.read("../../etc/passwd");
-out "FAIL: should have rejected path traversal";
+// A read of a path that is not there fails with a structured IOError (SZ4005)
+// and a non-zero exit, including when the path contains `..`.
+//
+// This does NOT prove a traversal guard, and it never did. There is no such
+// guard: `File` is accepted but inert (security.md), so `File.read("../x")`
+// reaches outside the working directory and succeeds. This program used to say
+// "path traversal must be rejected" and "an attacker might try to escape the
+// sandbox", and it passed only because the path it named does not exist — on
+// Windows, on Linux and on macOS alike. A security test that passes for an
+// unrelated reason is worse than no test, because the suite then reads as proof.
+//
+// The real behaviour is recorded in tests/filesystem_reach.rs, so confining
+// `File` later has to be a deliberate change with a test to update.
+let content = File.read("../__no_such_file_for_the_path_tests__");
+out "FAIL: reading a path that is not there should have failed";

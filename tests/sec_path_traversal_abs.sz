@@ -1,4 +1,12 @@
-// Security: absolute path access to sensitive system file must be rejected (❌)
-// Even if ../.. is caught, a direct /etc/shadow attempt must also fail
-let content = File.read("/etc/shadow");
-out "FAIL: should have rejected absolute path to system file";
+// The same for an absolute path that is not there: a structured IOError
+// (SZ4005) and a non-zero exit, not an empty string and not a crash.
+//
+// As above, this proves nothing about confinement. An absolute path to a file
+// that DOES exist is read successfully, wherever it is. This program used to
+// name /etc/shadow and claim absolute access "must be rejected"; it passed on
+// Windows because the path is absent and would have passed on Linux because the
+// file is unreadable by a normal user — in neither case for the stated reason.
+//
+// See tests/filesystem_reach.rs for what actually happens.
+let content = File.read("/__no_such_absolute_file_for_the_path_tests__");
+out "FAIL: reading a path that is not there should have failed";

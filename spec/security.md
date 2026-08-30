@@ -77,6 +77,28 @@ that declares one today. `src/permissions.rs` holds the vocabulary, and
 `enforced_permissions_match_the_evaluator` keeps it equal to what
 `require_permission` actually checks.
 
+### How far a path reaches, and what it is relative to
+
+Neither is restricted, and both are worth stating because a reader could
+reasonably assume otherwise.
+
+- **`..` and absolute paths are not blocked.** `File.read("../x")` walks out of
+  the working directory, and an absolute path goes wherever it points. There is
+  no confinement of any kind — consistent with `File` being inert, but not
+  obvious from it. Two conformance programs used to imply the opposite:
+  `sec_path_traversal.sz` said traversal "must be rejected" and named escaping
+  "the sandbox", and `sec_path_traversal_abs.sz` said the same for absolute
+  paths. Both passed on all three CI platforms only because the paths they named
+  do not exist there. They now say what they actually prove — that a read of a
+  path that is not there fails with a structured `SZ4005` — and the real
+  behaviour is pinned in `tests/filesystem_reach.rs`.
+- **A relative `File` path is measured from the process working directory, not
+  from the script.** `import "./lib"` is measured from the *file*, so an import
+  resolves the same wherever `sz` was invoked. `File.read("./data.txt")` does
+  not: the same program reads its own data file when run from its folder and
+  fails with `SZ4005` when run from one level up. Two features, both spelled
+  `./`, measured from different places. Changing either is a breaking change.
+
 Making `File` — or per-operation dotted permissions — genuinely enforced is a
 capability decision, not a diagnostics one. It would break existing programs
 and needs the process in `compatibility.md`.
