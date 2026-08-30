@@ -79,6 +79,7 @@ Current runtime mappings are:
 | `SZ4003` | `IndexOutOfBounds` |
 | `SZ4004` | `DivisionByZero` (division and modulo) |
 | `SZ4005` | `IOError` |
+| `SZ4999` | Internal: the runtime reported a failure without recording a diagnostic. Not a program error — see the boundary section. |
 | `SZ5001` | `ModuleNotFound` |
 | `SZ5002` | `ImportError` |
 | `SZ6001` | `PermissionError` |
@@ -318,9 +319,24 @@ The evaluator still propagates failures *internally* with an
 generation counter prevents stale payload reuse, but the side channel remains
 transitional implementation debt, not a public semantic guarantee.
 
-A producer that never recorded a payload surfaces as `UnstructuredError`, which
-is the one outcome the boundary prints **nothing** for — a non-zero exit with no
-diagnostic, the least actionable thing the runtime can do.
+A producer that never recorded a payload surfaces as `UnstructuredError`. This
+used to be the one outcome the boundary printed **nothing** for — a non-zero exit
+with no diagnostic, the least actionable thing the runtime can do. The comment
+that justified the silence said legacy error producers had already emitted their
+own diagnostic; measured, no such producer exists. Of the sixteen `eprintln!`
+calls in the evaluator, every one is `rt_err_kind`'s structured printer, the
+boundary reporter, stack-frame rendering, or a warning — except the two that
+print an error message of their own, `OS.spawn` and `Socket.recvWsFrame`, and
+those return a **value** (`-1`, `null`) rather than the sentinel, deliberately
+and as recorded above, so neither can reach that arm. The silence had nothing
+behind it.
+
+It now prints `SZ4999` and says the defect is in Serez-Code rather than in the
+program that was run. Nothing reachable produces the outcome, so this is a net
+for a future regression — and a regression that says something is worth more
+than one that says nothing. `the_boundary_actually_prints_the_unstructured_diagnostic`
+reads the arm, because a message the reporter never reaches is the same silence
+with extra steps.
 
 **Nothing reachable produces one today.** This document used to say that class
 `super`/dispatch paths and other native subsystems still contained examples; they
@@ -334,7 +350,12 @@ outcomes. `no_reachable_construct_produces_an_unstructured_outcome` in
 
 Thirty-four `return EvalResult::Error` sites remain in the evaluator. Every one
 *propagates* a failure recorded structured further in — they run cleanup and pass
-the sentinel outward — rather than originating an unstructured one. The variant
+the sentinel outward — rather than originating an unstructured one. Re-measured
+by classifying all 138 constructions of the sentinel outside tests: 102 re-emit
+it immediately after `rt_err_kind` or `fatal_err_kind` recorded the payload, 34
+propagate a sub-evaluation that had already failed, and the two the scan could
+not place are a `match` pattern split across two lines and `rt_err_kind`'s own
+tail. **Zero originate.** The variant
 stays in `ProgramOutcome` because an embedder must still be able to receive it,
 and because removing it would be a public API change.
 

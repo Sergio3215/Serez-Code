@@ -7,6 +7,39 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The one outcome that printed nothing now says something
+
+- `ProgramOutcome::UnstructuredError` was the single outcome the boundary
+  rendered no output for: a non-zero exit with nothing on stderr. The comment
+  justifying it read "legacy error producers already emitted their own
+  diagnostic."
+- Measured: no such producer exists. Of the sixteen `eprintln!` calls in the
+  evaluator, every one is `rt_err_kind`'s structured printer, the boundary
+  reporter, stack-frame rendering, or a warning — except two, `OS.spawn` and
+  `Socket.recvWsFrame`, and those return a **value** (`-1`, `null`) rather than
+  the sentinel. Both are deliberate compatibility fallbacks already recorded in
+  `errors.md` with their blast radius (`serez-http` and `serez-strike` branch on
+  the `null`; `serez-strike` calls `OS.spawn`), so they are unchanged — and
+  neither can reach that arm. The silence had nothing behind it.
+- It now prints `SZ4999` and says the defect is in Serez-Code, not in the program
+  that was run. Nothing reachable produces the outcome today, so this is a net
+  for a future regression; a regression that says something is worth more than
+  one that says nothing.
+- Two tests: one on the text, one that reads the reporter's arm — a message the
+  reporter never reaches is the same silence with extra steps. Confirmed to fail
+  when the arm is silenced.
+
+### The `EvalResult::Error` inventory, re-measured
+
+- `errors.md` said thirty-four sites remain and every one propagates rather than
+  originates. Verified independently by classifying all 138 constructions of the
+  sentinel outside tests: **102** re-emit it immediately after `rt_err_kind` or
+  `fatal_err_kind` recorded the payload, **34** propagate a sub-evaluation that
+  had already failed, and the two the scan could not place are a `match` pattern
+  split across two lines and `rt_err_kind`'s own tail. **Zero originate.** The
+  document's number was right; it is now backed by a measurement rather than a
+  sample.
+
 ### `--watch` on a mistyped filename panicked
 
 - `sz --watch nosuchfile.sz` ran the file, printed the correct diagnostic, and

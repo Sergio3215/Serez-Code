@@ -1670,12 +1670,39 @@ impl Evaluator {
         }
     }
 
+    /// The diagnostic for a failure the runtime signalled without recording a
+    /// payload.
+    ///
+    /// The boundary used to print **nothing** here, justified by a comment
+    /// saying legacy error producers had already emitted their own diagnostic.
+    /// No such producer exists. Of the sixteen `eprintln!` calls in the
+    /// evaluator, every one is either `rt_err_kind`'s structured printer, this
+    /// reporter, stack-frame rendering, or a warning. The only two that print
+    /// an error message of their own — `OS.spawn` and `Socket.recvWsFrame` —
+    /// return a **value** (`-1`, `null`) rather than the sentinel, as
+    /// `errors.md` records deliberately, so neither can ever reach this arm.
+    ///
+    /// The silence therefore had nothing behind it: a non-zero exit with no
+    /// output at all, which is the least actionable thing the runtime can do.
+    /// Nothing reachable produces this outcome today and
+    /// `no_reachable_construct_produces_an_unstructured_outcome` keeps it that
+    /// way, so this text is a net for a future regression — and a regression
+    /// that says something is worth far more than one that says nothing.
+    pub fn unstructured_outcome_diagnostic() -> String {
+        "❌ INTERNAL ERROR [SZ4999]: the runtime reported a failure without \
+recording a diagnostic for it.\n   This is a defect in Serez-Code itself, not \
+in the program that was run. Please report it."
+            .to_string()
+    }
+
     /// Render a structured program failure using the existing human CLI format.
-    /// Successful and legacy unstructured outcomes produce no additional output:
-    /// legacy error producers already emitted their own diagnostic.
+    /// A successful outcome produces no additional output.
     pub fn report_program_outcome(&self, outcome: &ProgramOutcome) {
         match outcome {
-            ProgramOutcome::Value(_) | ProgramOutcome::UnstructuredError => {}
+            ProgramOutcome::Value(_) => {}
+            ProgramOutcome::UnstructuredError => {
+                eprintln!("{}", Self::unstructured_outcome_diagnostic());
+            }
             ProgramOutcome::RuntimeError(error) => {
                 eprintln!("❌ ERROR [{}]: {}", error.code, error.message);
                 let frames: Vec<(&str, usize, usize)> = error

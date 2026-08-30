@@ -3563,3 +3563,91 @@ fn no_reachable_construct_produces_an_unstructured_outcome() {
         unstructured.join("\n")
     );
 }
+#[test]
+fn an_unstructured_outcome_says_something_rather_than_nothing() {
+    // `UnstructuredError` used to be the one outcome the boundary printed
+    // nothing for: a non-zero exit with no output at all. The comment that
+    // justified the silence said legacy error producers had already emitted
+    // their own diagnostic. No such producer exists — the only two sites in the
+    // evaluator that print an error message of their own, `OS.spawn` and
+    // `Socket.recvWsFrame`, return a *value* (`-1`, `null`) rather than the
+    // sentinel, deliberately and as `errors.md` records, so neither can reach
+    // that arm.
+    let text = Evaluator::unstructured_outcome_diagnostic();
+    assert!(!text.trim().is_empty());
+    assert!(text.contains("SZ4999"), "no code to grep for: {text}");
+    assert!(
+        text.contains("Serez-Code itself"),
+        "must say whose defect it is, so it is not read as a program error: {text}"
+    );
+}
+
+#[test]
+fn the_boundary_actually_prints_the_unstructured_diagnostic() {
+    // Nothing reachable produces this outcome, so no program can exercise the
+    // wiring — and a message that is never reached from the arm that needs it
+    // is the same silence with extra steps. Read the arm.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(root.join("src/evaluator/mod.rs"))
+        .expect("src/evaluator/mod.rs must be readable");
+
+    let start = source
+        .find("pub fn report_program_outcome")
+        .expect("report_program_outcome must exist");
+    let body = &source[start..];
+    let arm = body
+        .find("ProgramOutcome::UnstructuredError")
+        .expect("the reporter must still handle UnstructuredError");
+    let after = &body[arm..arm + 200];
+
+    assert!(
+        after.contains("unstructured_outcome_diagnostic"),
+        "the UnstructuredError arm must print the diagnostic, not swallow the \
+         outcome; it currently reads:\n{after}"
+    );
+}
+#[test]
+fn stderr_suppression_inside_try_never_swallows_an_error_that_escapes_it() {
+    // `try_depth` suppresses the stderr print for a *recoverable* error while a
+    // catch is in scope, and `last_error` carries the payload separately from
+    // the `EvalResult::Error` sentinel. Both are transitional side channels, and
+    // the failure they would produce is a silent one: an error that escapes the
+    // try still marked as "someone will handle this", or a later failure wearing
+    // an earlier failure's payload.
+    //
+    // These four paths are where suppression has to stop. The existing `.sz`
+    // tests cover catchability; none of them looks at what the boundary reports,
+    // which is the half that would go quiet.
+    let cases: [(&str, &str, &str); 4] = [
+        (
+            "a recoverable error in a try that has only finally",
+            r#"try { let a = [1]; out a[9]; } finally { out "fin"; }"#,
+            "SZ4003",
+        ),
+        (
+            "an error raised inside the catch handler itself",
+            r#"try { let a = [1]; out a[9]; } catch (e) { let b = [1]; out b[9]; }"#,
+            "SZ4003",
+        ),
+        (
+            "a later error must carry its own payload, not the caught one's",
+            r#"try { let a = [1]; out a[9]; } catch (e) { out "caught"; } out 1 / 0;"#,
+            "SZ4004",
+        ),
+        (
+            "an inner catch must not suppress what happens after it",
+            r#"try { try { let a = [1]; out a[9]; } catch (e) { } out 1 / 0; } finally { }"#,
+            "SZ4004",
+        ),
+    ];
+
+    for (label, src, expected_code) in cases {
+        match evaluate(src) {
+            ProgramOutcome::RuntimeError(error) => assert_eq!(
+                error.code, expected_code,
+                "{label}: reported the wrong failure — a stale payload would look exactly like this"
+            ),
+            other => panic!("{label}: expected a structured runtime error, got {other:?}"),
+        }
+    }
+}
