@@ -60,6 +60,7 @@ fn any get() { return 1; }    // PARSE ERROR — `get` opens a getter
 statement:
 
 ```serez
+// parse-error-example: a brace-less body is not accepted
 if (ready) out 1;          // PARSE ERROR
 if (ready) { out 1; }      // fine
 if (a) { } else out 1;     // PARSE ERROR
@@ -70,6 +71,7 @@ There is no brace-less body anywhere in the language.
 ### `for-in` requires the `let`
 
 ```serez
+// parse-error-example: `for-in` requires the `let`
 for (item in items) { }        // PARSE ERROR
 for (let item in items) { }    // fine
 ```
@@ -129,10 +131,14 @@ not on lambdas. See `types.md` and `functions.md`.
 ### A dict literal needs a dict context
 
 `{k, v}` is an *entry* literal, and a parenthesised sequence of them is a dict.
-It is only valid where a dict is expected — an annotated binding, or an argument
-to a dict method:
+It is only valid in two places: the annotated `let` that declares a dict, and an
+argument to a dict method. Note what that excludes — the literal is **not an
+expression**, so it cannot appear in a field initialiser, an argument, a return,
+an array element, an unannotated `let`, or even a reassignment of a binding that
+was annotated. `dicts.md` lists the failing shapes and the way around them.
 
 ```serez
+// parse-error-example: the last line has no such form
 let d <string, int> = ({"a", 1}, {"b", 2});    // fine
 let d = ({"a", 1});                            // TypeError / SZ4002:
                                                // "Entry literal {k,v} is only

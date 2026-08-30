@@ -1,8 +1,9 @@
 # Variables and destructuring
 
-This revision freezes declaration destructuring. General assignment, type
-annotations, shadowing and closure capture will be expanded after their own
-implementation/test audit.
+This document freezes declaration destructuring. The rest of what it once listed
+as pending has since been written elsewhere: type annotations in `types.md`,
+shadowing, block scoping, closure capture and `const` rejection in `scopes.md`,
+and assignment, copying and receiver writeback in `values.md`.
 
 ## Declarations
 
@@ -59,6 +60,13 @@ propagated unchanged.
 
 ## Coverage boundary
 
-The normative rules for ordinary assignment, typed declarations, const write
-attempts, shadowing and capture/writeback are still pending their dedicated
-audit. Existing conformance tests remain authoritative for those behaviors.
+Every rule above was re-probed against the binary in the current cycle: binding
+by position, ignored extras, a slot beyond the source, rest and its copies, the
+single evaluation of the source, dicts, class instances, `DateTime`, the alias
+form, a missing property, `const` binding and rejection, and the four shapes the
+grammar refuses. All held.
+
+What this document once listed as pending is now covered: typed declarations in
+`types.md`; `const` write attempts, shadowing and capture in `scopes.md`;
+ordinary assignment, copying and receiver writeback in `values.md`. Nothing
+about destructuring remains unaudited.

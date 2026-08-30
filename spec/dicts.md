@@ -14,6 +14,37 @@ A dict is declared with the key and value types after the name:
 let ages <string, int> = ({"Ana", 25}, {"Bob", 30});
 ```
 
+The annotation is **required**, and this is more consequential than it looks: a
+dict literal is not an expression. `let name <K, V> = ( ... )` is the only place
+the grammar accepts one, so every other position fails with catchable
+`TypeError` / `SZ4002` and the message "Entry literal {k,v} is only valid as an
+argument to a dict method" — which names the entry rather than the literal and
+so reads as a puzzle. Measured, all of these fail:
+
+```serez
+let d = ({"a", 1});                 // unannotated `let`
+f(({"a", 1}));                      // an argument
+return ({"a", 1});                  // a return value
+let a = [({"a", 1})];               // an array element
+class C { public C() { this.d = ({"a", 1}); } }   // a field initialiser
+d = ({"b", 2});                     // reassigning, even an annotated binding
+```
+
+To put a dict anywhere else, build it in an annotated `let` and use that
+binding:
+
+```serez
+class C {
+    public C() {
+        let seed <string, int> = ({"a", 1});
+        this.d = seed;
+    }
+}
+```
+
+An array has no such restriction: `[1, 2]` is an ordinary expression and works
+in every one of those positions.
+
 A dict is a value, not a shared handle: assigning one to another name copies it,
 and so does passing it to a function. A mutating method changes only the binding
 it was called on. See `arrays.md`, which states the same rule for arrays.

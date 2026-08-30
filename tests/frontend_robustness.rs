@@ -842,6 +842,97 @@ fn readme_serez_examples_parse() {
     );
 }
 
+/// The same guard the README has, over `spec/`.
+///
+/// `spec/` is the normative contract: an example there that cannot run is worse
+/// than one in a guide, because a reader takes it for the definition. Nothing
+/// checked those 46 blocks. Five did not parse — all in `syntax.md`, all
+/// deliberately invalid, and two of the five already said so. The three that did
+/// not are now marked, which is the point of the marker: being invalid has to be
+/// stated, not inferred.
+///
+/// This parses; it does not run. The defect that prompted it would have slipped
+/// through either way — `values.md` carried a writeback example whose dict
+/// literal parses fine and fails at runtime with `SZ4002`, because a dict
+/// literal is not an expression. Parsing is the cheap half, and it is the half
+/// that catches syntax drifting away from 25 documents.
+#[test]
+fn spec_serez_examples_parse() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let spec_dir = root.join("spec");
+
+    let mut documents: Vec<std::path::PathBuf> = std::fs::read_dir(&spec_dir)
+        .expect("spec/ must be readable")
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    documents.sort();
+    assert!(
+        documents.len() > 20,
+        "expected the spec to still be there, found {}",
+        documents.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+
+    for document in &documents {
+        let text = std::fs::read_to_string(document).expect("a spec document must be readable");
+        let name = document
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        let mut i = 0;
+        while i < lines.len() {
+            if lines[i].trim() != "```serez" {
+                i += 1;
+                continue;
+            }
+            let start = i + 2; // 1-based line of the first content line
+            let mut j = i + 1;
+            let mut buf: Vec<&str> = Vec::new();
+            while j < lines.len() && lines[j].trim() != "```" {
+                buf.push(lines[j]);
+                j += 1;
+            }
+            i = j + 1;
+
+            let src = buf.join("\n");
+            if src.contains("parse-error-example") {
+                continue;
+            }
+            checked += 1;
+            let lexer = serez_code::lexer::Lexer::new(src.clone());
+            let mut parser = serez_code::parser::Parser::new(lexer);
+            parser.set_source(src.lines().map(str::to_string).collect());
+            parser.set_source_name("<spec>");
+            let _ = parser.parse_program();
+            if parser.has_errors() {
+                let first = parser
+                    .take_errors()
+                    .first()
+                    .map(|e| e.message.clone())
+                    .unwrap_or_default();
+                failures.push(format!("spec/{name}:{start}: {first}"));
+            }
+        }
+    }
+
+    assert!(
+        checked > 30,
+        "almost every block opted out of parsing; that is not the intent \
+         ({checked} checked)"
+    );
+    assert!(
+        failures.is_empty(),
+        "spec examples that do not parse — fix the example, or mark the block \
+         with a first-line `// parse-error-example: <why>` if being invalid is \
+         the point:\n{}",
+        failures.join("\n")
+    );
+}
+
 /// `permissions::ENFORCED` is the list `require_permission` actually checks.
 ///
 /// The nine enforced namespaces existed only as string literals at their call

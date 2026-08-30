@@ -5,6 +5,12 @@ mutation is visible somewhere else.
 
 Every rule here was derived by probing the running implementation. Where the
 implementation was inconsistent, that is stated rather than smoothed over.
+Every claim below was re-probed against the binary in the current cycle: the
+copy rules for arrays, dicts, sets and instances; copying across a call and out
+of a container; writeback for all thirteen named mutators and for a method that
+assigns to `this`; a getter not being a place; closure capture; the five
+equality rows; the eight truthiness rows; and the operand-returning `&&`/`||`.
+One example did not survive that pass and is corrected below.
 
 ## Everything is a value
 
@@ -63,9 +69,20 @@ d["list"].push(2);                // d["list"] is [1, 2]
 let a = [[1]];
 a[0].push(2);                     // a[0] is [1, 2]
 
-class KV { public KV() { this.c = [[ ({"k", []}) ]]; } }
-kv.c[0][0]["k"].push(x);          // writes through the whole chain
+class KV {
+    public KV() {
+        // A dict literal only exists in an annotated `let` — see `dicts.md`.
+        let seed <string, any> = ({"k", []});
+        this.c = [[seed]];
+    }
+}
+let kv = new KV();
+kv.c[0][0]["k"].push(1);          // writes through the whole chain
 ```
+
+The example above used to read `this.c = [[ ({"k", []}) ]];` with `kv` never
+declared. It could not run: a dict literal is not an expression and cannot
+appear in a field initialiser.
 
 A **place** is a variable, a field read (`.name`, no parentheses, no
 arguments), an index (`[key]`), or any chain of those. The write happens after
@@ -139,9 +156,9 @@ compare containers structurally is a breaking change and needs the process in
 | `[]` | no |
 | everything else, including `[0]` and `"0"` | yes |
 
-`&&` and `||` return one of their operands, not a boolean. See `operators.md`
-when it exists; until then the rule is: `a && b` yields `a` when `a` is falsy
-and `b` otherwise; `a || b` yields `a` when `a` is truthy and `b` otherwise.
+`&&` and `||` return one of their operands, not a boolean: `a && b` yields `a`
+when `a` is falsy and `b` otherwise; `a || b` yields `a` when `a` is truthy and
+`b` otherwise. See `operators.md`.
 
 ## Limits
 

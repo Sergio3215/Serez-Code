@@ -7,6 +7,59 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A dict literal is not an expression, and nothing said so
+
+- `parse_dict_literal` is reachable from exactly one place in the grammar: a
+  `let` carrying `<K, V>`. Everywhere else `({"a", 1})` parses as a parenthesised
+  entry literal and fails at runtime with `TypeError` / `SZ4002` and the message
+  "Entry literal {k,v} is only valid as an argument to a dict method" — which
+  names the entry rather than the literal, so it reads as a puzzle.
+- Measured, all of these fail: an unannotated `let`, an argument, a return value,
+  an array element, a field initialiser, and reassigning a binding that *was*
+  annotated. An array has no such restriction, which is why the asymmetry
+  surprises. The way around it is an annotated `let` assigned across.
+- `dicts.md` — the document a reader goes to for dicts — never mentioned it.
+  `syntax.md` did, but said "an annotated binding, or an argument to a dict
+  method", which reads as allowing the reassignment that in fact fails. Both now
+  state the rule and agree.
+
+### `values.md` carried an example that could not run
+
+- The receiver-writeback chain example built a dict literal inside a field
+  initialiser and called `kv.c[0][0]["k"].push(x)` with `kv` never declared.
+  Replaced with a runnable version, verified to print what the surrounding prose
+  claims. Its stale "see `operators.md` when it exists" is also gone —
+  `operators.md` exists.
+- Everything else in the document was re-probed against the binary and held: the
+  copy rules for arrays, dicts, sets and class instances; copying across a call
+  and out of a container; writeback for all thirteen named mutators and for a
+  method that assigns to `this`; a getter not being a place, so nothing is
+  written; closure capture in both directions; the five equality rows; the eight
+  truthiness rows; and `&&`/`||` returning an operand. The 500-level copy ceiling
+  is reachable and fatal as documented — but only between 501 and 511 levels,
+  because the 512-level parse ceiling stops a deeper literal first.
+
+### `spec/` examples are now checked, like the README's
+
+- Nothing verified the 46 `serez` blocks across 25 normative documents. Five did
+  not parse — all in `syntax.md`, all deliberately invalid, and only two of them
+  said so. The three unmarked ones now carry a `parse-error-example` marker,
+  which is the point of the marker: being invalid is a claim, and a claim should
+  be written down.
+- `spec_serez_examples_parse` mirrors the README guard. It parses rather than
+  runs, and it would not have caught the `values.md` defect above, which parses
+  fine and fails at runtime — that half is still uncovered and said so in the
+  test's own comment. Confirmed to fail on a deliberate break.
+
+### `variables.md` was pointing at work that had already been done
+
+- Its opening and its coverage boundary both listed type annotations, shadowing,
+  closure capture, `const` write attempts and assignment as pending a dedicated
+  audit. `types.md`, `scopes.md` and `values.md` have since covered all of them.
+- Every destructuring rule it freezes was re-probed and held, including the four
+  shapes the grammar refuses (nested array and object patterns, object rest, and
+  a non-array or unsupported right-hand side declaring none of the bindings).
+
 ### The compatibility promise about diagnostic codes is now enforced
 
 - `compatibility.md` says: "Diagnostic **codes** and **kinds** are stable. A
