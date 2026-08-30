@@ -8,6 +8,7 @@ is a consequence of the design rather than a decision, that is said so.
 ## What `import` does
 
 ```serez
+// fragment: two files, shown together
 import "./lib/math.sz";
 import "lib/greet";
 import "mypkg";
@@ -96,12 +97,14 @@ also imported every transitive dependency.
 The consequence is that **exports leak transitively**:
 
 ```serez
+// fragment: two files, shown together
 // middle.sz
 import "./lib.sz";
 export fn string viaMiddle() { return visible(); }
 ```
 
 ```serez
+// fragment: two files, shown together
 import "./middle.sz";
 viaMiddle();   // works, as intended
 visible();     // ALSO works — lib.sz's export is visible here
@@ -119,6 +122,7 @@ There is a single flat global namespace. A module that declares a name the
 importing program already has **overwrites** it:
 
 ```serez
+// fragment: two files, shown together
 let collide = "from-main";
 import "./collide.sz";     // the module has `export let collide = "from-module"`
 collide;                   // "from-module"
@@ -160,6 +164,7 @@ export fn int getRuns() { return runs; }
 ```
 
 ```serez
+// fragment: two files, shown together
 import "./counter.sz";   getRuns();   // 1
 import "./counter.sz";   getRuns();   // 1, not 2
 ```
@@ -174,6 +179,7 @@ statement that reads a value the other module has not assigned yet sees the
 earlier one:
 
 ```serez
+// fragment: two files, shown together
 // a.sz
 export let aVal = "unset";
 import "./b.sz";
@@ -181,6 +187,7 @@ aVal = "set-by-A";
 ```
 
 ```serez
+// fragment: two files, shown together
 // b.sz
 import "./a.sz";
 export let seenFromB = aVal;   // "unset", not "set-by-A"
@@ -198,6 +205,7 @@ interfaces and enums — which live in registries rather than on the scope stack
 survive:
 
 ```serez
+// fragment: two files, shown together
 fn void load() { import "./lib.sz"; }
 load();
 visible();          // ReferenceError — the function went with the frame
@@ -222,6 +230,7 @@ error.
 The two module failures are told apart on purpose:
 
 ```serez
+// fragment: needs a ./broken.sz beside it
 try { import "./nope.sz"; }
 catch (e) { e; }              // "ModuleNotFound: Cannot find module './nope.sz'"
 

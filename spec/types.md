@@ -76,6 +76,7 @@ Matching is by this table, and by nothing else:
 `int` does not widen to `decimal` at a parameter, and neither does `dec`:
 
 ```serez
+// runtime-error-example: shows the checker rejecting a widening
 fn decimal half(decimal d) { return d / 2.0; }
 half(1);        // TypeError / SZ4002 — expected 'decimal' but received 'int'
 half(1m);       // TypeError / SZ4002 — expected 'decimal' but received 'dec'
@@ -93,6 +94,7 @@ A declared class name matches that class and nothing else. Inheritance drives
 method dispatch and field layout, but the type system does not see it:
 
 ```serez
+// runtime-error-example: shows a declared class name matching exactly
 class Base    { public Base() { this.v = 1; } }
 class Derived : Base { public Derived() { this.v = 2; } }
 
@@ -118,6 +120,7 @@ An annotation is any identifier followed by an optional `?`. Nothing checks that
 the name exists:
 
 ```serez
+// runtime-error-example: shows an unknown type name matching nothing
 fn any f(Frobnicate x) { return "reached"; }
 f(1);   // TypeError / SZ4002 — expected 'Frobnicate' but received 'int'
 ```
@@ -190,6 +193,7 @@ element type. Everything else infers nothing, and the check is silently skipped.
 The practical consequence:
 
 ```serez
+// runtime-error-example: shows what the static checker reports
 let s = "x";
 fn int f(int n) { return n; }
 f(s);                    // caught statically, then again at runtime

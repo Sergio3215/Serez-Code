@@ -22,6 +22,7 @@ argument to a dict method" — which names the entry rather than the literal and
 so reads as a puzzle. Measured, all of these fail:
 
 ```serez
+// runtime-error-example: every line here is one of the failing shapes
 let d = ({"a", 1});                 // unannotated `let`
 f(({"a", 1}));                      // an argument
 return ({"a", 1});                  // a return value
@@ -57,6 +58,7 @@ that order, and `toArray()` pairs them as `[[k1, v1], [k2, v2], …]`.
 Reading a missing key yields `null` rather than failing:
 
 ```serez
+// fragment: continues the `ages` dict declared above
 out ages["nobody"];   // null
 ```
 

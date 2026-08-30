@@ -38,6 +38,7 @@ refused rather than silently rounded, and the refusal covers **comparison and
 equality as well as arithmetic**:
 
 ```serez
+// runtime-error-example: mixing dec and decimal is refused
 1m + 1        // 2m  — int mixes in exactly
 1m + 0.5      // TypeError / SZ4002
 1m < 0.5      // TypeError / SZ4002

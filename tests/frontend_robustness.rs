@@ -933,6 +933,107 @@ fn spec_serez_examples_parse() {
     );
 }
 
+/// The half `spec_serez_examples_parse` cannot cover: a block that parses and
+/// then does not run.
+///
+/// That is not hypothetical. `values.md` carried a receiver-writeback example
+/// that parsed cleanly and failed at runtime with `SZ4002`, because it built a
+/// dict literal inside a field initialiser and a dict literal is not an
+/// expression. The parse checker was blind to it, and said so.
+///
+/// Every `serez` block in `spec/` must now either run to completion or say why
+/// it does not, with a first-line marker:
+///
+/// - `parse-error-example: why` — the source is deliberately not valid syntax;
+/// - `runtime-error-example: why` — it parses and is meant to fail, because the
+///   failure is the thing being documented;
+/// - `fragment: why` — it continues an earlier block, or needs files beside it.
+///
+/// Measured when this was written: of 41 blocks, 23 ran unaided and 18 needed a
+/// marker — eight deliberate runtime-error demonstrations and ten fragments,
+/// mostly multi-file module examples. None of the 18 was wrong; they were simply
+/// never distinguished from the blocks a reader is meant to be able to paste.
+#[test]
+fn spec_serez_examples_run() {
+    use std::process::Command;
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut documents: Vec<std::path::PathBuf> = std::fs::read_dir(root.join("spec"))
+        .expect("spec/ must be readable")
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    documents.sort();
+
+    let scratch = std::env::temp_dir().join(format!("sz_spec_run_{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("a scratch directory");
+    let probe = scratch.join("block.sz");
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut ran = 0usize;
+
+    for document in &documents {
+        let text = std::fs::read_to_string(document).expect("a spec document must be readable");
+        let name = document
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        let mut i = 0;
+        while i < lines.len() {
+            if lines[i].trim() != "```serez" {
+                i += 1;
+                continue;
+            }
+            let start = i + 2;
+            let mut j = i + 1;
+            let mut buf: Vec<&str> = Vec::new();
+            while j < lines.len() && lines[j].trim() != "```" {
+                buf.push(lines[j]);
+                j += 1;
+            }
+            i = j + 1;
+
+            let src = buf.join("\n");
+            if src.contains("parse-error-example")
+                || src.contains("runtime-error-example")
+                || src.contains("fragment:")
+            {
+                continue;
+            }
+            ran += 1;
+            std::fs::write(&probe, format!("{src}\n")).expect("the probe must be writable");
+            let out = Command::new(env!("CARGO_BIN_EXE_sz"))
+                .arg(&probe)
+                .current_dir(&scratch)
+                .output()
+                .expect("the sz binary must run");
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let first = stderr
+                    .lines()
+                    .find(|line| line.contains("ERROR") || line.contains("EXCEPTION"))
+                    .unwrap_or("(no diagnostic)");
+                failures.push(format!("spec/{name}:{start}: {first}"));
+            }
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&scratch);
+    assert!(
+        ran > 15,
+        "almost every block opted out of running; that is not the intent ({ran} ran)"
+    );
+    assert!(
+        failures.is_empty(),
+        "spec examples that parse but do not run — fix the example, or mark the \
+         block with a first-line `// runtime-error-example: <why>` when failing \
+         is the point, or `// fragment: <why>` when it continues another \
+         block:\n{}",
+        failures.join("\n")
+    );
+}
+
 /// `permissions::ENFORCED` is the list `require_permission` actually checks.
 ///
 /// The nine enforced namespaces existed only as string literals at their call

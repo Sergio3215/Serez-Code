@@ -7,6 +7,43 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Spec examples must run, not only parse
+
+- The parse checker added one stage earlier recorded its own blind spot: a block
+  that parses and then fails at runtime, which is exactly the `values.md` defect
+  that prompted it. `spec_serez_examples_run` closes it by driving the binary
+  over every `serez` block in `spec/`.
+- Of 41 blocks, **23 ran unaided**. The other 18 needed a marker, and none of
+  them was wrong — eight are deliberate runtime-error demonstrations (the
+  checker rejecting a widening, `dec` refusing to mix with `decimal`, a
+  constructor chain stopping, the dict-literal shapes that fail) and ten are
+  fragments, mostly multi-file module examples. They had simply never been
+  distinguished from the blocks a reader is meant to be able to paste.
+- Two markers join the existing `parse-error-example`:
+  `runtime-error-example: why` when failing is the thing being documented, and
+  `fragment: why` when a block continues another or needs files beside it.
+- Confirmed to fail on a deliberate break.
+
+### Four more spec documents re-probed; all four held
+
+- `arrays.md` — 56 claims, including every one of the eleven diagnostic codes in
+  its error table and the element-type rules (`filter` and `slice` preserve the
+  declared type, `map` and `flat` produce untyped arrays), the arity-before-
+  arguments ordering, `reduce`'s initial-value-first argument order, the
+  callback arity rule, `slice` and `flat` clamping, and the deliberate
+  inconsistency where `remove` on an empty array returns null.
+- `strings.md` — 48 claims, including scalar-based length, `substring` not
+  swapping reversed indexes where JavaScript would, and the historical padding
+  order `"x".padStart(4, "ab") == "babx"`.
+- `sets.md` — 14 claims, including that a compound element is always admitted
+  and `has` on a compound is always false.
+- `control-flow.md` — 11 claims, including the single evaluation of the
+  iterable, the snapshot that stops a growing source adding visits, and
+  per-iteration closure capture.
+- Zero drift across all four. Worth recording rather than passing over: it
+  separates the documents that were written from measurement and stayed true
+  from the ones this cycle had to correct.
+
 ### A dict literal is not an expression, and nothing said so
 
 - `parse_dict_literal` is reachable from exactly one place in the grammar: a

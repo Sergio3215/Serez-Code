@@ -19,6 +19,7 @@ They live in separate registries, so both declarations are accepted — and
 last. The class becomes unreachable:
 
 ```serez
+// runtime-error-example: an interface is not constructed with new
 class Shape { public Shape() { this.tag = "class"; } }
 interface Shape { tag: int; }
 
@@ -145,6 +146,7 @@ The chain therefore continues past the first level only through an explicit
 `super(...)` in each intermediate constructor:
 
 ```serez
+// runtime-error-example: the first half shows the chain stopping
 class G   { public G()   { this.a = "G"; } }
 
 class MidNo  : G      { public MidNo()  { this.b = "b"; } }          // no super()

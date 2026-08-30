@@ -152,6 +152,7 @@ There is no JSON-style `{key: value}` object literal. See `dicts.md`.
 ### `match`
 
 ```serez
+// fragment: continues the declaration above
 let label = match n {
     1 | 2 | 3      => "low",
     x if x > 100   => "huge",
