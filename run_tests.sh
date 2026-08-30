@@ -690,13 +690,17 @@ fi
 
 # ── Import Tests ──────────────────────────────────────────────────────────────
 echo ""
-echo "${CYAN}═══ Import Tests ═════════════════════════════${RESET}"
+echo "${CYAN}═══ Module & Task Tests ═════════════════════════════${RESET}"
 CATEGORY="import"
 if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     run_file_test "import: a module replacing your own name is reported" \
     "FROM THE MODULE" "replaced 'greet'" "" "import_shadow.sz"
     run_file_test "import: a clean import stays quiet" \
     "FROM THE MODULE" "" "WARNING" "import_clean.sz"
+    run_file_test "task: a worker's output lands on the parent's stdout" \
+        "LINE-FROM-THE-WORKER" "" "" "task_output_channel.sz"
+    run_file_test "task: the parent still sees its own reply" \
+        "LINE-FROM-THE-PARENT: replied" "" "" "task_output_channel.sz"
 fi
 # ── Cleanup & Summary ─────────────────────────────────────────────────────────
 rm -f "$TEMP_SZ" "$TEMP_OUT" "$TEMP_ERR"

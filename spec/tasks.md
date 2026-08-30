@@ -68,6 +68,24 @@ An unknown or evicted ID is `ReferenceError` (`SZ4001`) for both `poll` and
 runtime errors and user `throw` propagate unchanged. Resource ceilings are fatal
 `ResourceError` (`SZ6002`).
 
+### Where a worker's output goes
+
+`poll` is not the only channel a worker speaks through. A worker shares the host
+process's streams: its `out` reaches the **parent's stdout** and its diagnostics
+reach the **parent's stderr**, both interleaved with the parent's own output and
+ordered only by when each thread happens to write. Measured: a worker printing
+`WORKER-STDOUT` produces that line on the parent's stdout, and a worker whose
+script does not parse prints its `SZ2000` on the parent's stderr *in addition
+to* `poll` returning the `ERROR: ` string.
+
+Two consequences worth stating, because neither is visible from the API:
+
+- A program cannot tell its own output from a worker's by looking at the stream.
+  There is no prefix, no tag and no separation.
+- Handling a worker failure through `poll` does not suppress the diagnostic the
+  worker already printed. A caller that treats failure as ordinary control flow
+  still gets unrequested text on stderr.
+
 For compatibility, `Task.message()` outside a worker returns an empty string and
 `Task.reply(value)` outside a worker warns and does nothing. These permissive
 fallbacks can hide context bugs and remain documented debt rather than being
@@ -87,6 +105,28 @@ Terminal records remain repeat-pollable while retained. There is currently no
 explicit cancellation, join, timeout or user-facing `forget`; eviction is the
 only lifecycle cleanup. A non-terminating worker consumes one concurrency slot
 until the host process ends. Host/OS limits remain necessary for untrusted code.
+
+## What was re-probed
+
+Every claim above that can be reached from a program was probed against the
+binary in the current cycle and held: `run` returning an int id; `message`
+delivering the argument; a reply becoming observable only after a successful
+exit; a later failure winning over an earlier reply, with the structured
+payload (`SZ4003`) surviving inside the `ERROR: ` string; a worker that does not
+parse reported as a failed task; the last of several replies winning; a terminal
+record staying repeat-pollable; `SZ4001` for an unknown id on both `poll` and
+`isDone`; `SZ4002` for wrong arity and wrong argument type; and both permissive
+fallbacks outside a worker, including the `⚠️ WARNING` that `reply` prints.
+
+Path resolution was confirmed to use the **host process working directory**, not
+the calling script's: the same program run from one directory up picked up a
+different file of the same name. That is the documented behaviour and it is
+worth knowing it bites — the failure it produces is a worker that runs the wrong
+script and reports success.
+
+Not probed here: lockdown inheritance and the resource ceilings, which need an
+embedder or thirty-three concurrent workers; they rest on
+`runtime_outcome.rs` and `evaluator::namespaces_task::tests` as listed below.
 
 ## Conformance evidence
 

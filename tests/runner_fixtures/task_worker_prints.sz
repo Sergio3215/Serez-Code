@@ -1,0 +1,3 @@
+use permissions { Task }
+out "LINE-FROM-THE-WORKER";
+Task.reply("replied");

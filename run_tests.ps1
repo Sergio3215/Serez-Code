@@ -984,7 +984,7 @@ if ($runAll -or $cli) {
 # ── Summary ───────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host ""
-Write-Host "═══ Import Tests ═════════════════════════════" -ForegroundColor Cyan
+Write-Host "═══ Module & Task Tests ═════════════════════════════" -ForegroundColor Cyan
 $script:category = "import"
 if ($runAll -or $cli) {
     Run-File-Test "import: a module replacing your own name is reported" `
@@ -995,6 +995,12 @@ if ($runAll -or $cli) {
                   -expectOut "FROM THE MODULE" `
                   -forbidErr "WARNING" `
                   -fixture "import_clean.sz"
+    Run-File-Test "task: a worker's output lands on the parent's stdout" `
+                  -expectOut "LINE-FROM-THE-WORKER" `
+                  -fixture "task_output_channel.sz"
+    Run-File-Test "task: the parent still sees its own reply" `
+                  -expectOut "LINE-FROM-THE-PARENT: replied" `
+                  -fixture "task_output_channel.sz"
 }
 
 Write-Host "═══════════════════════════════════════════════" -ForegroundColor Cyan

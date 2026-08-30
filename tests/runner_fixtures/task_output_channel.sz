@@ -1,0 +1,9 @@
+// A worker shares the host process's streams: its `out` lands on the parent's
+// stdout, interleaved with the parent's own. spec/tasks.md states it; nothing
+// pinned it. The path is resolved from the process working directory, which the
+// runners set to the repository root.
+use permissions { Task }
+let id = Task.run("tests/runner_fixtures/task_worker_prints.sz", "");
+let spins = 0;
+while (Task.isDone(id) == false && spins < 5000000) { spins = spins + 1; }
+out "LINE-FROM-THE-PARENT: " + Task.poll(id);

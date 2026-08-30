@@ -7,6 +7,38 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A worker speaks on the parent's streams, and nothing said so
+
+- `tasks.md` describes `poll` as how a worker's result reaches the caller. It is
+  not the only channel. Measured: a worker's `out` lands on the **parent's
+  stdout** and its diagnostics on the **parent's stderr**, interleaved with the
+  parent's own output and ordered only by which thread writes first.
+- Two consequences neither the API nor the document showed: a program cannot
+  tell its own output from a worker's — there is no prefix, tag or separation —
+  and handling a worker failure through `poll` does not suppress the diagnostic
+  the worker already printed, so a caller treating failure as ordinary control
+  flow still gets unrequested text on stderr.
+- Documented in `tasks.md` and pinned by two runner cases on both platforms.
+
+### `tasks.md` re-probed: seventeen claims, all held
+
+- `run` returning an int id; `message` delivering the argument; a reply becoming
+  observable only after a successful exit; a later failure winning over an
+  earlier reply, with the structured `SZ4003` surviving inside the `ERROR:`
+  string; a worker that does not parse reported as a failed task; the last of
+  several replies winning; a terminal record staying repeat-pollable; `SZ4001`
+  for an unknown id on both `poll` and `isDone`; `SZ4002` for wrong arity and
+  wrong argument type; and both permissive fallbacks outside a worker, including
+  the warning `reply` prints.
+- Path resolution uses the host process working directory, as documented — and
+  this audit walked straight into what that costs. The same program run one
+  directory up silently executed a **different file of the same name** and
+  reported success. It looked like a defect in `poll` until the leftover file
+  turned up; `tasks.md` now says the failure it produces is a worker that runs
+  the wrong script and reports success.
+- Not re-probed, and said so in the document: lockdown inheritance and the
+  resource ceilings, which need an embedder or thirty-three concurrent workers.
+
 ### The generator ceiling: measured, put to a decision, not added
 
 - `fn*` accumulates into an unbounded vector. Measured on the current build:
