@@ -116,7 +116,7 @@ names of everything you depend on as part of your own namespace.
 ## One namespace, and collisions overwrite
 
 There is a single flat global namespace. A module that declares a name the
-importing program already has **overwrites** it, silently:
+importing program already has **overwrites** it:
 
 ```serez
 let collide = "from-main";
@@ -124,10 +124,28 @@ import "./collide.sz";     // the module has `export let collide = "from-module"
 collide;                   // "from-module"
 ```
 
-No diagnostic is produced in either direction. Together with transitive leaking,
-this is the main practical hazard of the module system: prefix names that are
-meant to be public, and assume any name you did not choose deliberately can be
-taken by a dependency.
+The import reports every name it replaced:
+
+```
+⚠️  WARNING: importing '.../collide.sz' replaced 'collide', which this file
+    already defined. The module's definition wins from here on — rename one of
+    them, or move the import above your own declaration if the replacement is
+    what you meant.
+```
+
+The rule itself is unchanged: the namespace is still flat, the module's
+definition still wins, and the exit code is unaffected. Until this cycle the
+overwrite was **silent**, which is what made it the main practical hazard of the
+module system. The warning was measured before being kept — across the 483-test
+core suite and all eight official packages the collision count is **zero**, with
+a probe verified to fire on a real collision — so it can only speak when
+something genuinely collided, and a clean import stays quiet.
+
+Nothing warns in the other direction: a name your own file declares *after* an
+import shadows the module's, and that is ordinary shadowing rather than a
+surprise. Together with transitive leaking this remains a hazard to design
+around: prefix names that are meant to be public, and assume any name you did
+not choose deliberately can be taken by a dependency.
 
 ## A module runs once
 
@@ -266,7 +284,8 @@ packages.
 These are limitations, not guarantees:
 
 - no selective import, aliasing or namespacing — one flat global namespace;
-- exports leak transitively, and collisions overwrite without a diagnostic;
+- exports leak transitively; a collision overwrites, and is reported as a
+  warning rather than prevented;
 - no re-export declaration; the leak above is what gets used instead;
 - an import inside a function or block half-applies rather than failing;
 - no lockfile, integrity check or version constraint on a URL import;

@@ -556,6 +556,30 @@ function Run-Repl-Test([string]$label, [string]$expectOut, [string]$forbidOut,
     else     { Write-Host "[FAIL] $label - $reason" -ForegroundColor Red; Add-Result "fail" $label $reason }
 }
 
+function Run-File-Test([string]$label, [string]$expectOut, [string]$expectErr,
+                      [string]$forbidErr, [string]$fixture) {
+    # Runs one fixture file and can assert that stderr does NOT say something.
+    # The absence matters as much as the presence for a diagnostic meant to fire
+    # only on a real problem: a warning nobody sees is useless, and one that
+    # fires on healthy code is worse than none. Run-CLI-Test asserts containment
+    # only.
+    if ($filter -and $label -notlike "*$filter*") { return }
+    $file = Join-Path $testsDir "runner_fixtures\$fixture"
+    $r = Invoke-Binary @("`"$file`"") "" $root
+    $ok = $true; $reason = ""
+    if ($expectOut -ne "" -and $r.stdout -notmatch [regex]::Escape($expectOut)) {
+        $ok = $false; $reason = "stdout missing '$expectOut'"
+    }
+    if ($expectErr -ne "" -and $r.stderr -notmatch [regex]::Escape($expectErr)) {
+        $ok = $false; $reason = "stderr missing '$expectErr'"
+    }
+    if ($forbidErr -ne "" -and $r.stderr -match [regex]::Escape($forbidErr)) {
+        $ok = $false; $reason = "stderr says '$forbidErr' and should be quiet here"
+    }
+    if ($ok) { Write-Host "[PASS] $label" -ForegroundColor Green; Add-Result "pass" $label }
+    else     { Write-Host "[FAIL] $label - $reason" -ForegroundColor Red; Add-Result "fail" $label $reason }
+}
+
 # The runner itself must reject a unit program that aborts before summary().
 Write-Host "═══ Test Runner Integrity ════════════════════" -ForegroundColor Cyan
 $script:category = "runner-integrity"
@@ -957,8 +981,23 @@ if ($runAll -or $cli) {
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 Write-Host ""
+Write-Host ""
+Write-Host "═══ Import Tests ═════════════════════════════" -ForegroundColor Cyan
+$script:category = "import"
+if ($runAll -or $cli) {
+    Run-File-Test "import: a module replacing your own name is reported" `
+                  -expectOut "FROM THE MODULE" `
+                  -expectErr "replaced 'greet'" `
+                  -fixture "import_shadow.sz"
+    Run-File-Test "import: a clean import stays quiet" `
+                  -expectOut "FROM THE MODULE" `
+                  -forbidErr "WARNING" `
+                  -fixture "import_clean.sz"
+}
+
 Write-Host "═══════════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host "TOTAL: $pass passed  $fail failed  $skip skipped" -ForegroundColor $(if ($fail -gt 0) { "Red" } else { "Green" })
+
 
 if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -ErrorAction SilentlyContinue }
 

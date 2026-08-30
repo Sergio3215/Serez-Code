@@ -1,0 +1,1 @@
+export fn string greet() { return "FROM THE MODULE"; }

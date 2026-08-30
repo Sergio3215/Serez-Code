@@ -448,6 +448,37 @@ run_repl_test() {
     fi
 }
 
+
+# -- run_file_test <label> <expect_out> <expect_err> <forbid_err> <fixture.sz>
+# Runs one fixture file and can assert that stderr does NOT say something. The
+# absence matters as much as the presence for a diagnostic that is meant to fire
+# only on a real problem: a warning nobody sees is useless, and one that fires on
+# healthy code is worse than none. `run_cli_test` asserts containment only.
+run_file_test() {
+    local label="$1" expect_out="$2" expect_err="$3" forbid_err="$4" fixture="$5"
+    [[ -n "$FILTER" && "$label" != *"$FILTER"* ]] && return
+
+    local out err ok=1 reason=""
+    out=$("$BINARY" "$(to_native_path "$TESTS_DIR/runner_fixtures/$fixture")" 2>"$TEMP_ERR" || true)
+    err=$(cat "$TEMP_ERR")
+
+    if [[ -n "$expect_out" && "$out" != *"$expect_out"* ]]; then
+        ok=0; reason="stdout missing '$expect_out'"
+    fi
+    if [[ -n "$expect_err" && "$err" != *"$expect_err"* ]]; then
+        ok=0; reason="stderr missing '$expect_err'"
+    fi
+    if [[ -n "$forbid_err" && "$err" == *"$forbid_err"* ]]; then
+        ok=0; reason="stderr says '$forbid_err' and should be quiet here"
+    fi
+
+    if [[ "$ok" == "1" ]]; then
+        echo "${GREEN}[PASS]${RESET} $label"; record pass "$label"
+    else
+        echo "${RED}[FAIL]${RESET} $label - $reason"; record fail "$label" "$reason"
+    fi
+}
+
 # ── CLI Tests ─────────────────────────────────────────────────────────────────
 echo ""
 echo "${CYAN}═══ CLI Tests ════════════════════════════════${RESET}"
@@ -655,6 +686,17 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     rm -rf "$TMP_LP"
 fi
 
+
+# ── Import Tests ──────────────────────────────────────────────────────────────
+echo ""
+echo "${CYAN}═══ Import Tests ═════════════════════════════${RESET}"
+CATEGORY="import"
+if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
+    run_file_test "import: a module replacing your own name is reported" \
+    "FROM THE MODULE" "replaced 'greet'" "" "import_shadow.sz"
+    run_file_test "import: a clean import stays quiet" \
+    "FROM THE MODULE" "" "WARNING" "import_clean.sz"
+fi
 # ── Cleanup & Summary ─────────────────────────────────────────────────────────
 rm -f "$TEMP_SZ" "$TEMP_OUT" "$TEMP_ERR"
 

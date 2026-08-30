@@ -685,6 +685,39 @@ impl Evaluator {
         );
     }
 
+    /// Warn when a module replaces a name the importing file already held.
+    ///
+    /// `modules.md` records this as a hazard: a module silently overwrites a
+    /// name the importer already defined, and the module's definition wins from
+    /// there on. Silently is the whole problem — it is the same shape as the
+    /// argument defaults and the zero-argument readers fixed earlier in this
+    /// cycle, input the author believed meant one thing being replaced without
+    /// a word.
+    ///
+    /// This only reports; it changes nothing. The flat namespace and the
+    /// last-writer-wins rule are the documented semantics and packages may
+    /// depend on them. Measured before keeping: across the 481-test core suite
+    /// and all eight official packages the collision count is **zero**, with a
+    /// probe verified to fire on a real one — so this can only speak when
+    /// something genuinely collided.
+    pub(crate) fn warn_about_replaced_names(&self, module: &str, mut names: Vec<String>) {
+        if names.is_empty() {
+            return;
+        }
+        names.sort();
+        let list = names
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "⚠️  WARNING: importing '{module}' replaced {list}, which this file \
+             already defined. The module's definition wins from here on — rename \
+             one of them, or move the import above your own declaration if the \
+             replacement is what you meant."
+        );
+    }
+
     /// Reject arguments passed to a method that takes none.
     ///
     /// Shared by the namespaces whose zero-argument readers used to accept

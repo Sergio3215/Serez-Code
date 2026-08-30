@@ -7,6 +7,30 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A module replacing one of your own names says so now
+
+- `modules.md` recorded it as a hazard and it was exactly that. Verified against
+  the binary: a file that defines `greet()`, prints `MINE`, imports a module
+  exporting its own `greet()`, then prints `FROM THE MODULE` — with nothing on
+  stderr in between. Your definition was gone and nothing said so.
+- The import now names every binding it replaced, and says which one wins and
+  how to stop it.
+- **Nothing about the rule changed.** The flat namespace, last-writer-wins and
+  the exit code are untouched; packages may depend on all three. Only the
+  silence changed.
+- Measured before keeping, with a probe verified to fire on a real collision:
+  **zero** collisions across the 483-test core suite and all eight official
+  packages. A warning that fires on healthy code is worse than none.
+- Both halves are pinned by a new Import Tests section on both runners — the
+  collision is reported, and a clean import stays quiet. The second needed a
+  `run_file_test` / `Run-File-Test` helper that can assert stderr does **not**
+  say something; the runners could only assert containment.
+- The first attempt at the probe fired on nothing, twice: once because it was
+  installed on the URL import path rather than the relative one, and once
+  because `declaration_name` returns `None` for an `export`ed declaration. Worth
+  recording, because a probe that measures zero and a probe that is simply dead
+  look identical in the output.
+
 ### The one outcome that printed nothing now says something
 
 - `ProgramOutcome::UnstructuredError` was the single outcome the boundary

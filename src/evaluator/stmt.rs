@@ -1507,6 +1507,24 @@ impl super::Evaluator {
         if result.is_none() {
             return EvalResult::Error;
         }
+        // A module that declares a name the importer already held replaces it,
+        // and used to do so without a word. `modules.md` records the hazard;
+        // this makes it visible without changing which definition wins.
+        let mut replaced: Vec<String> = program
+            .statements
+            .iter()
+            .filter_map(declaration_name)
+            .chain(exports.iter().cloned())
+            .filter(|name| {
+                before_globals.contains(name)
+                    || before_classes.contains(name)
+                    || before_interfaces.contains(name)
+                    || before_enums.contains(name)
+            })
+            .collect();
+        replaced.sort();
+        replaced.dedup();
+        self.warn_about_replaced_names(module_name, replaced);
 
         if !exports.is_empty() {
             self.global_bindings
@@ -1643,6 +1661,24 @@ impl super::Evaluator {
         if result.is_none() {
             return EvalResult::Error;
         }
+        // A module that declares a name the importer already held replaces it,
+        // and used to do so without a word. `modules.md` records the hazard;
+        // this makes it visible without changing which definition wins.
+        let mut replaced: Vec<String> = program
+            .statements
+            .iter()
+            .filter_map(declaration_name)
+            .chain(exports.iter().cloned())
+            .filter(|name| {
+                before_globals.contains(name)
+                    || before_classes.contains(name)
+                    || before_interfaces.contains(name)
+                    || before_enums.contains(name)
+            })
+            .collect();
+        replaced.sort();
+        replaced.dedup();
+        self.warn_about_replaced_names(module_name, replaced);
 
         // If the module used `export`, enforce visibility: remove what the module
         // DECLARED and did not export.

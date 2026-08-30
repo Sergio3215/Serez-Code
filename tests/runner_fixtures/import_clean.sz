@@ -1,0 +1,2 @@
+import "./import_shadow_lib";
+out greet();
