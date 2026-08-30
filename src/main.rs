@@ -71,8 +71,12 @@ PACKAGES
 
 EXIT CODES
   0   success
-  1   usage error, failed subcommand, parse error, type error,
+  1   usage error, failed subcommand, lexer or parser error,
       runtime error, or uncaught exception
+
+A type diagnostic (SZ3000) does NOT change the exit code. The checker is
+advisory: `sz file.sz` reports it and still runs the program, and `sz --check`
+reports it and still exits 0. See spec/types.md.
 
 Diagnostics go to stderr and carry a stable code (SZ1xxx lexer, SZ2xxx parser,
 SZ3xxx types, SZ4xxx runtime, SZ5xxx modules, SZ6xxx permissions and limits,

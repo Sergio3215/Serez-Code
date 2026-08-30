@@ -11,16 +11,20 @@ and stream rules are pinned by CLI tests in `run_tests.ps1` and `run_tests.sh`.
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. The program ran to completion, the check passed, the subcommand succeeded, or an informational flag (`--version`, `--help`) was answered. |
-| `1` | Any failure: usage error, unknown flag, missing or non-`.sz` file, lexer/parser/type diagnostic that aborts, runtime error, uncaught exception, or a failed package subcommand. |
+| `1` | Any failure: usage error, unknown flag, missing or non-`.sz` file, a lexer or parser diagnostic, a runtime error, an uncaught exception, or a failed package subcommand. |
 
 There is deliberately no finer granularity today. A caller that needs to know
 *why* something failed reads the diagnostic code on stderr, which is stable;
 inventing distinct exit codes now would freeze a classification the runtime
 does not yet make consistently. See `errors.md`.
 
-An uncaught user `throw` and a runtime error both exit `1`. So does a
-type-checker diagnostic that aborts — but note the checker is advisory: `sz
-file.sz` reports `SZ3000` diagnostics and still runs the program.
+An uncaught user `throw` and a runtime error both exit `1`. A **type diagnostic
+does not**: the checker is advisory, so `sz file.sz` reports `SZ3000` and runs
+the program anyway, and `sz --check` reports it and still exits `0`. Until this
+cycle `sz --help` listed "type error" among the things that exit `1`, which was
+simply false, and the test guarding that section only asserted the words "EXIT
+CODES" appeared. The behaviour is now pinned by
+`a_type_diagnostic_does_not_change_the_exit_code`.
 
 ## Streams
 
@@ -139,7 +143,7 @@ non-UTF-8 input with a diagnostic and exit 1.
 | `sz install [<pkg>[@<ver>]]` | Installs one package, or every dependency in `serez.json`. |
 | `sz uninstall <pkg>` | Removes a package. |
 | `sz update [<pkg>]` | Updates one package, or all of them. |
-| `sz info <pkg>` | Prints a package's manifest. |
+| `sz info <pkg>` | Prints a package's stats and versions, or fails with exit `1` if nothing was published under that name. |
 | `sz run <script> [args...]` | Runs a script from `serez.json`. |
 | `sz publish` / `sz unpublish <pkg>@<ver>` | Registry operations. |
 | `sz logout` | Forgets stored registry credentials. |
@@ -149,6 +153,21 @@ non-UTF-8 input with a diagnostic and exit 1.
 
 The `serez-code` key in `dependencies` is the minimum runtime, not a package:
 `sz install` checks it and never fetches it. See `compatibility.md`.
+
+### `sz info` on a name nobody published
+
+The registry does not answer `404` for an unknown package. It answers `200`
+with `{"total":0,"weekly":0,"monthly":0,"versions":[]}`, which is byte for byte
+what a real package with no downloads would look like. `sz info` used to render
+that faithfully — the name, three zeroes, an empty version list — and exit `0`,
+so asking about a typo produced a complete and plausible record for something
+that does not exist, while `sz update` answered the same input with "not found"
+and exit `1`.
+
+The distinguishing signal is the version list: publishing is what creates a
+version, and a yanked version still appears in the list with `yanked: 1`, so an
+empty list means nothing was ever published. `sz info` now reports not found and
+exits `1` for that case, agreeing with `sz update`.
 
 ## Not yet specified
 

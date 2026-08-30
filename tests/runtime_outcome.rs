@@ -3651,3 +3651,41 @@ fn stderr_suppression_inside_try_never_swallows_an_error_that_escapes_it() {
         }
     }
 }
+
+#[test]
+fn a_type_diagnostic_does_not_change_the_exit_code() {
+    // `--help` used to list "type error" among the things that exit 1. It does
+    // not: the checker is advisory, so `sz file.sz` reports SZ3000 and runs the
+    // program anyway, and `sz --check` reports it and still exits 0. The help
+    // is the surface people actually read, and the test that guarded it only
+    // asserted the words "EXIT CODES" appeared — it could not have caught this.
+    //
+    // Pinned as behaviour rather than as text: if the exit code ever does start
+    // depending on a type diagnostic, that is a decision to make deliberately,
+    // and this is where it should be seen.
+    let src = "fn int f(int a) { return a; }\nf(\"string\");\n";
+
+    let running = run_source_detailed(src.to_string(), "<types>", RunOpts::default());
+    assert_eq!(
+        running.exit_code, 1,
+        "the runtime type check still fails the program"
+    );
+
+    let checking = run_source_detailed(
+        src.to_string(),
+        "<types>",
+        RunOpts {
+            check_only: true,
+            ..RunOpts::default()
+        },
+    );
+    assert_eq!(
+        checking.exit_code, 0,
+        "--check reports the SZ3000 and exits 0; the checker is advisory"
+    );
+    assert!(
+        checking.failure.is_none(),
+        "an advisory diagnostic is not a failure: {:?}",
+        checking.failure
+    );
+}

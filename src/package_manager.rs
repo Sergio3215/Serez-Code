@@ -1437,6 +1437,78 @@ pub fn unpublish_package_remote(pkg_spec: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// What the registry's `/stats` answer says about a package.
+#[derive(Debug, PartialEq)]
+pub(crate) enum PackageStats {
+    /// The registry answered, and nothing was ever published under this name.
+    ///
+    /// The registry does not 404 for an unknown package: it answers `200` with
+    /// `{"total":0,"weekly":0,"monthly":0,"versions":[]}`, which is byte for
+    /// byte what a real package with no downloads would look like — except that
+    /// a real package always has at least one version, because publishing is
+    /// what creates one. A yanked version still appears in the list with
+    /// `yanked: 1`, so an empty list means nothing was ever published.
+    Missing,
+    Present {
+        total: u64,
+        weekly: u64,
+        monthly: u64,
+        /// `(version, yanked)`, newest first, as the registry ordered them.
+        versions: Vec<(String, bool)>,
+    },
+}
+
+/// Read the registry's `/stats` answer.
+///
+/// This used to be four hand-rolled string searches, and each one failed
+/// quietly. The three counters came from `extract_json_number(...).unwrap_or(0)`,
+/// so a body the client could not read printed as "0 downloads" rather than as
+/// an error. The version list was walked with `find("\"version\":")`, and its
+/// yank check was `search.contains("\"yanked\":1")` — a scan of the entire
+/// remaining body, so one unpublished version marked every version after it as
+/// unpublished too.
+pub(crate) fn parse_package_stats(body: &str) -> Result<PackageStats, String> {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|error| format!("the registry's answer was not JSON: {error}"))?;
+
+    let entries = value
+        .get("versions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "the registry's answer carries no version list".to_string())?;
+    if entries.is_empty() {
+        return Ok(PackageStats::Missing);
+    }
+
+    let count = |key: &str| -> Result<u64, String> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| format!("the registry's answer carries no '{key}' count"))
+    };
+
+    let mut versions = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let version = entry
+            .get("version")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "a version entry carries no version string".to_string())?;
+        // The registry sends 0/1; accept a real boolean too.
+        let yanked = match entry.get("yanked") {
+            Some(serde_json::Value::Bool(flag)) => *flag,
+            Some(serde_json::Value::Number(n)) => n.as_u64().unwrap_or(0) != 0,
+            _ => false,
+        };
+        versions.push((version.to_string(), yanked));
+    }
+
+    Ok(PackageStats::Present {
+        total: count("total")?,
+        weekly: count("weekly")?,
+        monthly: count("monthly")?,
+        versions,
+    })
+}
+
 /// Show stats and version list for a package in the registry.
 pub fn info_package(pkg_name: &str) -> Result<(), String> {
     validate_package_name(pkg_name)?;
@@ -1450,47 +1522,41 @@ pub fn info_package(pkg_name: &str) -> Result<(), String> {
         .into_string()
         .map_err(|e| format!("Invalid response: {}", e))?;
 
-    // Minimal display — extract numbers with basic string search
-    let total = extract_json_number(&body, "total").unwrap_or(0);
-    let weekly = extract_json_number(&body, "weekly").unwrap_or(0);
-    let monthly = extract_json_number(&body, "monthly").unwrap_or(0);
+    let (total, weekly, monthly, versions) = match parse_package_stats(&body)? {
+        // Reporting success for a name nobody published printed a complete,
+        // plausible record — the name, three zeroes and an empty version list —
+        // and exited 0. `sz update` answers the same input with "not found" and
+        // exit 1; this now agrees with it.
+        PackageStats::Missing => {
+            return Err(format!(
+                "Package '{}' not found in the registry ({})",
+                pkg_name,
+                registry_url()
+            ));
+        }
+        PackageStats::Present {
+            total,
+            weekly,
+            monthly,
+            versions,
+        } => (total, weekly, monthly, versions),
+    };
 
     println!("\nPackage: {}", pkg_name);
     println!("  Total downloads:   {}", total);
     println!("  Weekly downloads:  {}", weekly);
     println!("  Monthly downloads: {}", monthly);
 
-    // Extract versions array entries
     println!("\nVersions:");
-    let mut search = body.as_str();
-    while let Some(idx) = search.find("\"version\":") {
-        search = &search[idx + 10..];
-        if let Some(start) = search.find('"') {
-            let inner = &search[start + 1..];
-            if let Some(end) = inner.find('"') {
-                let ver = &inner[..end];
-                let yanked = search.contains("\"yanked\":1")
-                    || search.find("\"yanked\":1").map_or(false, |i| i < 60);
-                if yanked {
-                    println!("  {} (unpublished)", ver);
-                } else {
-                    println!("  {}", ver);
-                }
-            }
+    for (version, yanked) in versions {
+        if yanked {
+            println!("  {} (unpublished)", version);
+        } else {
+            println!("  {}", version);
         }
     }
     println!();
     Ok(())
-}
-
-fn extract_json_number(json: &str, key: &str) -> Option<u64> {
-    let needle = format!("\"{}\":", key);
-    let idx = json.find(&needle)?;
-    let after = json[idx + needle.len()..].trim_start();
-    let end = after
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(after.len());
-    after[..end].parse().ok()
 }
 
 /// Zip all .sz files in dir into an in-memory buffer.
@@ -2500,5 +2566,84 @@ mod tests {
         );
         // And so is a package whose name merely starts with the reserved one.
         assert!(parse_pkg_spec("serez-code-extras@1.0.0").is_ok());
+    }
+
+    #[test]
+    fn a_name_nobody_published_is_missing_not_a_package_with_no_downloads() {
+        // Verified against the live registry: an unknown name does not 404, it
+        // answers 200 with exactly this body. `sz info <unknown>` printed the
+        // name, three zeroes and an empty version list, and exited 0 — a
+        // complete, plausible record for something that does not exist. `sz
+        // update` answers the same input with "not found" and exit 1.
+        let body = r#"{"total":0,"weekly":0,"monthly":0,"versions":[]}"#;
+        assert_eq!(parse_package_stats(body).unwrap(), PackageStats::Missing);
+    }
+
+    #[test]
+    fn a_real_package_keeps_its_counts_and_order() {
+        let body = r#"{"total":58,"weekly":1,"monthly":5,"versions":[
+            {"version":"4.36.0","published_at":"2026-08-24 03:25:45","yanked":0},
+            {"version":"4.35.0","published_at":"2026-08-23 03:29:26","yanked":0}
+        ]}"#;
+        match parse_package_stats(body).unwrap() {
+            PackageStats::Present {
+                total,
+                weekly,
+                monthly,
+                versions,
+            } => {
+                assert_eq!((total, weekly, monthly), (58, 1, 5));
+                assert_eq!(
+                    versions,
+                    vec![("4.36.0".to_string(), false), ("4.35.0".to_string(), false),]
+                );
+            }
+            other => panic!("expected a present package, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn one_unpublished_version_does_not_mark_the_ones_after_it() {
+        // The old check was `search.contains("\"yanked\":1")` against the whole
+        // remaining body, so the first yank marked every later version as
+        // unpublished. Nothing in the registry is yanked today, which is the
+        // only reason it was invisible — `sz unpublish` exists and produces
+        // exactly this shape.
+        let body = r#"{"total":3,"weekly":0,"monthly":1,"versions":[
+            {"version":"2.0.0","yanked":0},
+            {"version":"1.5.0","yanked":1},
+            {"version":"1.0.0","yanked":0}
+        ]}"#;
+        match parse_package_stats(body).unwrap() {
+            PackageStats::Present { versions, .. } => assert_eq!(
+                versions,
+                vec![
+                    ("2.0.0".to_string(), false),
+                    ("1.5.0".to_string(), true),
+                    ("1.0.0".to_string(), false),
+                ]
+            ),
+            other => panic!("expected a present package, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_answer_the_client_cannot_read_is_an_error_not_three_zeroes() {
+        // Each counter used to be `extract_json_number(...).unwrap_or(0)`, so a
+        // redirect, an error page or a changed schema printed as a package with
+        // no downloads.
+        for body in [
+            "<html>502 Bad Gateway</html>",
+            r#"{"error":"rate limited"}"#,
+            r#"{"weekly":1,"monthly":5,"versions":[{"version":"1.0.0","yanked":0}]}"#,
+            r#"{"total":1,"monthly":5,"versions":[{"version":"1.0.0","yanked":0}]}"#,
+            r#"{"total":1,"weekly":1,"versions":[{"version":"1.0.0","yanked":0}]}"#,
+            r#"{"total":1,"weekly":1,"monthly":5,"versions":[{"published_at":"x"}]}"#,
+        ] {
+            assert!(
+                parse_package_stats(body).is_err(),
+                "this answer should not have parsed: {body}"
+            );
+        }
     }
 }

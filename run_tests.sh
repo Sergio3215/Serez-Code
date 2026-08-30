@@ -489,6 +489,7 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     run_cli_test "cli: -h is accepted" "USAGE" "" "" "" -h
     run_cli_test "cli: help subcommand is accepted" "USAGE" "" "" "" help
     run_cli_test "cli: --help documents the exit codes" "EXIT CODES" "" "" "" --help
+    run_cli_test "cli: --help does not claim a type error exits 1" "does NOT change the exit code" "" "" "" --help
     run_cli_test "cli: unknown flag reports error" "" "Unknown flag" "" "" --unknown-flag
     run_cli_test "cli: unknown flag points at --help" "" "sz --help" "" "" --unknown-flag
     run_cli_test "cli: no file argument points at --help" "" "sz --help" "" "" --check

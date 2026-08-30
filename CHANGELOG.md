@@ -7,6 +7,44 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `--help` stated an exit-code contract the binary does not honour
+
+- It listed "type error" among the things that exit `1`. It is not one: the
+  checker is advisory, so `sz file.sz` reports `SZ3000` and runs the program
+  anyway, and `sz --check` reports it and still exits `0`. Confirmed against the
+  binary both ways.
+- `--help` is the surface people actually read, and the test guarding that
+  section asserted only that the words "EXIT CODES" appeared — it could not have
+  caught this. Corrected, and now pinned as *behaviour* by
+  `a_type_diagnostic_does_not_change_the_exit_code`, so a future change to the
+  exit code has to be made deliberately.
+
+### `sz info` invented a package that does not exist
+
+- `sz info <name nobody published>` printed the name, three zeroes and an empty
+  version list, and exited `0` — a complete, plausible record for something that
+  is not there. `sz update` answers the same input with "not found" and exit `1`.
+- The cause is not local: the registry does not `404` for an unknown package.
+  Verified with a direct request — it answers `200` with
+  `{"total":0,"weekly":0,"monthly":0,"versions":[]}`, byte for byte what a real
+  package with no downloads would look like. The client rendered that faithfully.
+- The distinguishing signal is the version list: publishing is what creates a
+  version, and a yanked version still appears with `yanked: 1`, so an empty list
+  means nothing was ever published. `sz info` now reports not found and exits `1`,
+  agreeing with `sz update`.
+- Two more defects were in the same function and went with it:
+  - the three download counters came from `extract_json_number(...).unwrap_or(0)`,
+    so a redirect, an error page or a changed schema printed as "0 downloads"
+    rather than as an error;
+  - the yank marker was `search.contains("\"yanked\":1")` against the whole
+    remaining body, so the first unpublished version marked every version after
+    it as unpublished too. Invisible only because nothing in the registry is
+    yanked today — and `sz unpublish` exists.
+- All four hand-rolled searches are replaced by one `serde_json` parser behind a
+  pure `parse_package_stats`, pinned by four unit tests that need no network.
+- Verified against the live registry afterwards: `sz info serez-ui` still shows
+  58 downloads and 54 versions in order.
+
 ### A module replacing one of your own names says so now
 
 - `modules.md` recorded it as a hazard and it was exactly that. Verified against

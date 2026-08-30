@@ -731,6 +731,8 @@ if ($runAll -or $cli) {
                  -expectOut "USAGE"
     Run-CLI-Test "cli: --help documents the exit codes" @("--help") `
                  -expectOut "EXIT CODES"
+    Run-CLI-Test "cli: --help does not claim a type error exits 1" @("--help") `
+                 -expectOut "does NOT change the exit code"
     Run-CLI-Test "cli: unknown flag reports error"     @("--unknown-flag") `
                  -expectErr "Unknown flag"
     Run-CLI-Test "cli: unknown flag points at --help"  @("--unknown-flag") `
