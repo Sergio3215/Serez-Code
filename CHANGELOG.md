@@ -7,6 +7,40 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The generator ceiling: measured, put to a decision, not added
+
+- `fn*` accumulates into an unbounded vector. Measured on the current build:
+  100,000 yielded integers cost 20 MB, 400,000 cost 71 MB, 1,600,000 cost
+  254 MB — linear, about 160 bytes per value, against about 107 bytes for the
+  same count pushed onto a plain array. Ten million values is roughly 1.6 GB.
+- No official package uses `fn*` at all, and the largest generator in the
+  conformance suite yields 100 values. A ceiling would therefore have been
+  invisible to every program that exists while still being able to break one
+  that does not, so it was put to the maintainer as a decision rather than
+  taken. Documenting the absence was chosen.
+- `limits.md` records it under "What is not limited", with the measurements, the
+  reasoning, and an explicit note that behaviour at exhaustion was **not**
+  measured — the project's one precedent is the `sz-lsp` allocation fixed
+  earlier in this cycle, which aborted with an allocator message and no
+  diagnostic.
+
+### Eight runtime ceilings re-probed at the boundary
+
+- Not near the boundary — at it. `"a" * 10000000` succeeds and `* 10000001` is
+  fatal `SZ6002`; `Crypto.randomBytes(1048576)` succeeds while `1048577` and `0`
+  are refused with the plain-string throw the document already describes as the
+  one unstructured limit. Padded string result, tensor element count,
+  `Memory.alloc`, call depth, value nesting depth and the `sz-lsp` message body
+  matched too. Eight for eight.
+- The GPU buffer, WebSocket frame, four weights-file and Task rows were **not**
+  re-probed — reaching them needs a GPU, a live socket, a `.szw` file or
+  thirty-three concurrently spinning workers. `limits.md` now says which rows
+  were measured here and which rest on their own tests, rather than letting the
+  section read as uniformly verified.
+- One row named a limit without naming the operation it bounds. Reaching for
+  `"x".repeat(n)` gets `Unknown string method 'repeat'`, because repetition is
+  the `*` operator — the mistake this audit made first. The row names it now.
+
 ### Control flow is frozen; two hazards came out of freezing it
 
 - `control-flow.md` froze only `for-in` and listed everything else — `if`,

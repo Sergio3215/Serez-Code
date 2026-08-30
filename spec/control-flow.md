@@ -172,8 +172,10 @@ The consequence is worth stating plainly, because the `fn*`/`yield` syntax is
 borrowed from languages where it means the opposite: **an unbounded generator
 never returns.** `fn* forever() { while (true) { yield i; } }` runs until the
 process is stopped, accumulating into memory the whole time. Measured: no
-result after 20 seconds. There is no ceiling on the collected values — no entry
-in `limits.md` bounds it, and the collector is an unbounded vector.
+result after 20 seconds. There is no ceiling on the collected values, and that
+absence is deliberate — `limits.md` records it under "What is not limited",
+together with the measured cost of about 160 bytes per yielded value and the
+reason a limit was considered and not added.
 
 ## Conformance evidence
 

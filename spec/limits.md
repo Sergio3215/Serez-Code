@@ -46,11 +46,24 @@ and re-checking it is a `--check` sweep for `SZ2001`.
 
 ## Runtime limits
 
+Eight of these were re-probed against the binary in the current cycle, at the
+boundary rather than near it: string repetition (`"a" * 10000000` succeeds,
+`10000001` is fatal `SZ6002`), padded string result, tensor element count,
+`Memory.alloc`, call depth, value nesting depth, `Crypto.randomBytes` (1,048,576
+succeeds, 1,048,577 and 0 are refused with the plain-string throw described
+below) and the `sz-lsp` message body. All eight matched. `File.read` was probed
+earlier in the cycle. The rest — the GPU buffer, the WebSocket frame, the four
+weights-file ceilings and the Task limits — were **not** re-probed: reaching
+them needs a GPU, a live socket, a `.szw` file or thirty-three concurrently
+spinning workers. They are stated on the strength of their own tests, not of a
+measurement made here.
+
+
 | Limit | Value | Behavior on breach |
 | --- | --- | --- |
 | Call depth | 512 frames | Fatal `ResourceError` (`SZ6002`). |
 | Value nesting depth | 500 levels | Fatal `ResourceError` (`SZ6002`). |
-| String repetition | 10,000,000 repetitions | Fatal `ResourceError` (`SZ6002`). |
+| String repetition (`"a" * n`) | 10,000,000 repetitions | Fatal `ResourceError` (`SZ6002`). |
 | Padded string result | 10,000,000 Unicode scalar values | Fatal `ResourceError` (`SZ6002`) before result allocation. |
 | Tensor element count | 10,000,000 `f64` elements | Fatal `ResourceError` (`SZ6002`). |
 | Regex execution steps, per match | 1,000,000 | Match fails. |
@@ -148,6 +161,21 @@ These are known gaps, not guarantees:
   language has no by-design guard against it. Serez does not run a garbage
   collector, so memory is reclaimed by scope and arena lifetime rather than by
   collection.
+- **What a generator accumulates.** `fn*` is not lazy: calling one runs the body
+  to completion and returns an ordinary array of everything it yielded
+  (`control-flow.md`). The collector is an unbounded vector, so an unbounded
+  generator never returns and grows until the host runs out of memory. Measured
+  on the current build: 100,000 yielded integers cost 20 MB, 400,000 cost 71 MB
+  and 1,600,000 cost 254 MB — linear, about 160 bytes per value, against about
+  107 bytes for the same count pushed onto a plain array. Extrapolating, ten
+  million values is roughly 1.6 GB. A ceiling was considered and deliberately
+  not added: no official package uses `fn*` at all and the largest generator in
+  the conformance suite yields 100 values, so a limit would have been invisible
+  to every program that exists while still being able to break one that does
+  not. What happens at exhaustion was not measured; the project's one
+  precedent for an allocation that cannot be satisfied is the `sz-lsp` case
+  fixed earlier in this cycle, which aborted the process with an allocator
+  message and no diagnostic.
 - **Wall-clock time.** There is no execution timeout or Task cancellation. A
   `while (true)`—including inside a worker—runs until the process is stopped.
 - **File and socket count.** Open handles are bounded by the host, not by the
