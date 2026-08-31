@@ -19,7 +19,7 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS, no warnings |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
-| `cargo test --all-targets` | PASS, 308 tests (170 library, 36 LSP binary, 16 frontend robustness, 79 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
+| `cargo test --all-targets` | PASS, 314 tests (176 library, 36 LSP binary, 16 frontend robustness, 79 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
 | Serez test runner | PASS on **both** platforms, 490 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
@@ -281,6 +281,28 @@ yet meet.
    one for a single predicate is the theatre this section forbids. `class`/`enum`
    and `interface`/`enum` were checked and coexist correctly, so the warning is
    scoped to the one pair that breaks.
+   **Fourth slice done:** `src/handles.rs` owns the integer handles a program
+   holds. `Memory.alloc`, `GPU.createBuffer` and `Socket.listen` each hand back
+   an `int` and look it up later, and each was written out longhand inside
+   `Evaluator` as a `HashMap<i64, T>` beside its own `next_id`, so the evaluator
+   owned the storage, the id issuing and the lifetime rules for all of them.
+   `HandleRegistry<T>` owns that part, and the raw-memory heap is migrated onto
+   it: two fields become one, and the eleven access sites move to a typed API.
+   **No behavioural defect was found first, and none is claimed** — the probe
+   confirmed the opposite, that handles are never reissued, a worker is isolated
+   from the parent's allocations and self-copy is safe. The payoff is the one
+   `modules.rs` was accepted for: rules that could previously only be exercised
+   by running `.sz` source through a whole interpreter now have six direct unit
+   tests, including that zero is never a valid handle and that a freed handle
+   stays dead rather than coming to name a later object. It also gives the
+   aggregate ceiling `spec/limits.md` records as a known gap **one place to
+   live** instead of three ad-hoc counters; the ceiling itself is not added
+   here, because refusing programs that run today is not something to smuggle
+   into a refactor. `gpu_buffers` is the same shape and is next. The socket
+   registries are deliberately **not**: two maps share one `socket_next_id`
+   because `spec/socket.md` promises a listener id and a connection id are never
+   equal, which needs an allocator shared across registries — a different design
+   and its own change.
 2. **Partly implemented:** `run_ecosystem.ps1` / `run_ecosystem.sh` run every
    official package's own suite against the freshly built core and report one
    table, preferring each runner's tally over its exit code (a green exit with

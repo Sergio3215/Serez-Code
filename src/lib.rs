@@ -14,6 +14,7 @@
 
 pub mod ast;
 pub mod evaluator;
+pub mod handles;
 pub mod lexer;
 pub mod modules;
 pub mod package_manager;

@@ -7,6 +7,36 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `src/handles.rs` — the evaluator stops owning what an integer handle means
+
+- `Memory.alloc`, `GPU.createBuffer` and `Socket.listen` each hand a program an
+  `int` and look it up later. Each was written out longhand inside `Evaluator`
+  as a `HashMap<i64, T>` beside its own `next_id`, so one struct owned the
+  storage, the id issuing and the lifetime rules for all three — part of the
+  coupling the maturity plan's P2 section exists to unpick.
+- `HandleRegistry<T>` owns that. The raw-memory heap is migrated onto it: two
+  `Evaluator` fields become one, and eleven direct map accesses become a typed
+  API.
+- **No defect was found first, and none is claimed.** Probing confirmed the
+  opposite — handles are never reissued after `free`, a `Task` worker cannot see
+  the parent's allocations, `Memory.copy` onto itself is safe. Behaviour after
+  the change is identical, which is the point.
+- What it buys is what `modules.rs` was accepted for: rules that could only be
+  exercised by running `.sz` source through a whole interpreter now have six
+  direct unit tests — ids start at 1, **zero is never a valid handle** so a
+  caller defaulting to `0` gets a lookup failure rather than the first
+  allocation, a freed handle stays dead instead of coming to name a later
+  object, and emptying the registry does not lower the counter.
+- It also gives the aggregate ceiling `spec/limits.md` records as a known gap
+  **one place to live** instead of three ad-hoc counters. The ceiling is not
+  added here: refusing programs that run today is not something to smuggle into
+  a refactor.
+- `gpu_buffers` is the same shape and is next. The socket registries are
+  deliberately not — two maps share one `socket_next_id` because `socket.md`
+  promises a listener id and a connection id are never equal, which needs an
+  allocator shared across registries.
+
+
 ### `Gui.renderTree` emptied the window and called it a success
 
 - Swept for the shape that produced the `OS.exec` defect — an `if let` on a

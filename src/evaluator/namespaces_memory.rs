@@ -77,9 +77,7 @@ impl super::Evaluator {
                         format!("Memory.alloc() size {n} bytes exceeds maximum (256 MiB)"),
                     );
                 }
-                let id = self.memory_heap_next_id;
-                self.memory_heap_next_id += 1;
-                self.memory_heap.insert(id, vec![0u8; n]);
+                let id = self.memory.insert(vec![0u8; n]);
                 EvalResult::Value(self.alloc(ObjectData::Integer(id)))
             }
 
@@ -96,7 +94,7 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                if self.memory_heap.remove(&id).is_none() {
+                if self.memory.remove(id).is_none() {
                     return self.rt_err_kind(
                         "MemoryError",
                         format!("Memory.free() — no allocation with handle {}", id),
@@ -115,7 +113,7 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                match self.memory_heap.get(&id) {
+                match self.memory.get(id) {
                     Some(buf) => {
                         EvalResult::Value(self.alloc(ObjectData::Integer(buf.len() as i64)))
                     }
@@ -156,7 +154,7 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                let buf = match self.memory_heap.get(&id) {
+                let buf = match self.memory.get(id) {
                     Some(b) => b.clone(),
                     None => {
                         return self.rt_err_kind(
@@ -311,7 +309,7 @@ impl super::Evaluator {
                         return self.rt_err_kind("MemoryError", "Memory.write() — null value");
                     }
                 };
-                let buf = match self.memory_heap.get_mut(&id) {
+                let buf = match self.memory.get_mut(id) {
                     Some(b) => b,
                     None => {
                         return self.rt_err_kind(
@@ -348,7 +346,7 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                let src_bytes: Vec<u8> = match self.memory_heap.get(&src_id) {
+                let src_bytes: Vec<u8> = match self.memory.get(src_id) {
                     Some(b) => {
                         if n > b.len() {
                             return self.rt_err_kind(
@@ -366,7 +364,7 @@ impl super::Evaluator {
                     }
                 };
                 // Validate size BEFORE taking the &mut borrow — rt_err_kind needs &mut self.
-                let dst_len = match self.memory_heap.get(&dst_id) {
+                let dst_len = match self.memory.get(dst_id) {
                     Some(b) => b.len(),
                     None => {
                         return self.rt_err_kind(
@@ -381,7 +379,7 @@ impl super::Evaluator {
                         format!("Memory.copy() — dst size {} < n {}", dst_len, n),
                     );
                 }
-                if let Some(dst) = self.memory_heap.get_mut(&dst_id) {
+                if let Some(dst) = self.memory.get_mut(dst_id) {
                     dst[..n].copy_from_slice(&src_bytes);
                 }
                 EvalResult::Value(self.null_ref)
@@ -423,7 +421,7 @@ impl super::Evaluator {
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
-                match self.memory_heap.get_mut(&id) {
+                match self.memory.get_mut(id) {
                     Some(buf) => {
                         buf.iter_mut().for_each(|b| *b = byte_val);
                     }

@@ -229,10 +229,9 @@ pub struct Evaluator {
     gpu_buffers: HashMap<i64, Vec<f64>>,
     // Monotonically increasing ID counter for GPU buffers
     gpu_next_id: i64,
-    // Raw memory heap: maps allocation IDs to byte arrays
-    memory_heap: HashMap<i64, Vec<u8>>,
-    // Monotonically increasing ID counter for memory allocations
-    memory_heap_next_id: i64,
+    // Raw memory: the allocation handles a program holds, and what they name.
+    // The registry owns id issuing and the never-reissued rule; see handles.rs.
+    memory: crate::handles::HandleRegistry<Vec<u8>>,
     // Granted permissions: populated from serez.json + `use permissions { }` blocks
     permissions: HashSet<String>,
     // Untrusted-source mode. The permission set is a MANIFEST, not a sandbox: any
@@ -531,8 +530,7 @@ impl Evaluator {
             socket_next_id: 1,
             gpu_buffers: HashMap::new(),
             gpu_next_id: 1,
-            memory_heap: HashMap::new(),
-            memory_heap_next_id: 1,
+            memory: crate::handles::HandleRegistry::new(),
             permissions: HashSet::new(),
             lockdown: false,
             ad_recording: false,
