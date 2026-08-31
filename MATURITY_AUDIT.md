@@ -430,6 +430,33 @@ One flagged case was **not** a defect: `DateTime.from(1, 2, 3, 4, 5)` is inside
 its documented three-to-seven arity. The sweep was blunt there, and the pinning
 test records that so it is not "fixed" later.
 
+**That sweep read results, and results were the wrong thing to read.** A reader
+that ignores your argument returns the same value it would have returned
+without it, so nothing in the output distinguishes "accepted and used" from
+"accepted and discarded". Passing a *throwing* call as the argument makes the
+difference visible: if the member never evaluates it, the exception never
+happens. Re-run that way, seventeen more zero-argument members were still
+accepting and dropping arguments — `Math.PI`, `Math.E`, `Math.random`,
+`Dec.MAX`, `Dec.MIN`, `Dec.MAX_SCALE`, `Autodiff.clear`,
+`Autodiff.isRecording`, `Env.args`, `Time.now`, `System.cpuCount`,
+`System.totalMemory`, `System.freeMemory`, `System.hostname`, `System.uptime`,
+`Terminal.getSize` and `Terminal.clear` — plus three in `Gui`.
+
+The three `Gui` ones are a correction of this cycle's own work. `Gui.close` and
+`Gui.font` were excluded from `GUI_ZERO_ARG_METHODS` with a comment asserting
+they "do read arguments". They do not: `Gui.setFont` is the setter, and the
+`"text" | "font"` arm that prompted the belief belongs to scene-node property
+assignment, a different method entirely. `Gui.windowPosition` was simply
+missed. The claim was written into the source as justification, which is how it
+survived — a false comment is not caught by a test unless the test disagrees
+with it, and the test had been written to match the comment.
+
+All twenty now refuse arguments through the same `reject_arguments` helper,
+swept first against 1,123 `.sz`/`.szx` files across the core tests, the
+benchmarks and all ten official packages: not one passes an argument to any of
+them, so nothing that works today stops working. The property spelling
+(`Math.PI` with no parentheses) is unaffected and pinned.
+
 #### The panic-site audit
 
 The repository carries 311 `unwrap` / `expect` / `panic!` / `unreachable!`

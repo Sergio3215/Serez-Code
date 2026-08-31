@@ -193,9 +193,24 @@ impl super::Evaluator {
                 };
                 EvalResult::Value(self.alloc(ObjectData::Dec(Decimal::new(value, scale))))
             }
-            "MAX" => EvalResult::Value(self.alloc(ObjectData::Dec(Decimal::MAX))),
-            "MIN" => EvalResult::Value(self.alloc(ObjectData::Dec(Decimal::MIN))),
-            "MAX_SCALE" => EvalResult::Value(self.alloc(ObjectData::Integer(28))),
+            "MAX" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Dec") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Dec(Decimal::MAX)))
+            }
+            "MIN" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Dec") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Dec(Decimal::MIN)))
+            }
+            "MAX_SCALE" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Dec") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Integer(28)))
+            }
             other => {
                 let message = format!(
                     "Unknown Dec method '{other}' (expected parse/fromInt/MAX/MIN/MAX_SCALE)"

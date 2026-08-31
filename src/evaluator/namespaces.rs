@@ -13,9 +13,22 @@ use std::rc::Rc;
 impl super::Evaluator {
     pub(super) fn eval_math_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
         match dot_call.method.as_str() {
-            "PI" => EvalResult::Value(self.alloc(ObjectData::Decimal(std::f64::consts::PI))),
-            "E" => EvalResult::Value(self.alloc(ObjectData::Decimal(std::f64::consts::E))),
+            "PI" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Math") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Decimal(std::f64::consts::PI)))
+            }
+            "E" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Math") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Decimal(std::f64::consts::E)))
+            }
             "random" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Math") {
+                    return error;
+                }
                 let val = self.lcg_next_f64();
                 EvalResult::Value(self.alloc(ObjectData::Decimal(val)))
             }

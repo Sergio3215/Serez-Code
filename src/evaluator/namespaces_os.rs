@@ -148,19 +148,29 @@ impl super::Evaluator {
             return error;
         }
         match dot_call.method.as_str() {
-            "getSize" => match crossterm::terminal::size() {
-                Ok((cols, rows)) => {
-                    let cr = self.alloc(ObjectData::Integer(cols as i64));
-                    let rr = self.alloc(ObjectData::Integer(rows as i64));
-                    EvalResult::Value(self.alloc(ObjectData::Array {
-                        element_type: Some("int".to_string()),
-                        elements: vec![self.extract(cr), self.extract(rr)],
-                    }))
+            "getSize" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Terminal") {
+                    return error;
                 }
-                Err(e) => self.rt_err_kind("IOError", format!("Terminal.getSize failed: {}", e)),
-            },
+                match crossterm::terminal::size() {
+                    Ok((cols, rows)) => {
+                        let cr = self.alloc(ObjectData::Integer(cols as i64));
+                        let rr = self.alloc(ObjectData::Integer(rows as i64));
+                        EvalResult::Value(self.alloc(ObjectData::Array {
+                            element_type: Some("int".to_string()),
+                            elements: vec![self.extract(cr), self.extract(rr)],
+                        }))
+                    }
+                    Err(e) => {
+                        self.rt_err_kind("IOError", format!("Terminal.getSize failed: {}", e))
+                    }
+                }
+            }
 
             "clear" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Terminal") {
+                    return error;
+                }
                 use crossterm::{
                     ExecutableCommand,
                     terminal::{Clear, ClearType},
@@ -736,6 +746,9 @@ impl super::Evaluator {
             }
 
             "args" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Env") {
+                    return error;
+                }
                 let owned: Vec<OwnedValue> = std::env::args().map(|a| OwnedValue::Str(a)).collect();
                 EvalResult::Value(self.alloc(ObjectData::Array {
                     element_type: Some("string".to_string()),
@@ -787,6 +800,9 @@ impl super::Evaluator {
         }
         match dot_call.method.as_str() {
             "now" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Time") {
+                    return error;
+                }
                 let ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
@@ -851,19 +867,42 @@ impl super::Evaluator {
         }
         match dot_call.method.as_str() {
             "cpuCount" => {
+                if let Some(error) = self.reject_arguments(dot_call, "System") {
+                    return error;
+                }
                 let n = std::thread::available_parallelism()
                     .map(|n| n.get() as i64)
                     .unwrap_or(1);
                 EvalResult::Value(self.alloc(ObjectData::Integer(n)))
             }
 
-            "totalMemory" => EvalResult::Value(self.alloc(ObjectData::Integer(os_total_memory()))),
+            "totalMemory" => {
+                if let Some(error) = self.reject_arguments(dot_call, "System") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Integer(os_total_memory())))
+            }
 
-            "freeMemory" => EvalResult::Value(self.alloc(ObjectData::Integer(os_free_memory()))),
+            "freeMemory" => {
+                if let Some(error) = self.reject_arguments(dot_call, "System") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Integer(os_free_memory())))
+            }
 
-            "hostname" => EvalResult::Value(self.alloc(ObjectData::Str(os_hostname()))),
+            "hostname" => {
+                if let Some(error) = self.reject_arguments(dot_call, "System") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Str(os_hostname())))
+            }
 
-            "uptime" => EvalResult::Value(self.alloc(ObjectData::Integer(os_uptime_secs()))),
+            "uptime" => {
+                if let Some(error) = self.reject_arguments(dot_call, "System") {
+                    return error;
+                }
+                EvalResult::Value(self.alloc(ObjectData::Integer(os_uptime_secs())))
+            }
 
             _ => {
                 let m = dot_call.method.clone();

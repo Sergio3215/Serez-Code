@@ -3351,6 +3351,13 @@ fn zero_argument_gui_methods_reject_arguments() {
         r#"Gui.scroll(5);"#,
         r#"Gui.keysPressed(null);"#,
         r#"Gui.scaleFactor(1);"#,
+        // Added after the sweep: these three were excused here on a claim that
+        // they read arguments. They do not — `Gui.setFont` is the setter, and
+        // the `"text" | "font"` arm that prompted the belief is scene-node
+        // property assignment, a different method.
+        r#"Gui.font("nonexistent-font");"#,
+        r#"Gui.close(1);"#,
+        r#"Gui.windowPosition(0, 0);"#,
     ] {
         let src = format!("use permissions {{ Gui }}\n{call}");
         match evaluate_with_permissions(&src, &["Gui"]) {
@@ -3367,15 +3374,15 @@ fn zero_argument_gui_methods_reject_arguments() {
         }
     }
 
-    // The same calls with no arguments still work, and the two methods that do
-    // read arguments are untouched.
+    // The same calls with no arguments still work.
     for call in [
         "Gui.mouseDown();",
         "Gui.size();",
         "Gui.isOpen();",
         "Gui.scroll();",
         "Gui.close();",
-        r#"Gui.font("nonexistent-font");"#,
+        "Gui.font();",
+        "Gui.windowPosition();",
     ] {
         let src = format!("use permissions {{ Gui }}\n{call}");
         match evaluate_with_permissions(&src, &["Gui"]) {
@@ -3443,15 +3450,40 @@ fn zero_argument_native_methods_reject_arguments() {
     // `DateTime.from(1, 2, 3, 4, 5)` is *not* in this list and must not be:
     // three through seven arguments is its documented arity, and a sweep that
     // flagged it was the probe being blunt, not a defect.
-    for (call, ns) in [
-        (r#"OS.platform("x");"#, "OS"),
-        (r#"OS.pid(1);"#, "OS"),
-        (r#"OS.tick(1, 2);"#, "OS"),
-        (r#"Media.playingCount(1);"#, "Media"),
-        (r#"Media.stopAll("all");"#, "Media"),
+    //
+    // Seventeen more survived that sweep, because it read *results*, and a
+    // reader returns the same value whether or not it looked at your argument.
+    // The tell is that the argument expression is never evaluated: passing a
+    // throwing call makes it visible, because the exception simply does not
+    // happen. Swept against 1,123 `.sz`/`.szx` files — the core tests, the
+    // benchmarks and all ten official packages — before being enforced: not one
+    // passes an argument to any of these.
+    for (call, ns, permissions) in [
+        (r#"OS.platform("x");"#, "OS", &["OS", "Media"][..]),
+        (r#"OS.pid(1);"#, "OS", &["OS", "Media"][..]),
+        (r#"OS.tick(1, 2);"#, "OS", &["OS", "Media"][..]),
+        (r#"Media.playingCount(1);"#, "Media", &["OS", "Media"][..]),
+        (r#"Media.stopAll("all");"#, "Media", &["OS", "Media"][..]),
+        ("Math.PI(1);", "Math", &[][..]),
+        ("Math.E(1);", "Math", &[][..]),
+        ("Math.random(1);", "Math", &[][..]),
+        ("Dec.MAX(1);", "Dec", &[][..]),
+        ("Dec.MIN(1);", "Dec", &[][..]),
+        ("Dec.MAX_SCALE(1);", "Dec", &[][..]),
+        ("Autodiff.clear(1);", "Autodiff", &[][..]),
+        ("Autodiff.isRecording(1);", "Autodiff", &[][..]),
+        ("Env.args(1);", "Env", &["Env"][..]),
+        ("Time.now(1);", "Time", &["Time"][..]),
+        ("System.cpuCount(1);", "System", &["System"][..]),
+        ("System.totalMemory(1);", "System", &["System"][..]),
+        ("System.freeMemory(1);", "System", &["System"][..]),
+        ("System.hostname(1);", "System", &["System"][..]),
+        ("System.uptime(1);", "System", &["System"][..]),
+        ("Terminal.getSize(1);", "Terminal", &["Terminal"][..]),
+        ("Terminal.clear(1);", "Terminal", &["Terminal"][..]),
     ] {
-        let src = format!("use permissions {{ OS, Media }}\n{call}");
-        match evaluate_with_permissions(&src, &["OS", "Media"]) {
+        let src = call.to_string();
+        match evaluate_with_permissions(&src, permissions) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
                 assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
@@ -3465,18 +3497,42 @@ fn zero_argument_native_methods_reject_arguments() {
         }
     }
 
-    // The same calls with no arguments still work, and DateTime.from keeps its
-    // five-argument form.
-    for call in [
-        "OS.platform();",
-        "OS.pid();",
-        "OS.tick();",
-        "Media.playingCount();",
-        "Media.stopAll();",
-        "DateTime.from(2026, 2, 28, 13, 5);",
+    // What a result-reading sweep could never show: the argument used to be
+    // dropped without being evaluated, so a throw inside it never happened.
+    for (call, permissions) in [
+        ("Math.random(boom())", &[][..]),
+        ("Dec.MAX(boom())", &[][..]),
+        ("Autodiff.clear(boom())", &[][..]),
+        ("System.uptime(boom())", &["System"][..]),
     ] {
-        let src = format!("use permissions {{ OS, Media }}\n{call}");
-        match evaluate_with_permissions(&src, &["OS", "Media"]) {
+        let src = format!("fn int boom() {{ throw \"BOOM\"; return 1; }}\n{call};\n");
+        match evaluate_with_permissions(&src, permissions) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
+            }
+            other => panic!("{call} must be refused before its argument runs, got {other:?}"),
+        }
+    }
+
+    // The same calls with no arguments still work — including the property
+    // spelling that carries no parentheses at all — and DateTime.from keeps its
+    // five-argument form.
+    for (call, permissions) in [
+        ("OS.platform();", &["OS", "Media"][..]),
+        ("OS.pid();", &["OS", "Media"][..]),
+        ("OS.tick();", &["OS", "Media"][..]),
+        ("Media.playingCount();", &["OS", "Media"][..]),
+        ("Media.stopAll();", &["OS", "Media"][..]),
+        ("DateTime.from(2026, 2, 28, 13, 5);", &["OS", "Media"][..]),
+        ("out(Math.PI);", &[][..]),
+        ("out(Math.PI());", &[][..]),
+        ("out(Dec.MAX_SCALE);", &[][..]),
+        ("out(Autodiff.isRecording());", &[][..]),
+        ("out(System.cpuCount());", &["System"][..]),
+        ("out(Time.now());", &["Time"][..]),
+        ("Terminal.getSize();", &["Terminal"][..]),
+    ] {
+        match evaluate_with_permissions(call, permissions) {
             ProgramOutcome::Value(_) => {}
             other => panic!("{call} must still be accepted, got {other:?}"),
         }

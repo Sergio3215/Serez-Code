@@ -339,6 +339,9 @@ impl super::Evaluator {
             }
 
             "clear" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Autodiff") {
+                    return error;
+                }
                 self.ad_recording = false;
                 self.ad_tape.clear();
                 self.ad_grads.clear();
@@ -348,6 +351,9 @@ impl super::Evaluator {
             }
 
             "isRecording" => {
+                if let Some(error) = self.reject_arguments(dot_call, "Autodiff") {
+                    return error;
+                }
                 let b = self.ad_recording;
                 EvalResult::Value(self.bool_ref(b))
             }

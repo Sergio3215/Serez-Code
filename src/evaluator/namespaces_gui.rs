@@ -3171,7 +3171,13 @@ fn cursor_icon(name: &str) -> CursorIcon {
 /// here in particular, because `mouseRightDown` exists as a *separate* method:
 /// somebody will reasonably write `mouseDown(RIGHT)` and be told nothing.
 ///
-/// `close` and `font` are deliberately absent — they do read arguments.
+/// `close`, `font` and `windowPosition` were absent, and the first two were
+/// excused in this file with a claim that is simply wrong: they do *not* read
+/// arguments. `Gui.font` is the reader that returns the current family name —
+/// `Gui.setFont` is the setter — and the `"text" | "font"` arm that prompted
+/// the belief belongs to scene-node property assignment, a different method
+/// entirely. `Gui.close` and `Gui.windowPosition` take nothing either. All
+/// three are in the list now.
 ///
 /// Swept against the whole official ecosystem before being enforced: no package
 /// passes an argument to any of these, so nothing that works today stops
@@ -3180,10 +3186,12 @@ const GUI_ZERO_ARG_METHODS: &[&str] = &[
     "charsTyped",
     "clipboardGet",
     "clipboardGetImage",
+    "close",
     "currentWindow",
     "dragWindow",
     "droppedFiles",
     "focused",
+    "font",
     "hoveredFiles",
     "imePreedit",
     "isOpen",
@@ -3208,6 +3216,7 @@ const GUI_ZERO_ARG_METHODS: &[&str] = &[
     "size",
     "time",
     "touches",
+    "windowPosition",
 ];
 
 impl super::Evaluator {

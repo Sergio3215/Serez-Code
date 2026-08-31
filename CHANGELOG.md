@@ -7,6 +7,34 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Twenty more zero-argument members accepted arguments and threw them away
+
+- A previous stage fixed five of these outside `Gui` and thirty-one inside it.
+  It found them by calling each method with a fixed set of argument shapes and
+  reading the result — and **the result is the wrong thing to read.** A reader
+  that ignores your argument returns exactly what it would have returned
+  without it. Nothing in the output separates "used it" from "discarded it".
+- Passing a *throwing* call as the argument separates them: if the member never
+  evaluates the expression, the exception never happens. Re-run that way,
+  twenty members were still accepting and dropping what you wrote —
+  `Math.PI`, `Math.E`, `Math.random`, `Dec.MAX`, `Dec.MIN`, `Dec.MAX_SCALE`,
+  `Autodiff.clear`, `Autodiff.isRecording`, `Env.args`, `Time.now`,
+  `System.cpuCount`, `System.totalMemory`, `System.freeMemory`,
+  `System.hostname`, `System.uptime`, `Terminal.getSize`, `Terminal.clear`,
+  `Gui.close`, `Gui.font` and `Gui.windowPosition`.
+- **Three of them are a correction of this cycle's own work.** `Gui.close` and
+  `Gui.font` were excluded from the Gui list by a comment in the source stating
+  they "do read arguments". They do not — `Gui.setFont` is the setter, and the
+  `"text" | "font"` arm that prompted the belief is scene-node property
+  assignment, a different method. `Gui.windowPosition` was simply missed. The
+  test had been written to agree with the comment, so it confirmed the mistake
+  instead of catching it; it now asserts the opposite.
+- Swept against 1,123 `.sz`/`.szx` files — the core tests, the benchmarks and
+  all ten official packages — before being enforced. Not one passes an argument
+  to any of these, so nothing that works today stops working. `Math.PI` and
+  `Dec.MAX_SCALE` without parentheses are unaffected, and pinned.
+
+
 ### A `throw` inside a native argument was destroyed and blamed on the interpreter
 
 - The program raises an exception while computing an argument to a native
