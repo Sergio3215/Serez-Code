@@ -7,6 +7,23 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### GPU buffers move onto the handle registry too
+
+- Same shape as the memory heap, same terms: fifteen access sites migrated, two
+  `Evaluator` fields become one, no behavioural change. Verified by probe — a
+  freed buffer still errors on read, a fresh handle still does not repeat a
+  freed one, `size`/`fill`/`dot`/`readBuffer` all unchanged.
+- The migration surfaced an inconsistency and **deliberately left it alone**:
+  `GPU.freeBuffer` on an id that was never issued is a **silent no-op**, while
+  `Memory.free` on the same mistake raises `MemoryError`. Two handle registries,
+  opposite answers to the same question.
+- The typed API is what made it visible: `remove` returns an `Option` and the
+  caller drops it, which reads as a decision on the page instead of hiding
+  inside a `HashMap` call. Which of the two policies is right is a semantic
+  question with its own compatibility cost — a program may rely on the
+  idempotent free — so it is recorded, not smuggled into a refactor.
+
+
 ### `src/handles.rs` — the evaluator stops owning what an integer handle means
 
 - `Memory.alloc`, `GPU.createBuffer` and `Socket.listen` each hand a program an

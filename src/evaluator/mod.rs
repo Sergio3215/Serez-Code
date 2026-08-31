@@ -225,10 +225,9 @@ pub struct Evaluator {
     listener_registry: HashMap<i64, std::net::TcpListener>,
     // Monotonically increasing ID counter for sockets and listeners
     socket_next_id: i64,
-    // GPU buffer registry: maps buffer IDs to flat f64 data (CPU-backed)
-    gpu_buffers: HashMap<i64, Vec<f64>>,
-    // Monotonically increasing ID counter for GPU buffers
-    gpu_next_id: i64,
+    // GPU buffers (CPU-backed flat f64 data), by the handle a program holds.
+    // The registry owns id issuing and the never-reissued rule; see handles.rs.
+    gpu: crate::handles::HandleRegistry<Vec<f64>>,
     // Raw memory: the allocation handles a program holds, and what they name.
     // The registry owns id issuing and the never-reissued rule; see handles.rs.
     memory: crate::handles::HandleRegistry<Vec<u8>>,
@@ -528,8 +527,7 @@ impl Evaluator {
             socket_registry: HashMap::new(),
             listener_registry: HashMap::new(),
             socket_next_id: 1,
-            gpu_buffers: HashMap::new(),
-            gpu_next_id: 1,
+            gpu: crate::handles::HandleRegistry::new(),
             memory: crate::handles::HandleRegistry::new(),
             permissions: HashSet::new(),
             lockdown: false,

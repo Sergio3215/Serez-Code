@@ -69,7 +69,7 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                let data = match self.gpu_buffers.get(&id) {
+                let data = match self.gpu.get(id) {
                     Some(v) => v.clone(),
                     None => {
                         return self.rt_err_kind(
@@ -93,7 +93,11 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                self.gpu_buffers.remove(&id);
+                // Unlike `Memory.free`, freeing an id that was never issued is a
+                // silent no-op here. Two handle registries, opposite answers to
+                // the same mistake; recorded in MATURITY_AUDIT.md rather than
+                // changed inside a refactor.
+                self.gpu.remove(id);
                 EvalResult::Value(self.null_ref)
             }
 
@@ -116,7 +120,7 @@ impl super::Evaluator {
                         return self.rt_err_kind("TypeError", "GPU.fill: value must be numeric");
                     }
                 };
-                match self.gpu_buffers.get_mut(&id) {
+                match self.gpu.get_mut(id) {
                     Some(buf) => buf.fill(val),
                     None => {
                         return self.rt_err_kind(
@@ -136,7 +140,7 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                let n = match self.gpu_buffers.get(&id) {
+                let n = match self.gpu.get(id) {
                     Some(buf) => buf.len() as i64,
                     None => {
                         return self.rt_err_kind(
@@ -162,7 +166,7 @@ impl super::Evaluator {
                     EvalResult::Value(r) => r,
                     other => return other,
                 };
-                let data = match self.gpu_buffers.get(&id) {
+                let data = match self.gpu.get(id) {
                     Some(v) => v.clone(),
                     None => {
                         return self
@@ -217,7 +221,7 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", "GPU.reduce: initial value must be numeric");
                     }
                 };
-                let data = match self.gpu_buffers.get(&id) {
+                let data = match self.gpu.get(id) {
                     Some(v) => v.clone(),
                     None => {
                         return self.rt_err_kind(
@@ -259,7 +263,7 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                let a = match self.gpu_buffers.get(&id_a) {
+                let a = match self.gpu.get(id_a) {
                     Some(v) => v.clone(),
                     None => {
                         return self.rt_err_kind(
@@ -268,7 +272,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                let b = match self.gpu_buffers.get(&id_b) {
+                let b = match self.gpu.get(id_b) {
                     Some(v) => v.clone(),
                     None => {
                         return self.rt_err_kind(
@@ -317,7 +321,7 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                let x = match self.gpu_buffers.get(&id_x) {
+                let x = match self.gpu.get(id_x) {
                     Some(v) => v.clone(),
                     None => {
                         return self.rt_err_kind(
@@ -326,7 +330,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                let y = match self.gpu_buffers.get(&id_y) {
+                let y = match self.gpu.get(id_y) {
                     Some(v) => v.clone(),
                     None => {
                         return self.rt_err_kind(
@@ -420,7 +424,7 @@ impl super::Evaluator {
                 {
                     return error;
                 }
-                let a = match self.gpu_buffers.get(&id_a) {
+                let a = match self.gpu.get(id_a) {
                     Some(v) => v.clone(),
                     None => {
                         return self.rt_err_kind(
@@ -429,7 +433,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                let b = match self.gpu_buffers.get(&id_b) {
+                let b = match self.gpu.get(id_b) {
                     Some(v) => v.clone(),
                     None => {
                         return self.rt_err_kind(
@@ -518,10 +522,7 @@ impl super::Evaluator {
     }
 
     fn alloc_gpu_buffer(&mut self, data: Vec<f64>) -> i64 {
-        let id = self.gpu_next_id;
-        self.gpu_next_id += 1;
-        self.gpu_buffers.insert(id, data);
-        id
+        self.gpu.insert(data)
     }
 
     fn eval_gpu_id(&mut self, expr: &ast::Expression, ctx: &str) -> Result<i64, EvalResult> {

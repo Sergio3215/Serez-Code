@@ -303,6 +303,17 @@ yet meet.
    because `spec/socket.md` promises a listener id and a connection id are never
    equal, which needs an allocator shared across registries — a different design
    and its own change.
+   **Fifth slice done:** `gpu_buffers` migrated onto the same registry, on the
+   same terms — fifteen access sites, no behavioural change, verified by probe
+   (a freed buffer still errors on read, a fresh handle still does not repeat a
+   freed one). Two `Evaluator` fields become one again. The migration surfaced
+   an inconsistency it deliberately did not fix: **`GPU.freeBuffer` on an id
+   that was never issued is a silent no-op, while `Memory.free` on the same
+   mistake is a `MemoryError`.** Two handle registries, opposite answers to the
+   same question. The typed API is what made it visible — `remove` returns an
+   `Option` the caller discards — and it is recorded here rather than changed
+   inside a refactor. Which of the two is right is a semantic decision with its
+   own compatibility question, since a program may rely on the idempotent free.
 2. **Partly implemented:** `run_ecosystem.ps1` / `run_ecosystem.sh` run every
    official package's own suite against the freshly built core and report one
    table, preferring each runner's tally over its exit code (a green exit with
