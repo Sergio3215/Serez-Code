@@ -450,9 +450,15 @@ pub(crate) struct GuiRuntime {
     /// survive a window being closed and reopened.
     pub(crate) fonts: Option<GuiFonts>,
     /// Stylesheets loaded by `Gui.loadStylesheet`, by the handle it returned.
-    pub(crate) stylesheets: Vec<NativeStylesheet>,
-    /// SVGs parsed by `Gui.loadSvg`, by the handle it returned.
-    pub(crate) svgs: Vec<svg::ParsedSvg>,
+    ///
+    /// This was a `Vec` whose handle was its `len()` after the push and whose
+    /// lookup was `get((handle - 1) as usize)` — a 1-based id space written by
+    /// hand at each site. The registry issues the handles instead, so "zero is
+    /// not a handle" and "a handle keeps meaning the same sheet" are the tested
+    /// rules in `handles.rs` rather than arithmetic to get right twice.
+    pub(crate) stylesheets: crate::handles::HandleRegistry<NativeStylesheet>,
+    /// SVGs parsed by `Gui.loadSvg`, by the handle it returned. Same story.
+    pub(crate) svgs: crate::handles::HandleRegistry<svg::ParsedSvg>,
 }
 
 use css::{css_color, parse_css};
@@ -4519,8 +4525,7 @@ impl super::Evaluator {
                         sheet.font_alias.push((alias, family));
                     }
                 }
-                self.gui.stylesheets.push(sheet);
-                let handle = self.gui.stylesheets.len() as i64; // 1-based
+                let handle = self.gui.stylesheets.insert(sheet);
                 EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
             }
 
@@ -4554,8 +4559,7 @@ impl super::Evaluator {
                 };
                 match svg::parse(&markup) {
                     Some(p) => {
-                        self.gui.svgs.push(p);
-                        let handle = self.gui.svgs.len() as i64; // 1-based
+                        let handle = self.gui.svgs.insert(p);
                         EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
                     }
                     None => self.rt_err_kind(
@@ -4627,12 +4631,10 @@ impl super::Evaluator {
                 st.scene_dirty = true;
                 let mut regions: Vec<PrimRegion> = Vec::new();
                 {
-                    let sheet_ref = if sheet_h >= 1 {
-                        self.gui.stylesheets.get((sheet_h - 1) as usize)
-                    } else {
-                        None
-                    };
-                    let svgs_ref: &[svg::ParsedSvg] = &self.gui.svgs;
+                    // The registry answers for a handle of 0, a negative one and
+                    // one that was never issued; no guard to remember here.
+                    let sheet_ref = self.gui.stylesheets.get(sheet_h);
+                    let svgs_ref = &self.gui.svgs;
                     if let Some(ObjectData::Array { elements, .. }) = self.resolve(root_ref) {
                         if elements.len() >= 3 {
                             if let OwnedValue::Str(tag) = &elements[0] {

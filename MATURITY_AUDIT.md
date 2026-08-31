@@ -325,8 +325,24 @@ yet meet.
    loopback listener, connects to it, and asserts the two ids cannot collide.
    With these three slices the `Evaluator` struct goes from **55 fields to 51**,
    and three of the roles P2 names — memory manager, GPU runtime, socket manager
-   — no longer own their state. What remains in that list is GUI (four fields),
-   autodiff (five), media, tasks and the spawned-process queue.
+   — no longer own their state.
+   **Seventh slice done:** the GUI runtime, the largest remaining role.
+   `gui_state`, `gui_fonts`, `gui_stylesheets` and `gui_svgs` become one
+   `GuiRuntime` the evaluator holds; 107 access sites migrated and the struct
+   drops to **48 fields**. The `Option`s and the `take()`/`replace()` in
+   `renderTree` are deliberately unchanged — they are borrow-checker mechanics,
+   not design, and rewriting them would have made a move into the rewrite this
+   section forbids. A second change followed it: stylesheet and SVG handles were
+   a hand-rolled 1-based id space — `push`, then `len()` as the handle, then
+   `get((handle - 1) as usize)` — and the renderer indexed the SVG slice
+   **unchecked**, `cx.svgs[(hnd - 1) as usize]`, safe only because of a
+   `hnd >= 1 && (hnd as usize) <= len` guard two lines above. Both now use
+   `HandleRegistry`, so the lookup is checked and the guard is gone. Worth
+   noting for the panic-site audit above: that index was invisible to a search
+   for `unwrap`/`expect`/`panic!`, because it was neither.
+   What remains of the P2 list is autodiff (five fields, but 132 uses across
+   four files including `stmt.rs` and `methods_tensor.rs` — the woven shape this
+   section warns about), media, tasks and the spawned-process queue.
 2. **Partly implemented:** `run_ecosystem.ps1` / `run_ecosystem.sh` run every
    official package's own suite against the freshly built core and report one
    table, preferring each runner's tally over its exit code (a green exit with

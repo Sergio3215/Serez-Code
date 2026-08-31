@@ -7,6 +7,27 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### GUI handles stop being hand-rolled arithmetic, and an unchecked index goes with them
+
+- `Gui.loadStylesheet` and `Gui.loadSvg` ran their own 1-based id space: push
+  onto a `Vec`, return its `len()` as the handle, look it up later with
+  `get((handle - 1) as usize)`. The rule was written out at each site rather
+  than being anywhere.
+- The renderer indexed the SVG slice **unchecked** — `cx.svgs[(hnd - 1) as usize]`
+  — safe only because of a `hnd >= 1 && (hnd as usize) <= len` guard two lines
+  above it. It was correct, and it was correct by remembering.
+- Both now use `HandleRegistry`, the type already carrying those rules with
+  tests. The lookup is checked, so the guard has nothing to guard and is gone,
+  and `sheet_h` of `0`, a negative, or a handle never issued are all answered by
+  the registry instead of by an `if` at the call site.
+- Worth recording against the panic-site audit: that index was invisible to a
+  search for `unwrap` / `expect` / `panic!`, because it is none of them. The
+  audit's method finds a shape, and this was a different shape.
+- Verified from the language: handles still start at 1 and increment, and
+  `renderTree` with sheet handle `0`, `9999` or `-5` all behave as before.
+  `serez-ui` passes 36/36.
+
+
 ### The GUI runtime becomes one thing the evaluator holds, not four it is
 
 - `gui_state`, `gui_fonts`, `gui_stylesheets` and `gui_svgs` were four separate

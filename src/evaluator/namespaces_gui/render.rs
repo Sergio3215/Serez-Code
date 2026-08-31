@@ -22,7 +22,7 @@ pub(crate) fn render_tree(
     w: i32,
     h: i32,
     sheet: Option<&NativeStylesheet>,
-    svgs: &[svg::ParsedSvg],
+    svgs: &crate::handles::HandleRegistry<svg::ParsedSvg>,
     ctx: &[(String, String)],
     fonts: &mut Option<GuiFonts>,
     st: &mut GuiState,
@@ -1106,7 +1106,7 @@ fn prim_border_shorthand(s: Option<&str>) -> (i32, Option<u32>) {
 /// seis parámetros por cada llamada recursiva.
 struct PrimCtx<'a> {
     sheet: Option<&'a NativeStylesheet>,
-    svgs: &'a [svg::ParsedSvg],
+    svgs: &'a crate::handles::HandleRegistry<svg::ParsedSvg>,
     ctx: &'a [(String, String)],
     fonts: &'a mut Option<GuiFonts>,
     st: &'a mut GuiState,
@@ -1763,12 +1763,15 @@ fn prim_draw_media(sty: &PrimStyle, b: PrimBox, cx: &mut PrimCtx) -> i32 {
     if let Some(hnd) = svg_handle {
         let w = sty.num("width", 48).min(b.w);
         let hh = sty.num("height", 48);
-        if hnd >= 1 && (hnd as usize) <= cx.svgs.len() && w > 0 && hh > 0 {
+        // Was `hnd >= 1 && (hnd as usize) <= cx.svgs.len()` guarding an
+        // unchecked `cx.svgs[(hnd - 1) as usize]` two lines below. The lookup
+        // is checked now, so the handle no longer has a guard to fall out of.
+        if let (Some(parsed), true) = (cx.svgs.get(hnd), w > 0 && hh > 0) {
             let key = (hnd, w, hh);
             let img_handle = if let Some(&ih) = cx.st.svg_cache.get(&key) {
                 ih
             } else {
-                let px = svg::rasterize(&cx.svgs[(hnd - 1) as usize], w as u32, hh as u32);
+                let px = svg::rasterize(parsed, w as u32, hh as u32);
                 let ih = cx.st.next_image;
                 cx.st.next_image += 1;
                 cx.st.images.insert(
