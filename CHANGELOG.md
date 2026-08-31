@@ -7,6 +7,39 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `spec/processes.md`, a kill that always claimed success, and a false error marker
+
+- `OS`, `Env` and `System` are the process and environment surface: permission
+  gated, `unsafe` gated, and until now unspecified. The document states the
+  gates, the argument contract, `ExecResult`, the spawn/tick polling model and
+  the environment readers, all measured.
+- **`OS.kill` returned the success value whatever happened.** It ran `taskkill`
+  / `kill` with `.status()` and matched `Ok(_)` — but `Ok` means *the helper
+  ran*, not that the target died. `OS.kill(999999)` returned `null` as if the
+  kill had worked, while `ERROR: The process "999999" not found.` appeared on
+  the program's stderr, from a process the caller never launched. The helper's
+  output is captured now and a failure is a catchable `OSError`. The trade-off
+  is deliberate and documented: killing a child that has already exited raises,
+  so a caller racing a child's exit must catch it. Nothing in the ecosystem or
+  the test suite called `OS.kill`, so there was no installed behaviour to keep.
+- **`OS.spawn` printed the fatal marker for a non-fatal failure.** A failure to
+  start emitted `❌ ERROR: …` — the marker the CLI and the conformance runner
+  both read as "this program failed" — and then returned `-1` and let the
+  program continue to exit 0. It is a `⚠️  WARNING:` now, which is what it
+  always was.
+- **The asymmetry that remains is written down, not hidden.** `OS.exec` raises
+  a catchable `OSError` when a command cannot be started; `OS.spawn` returns
+  `-1`. Two sibling methods, the same failure, two different reporting models,
+  and only one of them catchable. Resolving it is a public breaking change to
+  the return value the polling API was designed around, so it is recorded as
+  debt with the advice that follows from it — check what `OS.spawn` returns.
+- Three facts the document states that nothing had: `OS.exec` blocks with no
+  timeout and no access to the child's stdin, so a child waiting for input
+  takes the interpreter with it; `OS.spawn` **discards the child's stdout**
+  entirely and delivers only stderr, through `tick`; and `Env.args()` is the
+  whole process command line, so a program's own arguments start at index 2.
+
+
 ### `OS.exec` and `OS.spawn` ran a different command than you wrote
 
 - Both built their argument vector with `if let Some(Array) = .. { for elem { if

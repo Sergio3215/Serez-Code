@@ -654,7 +654,12 @@ impl super::Evaluator {
                         EvalResult::Value(self.int_ref(pid))
                     }
                     Err(e) => {
-                        eprintln!("❌ ERROR: OS.spawn '{}' failed: {}", cmd, e);
+                        // `-1` is the documented return, so the program keeps
+                        // going — which means this is a warning, not an error.
+                        // It printed the "❌ ERROR:" marker, the one the CLI and
+                        // the conformance runner both read as "this program
+                        // failed", while the program went on to exit 0.
+                        eprintln!("⚠️  WARNING: OS.spawn '{}' failed: {}", cmd, e);
                         EvalResult::Value(self.int_ref(-1))
                     }
                 }
@@ -726,16 +731,31 @@ impl super::Evaluator {
                     Some(ObjectData::Integer(v)) => v,
                     _ => return self.rt_err_kind("TypeError", "OS.kill: pid must be an integer"),
                 };
+                // `.status()` let the helper inherit stderr, so `taskkill`'s own
+                // 'The process "999999" not found.' appeared on the program's
+                // stderr while `OS.kill` returned the success value. The caller
+                // was told the process was killed; the terminal said otherwise;
+                // nothing in the language reported anything. `.output()` captures
+                // that text so it can become the diagnostic it always was.
                 #[cfg(windows)]
                 let result = std::process::Command::new("taskkill")
                     .args(["/PID", &pid.to_string(), "/F"])
-                    .status();
+                    .output();
                 #[cfg(not(windows))]
                 let result = std::process::Command::new("kill")
                     .arg(pid.to_string())
-                    .status();
+                    .output();
                 match result {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(output) if output.status.success() => EvalResult::Value(self.null_ref),
+                    Ok(output) => {
+                        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        let detail = if detail.is_empty() {
+                            format!("the helper exited {}", output.status.code().unwrap_or(-1))
+                        } else {
+                            detail
+                        };
+                        self.rt_err_kind("OSError", format!("OS.kill {} failed: {}", pid, detail))
+                    }
                     Err(e) => self.rt_err_kind("OSError", format!("OS.kill {} failed: {}", pid, e)),
                 }
             }

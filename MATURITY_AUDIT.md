@@ -19,7 +19,7 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS, no warnings |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
-| `cargo test --all-targets` | PASS, 306 tests (170 library, 36 LSP binary, 16 frontend robustness, 77 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
+| `cargo test --all-targets` | PASS, 307 tests (170 library, 36 LSP binary, 16 frontend robustness, 78 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
 | Serez test runner | PASS on **both** platforms, 490 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
@@ -419,6 +419,16 @@ stale; `ls spec/` is the inventory.
   names twenty-one namespace modules, so Core reaches into Native capabilities
   today, and the document says so rather than drawing arrows that are not
   one-way.
+- `processes.md` — `OS`, `Env` and `System`: the permission and `unsafe` gates,
+  the argument contract, `ExecResult`, the spawn/tick polling model and the
+  environment readers. Writing it produced two fixes and one recorded debt.
+  `OS.kill` returned the success value whatever happened while the helper's own
+  stderr leaked into the program's output, and `OS.spawn` printed the fatal
+  `❌ ERROR:` marker — the one the CLI and the conformance runner read as "this
+  program failed" — for a failure after which the program continued and exited
+  0. The debt is the asymmetry that remains: `exec` raises a catchable
+  `OSError` where `spawn` returns `-1`, which is a public breaking change to
+  resolve and is written down rather than made silently.
 - `syntax.md` — the statement and expression grammar: what parses, and the forms
   that read as valid and do not (brace-less bodies, `for (x in …)` without the
   `let`, a typed lambda parameter, a scalar annotation on a `let`, a JSON-style

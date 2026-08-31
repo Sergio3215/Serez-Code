@@ -3918,3 +3918,62 @@ fn process_arguments_are_never_silently_dropped() {
         }
     }
 }
+
+/// `OS.kill` returned the success value whatever happened, and leaked the
+/// helper's own stderr into the program's output.
+///
+/// It ran `taskkill` / `kill` with `.status()`, which lets the child inherit
+/// stderr, and then matched `Ok(_)` — the `Ok` means *the helper ran*, not that
+/// the target died. So `OS.kill(999999)` printed
+/// `ERROR: The process "999999" not found.` on the program's stderr, from a
+/// process the caller never launched, and returned `null` as if the kill had
+/// worked. Nothing in the language reported anything.
+///
+/// The trade-off this creates is real and deliberate: killing a child that has
+/// already exited now raises, so a caller racing a child's exit must catch it.
+/// That is written down in `spec/processes.md`. No official package and no test
+/// called `OS.kill` before this, so there is no installed behaviour to keep.
+#[test]
+fn a_failed_kill_is_reported_instead_of_leaking() {
+    // A pid that cannot plausibly exist. Both `taskkill` and `kill` fail on it
+    // and say so on their own stderr.
+    let src = r#"
+        let seen = "none";
+        try {
+            unsafe { OS.kill(999999) }
+        } catch (e) {
+            seen = "caught";
+        }
+        out(seen);
+    "#;
+
+    match evaluate_with_permissions(src, &["OS"]) {
+        ProgramOutcome::Value(_) => {}
+        other => panic!("a failed kill must be catchable, not silent: {other:?}"),
+    }
+
+    match evaluate_with_permissions("unsafe { OS.kill(999999) }", &["OS"]) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.kind, "OSError", "{error:?}");
+            assert!(
+                error.message.contains("OS.kill 999999 failed"),
+                "the diagnostic names the pid: {}",
+                error.message
+            );
+        }
+        other => panic!("expected a structured OSError, got {other:?}"),
+    }
+
+    // The gates are unchanged: still unsafe, still permission-gated, and a
+    // non-integer pid is still refused before the helper is reached.
+    match evaluate_with_permissions("unsafe { OS.kill(\"1\") }", &["OS"]) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.code, "SZ4002", "{error:?}");
+            assert!(
+                error.message.contains("pid must be an integer"),
+                "{error:?}"
+            );
+        }
+        other => panic!("a non-integer pid must be refused, got {other:?}"),
+    }
+}
