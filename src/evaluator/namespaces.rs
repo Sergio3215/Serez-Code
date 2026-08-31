@@ -401,6 +401,16 @@ impl super::Evaluator {
                     Some(ObjectData::Str(s)) => s,
                     _ => return self.rt_err_kind("TypeError", "File.mkdir requires a string path"),
                 };
+                // `create_dir_all("")` is `Ok(())` in Rust and creates nothing, so
+                // the caller would be told a directory exists when none does.
+                // Every other File method rejects the empty path; this one now
+                // does too.
+                if path.is_empty() {
+                    return self.rt_err_kind(
+                        "IOError",
+                        "File.mkdir '' failed: the path is empty".to_string(),
+                    );
+                }
                 match std::fs::create_dir_all(&path) {
                     Ok(_) => EvalResult::Value(self.null_ref),
                     Err(e) => {

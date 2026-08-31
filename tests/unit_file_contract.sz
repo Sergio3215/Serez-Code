@@ -1,0 +1,209 @@
+// unit_file_contract.sz — the rules `spec/files.md` states, pinned.
+//
+// Every one of these is a fact a caller can trip over and that no test covered
+// before the document was written: what `write` does with a non-string, what
+// `create` does when something is already there, that `delete` on a directory
+// takes the whole tree and `rename` replaces its destination without a word.
+
+let dir = "test_file_contract_dir";
+let marker = 0;
+
+fn string sideEffect() {
+    marker = marker + 1;
+    return "x";
+}
+
+fn string p(string name) {
+    return dir + "/" + name;
+}
+
+test("setup", () => {
+    File.mkdir(dir);
+    assert(File.exists(dir), "the fixture directory must exist");
+});
+
+// ── write ────────────────────────────────────────────────────────────────────
+
+test("write renders any value with the same rules as out", () => {
+    File.write(p("v.txt"), 42);
+    assert(File.read(p("v.txt")) == "42", "an int is written as its text");
+    File.write(p("v.txt"), true);
+    assert(File.read(p("v.txt")) == "true", "a bool is written as its text");
+    File.write(p("v.txt"), [1, 2, 3]);
+    assert(File.read(p("v.txt")) == "[1, 2, 3]", "an array is written as its text");
+    File.write(p("v.txt"), null);
+    assert(
+        File.read(p("v.txt")) == "null",
+        "null writes the four characters, it does not raise — the hazard the spec names"
+    );
+});
+
+test("write returns null and replaces the whole file", () => {
+    let r = File.write(p("w.txt"), "first");
+    assert(r == null, "write returns null, not a byte count");
+    File.write(p("w.txt"), "second");
+    assert(File.read(p("w.txt")) == "second", "write replaces, it does not append");
+    File.write(p("w.txt"), "");
+    assert(File.stat(p("w.txt")).size == 0, "writing an empty string empties the file");
+});
+
+test("write does not create missing parent directories", () => {
+    let failed = false;
+    try {
+        File.write(p("no_such_dir/x.txt"), "y");
+    } catch (e) {
+        failed = true;
+    }
+    assert(failed, "a missing parent is an IOError, not a silent mkdir");
+});
+
+// ── create ───────────────────────────────────────────────────────────────────
+
+test("create never truncates an existing file", () => {
+    File.write(p("c.txt"), "KEEP");
+    File.create(p("c.txt"));
+    assert(File.read(p("c.txt")) == "KEEP", "create is a touch, not a truncate");
+});
+
+test("create on an existing directory succeeds and creates nothing", () => {
+    File.mkdir(p("cdir"));
+    File.create(p("cdir"));
+    assert(File.stat(p("cdir")).isDir, "the directory is still a directory");
+    let readable = true;
+    try {
+        File.read(p("cdir"));
+    } catch (e) {
+        readable = false;
+    }
+    assert(
+        readable == false,
+        "create succeeding does not mean the path is now a readable file"
+    );
+});
+
+// ── mkdir ────────────────────────────────────────────────────────────────────
+
+test("mkdir creates every missing parent and repeats harmlessly", () => {
+    File.mkdir(p("a/b/c"));
+    assert(File.exists(p("a/b/c")), "mkdir is recursive");
+    File.mkdir(p("a/b/c"));
+    assert(File.exists(p("a/b/c")), "mkdir on an existing directory is a no-op");
+});
+
+test("mkdir refuses a file and the empty path", () => {
+    File.write(p("notadir.txt"), "x");
+    let onFile = false;
+    try {
+        File.mkdir(p("notadir.txt"));
+    } catch (e) {
+        onFile = true;
+    }
+    assert(onFile, "mkdir on an existing file is an IOError");
+
+    let onEmpty = false;
+    try {
+        File.mkdir("");
+    } catch (e) {
+        onEmpty = true;
+    }
+    assert(
+        onEmpty,
+        "the empty path is an IOError — the host call reports success and creates nothing"
+    );
+});
+
+// ── listDir and stat ─────────────────────────────────────────────────────────
+
+test("listDir returns entry names, not paths", () => {
+    File.mkdir(p("ld"));
+    File.write(p("ld/one.txt"), "1");
+    let entries = File.listDir(p("ld"));
+    assert(entries.length() == 1, "one entry");
+    assert(entries[0] == "one.txt", "the name alone, with no directory prefix");
+});
+
+test("stat reports size, isDir and a millisecond timestamp", () => {
+    File.write(p("s.txt"), "hello");
+    let st = File.stat(p("s.txt"));
+    assert(st.size == 5, "size is bytes");
+    assert(st.isDir == false, "a file is not a directory");
+    assert(st.modified > 0, "modified is a millisecond timestamp");
+    assert(type_of(st) == "FileStat", "the value reports as FileStat");
+
+    File.mkdir(p("sdir"));
+    let sd = File.stat(p("sdir"));
+    assert(sd.isDir, "a directory says so");
+    assert(sd.size == 0, "a directory reports size 0");
+});
+
+// ── binary ───────────────────────────────────────────────────────────────────
+
+test("read requires valid UTF-8 and read_asBinary does not", () => {
+    File.write_asBinary(p("bad.bin"), [255, 254, 0]);
+    let failed = false;
+    try {
+        File.read(p("bad.bin"));
+    } catch (e) {
+        failed = true;
+    }
+    assert(failed, "read refuses bytes that are not valid UTF-8");
+
+    let bytes = File.read_asBinary(p("bad.bin"));
+    assert(bytes.length() == 3, "read_asBinary reads the same file fine");
+    assert(bytes[0] == 255, "bytes arrive as ints 0-255");
+});
+
+test("write_asBinary refuses anything that is not an int 0-255", () => {
+    let rejected = 0;
+    try { File.write_asBinary(p("b.bin"), [256]); } catch (e) { rejected = rejected + 1; }
+    try { File.write_asBinary(p("b.bin"), [-1]); } catch (e) { rejected = rejected + 1; }
+    try { File.write_asBinary(p("b.bin"), [1.5]); } catch (e) { rejected = rejected + 1; }
+    try { File.write_asBinary(p("b.bin"), ["a"]); } catch (e) { rejected = rejected + 1; }
+    assert(rejected == 4, "all four are TypeErrors, unlike write which converts");
+
+    File.write_asBinary(p("empty.bin"), []);
+    assert(File.stat(p("empty.bin")).size == 0, "an empty array writes an empty file");
+});
+
+// ── arity and evaluation order ───────────────────────────────────────────────
+
+test("the argument count is checked before the arguments run", () => {
+    marker = 0;
+    let caught = false;
+    try {
+        File.exists(sideEffect(), sideEffect());
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "the wrong count is a TypeError");
+    assert(marker == 0, "neither argument was evaluated");
+});
+
+// ── delete and rename, both unsafe ───────────────────────────────────────────
+
+test("delete on a directory removes the whole tree", () => {
+    File.mkdir(p("tree/inner"));
+    File.write(p("tree/inner/deep.txt"), "gone");
+    assert(File.exists(p("tree/inner/deep.txt")), "the tree exists first");
+    unsafe { File.delete(p("tree")); }
+    assert(
+        File.exists(p("tree")) == false,
+        "delete on a directory is recursive — the unsafe gate says 'removes files'"
+    );
+});
+
+test("rename replaces an existing destination without a word", () => {
+    File.write(p("src.txt"), "SRC");
+    File.write(p("dst.txt"), "DST");
+    unsafe { File.rename(p("src.txt"), p("dst.txt")); }
+    assert(File.read(p("dst.txt")) == "SRC", "the destination was overwritten");
+    assert(File.exists(p("src.txt")) == false, "the source is gone");
+});
+
+// ── cleanup ──────────────────────────────────────────────────────────────────
+
+unsafe {
+    if (File.exists(dir)) { File.delete(dir); }
+}
+
+summary();

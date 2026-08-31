@@ -7,6 +7,40 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `spec/files.md`, and five things about the filesystem nobody had written down
+
+- `File` is the namespace every program can reach and the only disk surface no
+  permission gates. It had no specification: the answer to "what happens if I
+  pass this?" was "read the Rust". It is written now, from measurement.
+- The five that will cost a caller time:
+  - **`write` converts instead of refusing.** `content` is not type-checked —
+    any value is rendered exactly as `out` would render it. A variable that is
+    unexpectedly `null` does not raise; it writes the four characters `null`
+    into the file, and the failure surfaces later, as data. `write_asBinary`,
+    two methods away, refuses a `1.5` outright.
+  - **`create` on an existing directory succeeds and creates nothing.** It
+    never truncates either, so `File.create(p)` returning cleanly does not mean
+    `p` is now a readable file. `mkdir`, by contrast, refuses to be confused
+    about what is already at the path.
+  - **`delete` on a directory removes the whole tree.** There is no recursive
+    flag and no confirmation. The `unsafe` gate's own wording — "it permanently
+    removes files" — understates what a mistyped path can take.
+  - **`rename` replaces an existing destination silently.** Its contents are
+    gone, with no error and no flag to prevent it.
+  - **`listDir` guarantees no order and omits what it cannot read.** A
+    directory changing during the listing returns a *short* list with no error,
+    and the caller cannot tell.
+- The document also states what the `unsafe` gates do **not** cover:
+  `File.write` destroys an existing file's contents with nothing declared. The
+  gate is on removing and moving, not on destroying.
+- **One fix came out of writing it.** `File.mkdir("")` reported success and
+  created nothing — `create_dir_all("")` is `Ok(())` in Rust — while `write`,
+  `create`, `listDir` and `stat` all reject the empty path. It is an `IOError`
+  now.
+- `unit_file_contract.sz` pins all fifteen, including that the argument count
+  is checked before any argument runs.
+
+
 ### Twenty more zero-argument members accepted arguments and threw them away
 
 - A previous stage fixed five of these outside `Gui` and thirty-one inside it.

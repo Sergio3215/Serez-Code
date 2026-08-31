@@ -20,7 +20,7 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo check` | PASS, no warnings |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
 | `cargo test --all-targets` | PASS, 305 tests (170 library, 36 LSP binary, 16 frontend robustness, 76 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
-| Serez test runner | PASS on **both** platforms, 488 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
+| Serez test runner | PASS on **both** platforms, 489 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
 Platform parity is now measured rather than assumed. `run_tests.sh` reported
@@ -396,6 +396,17 @@ stale; `ls spec/` is the inventory.
   declared type accepts at a call, the absence of numeric widening and of subtyping,
   where enforcement stops (bindings, field assignment, `[T]` parameters), `type_of`
   and `is`, and exactly how far the static checker reaches.
+- `files.md` — the `File` namespace: the eleven signatures, the absent
+  permission, the two `unsafe` gates and what they do **not** cover, and the
+  five behaviours a caller trips over — `write` rendering any value rather than
+  refusing it (so an unexpected `null` becomes the text `null` in the file),
+  `create` succeeding on an existing directory without making it readable,
+  `delete` on a directory removing the whole tree, `rename` replacing its
+  destination silently, and `listDir` returning unordered names that omit any
+  entry it could not read. Writing it produced one fix: `File.mkdir("")`
+  reported success while creating nothing, because `create_dir_all("")` is
+  `Ok(())` in Rust, and every other method in the namespace rejects the empty
+  path.
 - `syntax.md` — the statement and expression grammar: what parses, and the forms
   that read as valid and do not (brace-less bodies, `for (x in …)` without the
   `let`, a typed lambda parameter, a scalar annotation on a `let`, a JSON-style
