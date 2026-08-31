@@ -220,3 +220,75 @@ fn the_registry_and_this_suite_name_the_same_codes() {
          a documented code is a breaking change."
     );
 }
+/// Every kind the runtime raises must appear in `errors.md`, either with a code
+/// of its own or in the list of what falls through to `SZ4000`.
+///
+/// `runtime_error_code` maps eleven kinds and sends everything else to `SZ4000`,
+/// so a kind added anywhere in the evaluator silently joins the generic bucket.
+/// An earlier revision of `errors.md` said three kinds shared it. That was a
+/// sample of what one probe happened to reach rather than a reading of the
+/// source, and it understated the position by eleven — `GuiError` alone has
+/// forty sites and was missing. This compares the two directly so the count
+/// cannot drift again.
+#[test]
+fn kind_to_code_map_covers_every_kind_raised() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // Every `rt_err_kind("X"` / `fatal_err_kind("X"` in the source.
+    let mut raised: Vec<String> = Vec::new();
+    let mut stack = vec![root.join("src")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|ext| ext != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap_or_default();
+            for marker in ["rt_err_kind(", "fatal_err_kind("] {
+                let mut from = 0;
+                while let Some(at) = source[from..].find(marker) {
+                    let after = from + at + marker.len();
+                    from = after;
+                    let rest = source[after..].trim_start();
+                    let Some(rest) = rest.strip_prefix('"') else {
+                        continue;
+                    };
+                    if let Some(end) = rest.find('"') {
+                        let kind = &rest[..end];
+                        if !kind.is_empty()
+                            && kind.chars().all(|c| c.is_ascii_alphabetic())
+                            && !raised.contains(&kind.to_string())
+                        {
+                            raised.push(kind.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    raised.sort();
+    assert!(
+        raised.len() > 15,
+        "the scan found too few kinds to be reading the source: {raised:?}"
+    );
+
+    let spec = std::fs::read_to_string(root.join("spec/errors.md"))
+        .expect("spec/errors.md must be readable");
+    let missing: Vec<&String> = raised
+        .iter()
+        .filter(|kind| !spec.contains(&format!("`{kind}`")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these kinds are raised by the runtime and named nowhere in errors.md: \
+         {missing:?}. A kind with no code of its own falls through to SZ4000, so \
+         it belongs in the table of what shares that bucket."
+    );
+}

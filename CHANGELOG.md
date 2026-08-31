@@ -7,6 +7,46 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `SZ4000` has fifteen occupants, not three — correcting this cycle's own table
+
+- The table added two stages ago said three kinds shared the generic bucket.
+  That was a sample of what one probe happened to reach, not a reading of the
+  source.
+- `runtime_error_code` maps eleven kinds and sends **everything else** to
+  `SZ4000`. Fifteen fall through: `GuiError` (forty sites, the most common kind
+  after `TypeError`), `RangeError`, `RuntimeError`, `Overflow`, `TensorError`,
+  `SocketError`, `BinaryError`, `OSError`, `MemoryError`, `MediaError`,
+  `JsonError`, `GpuError`, `AutodiffError`, `InvalidAssignTarget`, and the
+  defensive `InternalError`.
+- The practical consequence is now stated: **for `SZ4000` the code alone is not
+  enough.** Telling a GUI failure from a socket failure from an integer overflow
+  needs `kind` as well. `compatibility.md` promises both fields are stable, so
+  the advice "match on the code, never the wording" just needed its other half.
+- `kind_to_code_map_covers_every_kind_raised` compares the source against the
+  document directly, so the count cannot drift again. It found the fifteenth —
+  `InvalidAssignTarget` — on its first run, which a hand count had missed
+  because it is formatted across lines.
+
+### `spec/socket.md`
+
+- Written from a loopback probe: the eight signatures, the id space, the error
+  contract and the fatal permission gate, all measured.
+- Three facts nothing had written down:
+  - **`recv` is partial and blocking.** It returns at most `maxBytes` and leaves
+    the remainder queued — sending `"abcdef"` then `recv(conn, 3)` yields
+    `"abc"`, and the next call `"def"`. A caller wanting a whole message must
+    loop. It blocks with no timeout, no non-blocking mode and no poll, so a
+    `recv` on a peer that never writes waits until the process is stopped.
+  - **`close` is asymmetric with the rest of the namespace.** Closing an id that
+    was never issued is a no-op, while `send`, `recv` and `accept` on an unknown
+    id are all `SocketError`. Deliberate for cleanup paths, but it means a typo
+    in a `close` is silent.
+  - **The WebSocket helpers do not perform the handshake.** `sendWsFrame` and
+    `recvWsFrame` layer RFC 6455 framing over an already-established connection;
+    the HTTP upgrade is the caller's job.
+- The documented `recvWsFrame` null fallback — the same value for "no message
+  yet" and "the read failed" — is restated where a reader will actually meet it.
+
 ### `spec/regex.md`, and five constructs that silently mean something else
 
 - Regex was the last namespace with real surface and no specification, which by

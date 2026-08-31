@@ -197,24 +197,53 @@ in `compatibility.md` behaviour no document describes is unstable. No official
 package calls `Regex.` at all. `spec/regex.md` has since been written, so the
 contract is frozen from here.
 
-### What still shares `SZ4000`
+### What shares `SZ4000`
 
-The code is coarse and the `kind` is the finer signal. Measured, `SZ4000` is
-carried by three kinds:
+`SZ4000` is not a small bucket. It is the **default arm** of the kind-to-code
+map: eleven kinds have a code of their own — the `SZ4001`–`SZ4005`, `SZ5001`,
+`SZ5002` and `SZ6001`–`SZ6004` rows above — and every other kind the runtime
+raises falls through to `SZ4000`. The code is therefore coarse and the `kind` is
+the finer signal.
 
-| `kind` | Reached by |
+Derived from the source rather than sampled, **fifteen** kinds share it:
+
+| `kind` | Raised by |
 | --- | --- |
-| `Overflow` | integer `+`/`*` overflow, exponent overflow |
-| `RangeError` | a `sort` order string that is not `"asc"`/`"desc"`, a negative padding target, an invalid `Random` range, a `DateTime` value out of range |
-| `RuntimeError` | a malformed regex pattern, `parseInt`/`parseDecimal` given text that is not a number, `break`/`continue` outside a loop reached through a class body |
+| `GuiError` | the GUI namespace — 40 sites, the most common kind after `TypeError` |
+| `RangeError` | exact-decimal operations, tensor shapes, `Random` ranges; also a `sort` order string that is not `"asc"`/`"desc"`, a negative padding target and an out-of-range `DateTime` |
+| `RuntimeError` | the built-ins and the evaluator core: a malformed regex pattern, `parseInt`/`parseDecimal` given text that is not a number, `break`/`continue` outside a loop reached through a class body |
+| `Overflow` | integer `+`/`*` and exponent overflow, exact-decimal overflow |
+| `TensorError` | tensor operations |
+| `SocketError` | sockets and WebSocket frames — see `socket.md` |
+| `BinaryError` | the Binary namespace |
+| `OSError` | the OS namespace |
+| `MemoryError` | raw memory |
+| `MediaError` | audio |
+| `JsonError` | JSON parsing and serialisation |
+| `GpuError` | GPU buffers |
+| `AutodiffError` | autodiff and weight files |
+| `InvalidAssignTarget` | writing through a path that does not exist, or to a field or index of a temporary value (`getArr()[i] = x`) |
+| `InternalError` | states that should be unreachable — "`min()` lost its non-empty argument list", an invalid value reference inside a Math builtin. Defensive, like `SZ4999`. |
 
-The `RuntimeError` row is the genuinely undifferentiated one, and it stays that
-way deliberately. A malformed pattern has no better kind to move to — there is
-no `SyntaxError`, and inventing one would be a new code rather than a
-reclassification. `parseInt("abc")` is a *value* problem, not a type problem:
-the argument is a string, which is the type the function wants. Narrowing either
-would be a change to a documented code and needs the process in
-`compatibility.md`.
+The practical consequence: **for `SZ4000`, matching on the code alone is not
+enough.** A consumer that wants to tell a GUI failure from a socket failure from
+an integer overflow has to read `kind` as well. `compatibility.md` promises both
+fields are stable, so both are safe to match on; it is only the advice "match on
+the code, never on the wording" that needs the extra half — the code, *and the
+kind when the code is `SZ4000`*.
+
+An earlier revision of this section said three kinds shared the bucket. That was
+a sample of what a probe happened to reach, not a reading of the source, and it
+understated the position by twelve kinds. `kind_to_code_map_covers_every_kind_raised`
+in `tests/diagnostic_codes.rs` now compares the two directly, so the table cannot
+drift again.
+
+Narrowing any of these to its own code would be a change to a documented code
+and needs the process in `compatibility.md`. Two are deliberate rather than
+pending: a malformed regex pattern has no better kind to move to — there is no
+`SyntaxError`, and inventing one would be a new code rather than a
+reclassification — and `parseInt("abc")` is a *value* problem, not a type
+problem, since the argument is a string, which is the type the function wants.
 
 Every type reports an unknown member the same way: recoverable
 `ReferenceError` / `SZ4001`. That holds for arrays, strings, dicts, sets, dec,
