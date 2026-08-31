@@ -45,9 +45,7 @@ impl super::Evaluator {
                 let addr = format!("{}:{}", host, port);
                 match std::net::TcpStream::connect(&addr) {
                     Ok(stream) => {
-                        let id = self.socket_next_id;
-                        self.socket_next_id += 1;
-                        self.socket_registry.insert(id, stream);
+                        let id = self.sockets.add_connection(stream);
                         EvalResult::Value(self.alloc(ObjectData::Integer(id)))
                     }
                     Err(e) => self.rt_err_kind("SocketError", format!("Socket.connect: {}", e)),
@@ -68,8 +66,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let bytes = data.into_bytes();
-                let result: Result<usize, std::io::Error> = match self.socket_registry.get_mut(&id)
-                {
+                let result: Result<usize, std::io::Error> = match self.sockets.connection_mut(id) {
                     Some(stream) => stream.write_all(&bytes).map(|_| bytes.len()),
                     None => {
                         return self.rt_err_kind(
@@ -106,8 +103,7 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", "Socket.recv: max_bytes must be an integer");
                     }
                 };
-                let result: Result<String, std::io::Error> = match self.socket_registry.get_mut(&id)
-                {
+                let result: Result<String, std::io::Error> = match self.sockets.connection_mut(id) {
                     Some(stream) => {
                         let mut buf = vec![0u8; max_bytes];
                         stream
@@ -135,9 +131,9 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                // Remove from both registries — IDs are shared across socket/listener space
-                self.socket_registry.remove(&id);
-                self.listener_registry.remove(&id);
+                // Closing an id that was never issued is a documented no-op,
+                // unlike send/recv/accept, which are errors on an unknown id.
+                self.sockets.close(id);
                 EvalResult::Value(self.null_ref)
             }
 
@@ -160,9 +156,7 @@ impl super::Evaluator {
                 let addr = format!("0.0.0.0:{}", port);
                 match std::net::TcpListener::bind(&addr) {
                     Ok(listener) => {
-                        let id = self.socket_next_id;
-                        self.socket_next_id += 1;
-                        self.listener_registry.insert(id, listener);
+                        let id = self.sockets.add_listener(listener);
                         EvalResult::Value(self.alloc(ObjectData::Integer(id)))
                     }
                     Err(e) => self.rt_err_kind("SocketError", format!("Socket.listen: {}", e)),
@@ -180,10 +174,10 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                // accept() takes &self so we can get an immutable borrow, complete the call,
-                // then drop the borrow before mutating socket_registry.
+                // accept() takes &self, so the immutable borrow of the listener ends
+                // before the accepted stream is registered as a connection.
                 let accept_result: Result<(std::net::TcpStream, _), _> =
-                    match self.listener_registry.get(&id) {
+                    match self.sockets.listener(id) {
                         Some(listener) => listener.accept(),
                         None => {
                             return self.rt_err_kind(
@@ -194,9 +188,7 @@ impl super::Evaluator {
                     };
                 match accept_result {
                     Ok((stream, _addr)) => {
-                        let new_id = self.socket_next_id;
-                        self.socket_next_id += 1;
-                        self.socket_registry.insert(new_id, stream);
+                        let new_id = self.sockets.add_connection(stream);
                         EvalResult::Value(self.alloc(ObjectData::Integer(new_id)))
                     }
                     Err(e) => self.rt_err_kind("SocketError", format!("Socket.accept: {}", e)),
@@ -217,7 +209,7 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                match self.socket_registry.get_mut(&id) {
+                match self.sockets.connection_mut(id) {
                     Some(stream) => match ws_recv_frame(stream) {
                         Ok(Some(msg)) => EvalResult::Value(self.alloc(ObjectData::Str(msg))),
                         Ok(None) => EvalResult::Value(self.null_ref),
@@ -250,7 +242,7 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                match self.socket_registry.get_mut(&id) {
+                match self.sockets.connection_mut(id) {
                     Some(stream) => match ws_send_frame(stream, &data) {
                         Ok(()) => EvalResult::Value(self.null_ref),
                         Err(e) => {

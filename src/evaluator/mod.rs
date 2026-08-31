@@ -219,12 +219,8 @@ pub struct Evaluator {
     // Collects yielded values while executing a generator function body.
     // None = not inside a generator; Some(vec) = collecting yields.
     yield_collector: Option<Vec<OwnedValue>>,
-    // Socket registry: maps socket IDs to live TCP streams
-    socket_registry: HashMap<i64, std::net::TcpStream>,
-    // Listener registry: maps listener IDs to bound TCP listeners
-    listener_registry: HashMap<i64, std::net::TcpListener>,
-    // Monotonically increasing ID counter for sockets and listeners
-    socket_next_id: i64,
+    // Connections and listeners, in one id space; see handles.rs.
+    sockets: crate::handles::SocketTable,
     // GPU buffers (CPU-backed flat f64 data), by the handle a program holds.
     // The registry owns id issuing and the never-reissued rule; see handles.rs.
     gpu: crate::handles::HandleRegistry<Vec<f64>>,
@@ -524,9 +520,7 @@ impl Evaluator {
             current_dir: None,
             current_module_exports: None,
             yield_collector: None,
-            socket_registry: HashMap::new(),
-            listener_registry: HashMap::new(),
-            socket_next_id: 1,
+            sockets: crate::handles::SocketTable::new(),
             gpu: crate::handles::HandleRegistry::new(),
             memory: crate::handles::HandleRegistry::new(),
             permissions: HashSet::new(),

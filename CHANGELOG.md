@@ -7,6 +7,28 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### Sockets move too, and the id-space promise stops being a coincidence
+
+- This was the case deferred two slices ago: `Socket.listen` and
+  `Socket.connect` hand back ids from **one** space, because `spec/socket.md`
+  promises a listener id and a connection id are never equal. Two independent
+  registries could not express that.
+- `HandleAllocator` is split out of `HandleRegistry`, and `SocketTable` owns
+  connections, listeners and the one allocator they share. Seventeen access
+  sites migrated; three `Evaluator` fields become one.
+- **The promise used to rest on three hand-written `+= 1`s** in different match
+  arms agreeing with each other. It is one counter now, with a test that binds a
+  real loopback listener, connects to it, and asserts the two ids cannot
+  collide — plus one pinning that closing an id that was never issued removes
+  nothing, which is the documented asymmetry with `send`/`recv`/`accept`.
+- Across the three slices the `Evaluator` struct goes from **55 fields to 51**,
+  and three of the roles the maturity plan names — memory manager, GPU runtime,
+  socket manager — no longer own their state. GUI (four fields), autodiff
+  (five), media, tasks and the spawned-process queue are what remain.
+- No behavioural change: the socket, WebSocket and `serez-http` suites all pass
+  unchanged.
+
+
 ### GPU buffers move onto the handle registry too
 
 - Same shape as the memory heap, same terms: fifteen access sites migrated, two

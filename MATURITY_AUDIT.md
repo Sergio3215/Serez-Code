@@ -19,7 +19,7 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS, no warnings |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
-| `cargo test --all-targets` | PASS, 314 tests (176 library, 36 LSP binary, 16 frontend robustness, 79 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
+| `cargo test --all-targets` | PASS, 318 tests (180 library, 36 LSP binary, 16 frontend robustness, 79 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
 | Serez test runner | PASS on **both** platforms, 490 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
@@ -314,6 +314,19 @@ yet meet.
    `Option` the caller discards — and it is recorded here rather than changed
    inside a refactor. Which of the two is right is a semantic decision with its
    own compatibility question, since a program may rely on the idempotent free.
+   **Sixth slice done:** the socket registries, the case that was explicitly
+   deferred two slices ago because two maps share one id space. `HandleAllocator`
+   was split out of `HandleRegistry` so the counter is one tested rule, and
+   `SocketTable` owns connections, listeners and that shared allocator.
+   Seventeen access sites migrated; three `Evaluator` fields become one. The
+   promise in `spec/socket.md` — that a listener id and a connection id are never
+   equal — used to rest on three hand-written `+= 1`s in different match arms
+   agreeing with each other; it is now one counter with a test that binds a real
+   loopback listener, connects to it, and asserts the two ids cannot collide.
+   With these three slices the `Evaluator` struct goes from **55 fields to 51**,
+   and three of the roles P2 names — memory manager, GPU runtime, socket manager
+   — no longer own their state. What remains in that list is GUI (four fields),
+   autodiff (five), media, tasks and the spawned-process queue.
 2. **Partly implemented:** `run_ecosystem.ps1` / `run_ecosystem.sh` run every
    official package's own suite against the freshly built core and report one
    table, preferring each runner's tally over its exit code (a green exit with

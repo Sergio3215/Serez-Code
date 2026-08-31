@@ -38,23 +38,51 @@
 //! refactor. What changes here is that such a budget would now have **one place
 //! to live** instead of three ad-hoc counters.
 //!
-//! ## Not yet migrated
+//! ## What lives here
 //!
-//! `gpu_buffers` is the same shape and is the obvious next one. The socket
-//! registries are **not**: `socket_registry` and `listener_registry` are two
-//! maps deliberately sharing a single `socket_next_id`, because `spec/socket.md`
-//! promises that a listener id and a connection id are never equal. Moving them
-//! needs an allocator shared across two registries, which is a different design
-//! and belongs in its own change.
+//! `HandleRegistry<T>` for the one-map cases — the raw-memory heap and the GPU
+//! buffers — and `SocketTable` for the case that is not one map: connections
+//! and listeners are two maps drawing from **one** id space, because
+//! `spec/socket.md` promises a listener id and a connection id are never equal.
+//! `HandleAllocator` is the counter both rest on, so that promise is one tested
+//! rule rather than several `+= 1`s that happen to agree.
 
 use std::collections::HashMap;
+
+/// Issues handles: starts at 1, only ever increases, never repeats.
+///
+/// It exists separately from `HandleRegistry` because the socket table needs
+/// **two** maps drawing from **one** id space — `spec/socket.md` promises a
+/// listener id and a connection id are never equal — and that promise should
+/// rest on the same tested counter as everything else rather than on three
+/// hand-written `+= 1`s agreeing.
+#[derive(Debug, Default)]
+pub struct HandleAllocator {
+    next: i64,
+}
+
+impl HandleAllocator {
+    pub fn new() -> Self {
+        HandleAllocator { next: 1 }
+    }
+
+    /// The next unused handle. Zero is never issued.
+    pub fn issue(&mut self) -> i64 {
+        if self.next == 0 {
+            self.next = 1;
+        }
+        let id = self.next;
+        self.next += 1;
+        id
+    }
+}
 
 /// A map from an integer handle to the object it names, plus the counter that
 /// issues those handles.
 #[derive(Debug)]
 pub struct HandleRegistry<T> {
     entries: HashMap<i64, T>,
-    next_id: i64,
+    ids: HandleAllocator,
 }
 
 impl<T> Default for HandleRegistry<T> {
@@ -71,14 +99,13 @@ impl<T> HandleRegistry<T> {
     pub fn new() -> Self {
         HandleRegistry {
             entries: HashMap::new(),
-            next_id: 1,
+            ids: HandleAllocator::new(),
         }
     }
 
     /// Store `value` and return the handle that now names it.
     pub fn insert(&mut self, value: T) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.ids.issue();
         self.entries.insert(id, value);
         id
     }
@@ -112,9 +139,115 @@ impl<T> HandleRegistry<T> {
     }
 }
 
+/// Connections and listeners, in one id space.
+///
+/// `Socket.listen` and `Socket.connect` both hand back an `int`, and
+/// `spec/socket.md` promises the two kinds never collide — a promise that used
+/// to rest on two `HashMap`s in `Evaluator` sharing a `socket_next_id` field
+/// that three separate call sites incremented by hand. The table owns it now.
+#[derive(Debug, Default)]
+pub struct SocketTable {
+    connections: HashMap<i64, std::net::TcpStream>,
+    listeners: HashMap<i64, std::net::TcpListener>,
+    ids: HandleAllocator,
+}
+
+impl SocketTable {
+    pub fn new() -> Self {
+        SocketTable {
+            connections: HashMap::new(),
+            listeners: HashMap::new(),
+            ids: HandleAllocator::new(),
+        }
+    }
+
+    pub fn add_connection(&mut self, stream: std::net::TcpStream) -> i64 {
+        let id = self.ids.issue();
+        self.connections.insert(id, stream);
+        id
+    }
+
+    pub fn add_listener(&mut self, listener: std::net::TcpListener) -> i64 {
+        let id = self.ids.issue();
+        self.listeners.insert(id, listener);
+        id
+    }
+
+    pub fn connection_mut(&mut self, id: i64) -> Option<&mut std::net::TcpStream> {
+        self.connections.get_mut(&id)
+    }
+
+    pub fn listener(&self, id: i64) -> Option<&std::net::TcpListener> {
+        self.listeners.get(&id)
+    }
+
+    /// Drop whichever kind holds `id`, if either does.
+    ///
+    /// Returns whether anything was removed. `Socket.close` discards that:
+    /// closing an id that was never issued is a documented no-op, unlike
+    /// `send`/`recv`/`accept`, which are all errors on an unknown id.
+    pub fn close(&mut self, id: i64) -> bool {
+        self.connections.remove(&id).is_some() | self.listeners.remove(&id).is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_listener_id_and_a_connection_id_are_never_equal() {
+        // The promise spec/socket.md makes, resting on one counter rather than
+        // on two maps that happen to be incremented in step.
+        let mut table = SocketTable::new();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let listener_id = table.add_listener(listener);
+
+        let port = table
+            .listener(listener_id)
+            .expect("the listener is addressable by its handle")
+            .local_addr()
+            .expect("local addr")
+            .port();
+        let stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect loopback");
+        let connection_id = table.add_connection(stream);
+
+        assert_ne!(listener_id, connection_id);
+        assert!(table.connection_mut(listener_id).is_none());
+        assert!(table.listener(connection_id).is_none());
+    }
+
+    #[test]
+    fn closing_an_id_that_was_never_issued_removes_nothing() {
+        let mut table = SocketTable::new();
+        assert!(!table.close(1), "nothing to close in an empty table");
+        assert!(!table.close(0), "and zero is not a handle either");
+    }
+
+    #[test]
+    fn the_allocator_starts_at_one_and_never_repeats() {
+        let mut ids = HandleAllocator::new();
+        let issued: Vec<i64> = (0..5).map(|_| ids.issue()).collect();
+        assert_eq!(issued, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn two_maps_can_share_one_id_space() {
+        // What the socket table needs: a listener id and a connection id are
+        // drawn from the same counter, so they can never collide.
+        let mut ids = HandleAllocator::new();
+        let mut listeners: HashMap<i64, &str> = HashMap::new();
+        let mut connections: HashMap<i64, &str> = HashMap::new();
+
+        let listener = ids.issue();
+        listeners.insert(listener, "listener");
+        let connection = ids.issue();
+        connections.insert(connection, "connection");
+
+        assert_ne!(listener, connection);
+        assert!(!connections.contains_key(&listener));
+        assert!(!listeners.contains_key(&connection));
+    }
 
     #[test]
     fn handles_start_at_one_and_increase() {
