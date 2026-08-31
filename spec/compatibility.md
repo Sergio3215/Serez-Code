@@ -157,6 +157,6 @@ These are stated so nobody mistakes silence for a guarantee.
   above. This entry used to name syntax, the type system, operators, scopes and
   modules; `syntax.md`, `types.md`, `operators.md`, `scopes.md` and `modules.md`
   have since been written, so all five are frozen and the entry was understating
-  what a release promises. What remains undocumented is genuinely unstable, and
+  what a release promises. `regex.md` and the control-flow expansion followed. What remains undocumented is genuinely unstable, and
   the honest way to find it is to look for behaviour no file in `spec/`
   describes rather than to trust a list here.

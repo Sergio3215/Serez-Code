@@ -135,4 +135,65 @@ test("a malformed pattern stays the generic RuntimeError", () => {
     assert(kind == "RuntimeError", "kind was " + kind);
 });
 
+// -- the constructs that are silently something else ---------------------------
+// None of these is rejected. Each parses as ordinary characters and matches the
+// wrong thing, which is why spec/regex.md gives them a table of their own. They
+// are pinned so a change to the pattern parser cannot alter them in either
+// direction without a test saying so.
+test("a lookahead is a group of literal characters", () => {
+    assert(Regex.test(r"a(?=b)", "ab") == false, "does not act as a lookahead");
+    assert(Regex.test(r"a(?=b)", "a?=b"), "matches the literal characters instead");
+});
+
+test("a negative lookahead is a group of literal characters", () => {
+    assert(Regex.test(r"a(?!b)", "ac") == false, "does not act as a lookahead");
+    assert(Regex.test(r"a(?!b)", "a?!b"), "matches the literal characters instead");
+});
+
+test("a named group is a group of literal characters", () => {
+    assert(Regex.test(r"(?<n>a)", "?<n>a"), "matches the literal characters");
+});
+
+test("a backreference is the literal digit", () => {
+    assert(Regex.test(r"(a)\1", "aa") == false, "does not back-reference");
+    assert(Regex.test(r"(a)\1", "a1"), "matches a literal 1 instead");
+});
+
+test("word boundary is the literal letter b", () => {
+    assert(Regex.test(r"a\bc", "abc"), "matches a literal b instead");
+    assert(Regex.test(r"\bcat\b", "a cat here") == false, "is not a boundary");
+});
+
+// -- shapes the document states ------------------------------------------------
+test("match returns null when nothing matches, not an empty array", () => {
+    assert(Regex.match(r"z", "abc") == null, "null, not an empty array");
+});
+
+test("replace takes the replacement last and replaces every occurrence", () => {
+    assert(Regex.replace(r"a", "banana", "X") == "bXnXnX", "every occurrence");
+});
+
+test("the replacement group form reads exactly one digit", () => {
+    // $10 is group 1 then a literal 0, not group 10; and a $n naming a group
+    // the pattern does not have stays literal.
+    assert(Regex.replace(r"(a)", "a", "$10") == "a0", "one digit only");
+    assert(Regex.replace(r"(a)(b)", "ab", "$5") == "$5", "absent group stays literal");
+    assert(Regex.replace(r"a", "a", "x$") == "x$", "a trailing dollar is literal");
+    assert(Regex.replace(r"a", "a", "$z") == "$z", "a dollar before anything else is literal");
+});
+
+test("an empty pattern does not split per character", () => {
+    let parts = Regex.split(r"", "abc");
+    assert(parts.length() == 1, "one element, got " + parts.length());
+    assert(parts[0] == "abc", "the whole text");
+});
+
+test("matching is case-sensitive and there are no flags", () => {
+    assert(Regex.test(r"A", "a") == false, "no case-insensitive mode");
+});
+
+test("dot does not match a newline", () => {
+    assert(Regex.test(r"a.b", "a\nb") == false, "dot excludes newline");
+});
+
 summary();

@@ -7,6 +7,38 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `spec/regex.md`, and five constructs that silently mean something else
+
+- Regex was the last namespace with real surface and no specification, which by
+  `compatibility.md`'s own rule left all of it unstable. The document is written
+  from measurement: the five signatures, the return shapes, the dialect, the
+  replacement syntax, the error contract and the two matcher ceilings.
+- **The section that matters most is what the engine does not support.** Five
+  constructs other engines have are not rejected — they parse as ordinary
+  characters and match something the author did not intend:
+
+  | Written | What it actually is | Measured |
+  | --- | --- | --- |
+  | `(?=b)` | a group of the literals `?`, `=`, `b` | does not match `"ab"`; matches `"a?=b"` |
+  | `(?!b)` | a group of the literals `?`, `!`, `b` | does not match `"ac"`; matches `"a?!b"` |
+  | `(?<n>a)` | a group of literal characters | matches the text `"?<n>a"` |
+  | `\1` | the literal character `1` | `r"(a)\1"` matches `"a1"`, not `"aa"` |
+  | `\b` | the literal character `b` | `r"a\bc"` matches `"abc"` |
+
+  One rule explains all five: `\` before an unrecognised character yields that
+  character, and `(?` followed by anything but `:` is an ordinary capturing
+  group. Such a pattern compiles, runs, and quietly answers the wrong question.
+- Two shapes worth knowing before reaching for the API: `replace` takes the
+  replacement **last**, after the text, and `match` returns `null` when nothing
+  matches rather than an empty array.
+- Writing the document turned up an omission in its own first draft. `replace`
+  supports `$&`, `$1`–`$9` and `$$` in the replacement — already covered by
+  tests, missed by the draft. The group form reads exactly **one** digit, so
+  `$10` is group 1 followed by a literal `0`, and a `$n` naming a group the
+  pattern does not have stays literal.
+- `unit_regex.sz` goes from 17 cases to 28, eleven of them pinning the hazards so
+  a change to the pattern parser cannot alter them in either direction unnoticed.
+
 ### `Regex` was the last namespace that got arity wrong
 
 - A wrong argument count on any `Regex.*` method reported the generic

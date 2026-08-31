@@ -658,9 +658,10 @@ impl super::Evaluator {
             // `RuntimeError` / `SZ4000`, so a caller matching on kind could not
             // tell "called wrongly" from any other runtime failure. Exactly the
             // shape `errors.md` records for `Set`'s unknown member, fixed the
-            // same way. Regex has no spec document, so this behaviour was
-            // unspecified and therefore unstable by `compatibility.md`'s own
-            // rule; no official package calls `Regex.` at all.
+            // same way. Regex had no spec document when this changed, so the
+            // behaviour was unspecified and therefore unstable by
+            // `compatibility.md`'s own rule; no official package calls `Regex.`
+            // at all. `spec/regex.md` exists now and freezes it.
             return self.rt_err_kind(
                 "TypeError",
                 format!("Regex.{} requires {} arguments", method, need),

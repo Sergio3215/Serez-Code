@@ -192,9 +192,10 @@ matching on kind could not tell "called wrongly" from any other runtime failure,
 while six documents — `arrays.md`, `dicts.md`, `random.md`, `sets.md`,
 `strings.md` and `tasks.md` — state the `TypeError` / `SZ4002` rule normatively.
 It is now `TypeError` / `SZ4002`. This was unspecified behaviour rather than a
-promise: there is no `spec/regex.md`, and by the rule in `compatibility.md`
-behaviour no document describes is unstable. No official package calls `Regex.`
-at all.
+promise: at the time of the change there was no `spec/regex.md`, and by the rule
+in `compatibility.md` behaviour no document describes is unstable. No official
+package calls `Regex.` at all. `spec/regex.md` has since been written, so the
+contract is frozen from here.
 
 ### What still shares `SZ4000`
 
