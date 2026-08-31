@@ -19,7 +19,7 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS, no warnings |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
-| `cargo test --all-targets` | PASS, 307 tests (170 library, 36 LSP binary, 16 frontend robustness, 78 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
+| `cargo test --all-targets` | PASS, 308 tests (170 library, 36 LSP binary, 16 frontend robustness, 79 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
 | Serez test runner | PASS on **both** platforms, 490 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 

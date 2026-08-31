@@ -3404,15 +3404,22 @@ fn a_supplied_gui_argument_of_the_wrong_type_is_rejected_not_defaulted() {
         (r#"Gui.setTitle(5);"#, "text must be a string"),
         (r#"Gui.clipboardSet(42);"#, "text must be a string"),
         (r#"Gui.setCursor(7);"#, "name must be a string"),
+        // These three pass a well-formed root because `root` is now checked
+        // too, and it is checked first — its failure is the destructive one, so
+        // it is caught before the scene is touched. A `null` root here would
+        // report the root's error and stop testing the argument it means to.
         (
-            r#"Gui.renderTree(null, "800", 600, 400);"#,
+            r#"Gui.renderTree(["div", [], []], "800", 600, 400);"#,
             "sheet must be an int",
         ),
         (
-            r#"Gui.renderTree(null, 1, "600", 400);"#,
+            r#"Gui.renderTree(["div", [], []], 1, "600", 400);"#,
             "w must be an int",
         ),
-        (r#"Gui.renderTree(null, 1, 600, []);"#, "h must be an int"),
+        (
+            r#"Gui.renderTree(["div", [], []], 1, 600, []);"#,
+            "h must be an int",
+        ),
     ] {
         let src = format!("use permissions {{ Gui }}\n{call}");
         match evaluate_with_permissions(&src, &["Gui"]) {
@@ -3975,5 +3982,54 @@ fn a_failed_kill_is_reported_instead_of_leaking() {
             );
         }
         other => panic!("a non-integer pid must be refused, got {other:?}"),
+    }
+}
+
+/// `Gui.renderTree` emptied the window and reported success when its tree was
+/// not a tree.
+///
+/// Of its five arguments, `root` was the only one with no type check — `sheet`,
+/// `w` and `h` all go through `gui_required_int`. The walk that consumes it is
+/// an `if let Some(Array)` with no `else`, and it runs *after* the scene has
+/// been cleared. So `Gui.renderTree("oops", 0, 800, 600)` cleared the window,
+/// drew nothing, and returned an empty region list as if it had rendered.
+///
+/// The same shape as the `OS.exec` argument defect: a wrong-typed argument
+/// means "do something else, quietly". Validation now happens before any state
+/// is touched, so a rejected tree leaves the window exactly as it was.
+#[test]
+fn render_tree_refuses_a_root_that_is_not_a_tree() {
+    for call in [
+        r#"Gui.renderTree("oops", 0, 800, 600);"#,
+        r#"Gui.renderTree(5, 0, 800, 600);"#,
+        r#"Gui.renderTree(null, 0, 800, 600);"#,
+        r#"Gui.renderTree(["div"], 0, 800, 600);"#,
+        r#"Gui.renderTree(["div", []], 0, 800, 600);"#,
+        r#"Gui.renderTree([1, [], []], 0, 800, 600);"#,
+    ] {
+        match evaluate_with_permissions(call, &["Gui"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
+                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert!(
+                    error.message.contains("root must be a"),
+                    "{call}: {}",
+                    error.message
+                );
+            }
+            other => panic!("{call} must be refused, got {other:?}"),
+        }
+    }
+
+    // A well-formed tree gets past the check and fails on the next condition —
+    // no window — which is what proves the validation let it through rather
+    // than accepting everything.
+    let ok = r#"Gui.renderTree(["div", [], []], 0, 800, 600);"#;
+    match evaluate_with_permissions(ok, &["Gui"]) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.kind, "GuiError", "{ok}: {error:?}");
+            assert!(error.message.contains("no window open"), "{ok}: {error:?}");
+        }
+        other => panic!("{ok}: expected the window check, got {other:?}"),
     }
 }

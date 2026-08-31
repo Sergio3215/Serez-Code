@@ -7,6 +7,30 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `Gui.renderTree` emptied the window and called it a success
+
+- Swept for the shape that produced the `OS.exec` defect — an `if let` on a
+  resolved value with no `else` — across the whole evaluator. Four sites remain;
+  three are fast paths with the general case immediately below them. The fourth
+  was real.
+- Of `renderTree`'s five arguments, `root` was the only one with no type check:
+  `sheet`, `w` and `h` all go through `gui_required_int`. The walk that consumes
+  the tree is that `if let` with no `else`, and it runs **after the scene has
+  been cleared**. `Gui.renderTree("oops", 0, 800, 600)` therefore cleared the
+  window, drew nothing, and returned an empty region list as if it had
+  rendered.
+- `root` is validated now, and validated **first** — before any state is
+  touched, so a rejected tree leaves the window exactly as it was. It must be a
+  `[tag, props, children]` array whose tag is a string; anything else is
+  `TypeError` / `SZ4002`.
+- `serez-ui` has one `renderTree` call site, on the experimental native render
+  path, and it always passes a well-formed tree. The canary still passes 36/36.
+- One existing test had to change, and the reason is worth recording: it passed
+  `null` as the root while checking the *sheet* argument's diagnostic, which was
+  only possible because the root was unchecked. It now passes a real tree, so it
+  tests the argument it names.
+
+
 ### `spec/processes.md`, a kill that always claimed success, and a false error marker
 
 - `OS`, `Env` and `System` are the process and environment surface: permission

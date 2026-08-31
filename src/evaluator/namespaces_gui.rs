@@ -4548,6 +4548,23 @@ impl super::Evaluator {
                     EvalResult::Value(v) => v,
                     other => return other,
                 };
+                // `root` was the one argument here with no type check, and the
+                // walk below is an `if let` with no `else`: a value that was not
+                // a `[tag, props, kids]` array was skipped silently — after the
+                // scene had already been cleared. `Gui.renderTree("oops", …)`
+                // therefore emptied the window and reported success. Validate
+                // before touching any state, so a rejected tree leaves the
+                // window exactly as it was.
+                match self.resolve(root_ref).cloned() {
+                    Some(ObjectData::Array { elements, .. })
+                        if elements.len() >= 3 && matches!(elements[0], OwnedValue::Str(_)) => {}
+                    _ => {
+                        return self.rt_err_kind(
+                            "TypeError",
+                            "Gui.renderTree: root must be a [tag, props, children] array with a string tag",
+                        );
+                    }
+                }
                 let sheet_h =
                     match self.gui_required_int(&dot_call.arguments[1], "renderTree", "sheet") {
                         Ok(v) => v,
