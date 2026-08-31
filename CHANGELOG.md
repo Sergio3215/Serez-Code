@@ -7,6 +7,39 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `spec/ecosystem.md` — the tiers existed only as a proposal, so nothing could fail them
+
+- `compatibility.md` says what a *change* promises. Nothing said what a *thing*
+  is: which layer it belongs to, what tier of promise it carries, or what a tier
+  obliges it to do. The tiers were three bullets inside the internal audit,
+  which meant "Official" was a label rather than a bar — no package could fail
+  to meet it.
+- The document defines the three tiers by what may happen to them, and gives
+  each a mechanical entry requirement. **Stable** needs a `spec/` document and
+  conformance tests the document points at; behaviour with no document is
+  unstable by definition, however long it has worked. **Official** needs a
+  declared minimum runtime, a suite of its own, and a place in the shared
+  ecosystem runner. **Experimental** may change or vanish in any release, but
+  must fail with a diagnostic rather than degrade in silence.
+- **Measured, not asserted.** Nine of the ten official packages declare no
+  minimum runtime; `serez-cobol` and `serez-strike` pass their own suites (23/23
+  and 113/113) but are absent from the shared runner; the ecosystem suite is not
+  in CI; and no manifest field carries a tier, so tooling cannot act on any of
+  this. All four are written down as unmet requirements.
+- **The gap that makes the first one matter:** the minimum-runtime floor is
+  checked by `sz install` and by nothing else. A project declaring
+  `"serez-code": ">= 99.0.0"` runs on 9.17.0 without a word; `sz update` skips
+  the key; installing a dependency never verifies that dependency's own floor.
+  The declaration protects the author who types `sz install`, not the user who
+  runs the program. Making it a run-time gate would refuse programs that work
+  today, so it is documented rather than changed, and both halves are now pinned
+  in the CLI suite on both platforms.
+- The layering claim was corrected before publishing. The first draft said a
+  lower layer never imports a higher one; `expr.rs` names twenty-one namespace
+  modules, so Core reaches into Native capabilities today. The document states
+  the layers as direction of travel and names the coupling that remains.
+
+
 ### `spec/files.md`, and five things about the filesystem nobody had written down
 
 - `File` is the namespace every program can reach and the only disk surface no

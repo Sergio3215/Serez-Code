@@ -20,7 +20,7 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo check` | PASS, no warnings |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
 | `cargo test --all-targets` | PASS, 305 tests (170 library, 36 LSP binary, 16 frontend robustness, 76 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
-| Serez test runner | PASS on **both** platforms, 489 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
+| Serez test runner | PASS on **both** platforms, 490 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
 Platform parity is now measured rather than assumed. `run_tests.sh` reported
@@ -140,15 +140,10 @@ The strict manifest parser accepts all ten local official manifests inspected
 eight-package aggregate canary because their runners are not yet entries in the
 shared ecosystem script.
 
-Proposed public tiers:
-
-- **Stable**: language specification, default interpreter pipeline, CLI execution,
-  modules and documented core value semantics.
-- **Official**: maintained libraries/frameworks with declared runtime/spec ranges
-  and mandatory compatibility suites.
-- **Experimental / Labs**: LLVM compiler, native renderer variants and any API
-  that may reject unsupported language constructs. Experimental must mean explicit
-  diagnostics, not silent semantic degradation.
+The public tiers are no longer a proposal in this file: they are normative in
+`spec/ecosystem.md`, which also states what each tier *requires*, where every
+surface and package sits today, and which requirements the ecosystem does not
+yet meet.
 
 ## Maturity plan
 
@@ -294,7 +289,13 @@ Proposed public tiers:
    commit-pinned revisions in CI needs an explicit trust policy for running
    external code, which has not been decided.
 3. Specify CLI exit codes, stdout/stderr and machine-readable diagnostics.
-4. Add minimum runtime and language-spec fields to official package manifests.
+4. Add minimum runtime fields to official package manifests. **Measured:** only
+   `serez-ui` declares one; the other nine do not. The mechanism is implemented
+   and specified, and `spec/ecosystem.md` now makes it a requirement of the
+   Official tier rather than advice. The remaining work is in each package's own
+   repository. A separate language-spec field is deliberately not added:
+   `compatibility.md` explains why the runtime version is the compatibility
+   number today.
 
 ### P3 — normative specification and documentation
 
@@ -407,6 +408,17 @@ stale; `ls spec/` is the inventory.
   reported success while creating nothing, because `create_dir_all("")` is
   `Ok(())` in Rust, and every other method in the namespace rejects the empty
   path.
+- `ecosystem.md` — the layers, the three public tiers and what each one
+  requires. Written because the tiers existed only as a proposal in this audit:
+  nothing public said what "Official" obliges a package to do, so no package
+  could fail to meet it. It records the measured state — nine of ten official
+  packages declare no minimum runtime, two are absent from the shared runner —
+  and the boundary that makes the first one matter: the floor is checked by
+  `sz install` and by nothing else, so a project demanding a runtime that does
+  not exist still runs. It also refuses to overclaim the layering: `expr.rs`
+  names twenty-one namespace modules, so Core reaches into Native capabilities
+  today, and the document says so rather than drawing arrows that are not
+  one-way.
 - `syntax.md` — the statement and expression grammar: what parses, and the forms
   that read as valid and do not (brace-less bodies, `for (x in …)` without the
   `let`, a typed lambda parameter, a scalar annotation on a `let`, a JSON-style

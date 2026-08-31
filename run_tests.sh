@@ -634,6 +634,15 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     run_cli_test "cli: the runtime is not an installable package" \
         "" "is the runtime" "" "$TMP_FLOOR" install serez-code
 
+    # The boundary, pinned because it is the surprising half: the floor gates
+    # `sz install` and nothing else. A program in a project whose manifest
+    # demands a runtime that does not exist still runs. spec/ecosystem.md
+    # records it as a known gap rather than changing it, because making it a
+    # run-time gate would refuse programs that work today.
+    printf 'out "ran";\n' > "$TMP_FLOOR/main.sz"
+    run_cli_test "cli: an unsatisfiable runtime floor does not gate execution" \
+        "ran" "" "" "$TMP_FLOOR" main.sz
+
     rm -rf "$TMP_FLOOR"
 
     # ── sz init ───────────────────────────────────────────────────────────────

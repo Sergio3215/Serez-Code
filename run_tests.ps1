@@ -916,6 +916,15 @@ if ($runAll -or $cli) {
     Run-CLI-Test "cli: the runtime is not an installable package" @("install", "serez-code") `
                  -expectErr "is the runtime" -workDir $tmpFloor
 
+    # The boundary, pinned because it is the surprising half: the floor gates
+    # `sz install` and nothing else. A program in a project whose manifest
+    # demands a runtime that does not exist still runs. spec/ecosystem.md
+    # records it as a known gap rather than changing it, because making it a
+    # run-time gate would refuse programs that work today.
+    Set-Content (Join-Path $tmpFloor "main.sz") 'out "ran";'
+    Run-CLI-Test "cli: an unsatisfiable runtime floor does not gate execution" @("main.sz") `
+                 -expectOut "ran" -workDir $tmpFloor
+
     Remove-Item $tmpFloor -Recurse -Force -ErrorAction SilentlyContinue
 
     # ── sz init tests ─────────────────────────────────────────────────────────

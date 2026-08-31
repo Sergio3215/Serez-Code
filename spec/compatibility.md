@@ -123,6 +123,15 @@ This key is **not** a package to install — there is no package by that name, i
 is the interpreter reading the manifest. `sz install` checks it against the
 running runtime and fails with an actionable message when it is not satisfied.
 
+**`sz install` is the only thing that checks it.** Running a program does not:
+a project declaring `"serez-code": ">= 99.0.0"` runs on 9.17.0 without a word.
+`sz update` skips the key, and installing a *dependency* does not verify that
+dependency's own floor — only the manifest in the current directory is read. So
+the declaration protects the author who types `sz install`, not the user who
+runs the program. Making it a run-time gate would refuse programs that work
+today, so it is written down here rather than changed silently; the CLI suite
+pins both halves. See `ecosystem.md`.
+
 Accepted forms are `">= X.Y.Z"`, `"> X.Y.Z"`, `"= X.Y.Z"` and a bare `"X.Y.Z"`,
 which means the same as `>=`. Whitespace around the operator is optional, and a
 `-suffix` or `+suffix` is ignored for comparison. Caret, tilde and union ranges
