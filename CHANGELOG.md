@@ -7,6 +7,24 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### The GUI runtime becomes one thing the evaluator holds, not four it is
+
+- `gui_state`, `gui_fonts`, `gui_stylesheets` and `gui_svgs` were four separate
+  `Evaluator` fields. That is how one struct came to be simultaneously the
+  language evaluator and the GUI runtime — the largest of the roles the maturity
+  plan's P2 section exists to unpick.
+- `GuiRuntime` owns them. 107 access sites migrated across the namespace file;
+  the `Evaluator` struct goes from 51 fields to **48**.
+- **The `Option`s and the `take()`/`replace()` dance are unchanged, on purpose.**
+  `state` is `None` until a window opens, and `Gui.renderTree` takes it so the
+  scene can be mutated while `&mut self` is used elsewhere, then puts it back.
+  That is dictated by the borrow checker, not by the design, and grouping the
+  fields neither needs nor makes it different — pretending otherwise would have
+  turned a move into a rewrite.
+- No behavioural change. `serez-ui`, the canary that exercises GUI, classes,
+  closures, modules and receiver semantics, passes 36/36 unchanged.
+
+
 ### Sockets move too, and the id-space promise stops being a coincidence
 
 - This was the case deferred two slices ago: `Socket.listen` and

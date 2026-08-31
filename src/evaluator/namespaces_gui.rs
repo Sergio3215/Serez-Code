@@ -428,6 +428,33 @@ struct Glyph {
 // `NativeStylesheet` va como pub(crate): mod.rs guarda `Vec<namespaces_gui::NativeStylesheet>`.
 mod css;
 pub(crate) use css::NativeStylesheet;
+
+/// Everything the GUI needs to keep between calls, owned in one place.
+///
+/// These four were four separate `Evaluator` fields — `gui_state`,
+/// `gui_fonts`, `gui_stylesheets`, `gui_svgs` — which is how one struct came to
+/// be simultaneously the language evaluator and the GUI runtime, the coupling
+/// `MATURITY_AUDIT.md`'s P2 section exists to unpick.
+///
+/// The `Option`s are load-bearing and stay: `state` is `None` until a window is
+/// opened, and `Gui.renderTree` deliberately `take()`s it so the scene can be
+/// mutated while `&mut self` is used for other work, then puts it back. That
+/// dance is dictated by the borrow checker, not by the design, and moving the
+/// fields does not change it.
+#[derive(Default)]
+pub(crate) struct GuiRuntime {
+    /// The interpreter thread's local canvas and input snapshot. `None` until
+    /// `Gui.open`; taken and replaced by `renderTree`.
+    pub(crate) state: Option<GuiState>,
+    /// Typography plus the glyph cache. Lives outside `state` because fonts
+    /// survive a window being closed and reopened.
+    pub(crate) fonts: Option<GuiFonts>,
+    /// Stylesheets loaded by `Gui.loadStylesheet`, by the handle it returned.
+    pub(crate) stylesheets: Vec<NativeStylesheet>,
+    /// SVGs parsed by `Gui.loadSvg`, by the handle it returned.
+    pub(crate) svgs: Vec<svg::ParsedSvg>,
+}
+
 use css::{css_color, parse_css};
 
 // El motor de primitivos (layout + CSS + emit de escena) vive en el submodulo
@@ -3293,7 +3320,7 @@ impl super::Evaluator {
                     }
                     (g.win_w.max(1), g.win_h.max(1))
                 };
-                self.gui_state = Some(GuiState::new(ww, wh));
+                self.gui.state = Some(GuiState::new(ww, wh));
                 EvalResult::Value(self.null_ref)
             }
 
@@ -3332,7 +3359,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                if self.gui_state.is_none() {
+                if self.gui.state.is_none() {
                     return self.rt_err_kind(
                         "GuiError",
                         "Gui.openWindow: open the primary window first (Gui.open)",
@@ -3346,7 +3373,7 @@ impl super::Evaluator {
                     }
                 };
                 let id = {
-                    let st = self.gui_state.as_mut().unwrap();
+                    let st = self.gui.state.as_mut().unwrap();
                     let id = st.next_win_id;
                     st.next_win_id += 1;
                     id
@@ -3381,7 +3408,7 @@ impl super::Evaluator {
                     let e = g.extra.get(&id).unwrap();
                     (e.win_w.max(1), e.win_h.max(1))
                 };
-                let st = self.gui_state.as_mut().unwrap();
+                let st = self.gui.state.as_mut().unwrap();
                 st.bg_windows.insert(
                     id,
                     WinSlot {
@@ -3421,7 +3448,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         if st.switch_to(id) {
                             EvalResult::Value(self.null_ref)
@@ -3438,7 +3465,8 @@ impl super::Evaluator {
 
             "currentWindow" => {
                 let id = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.current_win as i64)
                     .unwrap_or(0);
@@ -3467,7 +3495,7 @@ impl super::Evaluator {
                         return self.rt_err_kind("GuiError", "Gui.closeWindow: no GUI host");
                     }
                 };
-                if let Some(st) = self.gui_state.as_mut() {
+                if let Some(st) = self.gui.state.as_mut() {
                     if st.current_win == id {
                         st.switch_to(0);
                     }
@@ -3487,7 +3515,7 @@ impl super::Evaluator {
             // ── Modo retenido (scene graph) ──────────────────────────────────
             "nodeRect" | "nodeCircle" | "nodeLine" | "nodeText" | "nodeTextPx" | "nodeImage" => {
                 let method = dot_call.method.as_str();
-                if self.gui_state.is_none() {
+                if self.gui.state.is_none() {
                     return self
                         .rt_err_kind("GuiError", &format!("Gui.{}: no window open", method));
                 }
@@ -3649,7 +3677,7 @@ impl super::Evaluator {
                 };
                 match node {
                     Some((kind, x, y, color)) => {
-                        let st = self.gui_state.as_mut().unwrap();
+                        let st = self.gui.state.as_mut().unwrap();
                         let id = st.scene_add(kind, x, y, color);
                         EvalResult::Value(self.alloc(ObjectData::Integer(id)))
                     }
@@ -3693,7 +3721,7 @@ impl super::Evaluator {
                         }
                     }
                 }
-                if self.gui_state.is_none() {
+                if self.gui.state.is_none() {
                     return self
                         .rt_err_kind("GuiError", &format!("Gui.{}: no window open", method));
                 }
@@ -3737,7 +3765,7 @@ impl super::Evaluator {
                         0,
                     ),
                 };
-                let st = self.gui_state.as_mut().unwrap();
+                let st = self.gui.state.as_mut().unwrap();
                 let id = st.scene_add(kind, vals[0] as i32, vals[1] as i32, color);
                 EvalResult::Value(self.alloc(ObjectData::Integer(id)))
             }
@@ -3793,7 +3821,7 @@ impl super::Evaluator {
                         }
                     }
                 };
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         let id = st.scene_add(kind, 0, 0, color);
                         EvalResult::Value(self.alloc(ObjectData::Integer(id)))
@@ -3804,7 +3832,7 @@ impl super::Evaluator {
                 }
             }
 
-            "nodeClipPop" => match self.gui_state.as_mut() {
+            "nodeClipPop" => match self.gui.state.as_mut() {
                 Some(st) => {
                     let id = st.scene_add(SceneNodeKind::ClipPop, 0, 0, 0);
                     EvalResult::Value(self.alloc(ObjectData::Integer(id)))
@@ -3859,7 +3887,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                let st = match self.gui_state.as_mut() {
+                let st = match self.gui.state.as_mut() {
                     Some(s) => s,
                     None => {
                         return self.rt_err_kind("GuiError", "Gui.nodeSet: no window open");
@@ -4008,7 +4036,7 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", "Gui.nodeTransform requires 6 integers");
                     }
                 };
-                let st = match self.gui_state.as_mut() {
+                let st = match self.gui.state.as_mut() {
                     Some(s) => s,
                     None => {
                         return self.rt_err_kind("GuiError", "Gui.nodeTransform: no window open");
@@ -4050,7 +4078,7 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", "Gui.nodeDelete id must be an integer");
                     }
                 };
-                let existed = match self.gui_state.as_mut() {
+                let existed = match self.gui.state.as_mut() {
                     Some(st) => {
                         let before = st.scene.len();
                         st.scene.retain(|n| n.id != id);
@@ -4070,7 +4098,7 @@ impl super::Evaluator {
             }
 
             "sceneClear" => {
-                if let Some(st) = self.gui_state.as_mut() {
+                if let Some(st) = self.gui.state.as_mut() {
                     st.scene.clear();
                     st.scene_dirty = true;
                 }
@@ -4079,7 +4107,8 @@ impl super::Evaluator {
 
             "nodeCount" => {
                 let n = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.scene.len() as i64)
                     .unwrap_or(0);
@@ -4108,14 +4137,14 @@ impl super::Evaluator {
                         return self.rt_err_kind("GuiError", "Gui.renderScene: no GUI host");
                     }
                 };
-                if self.gui_state.is_none() {
+                if self.gui.state.is_none() {
                     return self.rt_err_kind("GuiError", "Gui.renderScene: no window open");
                 }
-                if self.gui_fonts.is_none() {
-                    self.gui_fonts = Some(GuiFonts::new());
+                if self.gui.fonts.is_none() {
+                    self.gui.fonts = Some(GuiFonts::new());
                 }
-                let fonts = self.gui_fonts.as_mut().unwrap();
-                let st = self.gui_state.as_mut().unwrap();
+                let fonts = self.gui.fonts.as_mut().unwrap();
+                let st = self.gui.state.as_mut().unwrap();
                 let redrew = st.scene_dirty || st.win_w != st.width || st.win_h != st.height;
                 if redrew {
                     st.scene_render(fonts, bg);
@@ -4134,7 +4163,7 @@ impl super::Evaluator {
             }
 
             "isOpen" => {
-                let open = match self.gui_state.as_ref() {
+                let open = match self.gui.state.as_ref() {
                     None => false,
                     Some(st) if st.current_win == 0 => host()
                         .map(|h| {
@@ -4157,7 +4186,8 @@ impl super::Evaluator {
 
             "size" => {
                 let (w, h) = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| (s.win_w as i64, s.win_h as i64))
                     .unwrap_or((0, 0));
@@ -4174,7 +4204,7 @@ impl super::Evaluator {
                         return self.rt_err_kind("GuiError", "Gui.present: no GUI host");
                     }
                 };
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         if st.current_win == 0 {
                             st.present(&host);
@@ -4201,7 +4231,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         // Reconciliar el canvas con el tamaño de ventana del último present.
                         if st.win_w != st.width || st.win_h != st.height {
@@ -4229,7 +4259,7 @@ impl super::Evaluator {
                     Some(v) => v,
                     None => return EvalResult::Error,
                 };
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.fill_rect(x as i32, y as i32, w as i32, h as i32, color);
                         EvalResult::Value(self.null_ref)
@@ -4265,7 +4295,7 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", "Gui.fillRectAlpha requires 6 integers");
                     }
                 };
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         let r = ((color >> 16) & 0xff) as u8;
                         let g = ((color >> 8) & 0xff) as u8;
@@ -4293,7 +4323,7 @@ impl super::Evaluator {
                         return self.rt_err_kind("TypeError", "Gui.setPixel requires 3 integers");
                     }
                 };
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.put(x, y, color);
                         EvalResult::Value(self.null_ref)
@@ -4326,7 +4356,7 @@ impl super::Evaluator {
                         return self.rt_err_kind("TypeError", "Gui.drawLine requires 5 integers");
                     }
                 };
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.draw_line(x0, y0, x1, y1, color);
                         EvalResult::Value(self.null_ref)
@@ -4384,14 +4414,14 @@ impl super::Evaluator {
                         );
                     }
                 };
-                if self.gui_state.is_none() {
+                if self.gui.state.is_none() {
                     return self.rt_err_kind("GuiError", "Gui.drawText: no window open");
                 }
-                if self.gui_fonts.is_none() {
-                    self.gui_fonts = Some(GuiFonts::new());
+                if self.gui.fonts.is_none() {
+                    self.gui.fonts = Some(GuiFonts::new());
                 }
-                let fonts = self.gui_fonts.as_mut().unwrap();
-                let st = self.gui_state.as_mut().unwrap();
+                let fonts = self.gui.fonts.as_mut().unwrap();
+                let st = self.gui.state.as_mut().unwrap();
                 st.draw_text(
                     fonts,
                     x,
@@ -4423,7 +4453,7 @@ impl super::Evaluator {
                 };
                 // Familia default → aritmética de rejilla (sin tocar FontSystem);
                 // familia custom → ancho real por advances (proporcional).
-                let w = match self.gui_fonts.as_mut() {
+                let w = match self.gui.fonts.as_mut() {
                     Some(f) if f.current != 0 => f.measure(&text, scale as i32 * 8),
                     _ => text.chars().count() as i64 * 8 * scale,
                 };
@@ -4453,7 +4483,7 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", "Gui.measureTextPx requires (string, int)");
                     }
                 };
-                let w = match self.gui_fonts.as_mut() {
+                let w = match self.gui.fonts.as_mut() {
                     Some(f) if f.current != 0 => f.measure(&text, px as i32),
                     _ => text.chars().count() as i64 * px,
                 };
@@ -4482,15 +4512,15 @@ impl super::Evaluator {
                 // Una ruta que no carga no es fatal: el alias queda sin mapear y el
                 // texto sale con la familia activa (mismo fallback que el intérprete).
                 for (alias, path) in sheet.font_decls.clone() {
-                    if self.gui_fonts.is_none() {
-                        self.gui_fonts = Some(GuiFonts::new());
+                    if self.gui.fonts.is_none() {
+                        self.gui.fonts = Some(GuiFonts::new());
                     }
-                    if let Some(family) = self.gui_fonts.as_mut().unwrap().load_font_file(&path) {
+                    if let Some(family) = self.gui.fonts.as_mut().unwrap().load_font_file(&path) {
                         sheet.font_alias.push((alias, family));
                     }
                 }
-                self.gui_stylesheets.push(sheet);
-                let handle = self.gui_stylesheets.len() as i64; // 1-based
+                self.gui.stylesheets.push(sheet);
+                let handle = self.gui.stylesheets.len() as i64; // 1-based
                 EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
             }
 
@@ -4524,8 +4554,8 @@ impl super::Evaluator {
                 };
                 match svg::parse(&markup) {
                     Some(p) => {
-                        self.gui_svgs.push(p);
-                        let handle = self.gui_svgs.len() as i64; // 1-based
+                        self.gui.svgs.push(p);
+                        let handle = self.gui.svgs.len() as i64; // 1-based
                         EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
                     }
                     None => self.rt_err_kind(
@@ -4583,13 +4613,13 @@ impl super::Evaluator {
                 } else {
                     Vec::new()
                 };
-                if self.gui_state.is_none() {
+                if self.gui.state.is_none() {
                     return self.rt_err_kind("GuiError", "Gui.renderTree: no window open");
                 }
-                let mut st = self.gui_state.take().unwrap();
+                let mut st = self.gui.state.take().unwrap();
                 // Sacamos las fuentes afuera para medir texto proporcional durante el
                 // layout (borrow mutable de un local, ajeno al arena de self).
-                let mut fonts = self.gui_fonts.take();
+                let mut fonts = self.gui.fonts.take();
                 st.scene.clear();
                 st.prim_clip = None;
                 st.win_w = w.max(1) as usize;
@@ -4598,11 +4628,11 @@ impl super::Evaluator {
                 let mut regions: Vec<PrimRegion> = Vec::new();
                 {
                     let sheet_ref = if sheet_h >= 1 {
-                        self.gui_stylesheets.get((sheet_h - 1) as usize)
+                        self.gui.stylesheets.get((sheet_h - 1) as usize)
                     } else {
                         None
                     };
-                    let svgs_ref: &[svg::ParsedSvg] = &self.gui_svgs;
+                    let svgs_ref: &[svg::ParsedSvg] = &self.gui.svgs;
                     if let Some(ObjectData::Array { elements, .. }) = self.resolve(root_ref) {
                         if elements.len() >= 3 {
                             if let OwnedValue::Str(tag) = &elements[0] {
@@ -4637,8 +4667,8 @@ impl super::Evaluator {
                         }
                     }
                 }
-                self.gui_fonts = fonts;
-                self.gui_state = Some(st);
+                self.gui.fonts = fonts;
+                self.gui.state = Some(st);
                 // Regions → Array de [tag, x, y, w, h, onClick|null] para hit-testing en .sz.
                 let mut arr: Vec<OwnedValue> = Vec::with_capacity(regions.len());
                 for r in regions {
@@ -4671,10 +4701,10 @@ impl super::Evaluator {
                         return self.rt_err_kind("TypeError", "Gui.loadFont path must be a string");
                     }
                 };
-                if self.gui_fonts.is_none() {
-                    self.gui_fonts = Some(GuiFonts::new());
+                if self.gui.fonts.is_none() {
+                    self.gui.fonts = Some(GuiFonts::new());
                 }
-                match self.gui_fonts.as_mut().unwrap().load_font_file(&path) {
+                match self.gui.fonts.as_mut().unwrap().load_font_file(&path) {
                     Some(family) => EvalResult::Value(self.alloc(ObjectData::Str(family))),
                     None => self.rt_err_kind(
                         "GuiError",
@@ -4695,7 +4725,7 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", "Gui.setFont family must be a string");
                     }
                 };
-                if self.gui_fonts.is_none() {
+                if self.gui.fonts.is_none() {
                     // Sin FontSystem todavía: el reset a default no necesita crearlo.
                     if name.is_empty()
                         || name.eq_ignore_ascii_case("default")
@@ -4703,15 +4733,16 @@ impl super::Evaluator {
                     {
                         return EvalResult::Value(self.true_ref);
                     }
-                    self.gui_fonts = Some(GuiFonts::new());
+                    self.gui.fonts = Some(GuiFonts::new());
                 }
-                let ok = self.gui_fonts.as_mut().unwrap().set_family(&name);
+                let ok = self.gui.fonts.as_mut().unwrap().set_family(&name);
                 EvalResult::Value(if ok { self.true_ref } else { self.false_ref })
             }
 
             "font" => {
                 let name = self
-                    .gui_fonts
+                    .gui
+                    .fonts
                     .as_ref()
                     .map(|f| f.families[f.current as usize].clone())
                     .unwrap_or_default();
@@ -4736,7 +4767,7 @@ impl super::Evaluator {
                     }
                 }
                 let color = (vals[5] as u32) & 0x00FF_FFFF;
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.fill_round_rect(
                             vals[0] as i32,
@@ -4756,7 +4787,8 @@ impl super::Evaluator {
                 // Milisegundos desde que se abrió la ventana — para animaciones y blink del caret.
                 // Devuelve 0 si no hay ventana abierta.
                 let ms = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.open_time.elapsed().as_millis() as i64)
                     .unwrap_or(0);
@@ -4781,7 +4813,7 @@ impl super::Evaluator {
                     }
                 }
                 let color = (vals[4] as u32) & 0x00FF_FFFF;
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.draw_rect(
                             vals[0] as i32,
@@ -4814,7 +4846,7 @@ impl super::Evaluator {
                     }
                 }
                 let color = (vals[3] as u32) & 0x00FF_FFFF;
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.fill_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color);
                         EvalResult::Value(self.null_ref)
@@ -4842,7 +4874,7 @@ impl super::Evaluator {
                     }
                 }
                 let color = (vals[3] as u32) & 0x00FF_FFFF;
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.draw_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color);
                         EvalResult::Value(self.null_ref)
@@ -4870,7 +4902,7 @@ impl super::Evaluator {
                     }
                 }
                 let color = (vals[5] as u32) & 0x00FF_FFFF;
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.draw_thick_line(
                             vals[0] as i32,
@@ -4915,7 +4947,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         let mut i = 0;
                         while i + 3 < pts.len() {
@@ -4964,7 +4996,7 @@ impl super::Evaluator {
                     .chunks_exact(2)
                     .map(|c| (c[0] as i32, c[1] as i32))
                     .collect();
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.fill_polygon(&verts, color);
                         EvalResult::Value(self.null_ref)
@@ -4996,7 +5028,8 @@ impl super::Evaluator {
 
             "mouse" => {
                 let (mx, my) = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| (s.input.mouse_x as i64, s.input.mouse_y as i64))
                     .unwrap_or((0, 0));
@@ -5008,7 +5041,8 @@ impl super::Evaluator {
 
             "mouseDown" => {
                 let down = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.mouse_l)
                     .unwrap_or(false);
@@ -5017,7 +5051,8 @@ impl super::Evaluator {
 
             "mouseRightDown" => {
                 let down = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.mouse_r)
                     .unwrap_or(false);
@@ -5026,7 +5061,8 @@ impl super::Evaluator {
 
             "mouseMiddleDown" => {
                 let down = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.mouse_m)
                     .unwrap_or(false);
@@ -5035,7 +5071,8 @@ impl super::Evaluator {
 
             "mousePressed" => {
                 let pressed = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.mouse_pressed)
                     .unwrap_or(false);
@@ -5048,7 +5085,8 @@ impl super::Evaluator {
 
             "scroll" => {
                 let (dx, dy) = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| (s.input.scroll_x, s.input.scroll_y))
                     .unwrap_or((0, 0));
@@ -5068,7 +5106,7 @@ impl super::Evaluator {
                         return self.rt_err_kind("TypeError", "Gui.keyDown name must be a string");
                     }
                 };
-                let down = match self.gui_state.as_ref() {
+                let down = match self.gui.state.as_ref() {
                     Some(st) => match name.as_str() {
                         "Shift" => st.input.shift,
                         "Ctrl" | "Control" => st.input.ctrl,
@@ -5083,7 +5121,8 @@ impl super::Evaluator {
 
             "keysPressed" => {
                 let v = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.keys_pressed.clone())
                     .unwrap_or_default();
@@ -5091,7 +5130,8 @@ impl super::Evaluator {
             }
             "keysRepeated" => {
                 let v = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.keys_repeated.clone())
                     .unwrap_or_default();
@@ -5099,7 +5139,8 @@ impl super::Evaluator {
             }
             "keysReleased" => {
                 let v = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.keys_released.clone())
                     .unwrap_or_default();
@@ -5108,7 +5149,8 @@ impl super::Evaluator {
 
             "charsTyped" => {
                 let s = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.chars_typed.clone())
                     .unwrap_or_default();
@@ -5117,7 +5159,8 @@ impl super::Evaluator {
 
             "focused" => {
                 let v = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.focused)
                     .unwrap_or(true);
@@ -5125,7 +5168,8 @@ impl super::Evaluator {
             }
             "mouseInWindow" => {
                 let v = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.mouse_in)
                     .unwrap_or(false);
@@ -5133,7 +5177,8 @@ impl super::Evaluator {
             }
             "mouseBackDown" => {
                 let v = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.mouse_back)
                     .unwrap_or(false);
@@ -5141,7 +5186,8 @@ impl super::Evaluator {
             }
             "mouseForwardDown" => {
                 let v = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.mouse_fwd)
                     .unwrap_or(false);
@@ -5150,7 +5196,8 @@ impl super::Evaluator {
             // Archivos soltados sobre la ventana este frame (rutas). Requiere permiso File para leerlos.
             "droppedFiles" => {
                 let v = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.dropped_files.clone())
                     .unwrap_or_default();
@@ -5159,7 +5206,8 @@ impl super::Evaluator {
             // Composición IME en curso (CJK), "" si no hay. serez-ui la dibuja en el caret.
             "imePreedit" => {
                 let s = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.ime_preedit.clone())
                     .unwrap_or_default();
@@ -5168,7 +5216,8 @@ impl super::Evaluator {
             // Archivos arrastrados SOBRE la ventana (antes de soltar) — para resaltar zonas de drop.
             "hoveredFiles" => {
                 let v = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.hovered_files.clone())
                     .unwrap_or_default();
@@ -5177,7 +5226,8 @@ impl super::Evaluator {
             // Toques activos este frame, aplanado: [id, fase, x, y, ...] (fase: 0=start 1=move 2=end 3=cancel).
             "touches" => {
                 let ts = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.touches.clone())
                     .unwrap_or_default();
@@ -5196,7 +5246,8 @@ impl super::Evaluator {
             // Delta de pinch/zoom acumulado este frame (decimal; 0 si no hubo gesto).
             "pinchDelta" => {
                 let d = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.input.pinch_delta)
                     .unwrap_or(0.0);
@@ -5206,7 +5257,8 @@ impl super::Evaluator {
             // recordar dónde estaba la ventana, o posicionar relativo a un monitor.
             "windowPosition" => {
                 let (x, y) = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| (s.win_x, s.win_y))
                     .unwrap_or((0, 0));
@@ -5220,7 +5272,8 @@ impl super::Evaluator {
             // (posición + resolución en píxeles físicos). Para multi-monitor y centrado.
             "monitors" => {
                 let mons = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.monitors.clone())
                     .unwrap_or_default();
@@ -5261,7 +5314,7 @@ impl super::Evaluator {
             }
 
             "clipboardGet" => {
-                let text = match self.gui_state.as_mut() {
+                let text = match self.gui.state.as_mut() {
                     Some(st) => {
                         if st.clipboard.is_none() {
                             st.clipboard = arboard::Clipboard::new().ok();
@@ -5286,7 +5339,7 @@ impl super::Evaluator {
                         Ok(v) => v,
                         Err(e) => return e,
                     };
-                if let Some(st) = self.gui_state.as_mut() {
+                if let Some(st) = self.gui.state.as_mut() {
                     if st.clipboard.is_none() {
                         st.clipboard = arboard::Clipboard::new().ok();
                     }
@@ -5299,7 +5352,7 @@ impl super::Evaluator {
             // Lee una imagen del portapapeles (RGBA) y la registra como handle (como loadImage).
             // Devuelve 0 si el portapapeles no contiene una imagen.
             "clipboardGetImage" => {
-                let img = match self.gui_state.as_mut() {
+                let img = match self.gui.state.as_mut() {
                     Some(st) => {
                         if st.clipboard.is_none() {
                             st.clipboard = arboard::Clipboard::new().ok();
@@ -5322,7 +5375,7 @@ impl super::Evaluator {
                             px.push((a << 24) | (r << 16) | (g << 8) | b);
                             i += 4;
                         }
-                        match self.gui_state.as_mut() {
+                        match self.gui.state.as_mut() {
                             Some(st) => {
                                 let id = st.next_image;
                                 st.next_image += 1;
@@ -5354,7 +5407,8 @@ impl super::Evaluator {
                 };
                 // ARGB u32 (interno) → RGBA bytes (lo que espera arboard).
                 let rgba = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .and_then(|s| s.images.get(&hnd))
                     .map(|im| {
@@ -5369,7 +5423,7 @@ impl super::Evaluator {
                     });
                 match rgba {
                     Some((w, h, bytes)) => {
-                        if let Some(st) = self.gui_state.as_mut() {
+                        if let Some(st) = self.gui.state.as_mut() {
                             if st.clipboard.is_none() {
                                 st.clipboard = arboard::Clipboard::new().ok();
                             }
@@ -5413,7 +5467,7 @@ impl super::Evaluator {
                     let [r, g, b, a] = pixel.0;
                     px.push(((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
                 }
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         let id = st.next_image;
                         st.next_image += 1;
@@ -5470,7 +5524,7 @@ impl super::Evaluator {
                     let [r, g, b, a] = pixel.0;
                     px.push(((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
                 }
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         let id = st.next_image;
                         st.next_image += 1;
@@ -5501,7 +5555,7 @@ impl super::Evaluator {
                     }
                 }
                 let (x, y, hnd) = (vals[0] as i32, vals[1] as i32, vals[2]);
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         if n == 3 {
                             st.draw_image(x, y, hnd, 0);
@@ -5545,7 +5599,7 @@ impl super::Evaluator {
                 };
                 let c1 = (vals[4] as u32) & 0x00FF_FFFF;
                 let c2 = (vals[5] as u32) & 0x00FF_FFFF;
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.fill_gradient(
                             vals[0] as i32,
@@ -5578,7 +5632,7 @@ impl super::Evaluator {
                         }
                     }
                 }
-                match self.gui_state.as_mut() {
+                match self.gui.state.as_mut() {
                     Some(st) => {
                         st.blur_region(
                             vals[0] as i32,
@@ -5595,7 +5649,8 @@ impl super::Evaluator {
 
             "scaleFactor" => {
                 let sf = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .map(|s| s.scale_factor)
                     .unwrap_or(1.0);
@@ -5618,7 +5673,7 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", "Gui.textAdvances requires (string, int)");
                     }
                 };
-                let xs = match self.gui_fonts.as_mut() {
+                let xs = match self.gui.fonts.as_mut() {
                     Some(f) => f.advances(&text, scale * 8),
                     None => {
                         let mut v = vec![0i64];
@@ -5784,7 +5839,8 @@ impl super::Evaluator {
                     }
                 };
                 let (w, h) = self
-                    .gui_state
+                    .gui
+                    .state
                     .as_ref()
                     .and_then(|s| s.images.get(&hnd))
                     .map(|im| (im.w as i64, im.h as i64))
@@ -5812,7 +5868,7 @@ impl super::Evaluator {
                         return self.rt_err_kind("TypeError", "Gui.pushClip requires 4 integers");
                     }
                 };
-                if let Some(st) = self.gui_state.as_mut() {
+                if let Some(st) = self.gui.state.as_mut() {
                     st.clip_stack.push(st.clip);
                     let (cx0, cy0, cx1, cy1) = st.clip;
                     let nx0 = x.max(cx0);
@@ -5825,7 +5881,7 @@ impl super::Evaluator {
             }
 
             "popClip" => {
-                if let Some(st) = self.gui_state.as_mut() {
+                if let Some(st) = self.gui.state.as_mut() {
                     if let Some(prev) = st.clip_stack.pop() {
                         st.clip = prev;
                     } else {
@@ -5875,7 +5931,7 @@ impl super::Evaluator {
                     g.cmds.push_back(GuiCmd::Close);
                     h.cv.notify_all();
                 }
-                self.gui_state = None;
+                self.gui.state = None;
                 EvalResult::Value(self.null_ref)
             }
 
@@ -6141,7 +6197,7 @@ impl super::Evaluator {
     /// extsCsv, defaultName). Devuelve la ruta elegida o "" si se canceló. Bloquea
     /// (el hilo main muestra el diálogo modal) vía handshake dialog_seq/dialog_done.
     fn gui_file_dialog(&mut self, save: bool, dot_call: &ast::DotCallExpression) -> EvalResult {
-        if self.gui_state.is_none() {
+        if self.gui.state.is_none() {
             return self.rt_err_kind("GuiError", "Gui file dialog: no window open");
         }
         let n = dot_call.arguments.len();

@@ -246,19 +246,11 @@ pub struct Evaluator {
     // Monotonically increasing counter for stable tensor identity (tid)
     tensor_id_counter: u64,
     // ── GUI ───────────────────────────────────────────────────────────────────
-    // Estado GUI del lado del intérprete (canvas + texto + input snapshot). La
-    // ventana/EventLoop de winit viven en el HILO PRINCIPAL (ver main.rs y
-    // namespaces_gui::gui_host_main_loop); se comunican por GUI_HOST. None hasta open.
-    gui_state: Option<namespaces_gui::GuiState>,
-    // Tipografía GUI (loadFont/setFont + cache de glifos). Vive fuera de gui_state
-    // para sobrevivir abrir/cerrar ventana y servir measureText sin ventana.
-    gui_fonts: Option<namespaces_gui::GuiFonts>,
-    // Hojas de estilo nativas (Gui.loadStylesheet → handle = índice+1). Motor de
-    // primitivos: match CSS en Rust (Fase 1). Global, no per-ventana.
-    gui_stylesheets: Vec<namespaces_gui::NativeStylesheet>,
-    // SVGs parseados (Gui.loadSvg → handle = índice+1). El primitivo `svg` los
-    // rasteriza con tiny-skia a la caja (Fase 2b). Global, no per-ventana.
-    gui_svgs: Vec<svg::ParsedSvg>,
+    // El runtime GUI: canvas + tipografías + hojas de estilo + SVGs, como UNA cosa
+    // en vez de cuatro campos del evaluador. La ventana/EventLoop de winit viven
+    // en el HILO PRINCIPAL (ver main.rs y namespaces_gui::gui_host_main_loop);
+    // aquí solo vive el lado del intérprete. Ver namespaces_gui::GuiRuntime.
+    gui: namespaces_gui::GuiRuntime,
     // Procesos lanzados con OS.spawn (no bloqueante). OS.tick() los cosecha y dispara
     // sus callbacks onOk/onErr en este hilo (cooperativo, sin background thread).
     spawned: Vec<namespaces_os::SpawnedJob>,
@@ -531,10 +523,7 @@ impl Evaluator {
             ad_next_id: 1,
             ad_tensor_ids: HashMap::new(),
             tensor_id_counter: 1,
-            gui_state: None,
-            gui_fonts: None,
-            gui_stylesheets: Vec::new(),
-            gui_svgs: Vec::new(),
+            gui: namespaces_gui::GuiRuntime::default(),
             #[cfg(feature = "audio")]
             media: None,
             spawned: Vec::new(),
