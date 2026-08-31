@@ -3689,3 +3689,94 @@ fn a_type_diagnostic_does_not_change_the_exit_code() {
         checking.failure
     );
 }
+
+/// A `throw` raised while evaluating an argument to a native method belongs to
+/// the program, and must reach the program's own handler.
+///
+/// It did not. Thirty-six argument sites across `File`, `JSON`, `Math`, `Env`,
+/// `OS`, `Terminal` and `Time` matched on `EvalResult::Value` and collapsed
+/// every other result — `Throw` included — into a bare `EvalResult::Error`.
+/// The user's exception was destroyed, `try/catch` never saw it, and the
+/// program died reporting `SZ4999`: an internal defect in Serez-Code, blaming
+/// the interpreter for the exception the source had just raised.
+///
+/// The table covers every method the sweep flagged, in the argument position
+/// that reaches evaluation — including second and third arguments, because a
+/// gate on argument one proves nothing about argument three.
+#[test]
+fn user_throw_survives_native_argument_evaluation() {
+    let cases = [
+        // File — the whole namespace, both argument positions.
+        "File.exists(boom())",
+        "File.read(boom())",
+        "File.write(boom(), \"x\")",
+        "File.write(\"unreachable.txt\", boom())",
+        "File.create(boom())",
+        "File.read_asBinary(boom())",
+        "File.write_asBinary(boom(), [1])",
+        "File.write_asBinary(\"unreachable.bin\", boom())",
+        "File.listDir(boom())",
+        "File.mkdir(boom())",
+        "File.stat(boom())",
+        "unsafe { File.delete(boom()) }",
+        "unsafe { File.rename(boom(), \"b\") }",
+        "unsafe { File.rename(\"a\", boom()) }",
+        // JSON.
+        "JSON.parse(boom())",
+        "JSON.stringify(boom())",
+        "JSON.pretty(boom())",
+        "JSON.pretty(boom(), 2)",
+        // Math — the two scalar entry points the earlier migration missed.
+        "Math.sign(boom())",
+        "Math.clamp(boom(), 0, 5)",
+        "Math.clamp(1, boom(), 5)",
+        "Math.clamp(1, 0, boom())",
+        // Env, OS, Terminal, Time.
+        "Env.get(boom())",
+        "unsafe { Env.set(boom(), \"v\") }",
+        "unsafe { Env.set(\"K\", boom()) }",
+        "unsafe { OS.exec(boom()) }",
+        "unsafe { OS.spawn(boom()) }",
+        "unsafe { OS.kill(boom()) }",
+        "unsafe { Terminal.setRawMode(boom()) }",
+        "unsafe { Terminal.enableMouse(boom()) }",
+        "Terminal.setCursor(boom(), 1)",
+        "Terminal.setCursor(1, boom())",
+        "Terminal.writeByte(boom())",
+        "Time.sleep(boom())",
+    ];
+
+    for call in cases {
+        // An `unsafe { .. }` block is already a statement; a `;` after its
+        // closing brace is a parse error, so only a bare call gets one.
+        let stmt = if call.ends_with('}') {
+            call.to_string()
+        } else {
+            format!("{call};")
+        };
+
+        let uncaught = format!(
+            "fn int boom() {{ throw \"BOOM\"; return 1; }}\n{stmt}\nout(\"unreachable\");\n"
+        );
+        match evaluate_with_permissions(&uncaught, &["Env", "OS", "Terminal", "Time"]) {
+            ProgramOutcome::UncaughtException { message } => {
+                assert_eq!(message, "BOOM", "{call}: the payload must survive intact");
+            }
+            ProgramOutcome::UnstructuredError => {
+                panic!("{call}: the user's throw was destroyed and reported as SZ4999")
+            }
+            other => panic!("{call}: expected the user exception, got {other:?}"),
+        }
+
+        let caught = format!(
+            "fn int boom() {{ throw \"BOOM\"; return 1; }}\n\
+             let seen = \"none\";\n\
+             try {{ {stmt} }} catch (e) {{ seen = \"{{e}}\"; }}\n\
+             out(seen);\n"
+        );
+        match evaluate_with_permissions(&caught, &["Env", "OS", "Terminal", "Time"]) {
+            ProgramOutcome::Value(_) => {}
+            other => panic!("{call}: the handler must run and the program continue, got {other:?}"),
+        }
+    }
+}

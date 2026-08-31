@@ -26,14 +26,17 @@ impl super::Evaluator {
                 }
                 let x = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let mn = match self.eval_expression(&dot_call.arguments[1]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let mx = match self.eval_expression(&dot_call.arguments[2]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 match (
@@ -67,6 +70,7 @@ impl super::Evaluator {
                 }
                 let xr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 match self.resolve(xr).cloned() {
@@ -129,6 +133,7 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -146,6 +151,7 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -185,10 +191,12 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let cr = match self.eval_expression(&dot_call.arguments[1]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -209,6 +217,7 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -235,6 +244,7 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -287,10 +297,12 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let br = match self.eval_expression(&dot_call.arguments[1]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -335,6 +347,7 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -368,6 +381,7 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -387,6 +401,7 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -429,6 +444,7 @@ impl super::Evaluator {
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let path = match self.resolve(pr).cloned() {
@@ -462,10 +478,12 @@ impl super::Evaluator {
                 }
                 let fr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let tr = match self.eval_expression(&dot_call.arguments[1]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let from = match self.resolve(fr).cloned() {
@@ -507,6 +525,7 @@ impl super::Evaluator {
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let owned = self.extract(vr);
@@ -519,6 +538,7 @@ impl super::Evaluator {
                 }
                 let sr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let s = match self.resolve(sr).cloned() {
@@ -539,6 +559,7 @@ impl super::Evaluator {
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
                     EvalResult::Value(r) => r,
+                    EvalResult::Throw(v) => return EvalResult::Throw(v),
                     _ => return EvalResult::Error,
                 };
                 let owned = self.extract(vr);
@@ -546,6 +567,7 @@ impl super::Evaluator {
                 let indent = if dot_call.arguments.len() == 2 {
                     let ir = match self.eval_expression(&dot_call.arguments[1]) {
                         EvalResult::Value(r) => r,
+                        EvalResult::Throw(v) => return EvalResult::Throw(v),
                         _ => return EvalResult::Error,
                     };
                     match self.resolve(ir) {

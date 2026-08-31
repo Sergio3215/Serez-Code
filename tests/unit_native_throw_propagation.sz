@@ -1,0 +1,107 @@
+// unit_native_throw_propagation.sz — a `throw` raised while evaluating an
+// argument to a native method belongs to the program, not to the interpreter.
+//
+// It used to be destroyed: thirty-six argument sites across File, JSON, Math,
+// Env, OS, Terminal and Time collapsed every non-Value result into a bare
+// internal error, so `try/catch` never saw the exception and the program died
+// reporting SZ4999 — "a defect in Serez-Code itself" — for an exception the
+// source had just raised on purpose.
+
+use permissions { Env, Time }
+
+fn string boomString() {
+    throw "BOOM";
+    return "unreachable";
+}
+
+fn int boomInt() {
+    throw "BOOM";
+    return 0;
+}
+
+test("a throw in a File argument reaches the handler", () => {
+    let seen = "none";
+    try {
+        File.exists(boomString());
+    } catch (e) {
+        seen = "{e}";
+    }
+    assert(seen == "BOOM", "the payload must arrive intact, got: {seen}");
+});
+
+test("a throw in the second argument reaches the handler", () => {
+    let seen = "none";
+    try {
+        File.write("unreachable_throw_probe.txt", boomString());
+    } catch (e) {
+        seen = "{e}";
+    }
+    assert(seen == "BOOM", "argument two must propagate too, got: {seen}");
+    assert(
+        File.exists("unreachable_throw_probe.txt") == false,
+        "the write must not happen when its argument threw"
+    );
+});
+
+test("a throw in a JSON argument reaches the handler", () => {
+    let seen = "none";
+    try {
+        JSON.parse(boomString());
+    } catch (e) {
+        seen = "{e}";
+    }
+    assert(seen == "BOOM", "the payload must arrive intact, got: {seen}");
+});
+
+test("a throw in a Math argument reaches the handler", () => {
+    let seen = "none";
+    try {
+        Math.sign(boomInt());
+    } catch (e) {
+        seen = "{e}";
+    }
+    assert(seen == "BOOM", "the payload must arrive intact, got: {seen}");
+});
+
+test("a throw in a later Math argument reaches the handler", () => {
+    let seen = "none";
+    try {
+        Math.clamp(1, 0, boomInt());
+    } catch (e) {
+        seen = "{e}";
+    }
+    assert(seen == "BOOM", "argument three must propagate too, got: {seen}");
+});
+
+test("a throw in an Env argument reaches the handler", () => {
+    let seen = "none";
+    try {
+        Env.get(boomString());
+    } catch (e) {
+        seen = "{e}";
+    }
+    assert(seen == "BOOM", "the payload must arrive intact, got: {seen}");
+});
+
+test("a throw in a Time argument reaches the handler", () => {
+    let seen = "none";
+    try {
+        Time.sleep(boomInt());
+    } catch (e) {
+        seen = "{e}";
+    }
+    assert(seen == "BOOM", "the payload must arrive intact, got: {seen}");
+});
+
+test("execution continues after the handler runs", () => {
+    let reached = false;
+    try {
+        File.read(boomString());
+    } catch (e) {
+        reached = true;
+    }
+    assert(reached, "the handler must run");
+    assert(File.exists("."), "the program must keep running afterwards");
+});
+
+summary();

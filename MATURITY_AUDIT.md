@@ -19,8 +19,8 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS, no warnings |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
-| `cargo test --all-targets` | PASS, 304 tests (170 library, 36 LSP binary, 16 frontend robustness, 75 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
-| Serez test runner | PASS on **both** platforms, 487 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
+| `cargo test --all-targets` | PASS, 305 tests (170 library, 36 LSP binary, 16 frontend robustness, 76 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
+| Serez test runner | PASS on **both** platforms, 488 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
 Platform parity is now measured rather than assumed. `run_tests.sh` reported
@@ -232,6 +232,20 @@ Proposed public tiers:
    Property-schema enforcement, declaring-owner privacy,
    static inheritance/references and the internal missing-`this` invariant
    remain in the legacy inventory.
+
+   **The argument boundary is now swept rather than sampled.** A user `throw`
+   raised while evaluating an argument to a native method was destroyed at 36
+   sites across `File`, `JSON`, `Math`, `Env`, `OS`, `Terminal` and `Time`:
+   they matched `EvalResult::Value` and folded everything else into an
+   unstructured error, so `try/catch` never saw the exception and the program
+   died reporting `SZ4999` — an internal defect of Serez-Code — for an
+   exception the source had deliberately raised. The list came from passing a
+   throwing call to every native method of every namespace at arities one to
+   four (1,610 programs), because reading is not reliable here: the same file
+   mixes correct and incorrect sites, and `Math.abs` propagated while
+   `Math.sign`, two match arms below it, did not.
+   `user_throw_survives_native_argument_evaluation` pins every call form,
+   including second- and third-argument positions.
 4. Add malformed-input and error-path tests for every migrated diagnostic.
 
 ### P2 — boundaries and compatibility

@@ -7,6 +7,35 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### A `throw` inside a native argument was destroyed and blamed on the interpreter
+
+- The program raises an exception while computing an argument to a native
+  method. That exception belongs to the program. It did not reach the program:
+  thirty-six argument sites across `File`, `JSON`, `Math`, `Env`, `OS`,
+  `Terminal` and `Time` matched only `EvalResult::Value` and collapsed every
+  other result — `Throw` among them — into a bare unstructured error.
+- The visible outcome was the worst one available. `try/catch` never saw the
+  exception, and the program died printing `SZ4999`: *"the runtime reported a
+  failure without recording a diagnostic for it. This is a defect in
+  Serez-Code itself, not in the program that was run."* The interpreter
+  accused itself of a defect for an exception the source had deliberately
+  raised, and the author's own payload was gone.
+- All thirty-six sites now carry the propagation arm the rest of the runtime
+  already used. `File.exists(boom())` reaches the handler with `"BOOM"`
+  intact, and uncaught it reports `UNCAUGHT EXCEPTION: BOOM` rather than an
+  internal defect.
+- **Found by sweeping, not by reading.** A throwing call was passed to every
+  native method of every namespace at arities one to four — 1,610 programs.
+  Reading the source would not have produced this list: the same file mixes
+  correct and incorrect sites, `Math.abs` propagates while `Math.sign`, two
+  arms below it, did not.
+- Two regressions keep it: `user_throw_survives_native_argument_evaluation`
+  pins all thirty-four call forms from Rust, including second and third
+  argument positions — a gate on argument one proves nothing about argument
+  three — and `unit_native_throw_propagation.sz` pins the visible contract,
+  that the handler runs, the payload arrives intact and execution continues.
+
+
 ### `SZ4000` has fifteen occupants, not three — correcting this cycle's own table
 
 - The table added two stages ago said three kinds shared the generic bucket.
