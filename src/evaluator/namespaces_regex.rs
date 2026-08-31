@@ -651,7 +651,20 @@ impl super::Evaluator {
             );
         }
         if dot_call.arguments.len() != need {
-            return self.rt_err(format!("Regex.{} requires {} arguments", method, need));
+            // Every other namespace answers a wrong argument count with
+            // `TypeError` / `SZ4002`, and six spec documents state it
+            // normatively — arrays, dicts, random, sets, strings and tasks.
+            // Regex was the one that did not: it reported the generic
+            // `RuntimeError` / `SZ4000`, so a caller matching on kind could not
+            // tell "called wrongly" from any other runtime failure. Exactly the
+            // shape `errors.md` records for `Set`'s unknown member, fixed the
+            // same way. Regex has no spec document, so this behaviour was
+            // unspecified and therefore unstable by `compatibility.md`'s own
+            // rule; no official package calls `Regex.` at all.
+            return self.rt_err_kind(
+                "TypeError",
+                format!("Regex.{} requires {} arguments", method, need),
+            );
         }
 
         let context = format!("Regex.{method}");

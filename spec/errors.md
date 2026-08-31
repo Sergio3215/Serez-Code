@@ -73,7 +73,7 @@ Current runtime mappings are:
 
 | Code | `kind` |
 | --- | --- |
-| `SZ4000` | Generic runtime category, including `Overflow` and `RangeError` until narrower codes are specified. |
+| `SZ4000` | Generic runtime category. Carries three kinds — `Overflow`, `RangeError` and `RuntimeError` — until narrower codes are specified; see the note below on which failures share it. |
 | `SZ4001` | `ReferenceError` |
 | `SZ4002` | `TypeError` |
 | `SZ4003` | `IndexOutOfBounds` |
@@ -185,6 +185,35 @@ are evaluated. See `dicts.md` and `sets.md`.
 An unknown `Set` member previously reported `TypeError`, which made Set the only
 collection whose `kind` could not separate "no such member" from "called
 wrongly". It now matches every other type.
+
+`Regex` was the same shape and is fixed the same way. A wrong argument count on
+any `Regex.*` method reported the generic `RuntimeError` / `SZ4000`, so a caller
+matching on kind could not tell "called wrongly" from any other runtime failure,
+while six documents — `arrays.md`, `dicts.md`, `random.md`, `sets.md`,
+`strings.md` and `tasks.md` — state the `TypeError` / `SZ4002` rule normatively.
+It is now `TypeError` / `SZ4002`. This was unspecified behaviour rather than a
+promise: there is no `spec/regex.md`, and by the rule in `compatibility.md`
+behaviour no document describes is unstable. No official package calls `Regex.`
+at all.
+
+### What still shares `SZ4000`
+
+The code is coarse and the `kind` is the finer signal. Measured, `SZ4000` is
+carried by three kinds:
+
+| `kind` | Reached by |
+| --- | --- |
+| `Overflow` | integer `+`/`*` overflow, exponent overflow |
+| `RangeError` | a `sort` order string that is not `"asc"`/`"desc"`, a negative padding target, an invalid `Random` range, a `DateTime` value out of range |
+| `RuntimeError` | a malformed regex pattern, `parseInt`/`parseDecimal` given text that is not a number, `break`/`continue` outside a loop reached through a class body |
+
+The `RuntimeError` row is the genuinely undifferentiated one, and it stays that
+way deliberately. A malformed pattern has no better kind to move to — there is
+no `SyntaxError`, and inventing one would be a new code rather than a
+reclassification. `parseInt("abc")` is a *value* problem, not a type problem:
+the argument is a string, which is the type the function wants. Narrowing either
+would be a change to a documented code and needs the process in
+`compatibility.md`.
 
 Every type reports an unknown member the same way: recoverable
 `ReferenceError` / `SZ4001`. That holds for arrays, strings, dicts, sets, dec,

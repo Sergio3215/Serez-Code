@@ -102,4 +102,37 @@ test("invalid pattern is catchable", () => {
     assert(caught, "unbalanced group throws a catchable error");
 });
 
+// ── the error contract: arity matches every other namespace ─────────────────────
+test("wrong arity is TypeError / SZ4002, like every other namespace", () => {
+    // Regex used to answer a wrong argument count with the generic
+    // RuntimeError / SZ4000, so a caller matching on kind could not tell
+    // "called wrongly" from any other runtime failure. Six spec documents state
+    // the TypeError rule normatively; Regex was the only holdout. Same shape as
+    // Set's unknown member, recorded in errors.md, fixed the same way.
+    let code = "";
+    let kind = "";
+    try {
+        let x = Regex.match("a");
+    } catch (e) {
+        code = e.code;
+        kind = e.kind;
+    }
+    assert(code == "SZ4002", "code was " + code);
+    assert(kind == "TypeError", "kind was " + kind);
+});
+
+test("an unknown member stays ReferenceError / SZ4001", () => {
+    let code = "";
+    try { let x = Regex.nope("a", "b"); } catch (e) { code = e.code; }
+    assert(code == "SZ4001", "code was " + code);
+});
+
+test("a malformed pattern stays the generic RuntimeError", () => {
+    // Deliberate, not an oversight: there is no SyntaxError kind to move it to,
+    // and inventing one would be a new code. Recorded in errors.md.
+    let kind = "";
+    try { let x = Regex.match("(", "a"); } catch (e) { kind = e.kind; }
+    assert(kind == "RuntimeError", "kind was " + kind);
+});
+
 summary();

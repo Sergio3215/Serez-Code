@@ -7,6 +7,38 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `Regex` was the last namespace that got arity wrong
+
+- A wrong argument count on any `Regex.*` method reported the generic
+  `RuntimeError` / `SZ4000`, so a caller matching on `kind` could not tell
+  "called wrongly" from any other runtime failure. Six spec documents —
+  `arrays.md`, `dicts.md`, `random.md`, `sets.md`, `strings.md`, `tasks.md` —
+  state the `TypeError` / `SZ4002` rule normatively. Regex was the only holdout.
+- Exactly the shape `errors.md` already records for `Set`'s unknown member, and
+  fixed the same way. Safe rather than breaking: there is no `spec/regex.md`, so
+  the behaviour was unspecified and therefore unstable by `compatibility.md`'s
+  own rule, and no official package calls `Regex.` at all.
+- Pinned by three cases in `unit_regex.sz`: arity is `SZ4002`, an unknown member
+  stays `SZ4001`, and a malformed pattern stays the generic kind.
+
+### What "unmigrated producers" actually meant
+
+- The audit's Evaluator row said `mod.rs`, `stmt.rs`, `classes.rs` and
+  `methods_dec.rs` "still hold unmigrated producers". Measured: **zero** sites
+  originate an unstructured failure — that was settled earlier in this cycle.
+  What remains is coarseness, not absence.
+- `SZ4000` is carried by three kinds, and the registry named two.
+  `errors.md` now lists all three and which failures reach each: `Overflow` for
+  integer and exponent overflow; `RangeError` for a bad `sort` order string, a
+  negative padding target, an invalid `Random` range and an out-of-range
+  `DateTime`; `RuntimeError` for a malformed regex pattern, `parseInt` /
+  `parseDecimal` given non-numeric text, and `break`/`continue` outside a loop
+  reached through a class body.
+- The `RuntimeError` row stays undifferentiated deliberately, and says so: there
+  is no `SyntaxError` kind for a malformed pattern, and `parseInt("abc")` is a
+  value problem rather than a type one — the argument is a string, which is the
+  type the function wants. Narrowing either would change a documented code.
+
 ### A worker speaks on the parent's streams, and nothing said so
 
 - `tasks.md` describes `poll` as how a worker's result reaches the caller. It is
