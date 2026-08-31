@@ -7,6 +7,32 @@ Order: most recent to oldest.
 
 ## [Unreleased] — maturity hardening
 
+### `OS.exec` and `OS.spawn` ran a different command than you wrote
+
+- Both built their argument vector with `if let Some(Array) = .. { for elem { if
+  let Str(s) = elem { .. } } }` and no `else` on either shape. A non-array
+  `args` was ignored **entirely**; a non-string element was **dropped**. The
+  process then started with a different argument list and reported success.
+- Measured, not imagined:
+  - `OS.exec("cmd", "/c echo HELLO")` — a string where an array was expected —
+    launched a **bare interactive shell**, printed the Windows banner, and
+    returned `code: 0`.
+  - `OS.exec("cmd", ["/c", "echo", 42])` ran `echo` with no operand. The `42`
+    was gone and the call still succeeded.
+- For a process API this is the worst shape a defect can take: the command
+  runs, it runs as something else, and nothing says so. An argument that
+  disappears can be the one that made a command safe.
+- Both now fail with `TypeError` / `SZ4002` **before anything is started** —
+  `args must be an array of strings`, or `every argument must be a string`. The
+  two identical call sites became one helper.
+- Swept across the ecosystem before enforcing: every official call site in
+  `serez-pack`, `serez-apipack` and `serez-cobol` already passes an array of
+  strings. An omitted list and an empty list both still mean "no arguments".
+- The earlier native sweep reported "zero silent defaults" because it grepped
+  for the `_arg(..).unwrap_or(..)` shape. This defect is an `if let` with no
+  `else`, which that search could not see.
+
+
 ### `spec/ecosystem.md` — the tiers existed only as a proposal, so nothing could fail them
 
 - `compatibility.md` says what a *change* promises. Nothing said what a *thing*

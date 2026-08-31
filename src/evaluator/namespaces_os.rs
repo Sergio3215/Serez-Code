@@ -474,6 +474,49 @@ impl super::Evaluator {
         }
     }
 
+    /// Collect the argument vector for `OS.exec` / `OS.spawn`.
+    ///
+    /// This was `if let Some(Array) = .. { for elem { if let Str(s) = elem { .. } } }`,
+    /// with no `else` on either shape. A non-array `args` was ignored entirely
+    /// and a non-string element was dropped, so the process ran with a
+    /// different argument list than the caller wrote — and still reported
+    /// success. `OS.exec("cmd", "/c echo hi")` launched a bare interactive
+    /// shell; `OS.exec("cmd", ["/c", "echo", 42])` echoed nothing. Both now
+    /// fail before anything is started.
+    fn process_argument_list(
+        &mut self,
+        expr: &ast::Expression,
+        operation: &str,
+    ) -> Result<Vec<String>, EvalResult> {
+        let arg_ref = match self.eval_expression(expr) {
+            EvalResult::Value(v) => v,
+            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
+            _ => return Err(EvalResult::Error),
+        };
+        let elements = match self.resolve(arg_ref).cloned() {
+            Some(ObjectData::Array { elements, .. }) => elements,
+            _ => {
+                return Err(self.rt_err_kind(
+                    "TypeError",
+                    format!("{operation}: args must be an array of strings"),
+                ));
+            }
+        };
+        let mut collected = Vec::with_capacity(elements.len());
+        for element in elements {
+            match element {
+                OwnedValue::Str(text) => collected.push(text),
+                _ => {
+                    return Err(self.rt_err_kind(
+                        "TypeError",
+                        format!("{operation}: every argument must be a string"),
+                    ));
+                }
+            }
+        }
+        Ok(collected)
+    }
+
     // ── OS ────────────────────────────────────────────────────────────────────
 
     pub(super) fn eval_os_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
@@ -526,18 +569,10 @@ impl super::Evaluator {
                 }
                 let mut args_vec: Vec<String> = Vec::new();
                 if dot_call.arguments.len() >= 2 {
-                    let ar = match self.eval_expression(&dot_call.arguments[1]) {
-                        EvalResult::Value(v) => v,
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                    args_vec = match self.process_argument_list(&dot_call.arguments[1], "OS.exec") {
+                        Ok(list) => list,
+                        Err(signal) => return signal,
                     };
-                    if let Some(ObjectData::Array { elements, .. }) = self.resolve(ar).cloned() {
-                        for elem in elements {
-                            if let OwnedValue::Str(s) = elem {
-                                args_vec.push(s);
-                            }
-                        }
-                    }
                 }
                 match std::process::Command::new(&cmd).args(&args_vec).output() {
                     Ok(output) => {
@@ -594,18 +629,11 @@ impl super::Evaluator {
                 }
                 let mut args_vec: Vec<String> = Vec::new();
                 if dot_call.arguments.len() >= 2 {
-                    let ar = match self.eval_expression(&dot_call.arguments[1]) {
-                        EvalResult::Value(v) => v,
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                    args_vec = match self.process_argument_list(&dot_call.arguments[1], "OS.spawn")
+                    {
+                        Ok(list) => list,
+                        Err(signal) => return signal,
                     };
-                    if let Some(ObjectData::Array { elements, .. }) = self.resolve(ar).cloned() {
-                        for elem in elements {
-                            if let OwnedValue::Str(s) = elem {
-                                args_vec.push(s);
-                            }
-                        }
-                    }
                 }
                 // stderr piped (para el mensaje de error); sin ventana de consola en Windows.
                 let mut command = std::process::Command::new(&cmd);

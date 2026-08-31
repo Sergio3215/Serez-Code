@@ -19,7 +19,7 @@ Current verified baseline on Windows (re-measured 2026-08-28):
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS, no warnings |
 | `cargo clippy --all-targets` | PASS, 190 historical library warnings, no errors |
-| `cargo test --all-targets` | PASS, 305 tests (170 library, 36 LSP binary, 16 frontend robustness, 76 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
+| `cargo test --all-targets` | PASS, 306 tests (170 library, 36 LSP binary, 16 frontend robustness, 77 runtime outcome, 2 diagnostic codes, 4 filesystem reach) |
 | Serez test runner | PASS on **both** platforms, 490 files/groups each; 0 failed; 0 skipped. `run_tests.sh` had been executing 306 of them — see the parity row below. |
 | Official ecosystem (`run_ecosystem.ps1`) | PASS, 8/8 packages: UI 36/36, HTTP 3/3, AI 3/3, AgentAI 3/3, pack 3/3, apipack 3/3, dotenv 2/2, graph 3/3 |
 
@@ -443,8 +443,15 @@ Every method of twelve native namespaces was called with no arguments, a string,
 - **Zero panics.**
 - **Zero unstructured errors.** `errors.md` lists unstructured producers as
   active debt; in the namespaces reachable this way there are none left.
-- **Zero silent defaults.** The `_arg(..).unwrap_or(..)` pattern that turned a
-  wrong-typed argument into 0 or `""` is gone from every namespace.
+- **Zero silent defaults** *of that shape*. The `_arg(..).unwrap_or(..)`
+  pattern that turned a wrong-typed argument into 0 or `""` is gone from every
+  namespace. The claim was overstated: it describes what was **grepped for**,
+  not what was proven. `OS.exec` and `OS.spawn` discarded arguments through an
+  `if let` with no `else`, which no search for `unwrap_or` could find — a
+  non-array `args` was ignored entirely and a non-string element dropped, so
+  the process started with a different argument list and returned success.
+  Both now fail before starting anything; `process_arguments_are_never_silently_dropped`
+  pins it.
 - Five zero-argument methods outside `Gui` accepted extras and ignored them —
   `OS.pid`, `OS.platform`, `OS.tick`, `Media.playingCount`, `Media.stopAll` —
   and now reject them through a shared `reject_arguments` helper.

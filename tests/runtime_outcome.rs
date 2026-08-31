@@ -3836,3 +3836,85 @@ fn user_throw_survives_native_argument_evaluation() {
         }
     }
 }
+
+/// `OS.exec` and `OS.spawn` ran a different command than the caller wrote.
+///
+/// Both collected their argument vector with
+/// `if let Some(Array) = .. { for elem { if let Str(s) = elem { .. } } }` and no
+/// `else` on either shape. A non-array `args` was ignored entirely; a
+/// non-string element was dropped. The process then started with a *different
+/// argument list* and reported success:
+///
+/// - `OS.exec("cmd", "/c echo hi")` launched a bare interactive shell and
+///   returned `code: 0`.
+/// - `OS.exec("cmd", ["/c", "echo", 42])` ran `echo` with no operand.
+///
+/// For a process API that is the worst shape a defect can take: the command
+/// runs, it runs as something else, and nothing says so. Swept across the
+/// ecosystem first — every official call site passes an array of strings.
+#[test]
+fn process_arguments_are_never_silently_dropped() {
+    for call in [
+        r#"unsafe { OS.exec("cmd", "/c echo hi") }"#,
+        r#"unsafe { OS.exec("cmd", 5) }"#,
+        r#"unsafe { OS.exec("cmd", null) }"#,
+        r#"unsafe { OS.spawn("cmd", "/c echo hi") }"#,
+        r#"unsafe { OS.spawn("cmd", 5) }"#,
+    ] {
+        match evaluate_with_permissions(call, &["OS"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
+                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert!(
+                    error.message.contains("args must be an array of strings"),
+                    "{call}: {}",
+                    error.message
+                );
+            }
+            other => panic!("{call} must be refused before anything runs, got {other:?}"),
+        }
+    }
+
+    for call in [
+        r#"unsafe { OS.exec("cmd", ["/c", 42]) }"#,
+        r#"unsafe { OS.exec("cmd", ["/c", null]) }"#,
+        r#"unsafe { OS.spawn("cmd", [1.5]) }"#,
+    ] {
+        match evaluate_with_permissions(call, &["OS"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
+                assert!(
+                    error.message.contains("every argument must be a string"),
+                    "{call}: {}",
+                    error.message
+                );
+            }
+            other => panic!("{call} must be refused before anything runs, got {other:?}"),
+        }
+    }
+
+    // A well-formed argument list is still accepted. The command below does not
+    // exist on any platform, so the failure that follows proves the arguments
+    // were taken and the spawn was attempted — without this test depending on
+    // a real executable.
+    let accepted = r#"unsafe { OS.exec("serez-no-such-command-xyz", ["a", "b"]) }"#;
+    match evaluate_with_permissions(accepted, &["OS"]) {
+        ProgramOutcome::RuntimeError(error) => {
+            assert_eq!(error.kind, "OSError", "{accepted}: {error:?}");
+        }
+        other => panic!("{accepted}: expected the spawn itself to fail, got {other:?}"),
+    }
+
+    // An empty list and an omitted list both mean "no arguments".
+    for call in [
+        r#"unsafe { OS.exec("serez-no-such-command-xyz", []) }"#,
+        r#"unsafe { OS.exec("serez-no-such-command-xyz") }"#,
+    ] {
+        match evaluate_with_permissions(call, &["OS"]) {
+            ProgramOutcome::RuntimeError(error) => {
+                assert_eq!(error.kind, "OSError", "{call}: {error:?}");
+            }
+            other => panic!("{call}: expected the spawn itself to fail, got {other:?}"),
+        }
+    }
+}
