@@ -8,8 +8,11 @@
 mod cursor;
 mod depth;
 mod diagnostics;
+mod directives;
+mod types;
 
 use depth::DepthGuard;
+use types::is_type_keyword;
 
 // Re-exported so `serez_code::parser::MAX_PARSE_DEPTH` keeps meaning what it
 // meant when the constant lived in this file: `tests/frontend_robustness.rs`
@@ -476,83 +479,6 @@ impl Parser {
             return_type,
             parameters,
         }))
-    }
-
-    fn parse_export_statement(&mut self) -> Option<Statement> {
-        // export <declaration>  —  wraps any top-level declaration
-        self.next_token(); // consume 'export', move to the inner keyword
-        let inner = self.parse_statement()?;
-        Some(Statement::Export(Box::new(inner)))
-    }
-
-    fn parse_use_permissions(&mut self) -> Option<Statement> {
-        // use permissions { Terminal, OS.exec, File.delete }
-        if self.peek_token.token_type != TokenType::Ident
-            || self.peek_token.literal != "permissions"
-        {
-            self.parser_error("expected 'permissions' after 'use'");
-            return None;
-        }
-        self.next_token(); // current = "permissions"
-        if self.peek_token.token_type != TokenType::LBrace {
-            self.parser_error("expected '{' after 'use permissions'");
-            return None;
-        }
-        self.next_token(); // current = '{'
-        let mut perms: Vec<String> = Vec::new();
-        loop {
-            if self.peek_token.token_type == TokenType::RBrace
-                || self.peek_token.token_type == TokenType::Eof
-            {
-                self.next_token();
-                break;
-            }
-            self.next_token(); // current = permission name (Ident)
-            if self.current_token.token_type != TokenType::Ident {
-                self.parser_error("expected permission name inside 'use permissions { }'");
-                return None;
-            }
-            let mut perm = self.current_token.literal.clone();
-            // Handle dotted names: OS.exec, File.delete
-            while self.peek_token.token_type == TokenType::Dot {
-                self.next_token(); // current = '.'
-                if self.peek_token.token_type != TokenType::Ident {
-                    self.parser_error("expected identifier after '.' in permission name");
-                    return None;
-                }
-                self.next_token(); // current = sub-name
-                perm.push('.');
-                perm.push_str(&self.current_token.literal);
-            }
-            perms.push(perm);
-            if self.peek_token.token_type == TokenType::Comma {
-                self.next_token(); // consume ','
-            } else if self.peek_token.token_type == TokenType::RBrace {
-                self.next_token(); // consume '}'
-                break;
-            } else {
-                self.parser_error("expected ',' or '}' in 'use permissions'");
-                return None;
-            }
-        }
-        if self.peek_token.token_type == TokenType::Semicolon {
-            self.next_token();
-        }
-        Some(Statement::UsePermissions(perms))
-    }
-
-    fn parse_import_statement(&mut self) -> Option<Statement> {
-        // import "path/to/module";
-        if self.peek_token.token_type != TokenType::String {
-            self.parser_error("expected string path after 'import'");
-            return None;
-        }
-        self.next_token(); // current = string literal
-        let path = self.current_token.literal.clone();
-        if self.peek_token.token_type == TokenType::Semicolon {
-            self.next_token();
-        }
-        Some(Statement::Import(path))
     }
 
     // Parse `[a, _, b, ...rest]` — caller must be positioned at `[`.
@@ -2408,44 +2334,6 @@ impl Parser {
         self.parse_infix_chain(left_exp, precedence)
     }
 
-    fn parse_dict_type_annotation(&mut self) -> Option<(String, String)> {
-        self.next_token(); // '<'
-        self.next_token(); // key_type
-
-        if !is_type_keyword(&self.current_token.token_type) {
-            self.parser_error(&format!(
-                "Expected type keyword for dict key type, got '{}'",
-                self.current_token.literal
-            ));
-            return None;
-        }
-        let key_type = self.current_token.literal.clone();
-
-        if self.peek_token.token_type != TokenType::Comma {
-            self.parser_error("Expected ',' between key and value types in dict annotation");
-            return None;
-        }
-        self.next_token(); // ','
-        self.next_token(); // value_type
-
-        if !is_type_keyword(&self.current_token.token_type) {
-            self.parser_error(&format!(
-                "Expected type keyword for dict value type, got '{}'",
-                self.current_token.literal
-            ));
-            return None;
-        }
-        let value_type = self.current_token.literal.clone();
-
-        if self.peek_token.token_type != TokenType::Gt {
-            self.parser_error("Expected '>' to close dict type annotation");
-            return None;
-        }
-        self.next_token(); // '>'
-
-        Some((key_type, value_type))
-    }
-
     fn parse_dict_literal(&mut self, key_type: String, value_type: String) -> Option<Expression> {
         let mut entries = Vec::new();
 
@@ -3567,19 +3455,6 @@ impl Parser {
     }
 }
 
-fn is_type_keyword(token_type: &TokenType) -> bool {
-    matches!(
-        token_type,
-        TokenType::KwVoid
-            | TokenType::KwInt
-            | TokenType::KwDecimal
-            | TokenType::KwDec
-            | TokenType::KwString
-            | TokenType::KwBool
-            | TokenType::KwAny
-    )
-}
-
 /// Parse a `dec` literal lexeme (the `m` suffix is already stripped). Handles
 /// both plain (`12.50`) and scientific (`1e-7`) forms via rust_decimal.
 fn parse_dec_literal(lit: &str) -> Option<rust_decimal::Decimal> {
@@ -3587,20 +3462,6 @@ fn parse_dec_literal(lit: &str) -> Option<rust_decimal::Decimal> {
         rust_decimal::Decimal::from_scientific(lit).ok()
     } else {
         lit.parse::<rust_decimal::Decimal>().ok()
-    }
-}
-
-impl Parser {
-    // Reads current token as a base type and optionally appends '?' if peek is Question.
-    // Assumes caller already verified current is a type keyword.
-    fn parse_type_string(&mut self) -> Option<String> {
-        let base = self.current_token.literal.clone();
-        if self.peek_token.token_type == TokenType::Question {
-            self.next_token();
-            Some(format!("{}?", base))
-        } else {
-            Some(base)
-        }
     }
 }
 

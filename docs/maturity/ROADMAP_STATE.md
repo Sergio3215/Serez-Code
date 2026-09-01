@@ -18,20 +18,20 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M1 — Parser Molecular. IN PROGRESS.** |
-| Goals done in M1 | **M1.0** (skeleton + net) and **M1.1** (parser core) — 2 of 17 |
+| Goals done in M1 | **M1.0** (skeleton + net), **M1.1** (core), **M1.2** (type syntax), **M1.3** (directives) — 4 of 17 |
 | Last completed milestone | M0 — Baseline Frozen (**COMPLETE**) |
-| Next molecule | **M1.2.1** — extract type syntax (`parse_type_string`, `is_type_keyword`, `parse_dict_type_annotation`) into `parser/types.rs` |
+| Next molecule | **M1.4** — declarations: `enum` and `native fn` into `parser/declarations/` |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-01, end of M1.1 |
+| Last state update | 2026-09-01, end of M1.3 |
 
 Milestone ledger:
 
 | Milestone | Status |
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
-| M1 — Parser Molecular | **IN PROGRESS** — M1.0 and M1.1 done, 15 goals left |
+| M1 — Parser Molecular | **IN PROGRESS** — 4 of 17 goals done |
 | M2 — AST + Spans Stable | NOT STARTED |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
@@ -122,7 +122,7 @@ M0 changed no behavior. It wrote documentation only:
 | File | Lines |
 |---|---|
 | `src/evaluator/namespaces_gui.rs` | 6,264 |
-| `src/parser/mod.rs` | 3,673 (was 3,936 before M1.1) |
+| `src/parser/mod.rs` | 3,534 (was 3,936 at the M0 baseline) |
 | `src/evaluator/methods_tensor.rs` | 3,672 |
 | `src/evaluator/namespaces_autodiff.rs` | 2,935 |
 | `src/evaluator/mod.rs` | 2,653 |
@@ -146,7 +146,7 @@ residue that differs between checkouts.
 ```
 source (String)
   → lexer::Lexer          (828 lines, 20 fns) ── LexError  { code SZ1xxx, line, column, message }
-  → parser::Parser        (4,026 lines, 4 files) ── ParseError { code SZ2xxx, line, column, message }
+  → parser::Parser        (4,087 lines, 6 files) ── ParseError { code SZ2xxx, line, column, message }
   → ast::Program                              ── 48 types, all derive Debug, no HashMap
   → type_checker::TypeChecker (410 lines)     ── TypeError  { code SZ3xxx, line, column, message }
   → evaluator::Evaluator  (37,187 lines, 48 fields) ── RuntimeError { code, kind, message, span, stack, notes }
@@ -696,17 +696,63 @@ parser.rs en archivos". A plan written before reading the code proposed it; the
 code says no. Recovery gets a module when it acquires a *policy* worth naming,
 which is M1.17's or M3's call, not a file move's.
 
-### 9.3 What the parser looks like now
+### 9.3 M1.2 — type syntax: **COMPLETE**
+
+`parse_type_string`, `parse_dict_type_annotation` and `is_type_keyword` →
+`parser/types.rs` (93 lines).
+
+The boundary is the one `spec/types.md` already draws, and it is the one worth
+stating: **parsing a type belongs to the parser, deciding whether two types are
+compatible does not.** Nothing in the file asks what a type means. A type
+reaches the AST as the `String` that was written, which is why
+`parse_type_string` is nine lines — the parser has no opinion to be wrong about.
+When M5 gives types a real representation, the syntax half of that change lands
+here.
+
+Called from seven places (native declarations, `let`, function statements and
+their parameters, arrow functions, interfaces, classes), which is what makes it
+shared rather than part of any one of them.
+
+Snapshot: identical.
+
+### 9.4 M1.3 — directives: **COMPLETE**
+
+`import`, `export` and `use permissions { … }` → `parser/directives.rs`
+(107 lines).
+
+Together because they answer one question — what a file needs from, and offers
+to, the world outside it. All three are top-level and none produces a value,
+which is also their shared reason to change: a decision about the module system
+or the permission vocabulary lands here and nothing about expressions does.
+
+`export` is 6 lines because it is a wrapper: it parses the declaration that
+follows and returns it inside `Statement::Export`, so every rule about *what* may
+be exported lives in the evaluator. `use permissions` parses dotted names
+(`OS.exec`) and validates none of them — consistent with `spec/security.md`,
+which records that permissions are additive declarations rather than an
+isolation boundary.
+
+Snapshot: identical.
+
+### 9.5 What the parser looks like now
 
 | File | Lines | Responsibility |
 |---|---|---|
-| `parser/mod.rs` | 3,673 | `Parser` state, `new`, `parse_program` + `synchronize`, and **all grammar** |
+| `parser/mod.rs` | 3,534 | `Parser` state, `new`, `parse_program` + `synchronize`, and **all remaining grammar** |
 | `parser/diagnostics.rs` | 135 | `ParseError`, `SZ2000`, reporting, rendering, source labels, the error readers |
 | `parser/depth.rs` | 111 | `MAX_PARSE_DEPTH`, `SZ2001`, `DepthGuard`, the charge/release accounting |
 | `parser/cursor.rs` | 107 | advancing the stream, precedence at the cursor, name classification |
+| `parser/directives.rs` | 107 | `import`, `export`, `use permissions` |
+| `parser/types.rs` | 93 | type syntax, and nothing about type compatibility |
 
-The infrastructure is out. Goals M1.2–M1.16 are the grammar itself, which is the
-3,673 lines that remain.
+`mod.rs` is down 402 lines from 3,936. The infrastructure and the two smallest
+grammar areas are out; **what remains is the grammar proper**, and it is where
+the weight is: classes 250 lines, the prefix dispatcher 288, the infix chain
+217, `for` 184, `let` 149.
+
+Goals M1.4–M1.16 are that. The ordering in §9 still holds — leaves first,
+expressions last — but the next few goals are the first ones large enough that
+the diff itself needs reading, not just the snapshot.
 
 ---
 
