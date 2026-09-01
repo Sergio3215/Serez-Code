@@ -17,21 +17,21 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M1 — Parser Molecular. IN PROGRESS.** |
-| Goals done in M1 | M1.0 net · M1.1 core · M1.2 types · M1.3 directives · M1.4 functions · M1.5 variables · M1.6 classes · M1.9 loops · M1.10 branches · M1.11 literals — **10 of 17** |
-| Last completed milestone | M0 — Baseline Frozen (**COMPLETE**) |
-| Next molecule | **M1.12** — the assignment forms (HIGH risk: receiver writeback) |
+| **Current milestone** | **M1 — Parser Molecular. COMPLETE.** Awaiting authorization for M2. |
+| Goals done in M1 | **all of them** — the 17 planned became 13 after reading the code; see §9A |
+| Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
+| Next molecule | **none** — M2.1 is unplanned and unauthorized. M2 starts by auditing spans, per §5.4: four of five positional AST fields have no consumer and `Token` carries no byte offset, so M2 reaches into the lexer. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-01, end of M1.11 |
+| Last state update | 2026-09-01, M1 milestone audit |
 
 Milestone ledger:
 
 | Milestone | Status |
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
-| M1 — Parser Molecular | **IN PROGRESS** — 10 of 17 goals; mod.rs 3,936 -> 1,527 (-61%) |
+| M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
 | M2 — AST + Spans Stable | NOT STARTED |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
@@ -122,7 +122,7 @@ M0 changed no behavior. It wrote documentation only:
 | File | Lines |
 |---|---|
 | `src/evaluator/namespaces_gui.rs` | 6,264 |
-| `src/parser/mod.rs` | 1,527 (was 3,936 at the M0 baseline) |
+| `src/parser/expressions.rs` | 754 (the parser is now 14 files; `mod.rs` is 422) |
 | `src/evaluator/methods_tensor.rs` | 3,672 |
 | `src/evaluator/namespaces_autodiff.rs` | 2,935 |
 | `src/evaluator/mod.rs` | 2,653 |
@@ -146,7 +146,7 @@ residue that differs between checkouts.
 ```
 source (String)
   → lexer::Lexer          (828 lines, 20 fns) ── LexError  { code SZ1xxx, line, column, message }
-  → parser::Parser        (4,286 lines, 12 files) ── ParseError { code SZ2xxx, line, column, message }
+  → parser::Parser        (4,403 lines, 14 files) ── ParseError { code SZ2xxx, line, column, message }
   → ast::Program                              ── 48 types, all derive Debug, no HashMap
   → type_checker::TypeChecker (410 lines)     ── TypeError  { code SZ3xxx, line, column, message }
   → evaluator::Evaluator  (37,187 lines, 48 fields) ── RuntimeError { code, kind, message, span, stack, notes }
@@ -333,7 +333,7 @@ entangled because of a bug rather than because of the architecture.
 
 ## 5. Discoveries
 
-§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1.
+§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15.
 
 All are **pre-existing**. Neither milestone changed any behavior; none was fixed.
 
@@ -560,6 +560,93 @@ except the build. Making `sz-lsp` depend on the library the way `sz` does would
 remove the whole class of problem.
 
 **Not fixed** — changing a binary's crate structure is not a parser refactor.
+
+### 5.19 `spec/operators.md` states the wrong bitwise precedence — **documentation mismatch**, medium (found in M1.14)
+
+The normative table lists thirteen levels tightest-to-loosest, and level 8 is
+`` `&`, `^`, `|` `` — one level, three operators. Line 156 then states that
+operators at the same level are left-associative. Read literally, that makes
+`1 | 2 ^ 3` mean `(1 | 2) ^ 3`, which is `3 ^ 3` = `0`.
+
+The implementation ranks them as three separate levels, C-style. Measured
+against the 10.0.0 binary:
+
+```
+sz --eval 'out (1 | 2 ^ 3);'   ->  1     # = 1 | (2^3);  (1|2)^3 would be 0
+sz --eval 'out (1 ^ 2 & 2);'   ->  3     # = 1 ^ (2&2);  (1^2)&2 would be 2
+```
+
+So `&` binds tighter than `^`, which binds tighter than `|`, and
+`Precedence::{BitAnd, BitXor, BitOr}` are three distinct variants.
+
+**The contradiction is registered rather than resolved**, per the roadmap's
+source-of-truth rule: implementation, tests and specification disagree, and
+choosing between them silently is exactly what that rule forbids. What the
+evidence says, for whoever decides:
+
+- The implementation matches every C-family language, and `spec/operators.md`
+  was written recently (`docs(spec): freeze the operator contract`, 2026-08-28)
+  against an implementation that already behaved this way.
+- Changing the *implementation* to match the document would be a breaking
+  change to any program using `|` and `^` in one expression.
+- So the likely correct fix is to the document, splitting level 8 into three.
+  That is a documentation change and safe — but it is still a decision about
+  what the language promises, so it belongs to M7, not to a parser refactor.
+
+Two further gaps in the same table, found by the same audit:
+
+- **`is` is absent.** `token_precedence` maps `KwIs` to `LessGreater`, so
+  `a is string == b` parses as `(a is string) == b`. The table says nothing.
+- **Member access, call and index are absent.** `.`, `?.`, `(` and `[` are the
+  two tightest levels in the implementation (`Call`, `Index`), above unary. A
+  precedence table that omits them cannot be used to predict how
+  `-a.b[c]()` groups.
+
+**Not fixed.** No code changed in M1.14 — it was an audit, and D2 forbids
+touching the algorithm during M1.
+
+### 5.20 The parser performs one semantic check, and it covers 7 of 20 namespaces — *semantic debt*, medium (found in M1.15)
+
+M1's Definition of Done asks for no semantic validation in the parser. There is
+exactly one, and the milestone audit is what surfaced it: `is_reserved_name`
+rejects a `class`, `interface` or `enum` named `Task`, `Time`, `DateTime`,
+`System`, `Gui`, `Dec` or `Media`.
+
+It is semantic, not syntactic. Those names are not keywords — the lexer returns
+them as `Ident`, and `class Task {}` is well-formed source. It is rejected
+because the name collides with the runtime's namespace table, which is a fact
+about the program's meaning.
+
+And the list is arbitrary. The evaluator exposes twenty namespaces; seven appear
+here. Measured against the 10.0.0 binary:
+
+```
+class Task {}    -> SZ2000, "'Task' is a reserved system namespace"
+class Gui {}     -> SZ2000
+class Math {}    -> accepted
+class File {}    -> accepted
+class Socket {}  -> accepted
+class Crypto {}  -> accepted
+```
+
+And shadowing an unguarded one demonstrably works:
+
+```
+class Math { public int hi() { return 7; } }
+let m = new Math();
+out m.hi();            ->  7
+out Math.floor(3.7);   ->  3     # the namespace still resolves
+```
+
+So the guard is not preventing a collision the language cannot survive. Which
+seven names it covers looks accidental rather than designed.
+
+**Not fixed.** Deleting the check is a compatibility question — a program that
+today gets a clear message would start failing later and less clearly — and
+extending it to all twenty is a breaking change for anyone with a `class File`.
+Either is M4's or M7's decision. M1.15 moved the function from the façade to
+`classes.rs`, where its only three callers are, and wrote the finding at the
+site so it cannot be mistaken for settled design.
 
 ---
 
@@ -852,6 +939,103 @@ What is intended to remain in `mod.rs` at the end: the `Parser` struct, `new`,
 `parse_program` + `synchronize`, the `parse_statement` dispatcher,
 `is_reserved_name`, and the five one-liner statement forms (`return`, `out`,
 `throw`, `unsafe`, `block`). That is the façade the Definition of Done asks for.
+
+---
+
+## 9A. M1 MILESTONE AUDIT
+
+Run at the end of M1.15, per the roadmap's checkpoint procedure.
+
+### Definition of Done
+
+| Criterion | Status |
+|---|---|
+| Parser core small | **met** — `mod.rs` is 422 lines, of which **329 are code** and 66 are the module documentation. The roadmap's 300–400 signal is met on the measure that matters. |
+| Grammar distributed by responsibility | **met** — 13 modules, each named for what changes it |
+| Dependencies clear | **met** — see below |
+| No accidental semantic validation | **one exception, documented** — see below |
+| Behavior preserved | **met** — the snapshot manifest matched after every one of the 13 extractions |
+| Suites and ecosystem green | **met** — 331 Rust tests, 490 conformance, 8/8 ecosystem |
+
+### 1. Objective vs implementation
+
+The charter said "eliminate the parser monolith as an architectural
+concentration" and "do not merely split parser.rs into files". One 3,936-line
+`impl Parser` became 14 files with a 422-line façade. Each module was placed by
+reading the call graph, not by cutting the file into equal parts — which is why
+the plan changed three times along the way (§9.2 dropped a molecule, §9.5
+collapsed five goals into three, §9.7 merged statement families).
+
+### 2. Responsibilities not actually extracted
+
+One. `is_reserved_name` is a semantic check that remains in the parser (§5.20).
+It is preserved deliberately: removing it changes when an error is reported, and
+extending it to all twenty namespaces is a breaking change. **M4 owns it.**
+
+### 3. Circular or new dependencies
+
+None. Verified mechanically: no file under `src/parser/` references
+`crate::evaluator`, `crate::run`, `crate::region`, `crate::scope`, `crate::szx`
+or `crate::package_manager`. Every module depends only on `crate::{ast, token,
+lexer}` and `super::`.
+
+The horizontal edges form a DAG:
+
+```
+types     ← classes, functions, variables, expressions
+literals  ← branches, expressions
+```
+
+`types` is the shared type-syntax helper; `literals` provides the two lexeme
+parsers that build `Expression`s. Nothing else crosses.
+
+### 4. Duplication introduced
+
+None. No method name is defined twice across the 14 files, and every extraction
+was verified line-by-line under the §9.6 invariant.
+
+### 5. Semantic drift
+
+None detected. The evidence is the snapshot manifest: 490 files, both the
+`Debug` tree and the full diagnostic list hashed, identical before and after
+every extraction — and demonstrated in M1.0.2 to catch changes that all 808
+other tests miss.
+
+### 6–7. Full gates and ecosystem
+
+fmt PASS · check PASS, no warnings · clippy 0 errors and **exactly 186
+warnings**, the M0 number, unmoved across all 13 extractions · `cargo test`
+331/0 · `run_tests.ps1` 490/0/0 · `run_ecosystem.ps1` 8/8.
+
+### 8–9. Documentation and MATURITY_AUDIT.md
+
+Every module carries a doc comment stating what it owns and why, including the
+hazards that live in it. `MATURITY_AUDIT.md`'s Parser row said "the large parser
+now exposes coded positional errors through one CLI/LSP shape, but recovery
+rules remain ad hoc"; the "large parser" half is now stale and is updated.
+
+### 10. Commits
+
+Six, one per goal group, each with the contract it preserved and the evidence
+for it: `4edad8b`, `da82ffe`, `7775c2c`, `61080fc`, `ca1f24a`, and this one.
+
+### Findings raised by M1 that other milestones now own
+
+| § | Finding | Owner |
+|---|---|---|
+| 5.17 | Nine parser errors never reach the error list — the LSP shows nothing | **M3** |
+| 5.12 | Diagnostics grouped by producer, not ordered by position | **M3** |
+| 5.19 | `spec/operators.md` states the wrong bitwise precedence | **M7** |
+| 5.20 | `is_reserved_name` is semantic, and covers 7 of 20 namespaces | **M4** |
+| 5.18 | The frontend is compiled twice; `sz-lsp` does not use the library | **M10** |
+| 5.11, 5.13 | `take_errors` does not take; `has_errors` is false before the flush | M3 |
+
+## MILESTONE STATUS: **COMPLETE**
+
+With one qualification stated plainly rather than buried: the "no semantic
+validation" criterion has a single documented exception (§5.20) that M1 was
+forbidden to remove, because doing so is a semantic change and the milestone's
+governing rule is that a refactor is not one.
 
 ---
 

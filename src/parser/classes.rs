@@ -31,6 +31,33 @@ use crate::ast::*;
 use crate::token::TokenType;
 
 impl Parser {
+    /// Is this name one the runtime already owns as a namespace?
+    ///
+    /// **This is a semantic check, and it is in the wrong layer.** The names are
+    /// not keywords — the lexer returns them as `Ident`, and `class Task {}` is
+    /// perfectly well-formed *syntax*. It is rejected because the name collides
+    /// with the runtime's namespace table, which is a fact about what the
+    /// program means rather than about the shape of its source. M1's Definition
+    /// of Done asks for no semantic validation in the parser, and this is the
+    /// one exception; it is preserved rather than relocated because moving it
+    /// changes *when* the error is reported. M4, the semantic layer, is its
+    /// proper home.
+    ///
+    /// It is also **incomplete and inconsistent**. The evaluator exposes twenty
+    /// namespaces and seven are listed here. Measured against the 10.0.0 binary:
+    /// `class Task {}` and `class Gui {}` are rejected, while `class Math {}`,
+    /// `class File {}`, `class Socket {}` and `class Crypto {}` are accepted —
+    /// and a program may then define `class Math`, call `new Math()`, and still
+    /// call `Math.floor(3.7)`, both resolving correctly. So the guard is not
+    /// preventing a collision the language cannot survive, and which seven names
+    /// it covers looks accidental. See `docs/maturity/ROADMAP_STATE.md` §5.20.
+    fn is_reserved_name(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "Task" | "Time" | "DateTime" | "System" | "Gui" | "Dec" | "Media"
+        )
+    }
+
     // ── Class declaration ─────────────────────────────────────────────────────
     pub(super) fn parse_class_declaration(
         &mut self,
