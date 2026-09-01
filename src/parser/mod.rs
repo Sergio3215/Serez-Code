@@ -1,3 +1,30 @@
+//! The parser: source tokens in, a syntax tree out.
+//!
+//! This file is still the whole grammar. M1 is extracting it by responsibility
+//! (see `docs/maturity/ROADMAP_STATE.md` §9); what has moved out so far lives
+//! in the modules declared below, each extending `Parser` through its own
+//! `impl` block, the way `src/evaluator/` already does.
+
+mod cursor;
+mod depth;
+mod diagnostics;
+
+use depth::DepthGuard;
+
+// Re-exported so `serez_code::parser::MAX_PARSE_DEPTH` keeps meaning what it
+// meant when the constant lived in this file: `tests/frontend_robustness.rs`
+// and `tests/parser_facade.rs` both name that path.
+//
+// The `allow` is not cosmetic. `src/lsp_main.rs` declares `mod parser;` of its
+// own, so this file is compiled a second time as part of the `sz-lsp` binary —
+// where `parser` is a private module of a binary crate and the re-export really
+// does reach nobody. One target needs it and the other cannot use it; see
+// ROADMAP_STATE.md §5.18.
+#[allow(unused_imports)]
+pub use depth::{MAX_PARSE_DEPTH, SZ_PARSE_DEPTH_EXCEEDED};
+#[allow(unused_imports)]
+pub use diagnostics::{ParseError, SZ_PARSE_ERROR};
+
 use crate::ast::*;
 use crate::lexer::{LexError, Lexer};
 use crate::token::{Token, TokenType};
@@ -65,90 +92,6 @@ pub fn token_precedence(token_type: &TokenType) -> Precedence {
     }
 }
 
-/// Generic parser diagnostic: a syntax error not yet given a narrower code.
-///
-/// Most of the parser's several hundred messages still land here. That is
-/// deliberate — a code is a promise of stability, so they get split out one at
-/// a time as each acquires a test that pins its meaning, rather than by
-/// numbering every message at once and freezing distinctions nobody checked.
-pub const SZ_PARSE_ERROR: &str = "SZ2000";
-
-/// Source describes a tree deeper than [`MAX_PARSE_DEPTH`].
-pub const SZ_PARSE_DEPTH_EXCEEDED: &str = "SZ2001";
-
-/// A frontend error with its source position (1-based line/column). Parser
-/// diagnostics use `SZ2xxx`; lexical diagnostics are forwarded as `SZ1xxx` so
-/// callers and the LSP consume one ordered diagnostic shape.
-#[derive(Debug, Clone)]
-pub struct ParseError {
-    /// Stable `SZ1xxx`/`SZ2xxx` identifier. Tooling classifies on this; `message` is
-    /// for humans and its wording is not part of the contract.
-    pub code: &'static str,
-    pub line: usize,
-    pub column: usize,
-    pub message: String,
-}
-
-/// Hard ceiling on the depth of the AST a single source file may describe.
-///
-/// Without a ceiling, ordinary text kills the process with no diagnostic at all
-/// — no line number, no exit code the CLI chose, nothing for the LSP to
-/// underline (`STATUS_STACK_OVERFLOW` on Windows, `SIGSEGV` elsewhere). Two
-/// different shapes of source got there, and both are bounded here:
-///
-///   * **Nesting.** The parser is recursive descent, so `((((…1…))))` turns one
-///     level of source into one Rust stack frame. Measured crash point in a
-///     release build: between 32k and 50k levels.
-///   * **Operator chains.** `1 + 1 + 1 + …` parses in a *flat* loop, so it never
-///     troubles the parser — but it builds a left-leaning tree one level deeper
-///     per operator, and the type checker, the evaluator and the AST's own drop
-///     glue each recurse once per level of that tree. Measured crash point in a
-///     release build: ~32k terms when evaluated, ~1M when only type-checked.
-///
-/// So the ceiling counts tree depth, not parser recursion: an operator chain
-/// charges one level per operator. See [`Parser::charge_depth`].
-///
-/// 512 is sized against the tightest stack in play rather than the roomiest,
-/// and it costs real code nothing. Across the 999 `.sz`/`.szx` files in the
-/// official ecosystem the deepest nesting is 19 levels and the longest operator
-/// chain is 25 — the ceiling clears both by more than 20×. Source that
-/// legitimately needs more should build the structure at runtime instead of
-/// spelling it out.
-pub const MAX_PARSE_DEPTH: usize = 512;
-
-/// Releases the levels one parser call charged, on the way out of that call.
-///
-/// Recursive-descent methods return early from dozens of places (`?`,
-/// `return None`, `match` arms), so decrementing by hand would leak levels on
-/// the first missed path. Holding the counter in an `Rc<Cell<_>>` rather than
-/// borrowing the parser lets the guard live across `&mut self` calls in the
-/// body it protects.
-///
-/// A guard can hold more than one level: an infix chain charges one level per
-/// operator it appends and releases them all at once. See
-/// [`Parser::charge_depth`].
-struct DepthGuard {
-    counter: std::rc::Rc<std::cell::Cell<usize>>,
-    held: usize,
-}
-
-impl DepthGuard {
-    /// A guard holding nothing yet.
-    fn empty(counter: &std::rc::Rc<std::cell::Cell<usize>>) -> Self {
-        DepthGuard {
-            counter: std::rc::Rc::clone(counter),
-            held: 0,
-        }
-    }
-}
-
-impl Drop for DepthGuard {
-    fn drop(&mut self) {
-        self.counter
-            .set(self.counter.get().saturating_sub(self.held));
-    }
-}
-
 pub struct Parser {
     lexer: Lexer,
     current_token: Token,
@@ -188,217 +131,11 @@ impl Parser {
         }
     }
 
-    /// Enter one level of recursive descent, or refuse to.
-    ///
-    /// `None` means the ceiling was hit and an error was already reported; the
-    /// caller must propagate it like any other parse failure so `parse_program`
-    /// can synchronize instead of recursing further.
-    fn enter_depth(&self) -> Option<DepthGuard> {
-        let mut guard = DepthGuard::empty(&self.depth);
-        self.charge_depth(&mut guard)?;
-        Some(guard)
-    }
-
-    /// Charge one more level of AST depth to `guard`.
-    ///
-    /// The counter tracks the depth of the *tree being built*, which is not the
-    /// same as how deep the parser has recursed. `a + b + c + …` parses in a
-    /// flat loop but produces a left-leaning tree one level deeper per operator,
-    /// and every walker downstream — the type checker, the evaluator, and the
-    /// AST's own drop glue — recurses once per level of that tree. Charging the
-    /// loop keeps a single ceiling covering both shapes.
-    fn charge_depth(&self, guard: &mut DepthGuard) -> Option<()> {
-        let next = self.depth.get() + 1;
-        if next > MAX_PARSE_DEPTH {
-            self.parser_error_code(
-                SZ_PARSE_DEPTH_EXCEEDED,
-                &format!(
-                    "Expression nests deeper than the {} level limit (an operator \
-                     chain counts one level per operator)",
-                    MAX_PARSE_DEPTH
-                ),
-            );
-            return None;
-        }
-        self.depth.set(next);
-        guard.held += 1;
-        Some(())
-    }
-
     fn is_reserved_name(&self, name: &str) -> bool {
         matches!(
             name,
             "Task" | "Time" | "DateTime" | "System" | "Gui" | "Dec" | "Media"
         )
-    }
-
-    /// Whether any parse error was reported while building the program.
-    pub fn has_errors(&self) -> bool {
-        self.had_error.get()
-    }
-
-    /// All parse errors reported so far, with positions. Used by tooling (LSP).
-    pub fn take_errors(&self) -> Vec<ParseError> {
-        self.errors.borrow().clone()
-    }
-
-    pub fn set_source(&mut self, lines: Vec<String>) {
-        self.source_lines = lines;
-    }
-
-    pub fn set_source_name(&mut self, name: &str) {
-        self.source_name = Some(name.to_string());
-    }
-
-    fn parser_error(&self, msg: &str) {
-        self.parser_error_code(SZ_PARSE_ERROR, msg);
-    }
-
-    /// Report a parse error under a specific stable diagnostic code.
-    fn parser_error_code(&self, code: &'static str, msg: &str) {
-        self.had_error.set(true);
-        let line = self.current_token.line;
-        let col = self.current_token.column;
-        self.errors.borrow_mut().push(ParseError {
-            code,
-            line,
-            column: col,
-            message: msg.to_string(),
-        });
-        self.print_frontend_error("PARSER", code, line, col, msg);
-    }
-
-    fn print_frontend_error(
-        &self,
-        phase: &str,
-        code: &'static str,
-        line: usize,
-        col: usize,
-        msg: &str,
-    ) {
-        match &self.source_name {
-            Some(name) => eprintln!(
-                "❌ {} ERROR [{}] [{} {}:{}]: {}",
-                phase, code, name, line, col, msg
-            ),
-            None => eprintln!(
-                "❌ {} ERROR [{}] [line {}:{}]: {}",
-                phase, code, line, col, msg
-            ),
-        }
-        if let Some(src) = self.source_lines.get(line.saturating_sub(1)) {
-            let ln = line.to_string();
-            eprintln!("  {} | {}", ln, src.trim_end());
-            eprintln!(
-                "  {}   {}^",
-                " ".repeat(ln.len()),
-                " ".repeat(col.saturating_sub(1))
-            );
-        }
-    }
-
-    fn flush_lexer_errors(&self) {
-        let lexical = std::mem::take(&mut *self.lexer_errors.borrow_mut());
-        if lexical.is_empty() {
-            return;
-        }
-        self.had_error.set(true);
-        for error in lexical {
-            self.print_frontend_error(
-                "LEXER",
-                error.code,
-                error.line,
-                error.column,
-                &error.message,
-            );
-            self.errors.borrow_mut().push(ParseError {
-                code: error.code,
-                line: error.line,
-                column: error.column,
-                message: error.message,
-            });
-        }
-    }
-
-    pub fn next_token(&mut self) {
-        self.current_token = self.peek_token.clone();
-        self.peek_token = self.lexer.next_token();
-        self.lexer_errors
-            .borrow_mut()
-            .extend(self.lexer.take_errors());
-    }
-
-    fn peek_precedence(&self) -> Precedence {
-        token_precedence(&self.peek_token.token_type)
-    }
-
-    /// Returns true if the peek token is a valid method/field name (identifier or keyword).
-    /// After '.', keywords like 'get', 'set', 'in', etc. are valid method names.
-    fn peek_token_is_name(&self) -> bool {
-        Self::token_type_is_name(&self.peek_token.token_type)
-    }
-
-    fn current_token_is_name(&self) -> bool {
-        Self::token_type_is_name(&self.current_token.token_type)
-    }
-
-    fn token_type_is_name(tt: &TokenType) -> bool {
-        !matches!(
-            tt,
-            TokenType::Illegal
-                | TokenType::Eof
-                | TokenType::Int
-                | TokenType::Decimal
-                | TokenType::String
-                | TokenType::Assign
-                | TokenType::Plus
-                | TokenType::Minus
-                | TokenType::Bang
-                | TokenType::Asterisk
-                | TokenType::Slash
-                | TokenType::Percent
-                | TokenType::Lt
-                | TokenType::Gt
-                | TokenType::LtEq
-                | TokenType::GtEq
-                | TokenType::Eq
-                | TokenType::NotEq
-                | TokenType::And
-                | TokenType::Or
-                | TokenType::Arrow
-                | TokenType::NullCoalesce
-                | TokenType::PlusEq
-                | TokenType::MinusEq
-                | TokenType::StarEq
-                | TokenType::SlashEq
-                | TokenType::PercentEq
-                | TokenType::Comma
-                | TokenType::Semicolon
-                | TokenType::LParen
-                | TokenType::RParen
-                | TokenType::LBrace
-                | TokenType::RBrace
-                | TokenType::LBracket
-                | TokenType::RBracket
-                | TokenType::Dot
-                | TokenType::Colon
-                | TokenType::Question
-                | TokenType::PlusPlus
-                | TokenType::MinusMinus
-                | TokenType::DotDotDot
-                | TokenType::Power
-                | TokenType::BitAnd
-                | TokenType::BitOr
-                | TokenType::BitXor
-                | TokenType::BitNot
-                | TokenType::Shl
-                | TokenType::Shr
-                | TokenType::QuestionDot
-        )
-    }
-
-    fn current_precedence(&self) -> Precedence {
-        token_precedence(&self.current_token.token_type)
     }
 
     pub fn parse_program(&mut self) -> Program {

@@ -18,20 +18,20 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M1 — Parser Molecular. IN PROGRESS.** |
-| Goals done in M1 | **M1.0** — skeleton and façade contract pinned (1 of 17). **M1.1.1** (inventory) also done — see §4.6 |
+| Goals done in M1 | **M1.0** (skeleton + net) and **M1.1** (parser core) — 2 of 17 |
 | Last completed milestone | M0 — Baseline Frozen (**COMPLETE**) |
-| Next molecule | **M1.1.2** — extract the token cursor into `parser/cursor.rs` |
+| Next molecule | **M1.2.1** — extract type syntax (`parse_type_string`, `is_type_keyword`, `parse_dict_type_annotation`) into `parser/types.rs` |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-01, end of M1.0 |
+| Last state update | 2026-09-01, end of M1.1 |
 
 Milestone ledger:
 
 | Milestone | Status |
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
-| M1 — Parser Molecular | **IN PROGRESS** — M1.0 done, 16 goals left |
+| M1 — Parser Molecular | **IN PROGRESS** — M1.0 and M1.1 done, 15 goals left |
 | M2 — AST + Spans Stable | NOT STARTED |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
@@ -122,7 +122,7 @@ M0 changed no behavior. It wrote documentation only:
 | File | Lines |
 |---|---|
 | `src/evaluator/namespaces_gui.rs` | 6,264 |
-| `src/parser/mod.rs` | 3,936 |
+| `src/parser/mod.rs` | 3,673 (was 3,936 before M1.1) |
 | `src/evaluator/methods_tensor.rs` | 3,672 |
 | `src/evaluator/namespaces_autodiff.rs` | 2,935 |
 | `src/evaluator/mod.rs` | 2,653 |
@@ -146,7 +146,7 @@ residue that differs between checkouts.
 ```
 source (String)
   → lexer::Lexer          (828 lines, 20 fns) ── LexError  { code SZ1xxx, line, column, message }
-  → parser::Parser        (3,936 lines)       ── ParseError { code SZ2xxx, line, column, message }
+  → parser::Parser        (4,026 lines, 4 files) ── ParseError { code SZ2xxx, line, column, message }
   → ast::Program                              ── 48 types, all derive Debug, no HashMap
   → type_checker::TypeChecker (410 lines)     ── TypeError  { code SZ3xxx, line, column, message }
   → evaluator::Evaluator  (37,187 lines, 48 fields) ── RuntimeError { code, kind, message, span, stack, notes }
@@ -333,7 +333,7 @@ entangled because of a bug rather than because of the architecture.
 
 ## 5. Discoveries
 
-§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17 is M1.1.1.
+§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1.
 
 All are **pre-existing**. Neither milestone changed any behavior; none was fixed.
 
@@ -540,6 +540,27 @@ The natural owner is **M3 (Diagnostics Unified)**, whose whole premise —
 violates. It may be worth fixing earlier as its own commit, since it is a
 user-visible defect rather than architectural debt.
 
+### 5.18 The frontend is compiled twice, from the same source — *architectural debt*, medium (M10 input)
+
+`src/lsp_main.rs` opens with its own `mod ast; mod lexer; mod lsp; mod parser;
+mod token; mod type_checker;`. The `sz-lsp` binary therefore does **not** depend
+on the `serez_code` library — it recompiles five frontend modules into a second,
+independent crate.
+
+Found because M1.1.3's `pub use depth::MAX_PARSE_DEPTH` warned as an unused
+import: the library needs the re-export (tests name
+`serez_code::parser::MAX_PARSE_DEPTH`), and in the binary `parser` is a private
+module of a binary crate, where the same re-export reaches nobody. One
+`#[allow(unused_imports)]` with a comment holds it for now.
+
+M10 asks that "LSP shares frontend". It shares the *source text*, not the
+*crate* — which means every `pub`/`pub(crate)` decision in the frontend has to
+be correct under two different module roots at once, and nothing enforces that
+except the build. Making `sz-lsp` depend on the library the way `sz` does would
+remove the whole class of problem.
+
+**Not fixed** — changing a binary's crate structure is not a parser refactor.
+
 ---
 
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
@@ -648,25 +669,44 @@ no parser logic was edited. Verified three ways — the moved file is
 byte-identical to its predecessor, the snapshot manifest regenerates identically,
 and every pre-existing gate holds at its M0 number.
 
-### 9.2 M1.1 — parser core: molecules (**next**)
+### 9.2 M1.1 — parser core: **COMPLETE**
 
-`parser/mod.rs` is still the whole parser. M1.1 extracts the infrastructure the
-grammar sits on, which is the prerequisite for every later goal: until the
-cursor, the depth accounting and the error emission live behind a named
-boundary, moving a grammar family means moving its dependencies with it.
-
-| Molecule | Action | Verification |
+| Molecule | Action | Outcome |
 |---|---|---|
-| **M1.1.1** | Inventory only, no code change | **done** — §4.6. It found §5.17: nine error sites that never reach the error list |
-| **M1.1.2** | Extract the token cursor (`next_token`, `peek_precedence`, `current_precedence`, the `*_is_name` helpers) into `parser/cursor.rs` as `impl super::Parser` | snapshot + façade + `cargo test` |
-| **M1.1.3** | Extract depth accounting (`DepthGuard`, `MAX_PARSE_DEPTH`, `enter_depth`, `charge_depth`) into `parser/depth.rs` | snapshot + `frontend_robustness` |
-| **M1.1.4** | Extract diagnostic emission (`ParseError`, the `SZ2xxx` constants, `parser_error`, `parser_error_code`, `print_frontend_error`, `flush_lexer_errors`) into `parser/diagnostics.rs` | snapshot + façade + `diagnostic_codes` |
-| **M1.1.5** | Extract recovery (`synchronize`) into `parser/recovery.rs` | snapshot + façade |
-| **M1.1.6** | Full gates + ecosystem; review diff; commit | All green |
+| **M1.1.1** | Inventory only, no code change | **done** — §4.6. It found §5.17 |
+| **M1.1.2** | Token cursor → `parser/cursor.rs` | **done**, 107 lines |
+| **M1.1.3** | Depth accounting → `parser/depth.rs` | **done**, 111 lines. It found §5.18 |
+| **M1.1.4** | Diagnostic emission → `parser/diagnostics.rs` | **done**, 135 lines |
+| **M1.1.5** | Recovery → `parser/recovery.rs` | **DROPPED — see below** |
+| **M1.1.6** | Full gates + ecosystem; commit | **done** |
 
-Risk: MEDIUM — `next_token` has fan-in 55 and `parser_error` 30, so these
-molecules touch the most-called code in the file. Nothing about their *bodies*
-changes; only which file they live in.
+`mod.rs` went from 3,936 lines to 3,673. Behavior: **UNCHANGED** — the snapshot
+manifest matched after every one of the three extractions.
+
+**Why M1.1.5 was dropped.** `synchronize` is 28 lines with exactly one caller,
+`parse_program`, eight lines above it. Extracting it would produce a file
+smaller than its own module doc, called from the loop it belongs to, reducing no
+coupling and clarifying no ownership. `parse_program` drives the statement loop
+and `synchronize` is that loop's error branch: one responsibility, correctly
+adjacent.
+
+This is the roadmap's own rule — "molecular NO significa muchos archivos", "no
+crear archivos diminutos sin frontera conceptual", "NO limitarse a dividir
+parser.rs en archivos". A plan written before reading the code proposed it; the
+code says no. Recovery gets a module when it acquires a *policy* worth naming,
+which is M1.17's or M3's call, not a file move's.
+
+### 9.3 What the parser looks like now
+
+| File | Lines | Responsibility |
+|---|---|---|
+| `parser/mod.rs` | 3,673 | `Parser` state, `new`, `parse_program` + `synchronize`, and **all grammar** |
+| `parser/diagnostics.rs` | 135 | `ParseError`, `SZ2000`, reporting, rendering, source labels, the error readers |
+| `parser/depth.rs` | 111 | `MAX_PARSE_DEPTH`, `SZ2001`, `DepthGuard`, the charge/release accounting |
+| `parser/cursor.rs` | 107 | advancing the stream, precedence at the cursor, name classification |
+
+The infrastructure is out. Goals M1.2–M1.16 are the grammar itself, which is the
+3,673 lines that remain.
 
 ---
 
