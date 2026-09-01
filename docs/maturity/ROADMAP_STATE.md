@@ -17,20 +17,21 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M1 — Parser Molecular. NOT STARTED. Awaiting authorization.** |
+| **Current milestone** | **M1 — Parser Molecular. IN PROGRESS.** |
+| Goals done in M1 | **M1.0** — skeleton and façade contract pinned (1 of 17). **M1.1.1** (inventory) also done — see §4.6 |
 | Last completed milestone | M0 — Baseline Frozen (**COMPLETE**) |
-| Next authorized molecule | **none** — M1.0.1 is planned but not authorized |
+| Next molecule | **M1.1.2** — extract the token cursor into `parser/cursor.rs` |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-01, end of M0 |
+| Last state update | 2026-09-01, end of M1.0 |
 
 Milestone ledger:
 
 | Milestone | Status |
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
-| M1 — Parser Molecular | NOT STARTED |
+| M1 — Parser Molecular | **IN PROGRESS** — M1.0 done, 16 goals left |
 | M2 — AST + Spans Stable | NOT STARTED |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
@@ -121,18 +122,22 @@ M0 changed no behavior. It wrote documentation only:
 | File | Lines |
 |---|---|
 | `src/evaluator/namespaces_gui.rs` | 6,264 |
-| `src/parser.rs` | 3,936 |
+| `src/parser/mod.rs` | 3,936 |
 | `src/evaluator/methods_tensor.rs` | 3,672 |
 | `src/evaluator/namespaces_autodiff.rs` | 2,935 |
 | `src/evaluator/mod.rs` | 2,653 |
 | `src/package_manager.rs` | 2,649 |
 | `src/evaluator/namespaces_gui/render.rs` | 2,530 |
 
-Serez corpus in-repo, git-tracked: **491** `.sz`/`.szx` files — 460 under `tests/`,
-17 benchmarks, 9 `apps/`, 5 `std/`. Tracked rather than on-disk is the number
-that matters: `tests/` also accumulates gitignored `~unit_temp_*.sz` runner
-residue, and the untracked files differ between checkouts. 491 is the corpus a
-differential parser harness should consume.
+Serez corpus, git-tracked: **491** `.sz` files — 460 under `tests/`, 17
+benchmarks, 9 `apps/`, 5 `std/`. No `.szx` is tracked, so the parser harness
+needs no `.szx` translation step. Tracked rather than on-disk is the number that
+matters: `tests/` also accumulates gitignored `_*.sz` and `~unit_temp_*.sz`
+residue that differs between checkouts.
+
+`tests/parser_snapshot.rs` walks **490** of the 491. The one it skips is
+`tests/~tmp_test.sz`, which is committed runner residue rather than a test — see
+§5.14.
 
 ---
 
@@ -195,7 +200,11 @@ documented at `SZ_PARSE_ERROR`.
 
 ---
 
-## 4. `parser.rs` — the M1 map
+## 4. The parser — the M1 map
+
+Measured at `d8662c2`, when the file was `src/parser.rs`. M1.0 moved it to
+`src/parser/mod.rs` without changing a line of it, so every figure below still
+holds.
 
 3,936 lines, one `impl Parser` block, ~95 methods, 5 free functions
 (`is_writable_chain`, `token_precedence`, `is_type_keyword`, `parse_dec_literal`,
@@ -223,6 +232,12 @@ pub fn token_precedence              // pub, no external consumer
 Consumers: `run.rs`, `lsp/analysis.rs`, `evaluator/stmt.rs` (×2, for `import`),
 `evaluator/namespaces_task.rs` (×2, for workers), `tests/frontend_robustness.rs`,
 `tests/diagnostic_codes.rs`.
+
+Since M1.0 this surface is pinned by `tests/parser_facade.rs`, which also
+records three things about it that were not written down anywhere:
+`take_errors` does not drain (§5.11), diagnostics are grouped lexer-last rather
+than ordered by position (§5.12), and `has_errors()` answers `false` on a
+parser whose source is already lexically broken (§5.13).
 
 ### 4.2 Shared core (high fan-in — belongs in `parser/core`)
 
@@ -278,11 +293,49 @@ recursive descent. Per the roadmap, **M1 must not change the algorithm.** Any
 move toward Pratt parsing is a separate project requiring differential testing,
 because it can silently alter precedence or associativity.
 
+### 4.6 Parser core inventory (M1.1.1 — measurement, no code change)
+
+Every access to every `Parser` field, attributed to the method that makes it.
+The question M1.1 has to answer is not "what looks like infrastructure" but
+"where does infrastructure already leak into grammar", because those leaks are
+what a file split would otherwise carry along with it.
+
+| Field | Kind | Owned by | Grammar leaks |
+|---|---|---|---|
+| `lexer` | cursor | `new`, `next_token` | none |
+| `current_token`, `peek_token` | cursor | grammar, 212 + 253 reads | **by design** — this is recursive descent; hiding these behind accessors would be abstraction for its own sake |
+| `depth` | depth accounting | `enter_depth`, `charge_depth` | **1** — `parse_infix_chain:2176` constructs a `DepthGuard` directly, deliberately and with a comment: it charges one level per operator so the ceiling bounds the *tree*, not the recursion |
+| `errors` | diagnostics | `take_errors`, `parser_error_code`, `flush_lexer_errors` | none |
+| `lexer_errors` | diagnostics | `next_token`, `flush_lexer_errors` | none |
+| `had_error` | diagnostics | `has_errors`, `parser_error_code`, `flush_lexer_errors` | **9** — and every one of them is the bug in §5.17 |
+| `source_lines` | rendering | `set_source`, `print_frontend_error` | none |
+| `source_name` | rendering | `set_source_name`, `print_frontend_error` | **1** — `parse_expression:2442` hands it to the free function `parse_interpolated_string`, which needs a label for a message it prints itself |
+
+**The boundary is already almost clean.** Eight of the nine fields are confined
+to the methods that own them; the token pair is grammar's by nature. Only three
+places cross the line, and two of them are the same defect:
+
+1. The nine `had_error` sites (§5.17). They are a diagnostics bug, not a
+   layering problem — routing them through `parser_error_code` fixes both at
+   once. **M1.1.4 must move them as they are** and leave the fix to its own
+   commit.
+2. `parse_infix_chain`'s direct `DepthGuard`. Intentional and documented; it
+   moves with the depth module in M1.1.3 and needs `DepthGuard` to stay
+   reachable from grammar.
+3. `parse_interpolated_string`'s `source_name`. A free function that reports for
+   itself, which is why its message is the tenth uncoded one.
+
+Consequence for the plan: **M1.1 is smaller than it looked.** The extraction is
+mostly mechanical, and the one genuinely entangled thing — error reporting — is
+entangled because of a bug rather than because of the architecture.
+
 ---
 
-## 5. Discoveries made during M0
+## 5. Discoveries
 
-All are **pre-existing**. M0 changed no behavior; none was fixed.
+§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17 is M1.1.1.
+
+All are **pre-existing**. Neither milestone changed any behavior; none was fixed.
 
 ### 5.1 `MATURITY_AUDIT.md` evidence had drifted — *documentation mismatch* (fixed in M0, docs only)
 
@@ -360,6 +413,132 @@ spec-rule ↔ conformance-test mapping starts from nothing.
 | Free variables resolve **dynamically** | `callee()` reading a free `secret` returns `from-a` under one caller and `from-b` under another. The audit's one remaining **critical open** finding still holds. |
 | Type errors are advisory | `SZ3000` printed, `out "before"` still executed, failure came later as runtime `SZ4002`. |
 | Parse-depth ceiling | 600 nested parens → `SZ2001`, "deeper than the 512 level limit". |
+
+---
+
+### 5.10 The existing gate cannot see an AST change or a reworded diagnostic — *test deficiency*, high (measured in M1.0.2)
+
+Not an opinion — an experiment. Two changes were made to `parser.rs`, both of
+the exact shape a careless extraction produces:
+
+1. `CallExpression.column` set to `0`. That field is `#[allow(dead_code)]` and
+   has **no consumer anywhere in the crate** (§5.4), so this is the most
+   invisible tree change available.
+2. One parser message reworded, `"Unexpected token"` → `"PERTURBED token"`.
+
+Then the whole quality gate was run against the perturbed parser:
+
+| Gate | Result with both perturbations in place |
+|---|---|
+| `cargo test` (318 tests, snapshot excluded) | **all pass** |
+| `run_tests.ps1` (490 files/groups) | **490 passed, 0 failed** |
+| `tests/parser_snapshot.rs` | **fails — 287 of 490 files, and 4 diagnostic lists** |
+
+So 808 tests were blind to both, and the harness caught both. This is the
+justification for M1.0 existing as its own goal, and the reason no later M1
+molecule is allowed to proceed without it green.
+
+### 5.11 `Parser::take_errors` clones rather than drains — *API hazard*, low
+
+Despite the name, the body is `self.errors.borrow().clone()`. Both callers
+(`run.rs`, `lsp/analysis.rs`) call it exactly once, so nothing depends on the
+difference — which is exactly why a refactor could "fix" it into a real drain
+and break nothing visibly until a second caller appeared. Pinned by
+`take_errors_reads_the_list_rather_than_draining_it`.
+
+### 5.12 Diagnostics are grouped by producer, not ordered by position — *unspecified behavior*, medium (M3 input)
+
+`flush_lexer_errors` runs at the *end* of `parse_program`, so every `SZ2xxx`
+precedes every `SZ1xxx` regardless of where they occurred: a malformed literal
+on line 1 is reported after a syntax error on line 3. `spec/errors.md` documents
+the codes and the stderr shape and says nothing about order, so neither
+behaviour is currently wrong — but a caller sorting or trusting the order has
+nothing to rely on. Pinned as observed by
+`lexical_diagnostics_arrive_after_syntactic_ones`; M3 has to decide it.
+
+### 5.13 `has_errors()` is false on a parser whose source is already broken — *hazard*, low
+
+`Parser::new` pulls two tokens, so a lexical failure on line 1 exists inside the
+parser before `parse_program` is called. It sits in a separate queue until the
+flush, so `has_errors()` answers `false` until then. No caller checks early.
+Pinned by `lexical_diagnostics_become_visible_only_once_parsing_has_run`.
+
+### 5.14 `tests/~tmp_test.sz` is committed runner residue — *test deficiency*, low
+
+`framework.sz` with the body of what is now `unit_dict_advanced.sz` appended:
+a captured temp file from a 2026-06-19 run. No runner, script or document
+references it. Two commits have "restored" it after glob cleanups removed it, on
+the assumption it was needed — `chore: restore tests/~tmp_test.sz (caught again
+by glob cleanup)`. It is why the snapshot corpus is 490 files and
+`git ls-files '*.sz'` reports 491. **Not fixed**; deletion is an independent
+task.
+
+### 5.15 A frontend test cannot walk a 512-deep AST on a default test thread — *note, not a defect*
+
+The snapshot harness died with `STATUS_STACK_OVERFLOW` on first run. Cause: the
+corpus contains the two depth-ceiling fixtures, `cargo test` gives its threads
+2 MiB, and a debug-build `parse_expression` frame is ~8 KiB. This is already
+documented at `tests/frontend_robustness.rs:31`, which answers it with an
+explicit 16 MiB thread; the snapshot uses 32 MiB because it walks each tree
+three times (parse, `Debug`, drop) rather than twice. **No product behavior is
+involved** — the release binary parses both fixtures in every conformance run.
+Recorded so the next frontend test does not rediscover it.
+
+### 5.16 A peer session writes into this working tree — *working-tree hazard*, low
+
+`audit/2026-09-01_14-52-03.md` appeared untracked, mid-session, at 14:52. It was
+written by a separate Claude Code session (`Auditoría de módulos y permisos
+nativos`). It changed no tracked file — verified against `git status` and by
+diffing the moved parser against `HEAD:src/parser.rs` — so the M0 baseline and
+the M1.0 evidence are intact. It is left in place and uncommitted. Worth knowing
+before a future milestone treats a clean `git status` as a precondition.
+
+### 5.17 Nine parser errors never reach the error list — **confirmed bug**, high (found in M1.1.1)
+
+Nine sites in `parser/mod.rs` report by hand instead of calling
+`parser_error`: `had_error.set(true)` followed by a bare `eprintln!`. Lines
+687, 702, 717 (`parse_native_declaration`), 935, 971
+(`parse_sizeof_expression`), 980 (`parse_unsafe_statement`), 2642
+(`parse_expression`'s `unsafe` arm), 3179 (`parse_class_declaration`), 3371
+(`parse_visibility_statement`); plus 3907 in the free function
+`parse_interpolated_string`, which cannot reach the parser's state at all.
+
+Nothing is pushed into `errors`, so `take_errors()` returns **empty** for a
+program the parser has just rejected. Measured, not inferred:
+
+```
+$ sz p_sizeof.sz
+❌ PARSE ERROR: expected '(' after 'sizeof'          # no code, no file, no line, no caret
+$ sz p_normal.sz
+❌ PARSER ERROR [SZ2000] [p_normal.sz 2:1]: Expected variable name after 'let'
+  2 | let = 2;
+      ^
+```
+
+Consequences:
+
+- **The LSP publishes nothing.** `lsp/analysis.rs` builds its diagnostics from
+  `take_errors()`, so an editor underlines nothing for these nine errors.
+- **`run.rs` builds `RunFailure::Frontend(vec![])`** — a frontend failure
+  carrying no reason for an embedder to read.
+- **`spec/errors.md` is contradicted.** It states every parser diagnostic is
+  `SZ2000`/`SZ2001`, rendered `❌ PARSER ERROR [SZ2000] [file line:col]`. These
+  are uncoded, unpositioned, and even use a different prefix — `PARSE ERROR`
+  against `PARSER ERROR`.
+
+Why nothing caught it: `has_errors()` is still set, so the CLI still exits 1 and
+still prints a `❌`, and that is the whole of what the 63 error tests assert.
+
+**Classification: confirmed bug + documentation mismatch.** **Not fixed** — the
+refactor preserves it, per the bug-discovery protocol. Pinned by
+`some_syntax_errors_never_reach_the_error_list_at_all` so it cannot change
+silently in either direction, and so that whoever fixes it is forced to update
+this entry, `spec/errors.md` and the snapshot manifest together.
+
+The natural owner is **M3 (Diagnostics Unified)**, whose whole premise —
+"cero silent failures", one diagnostic model per conceptual error — this
+violates. It may be worth fixing earlier as its own commit, since it is a
+user-visible defect rather than architectural debt.
 
 ---
 
@@ -452,22 +631,42 @@ orchestration; grammar is distributed by responsibility; no semantic validation
 sits in the parser; the harness proves byte-identical ASTs and diagnostics; all
 seven gates plus the ecosystem canary stay green.
 
-### 9.1 M1.0 — molecules (planned, **not authorized**)
+### 9.1 M1.0 — skeleton and façade contract: **COMPLETE**
 
-Only the first goal is decomposed, per the roadmap.
+| Molecule | Action | Outcome |
+|---|---|---|
+| **M1.0.1** | `tests/parser_snapshot.rs` — walk the corpus, parse each file, hash the `Debug` tree and the diagnostic list into a committed manifest | **done**, 490 files, 34 KB manifest. Also proves the manifest is line-ending independent, since CI checks out CRLF on Windows and LF elsewhere |
+| **M1.0.2** | Prove the harness fails: perturb the parser, confirm detection, revert | **done** — see §5.10, the most important result in M1.0 |
+| **M1.0.3** | `tests/parser_facade.rs` — pin the public API of §4.1 | **done**, 10 tests. Writing them found §5.11, §5.12, §5.13 |
+| **M1.0.4** | `git mv src/parser.rs src/parser/mod.rs`, no other edit | **done**, byte-identical to `HEAD:src/parser.rs` |
+| **M1.0.5** | Full gates | **done** — fmt PASS, check PASS, clippy still **exactly 186**, `cargo test` **331/0** (318 + 13 new), `run_tests.ps1` 490/0/0, `run_tests.sh` 490/0/0 |
+| **M1.0.6** | Ecosystem canary | **done**, 8/8 |
+| **M1.0.7** | Diff review, self-audit, commit | **done** |
+
+Behavior: **UNCHANGED.** The parser file moved and two test files were added;
+no parser logic was edited. Verified three ways — the moved file is
+byte-identical to its predecessor, the snapshot manifest regenerates identically,
+and every pre-existing gate holds at its M0 number.
+
+### 9.2 M1.1 — parser core: molecules (**next**)
+
+`parser/mod.rs` is still the whole parser. M1.1 extracts the infrastructure the
+grammar sits on, which is the prerequisite for every later goal: until the
+cursor, the depth accounting and the error emission live behind a named
+boundary, moving a grammar family means moving its dependencies with it.
 
 | Molecule | Action | Verification |
 |---|---|---|
-| **M1.0.1** | Add `tests/parser_snapshot.rs`: walk the in-repo `.sz`/`.szx` corpus, parse each file, record `format!("{:?}", program)` and the full `take_errors()` list, hash both, write a committed golden manifest | New test passes; manifest committed; corpus count asserted so a vanished file fails loudly |
-| **M1.0.2** | Prove the harness *fails* — perturb one parse rule locally, confirm the manifest mismatches, revert | The perturbation is reported and named; nothing is committed from this step |
-| **M1.0.3** | Add a façade-contract test pinning the exact public API of §4.1 (signatures, error ordering, `has_errors` before/after semantics) | New test passes |
-| **M1.0.4** | `git mv src/parser.rs src/parser/mod.rs` — **no other edit** | `cargo check`; snapshot manifest byte-identical |
-| **M1.0.5** | Full gates: fmt, check, clippy (warning count still 186), `cargo test`, both Serez runners | All green |
-| **M1.0.6** | Ecosystem canary | 8/8 |
-| **M1.0.7** | Review diff; run the self-audit questionnaire; commit | One commit, `refactor(parser): move the parser into its own module directory` |
+| **M1.1.1** | Inventory only, no code change | **done** — §4.6. It found §5.17: nine error sites that never reach the error list |
+| **M1.1.2** | Extract the token cursor (`next_token`, `peek_precedence`, `current_precedence`, the `*_is_name` helpers) into `parser/cursor.rs` as `impl super::Parser` | snapshot + façade + `cargo test` |
+| **M1.1.3** | Extract depth accounting (`DepthGuard`, `MAX_PARSE_DEPTH`, `enter_depth`, `charge_depth`) into `parser/depth.rs` | snapshot + `frontend_robustness` |
+| **M1.1.4** | Extract diagnostic emission (`ParseError`, the `SZ2xxx` constants, `parser_error`, `parser_error_code`, `print_frontend_error`, `flush_lexer_errors`) into `parser/diagnostics.rs` | snapshot + façade + `diagnostic_codes` |
+| **M1.1.5** | Extract recovery (`synchronize`) into `parser/recovery.rs` | snapshot + façade |
+| **M1.1.6** | Full gates + ecosystem; review diff; commit | All green |
 
-Risk: LOW. Contract: parse trees, diagnostic text, diagnostic order, diagnostic
-codes, positions and exit codes are all unchanged. `M1.0.4` is a pure file move.
+Risk: MEDIUM — `next_token` has fan-in 55 and `parser_error` 30, so these
+molecules touch the most-called code in the file. Nothing about their *bodies*
+changes; only which file they live in.
 
 ---
 
@@ -476,7 +675,8 @@ codes, positions and exit codes are all unchanged. `M1.0.4` is a pure file move.
 | Milestone | Commit | Note |
 |---|---|---|
 | M0 baseline | `d8662c2` | pre-existing HEAD, = tag `v10.0.0`; the frozen reference point |
-| M0 checkpoint | the commit that created this file — `git log --diff-filter=A -1 --format=%h -- docs/maturity/ROADMAP_STATE.md` | `docs(maturity): freeze the M0 baseline, and re-measure an audit that had drifted`. Documentation only; no behavior change. A commit cannot name its own hash, so this row resolves the checkpoint instead of quoting it. |
+| M0 checkpoint | `5b34f65` | `docs(maturity): freeze the M0 baseline, and re-measure an audit that had drifted`. Documentation only; no behavior change. |
+| M1.0 checkpoint | the commit that created `tests/parser_snapshot.rs` — `git log --diff-filter=A -1 --format=%h -- tests/parser_snapshot.rs` | `refactor(parser): give the parser a module of its own, behind a net that can see it`. A commit cannot name its own hash, so this row resolves it instead of quoting it. |
 
 ---
 
