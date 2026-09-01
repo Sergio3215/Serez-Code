@@ -3537,12 +3537,29 @@ fn zero_argument_native_methods_reject_arguments() {
         ("out(Autodiff.isRecording());", &[][..]),
         ("out(System.cpuCount());", &["System"][..]),
         ("out(Time.now());", &["Time"][..]),
-        ("Terminal.getSize();", &["Terminal"][..]),
     ] {
         match evaluate_with_permissions(call, permissions) {
             ProgramOutcome::Value(_) => {}
             other => panic!("{call} must still be accepted, got {other:?}"),
         }
+    }
+
+    // `Terminal.getSize()` asks the host for the terminal dimensions, which is
+    // not something a test can assume: with no TTY attached — CI, a pipe, a
+    // detached process — crossterm fails with an ordinary IOError. That has
+    // nothing to do with the arity rule this test exists for, so the assertion
+    // is that the zero-argument form is *not refused for its arity*, which is
+    // environment-independent. Asserting success here passed on a Windows
+    // console and failed on Linux CI.
+    match evaluate_with_permissions("Terminal.getSize();", &["Terminal"]) {
+        ProgramOutcome::Value(_) => {}
+        ProgramOutcome::RuntimeError(error) => {
+            assert_ne!(
+                error.code, "SZ4002",
+                "the zero-argument form must not be refused for its arity: {error:?}"
+            );
+        }
+        other => panic!("Terminal.getSize(); must not be refused for its arity, got {other:?}"),
     }
 }
 
