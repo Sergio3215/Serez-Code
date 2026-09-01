@@ -1045,7 +1045,12 @@ governing rule is that a refactor is not one.
 |---|---|---|
 | M0 baseline | `d8662c2` | pre-existing HEAD, = tag `v10.0.0`; the frozen reference point |
 | M0 checkpoint | `5b34f65` | `docs(maturity): freeze the M0 baseline, and re-measure an audit that had drifted`. Documentation only; no behavior change. |
-| M1.0 checkpoint | the commit that created `tests/parser_snapshot.rs` — `git log --diff-filter=A -1 --format=%h -- tests/parser_snapshot.rs` | `refactor(parser): give the parser a module of its own, behind a net that can see it`. A commit cannot name its own hash, so this row resolves it instead of quoting it. |
+| M1.0 | `4edad8b` | `give the parser a module of its own, behind a net that can see it` — the snapshot + façade tests, and the file move |
+| M1.1 | `da82ffe` | `move the infrastructure the grammar sits on out of the grammar` — cursor, depth, diagnostics |
+| M1.2-M1.3 | `7775c2c` | `move type syntax and the file-level directives out of the grammar` |
+| M1.4-M1.6 | `61080fc` | `move every declaration form out of the grammar` — functions, variables, classes |
+| M1.9-M1.11 | `ca1f24a` | `move control flow and the literal forms out of the grammar` — loops, branches, literals |
+| **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
 
 ---
 
