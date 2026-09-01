@@ -18,20 +18,20 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M1 — Parser Molecular. IN PROGRESS.** |
-| Goals done in M1 | M1.0 net · M1.1 core · M1.2 types · M1.3 directives · M1.4 functions · M1.5 variables · M1.6 classes — **7 of 17** |
+| Goals done in M1 | M1.0 net · M1.1 core · M1.2 types · M1.3 directives · M1.4 functions · M1.5 variables · M1.6 classes · M1.9 loops · M1.10 branches · M1.11 literals — **10 of 17** |
 | Last completed milestone | M0 — Baseline Frozen (**COMPLETE**) |
-| Next molecule | **M1.9** — statements: blocks and flow (`return`, `out`, `throw`, labels, `unsafe`) |
+| Next molecule | **M1.12** — the assignment forms (HIGH risk: receiver writeback) |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-01, end of M1.6 |
+| Last state update | 2026-09-01, end of M1.11 |
 
 Milestone ledger:
 
 | Milestone | Status |
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
-| M1 — Parser Molecular | **IN PROGRESS** — 7 of 17 goals done; mod.rs 3,936 -> 2,473 |
+| M1 — Parser Molecular | **IN PROGRESS** — 10 of 17 goals; mod.rs 3,936 -> 1,527 (-61%) |
 | M2 — AST + Spans Stable | NOT STARTED |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
@@ -122,7 +122,7 @@ M0 changed no behavior. It wrote documentation only:
 | File | Lines |
 |---|---|
 | `src/evaluator/namespaces_gui.rs` | 6,264 |
-| `src/parser/mod.rs` | 2,473 (was 3,936 at the M0 baseline) |
+| `src/parser/mod.rs` | 1,527 (was 3,936 at the M0 baseline) |
 | `src/evaluator/methods_tensor.rs` | 3,672 |
 | `src/evaluator/namespaces_autodiff.rs` | 2,935 |
 | `src/evaluator/mod.rs` | 2,653 |
@@ -146,7 +146,7 @@ residue that differs between checkouts.
 ```
 source (String)
   → lexer::Lexer          (828 lines, 20 fns) ── LexError  { code SZ1xxx, line, column, message }
-  → parser::Parser        (4,182 lines, 9 files) ── ParseError { code SZ2xxx, line, column, message }
+  → parser::Parser        (4,286 lines, 12 files) ── ParseError { code SZ2xxx, line, column, message }
   → ast::Program                              ── 48 types, all derive Debug, no HashMap
   → type_checker::TypeChecker (410 lines)     ── TypeError  { code SZ3xxx, line, column, message }
   → evaluator::Evaluator  (37,187 lines, 48 fields) ── RuntimeError { code, kind, message, span, stack, notes }
@@ -788,13 +788,46 @@ comm -23  <(removed lines, sorted -u)  <(new files + re-added lines, sorted -u)
 Under that check M1.4–M1.6 come out exactly right: 13 lines differ, and all 13
 are the signatures that gained `pub(super)`.
 
-### 9.7 What the parser looks like now
+### 9.7 M1.9–M1.11 — control flow and literals: **COMPLETE**
+
+| Goal | Module | Lines | Contents |
+|---|---|---|---|
+| **M1.9** | `parser/loops.rs` | 325 | `while`, `do-while`, C-style `for`, `for-in`, `label:` |
+| **M1.10** | `parser/branches.rs` | 400 | `if`, `switch`, `match` + patterns, `try`, `parse_inner_block` |
+| **M1.11** | `parser/literals.rs` | 325 | array, dict, entry and brace forms, `dec` lexemes, string interpolation |
+
+Three judgements worth recording:
+
+- **Labels went with loops**, not with the general statement forms.
+  `parse_labeled_statement` exists only to introduce a loop — it reads the name
+  and then *requires* `while` or `for`. A label in front of anything else is a
+  syntax error, so all of it is loop grammar despite looking like a general
+  prefix.
+- **`if` and `match` went with `switch` and `try`** even though the first two
+  produce an `Expression` and the last two a `Statement`. The four are the
+  language's ways of choosing a branch and three share `parse_inner_block`. The
+  statement/expression split there is the language's shape, not a filing error,
+  and `spec/control-flow.md` records it.
+- **The brace forms are why `literals.rs` is one module.** A `{` in expression
+  position can begin an entry literal, an object patch or a dict body;
+  `parse_brace_expression` is the single place that decides, so the three forms
+  it can produce belong beside it. The two lexeme parsers (`parse_dec_literal`,
+  `parse_interpolated_string`) live here rather than in the lexer because both
+  build an `Expression` and the lexer only produces tokens.
+
+Snapshot: identical after each. Verbatim check under the §9.6 invariant: 22
+lines differ, all 22 the signatures that gained `pub(super)`.
+
+### 9.8 What the parser looks like now
 
 | File | Lines | Responsibility |
 |---|---|---|
-| `parser/mod.rs` | 2,473 | `Parser` state, `new`, `parse_program` + `synchronize`, statements and expressions |
+| `parser/mod.rs` | 1,527 | `Parser` state, `new`, `parse_program` + `synchronize`, `parse_statement`, the simple statement forms, the assignment forms and the expression core |
 | `parser/classes.rs` | 523 | `class`, `interface`, `enum`, modifier prefixes |
+| `parser/branches.rs` | 400 | `if`, `switch`, `match`, `try` |
 | `parser/functions.rs` | 343 | every way a callable is written |
+| `parser/literals.rs` | 325 | arrays, dicts, brace forms, `dec`, interpolation |
+| `parser/loops.rs` | 325 | `while`, `do-while`, `for`, `for-in`, labels |
 | `parser/variables.rs` | 290 | `let`, `const`, destructuring |
 | `parser/diagnostics.rs` | 135 | `ParseError`, `SZ2000`, reporting, rendering |
 | `parser/depth.rs` | 111 | `MAX_PARSE_DEPTH`, `SZ2001`, `DepthGuard` |
@@ -802,15 +835,23 @@ are the signatures that gained `pub(super)`.
 | `parser/directives.rs` | 107 | `import`, `export`, `use permissions` |
 | `parser/types.rs` | 93 | type syntax, and nothing about type compatibility |
 
-**`mod.rs` is down 1,463 lines from 3,936 — 37%.** Infrastructure and every
-declaration form are out. What remains is statements and expressions:
-the prefix dispatcher 288, the infix chain 217, `for` 184,
-`parse_expression_statement` 157, `parse_statement` 161, plus switch/match/try
-and the assignment forms.
+**`mod.rs` is down 2,409 lines from 3,936 — 61%.** Infrastructure, every
+declaration form, all control flow and every literal are out.
 
-Goals M1.9–M1.16 are that, and the ordering in §9 still holds: assignment forms
-(M1.12) and the expression core (M1.16) are the two HIGH-risk ones and stay
-last.
+Two substantial areas remain, and they are the two the plan always said to leave
+until last because they are the HIGH-risk ones:
+
+| Remaining goal | Scope | Lines | Risk |
+|---|---|---|---|
+| **M1.12** | assignment forms — `parse_expression_statement`, the three `try_build_*`, index and compound assignment, `is_writable_chain` | ~414 | **HIGH** — this is where receiver-writeback shape is decided, the behavior `serez-ui` leans on hardest |
+| **M1.13** | expression core — `parse_expression`, `parse_infix_chain`, `Precedence`, `token_precedence`, call arguments, `new`, `sizeof` | ~715 | **HIGH** — fan-in 30, and precedence/associativity live here |
+| **M1.14** | precedence audit; no code change (D2) | — | LOW |
+| **M1.15** | façade reduction; M1 milestone audit | — | MEDIUM |
+
+What is intended to remain in `mod.rs` at the end: the `Parser` struct, `new`,
+`parse_program` + `synchronize`, the `parse_statement` dispatcher,
+`is_reserved_name`, and the five one-liner statement forms (`return`, `out`,
+`throw`, `unsafe`, `block`). That is the façade the Definition of Done asks for.
 
 ---
 
