@@ -18,20 +18,20 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M1 — Parser Molecular. IN PROGRESS.** |
-| Goals done in M1 | **M1.0** (skeleton + net), **M1.1** (core), **M1.2** (type syntax), **M1.3** (directives) — 4 of 17 |
+| Goals done in M1 | M1.0 net · M1.1 core · M1.2 types · M1.3 directives · M1.4 functions · M1.5 variables · M1.6 classes — **7 of 17** |
 | Last completed milestone | M0 — Baseline Frozen (**COMPLETE**) |
-| Next molecule | **M1.4** — declarations: `enum` and `native fn` into `parser/declarations/` |
+| Next molecule | **M1.9** — statements: blocks and flow (`return`, `out`, `throw`, labels, `unsafe`) |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-01, end of M1.3 |
+| Last state update | 2026-09-01, end of M1.6 |
 
 Milestone ledger:
 
 | Milestone | Status |
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
-| M1 — Parser Molecular | **IN PROGRESS** — 4 of 17 goals done |
+| M1 — Parser Molecular | **IN PROGRESS** — 7 of 17 goals done; mod.rs 3,936 -> 2,473 |
 | M2 — AST + Spans Stable | NOT STARTED |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
@@ -122,7 +122,7 @@ M0 changed no behavior. It wrote documentation only:
 | File | Lines |
 |---|---|
 | `src/evaluator/namespaces_gui.rs` | 6,264 |
-| `src/parser/mod.rs` | 3,534 (was 3,936 at the M0 baseline) |
+| `src/parser/mod.rs` | 2,473 (was 3,936 at the M0 baseline) |
 | `src/evaluator/methods_tensor.rs` | 3,672 |
 | `src/evaluator/namespaces_autodiff.rs` | 2,935 |
 | `src/evaluator/mod.rs` | 2,653 |
@@ -146,7 +146,7 @@ residue that differs between checkouts.
 ```
 source (String)
   → lexer::Lexer          (828 lines, 20 fns) ── LexError  { code SZ1xxx, line, column, message }
-  → parser::Parser        (4,087 lines, 6 files) ── ParseError { code SZ2xxx, line, column, message }
+  → parser::Parser        (4,182 lines, 9 files) ── ParseError { code SZ2xxx, line, column, message }
   → ast::Program                              ── 48 types, all derive Debug, no HashMap
   → type_checker::TypeChecker (410 lines)     ── TypeError  { code SZ3xxx, line, column, message }
   → evaluator::Evaluator  (37,187 lines, 48 fields) ── RuntimeError { code, kind, message, span, stack, notes }
@@ -734,25 +734,83 @@ isolation boundary.
 
 Snapshot: identical.
 
-### 9.5 What the parser looks like now
+### 9.5 M1.4–M1.6 — declarations: **COMPLETE**
+
+The plan in §9 split declarations five ways — enums+native, interfaces,
+classes, functions, variables. Reading the code first (the sizes and the call
+graph) said three, and the three follow `spec/` rather than a taxonomy:
+
+| Goal | Module | Lines | Contents |
+|---|---|---|---|
+| **M1.4** | `parser/functions.rs` | 343 | `fn`, `fn*`, parameters, `native fn`, arrow functions, lambda bodies |
+| **M1.5** | `parser/variables.rs` | 290 | `let`, `const`, array and dict destructuring patterns |
+| **M1.6** | `parser/classes.rs` | 523 | `class`, `interface`, `enum`, and the `public`/`private`/`abstract`/`sealed` prefixes |
+
+Why these three and not five:
+
+- **Functions.** Five spellings, one subject, and they *share*
+  `parse_function_parameters` — a change to how a parameter list is written has
+  to reach all of them at once. That shared dependency is the boundary, not the
+  line count.
+- **Variables.** `let` and `const` are one grammar with one flag, and both admit
+  the same three left-hand sides. The pattern parsers stay `pub(super)` because
+  `for (let x in xs)` uses them too.
+- **Classes.** The call graph decided this one. `parse_visibility_statement`
+  dispatches to **both** class and interface, and
+  `parse_abstract_or_sealed_class` steps over a visibility keyword on its way to
+  a class. The modifier prefixes are owned by neither declaration — they route
+  between them — so splitting classes from interfaces would have stranded the
+  dispatchers between two files or duplicated them. `enum` joins because it is
+  the third way a nominal type is introduced by name, and `is_reserved_name`
+  guards all three alike.
+
+Snapshot: identical after each of the three.
+
+### 9.6 A correction to the diff-review method
+
+The check used through M1.3 — "every non-blank line removed from `mod.rs`
+reappears in the new file" — produced a false alarm here: twelve lines of
+`parse_if_expression`, a method that was never extracted, showed as removed.
+The method was intact at its original 59 lines.
+
+The cause is git, not the code. When several large adjacent regions are removed,
+the diff re-anchors and reports some *surviving* lines as `-` at one position
+and `+` at another. The check only collected `-` lines and compared them against
+the new files, so re-anchored survivors looked unaccounted for.
+
+**The correct invariant** — used from M1.4 onward — is that every removed line
+must appear in the new files **or** among the lines added back to `mod.rs`:
+
+```
+comm -23  <(removed lines, sorted -u)  <(new files + re-added lines, sorted -u)
+```
+
+Under that check M1.4–M1.6 come out exactly right: 13 lines differ, and all 13
+are the signatures that gained `pub(super)`.
+
+### 9.7 What the parser looks like now
 
 | File | Lines | Responsibility |
 |---|---|---|
-| `parser/mod.rs` | 3,534 | `Parser` state, `new`, `parse_program` + `synchronize`, and **all remaining grammar** |
-| `parser/diagnostics.rs` | 135 | `ParseError`, `SZ2000`, reporting, rendering, source labels, the error readers |
-| `parser/depth.rs` | 111 | `MAX_PARSE_DEPTH`, `SZ2001`, `DepthGuard`, the charge/release accounting |
-| `parser/cursor.rs` | 107 | advancing the stream, precedence at the cursor, name classification |
+| `parser/mod.rs` | 2,473 | `Parser` state, `new`, `parse_program` + `synchronize`, statements and expressions |
+| `parser/classes.rs` | 523 | `class`, `interface`, `enum`, modifier prefixes |
+| `parser/functions.rs` | 343 | every way a callable is written |
+| `parser/variables.rs` | 290 | `let`, `const`, destructuring |
+| `parser/diagnostics.rs` | 135 | `ParseError`, `SZ2000`, reporting, rendering |
+| `parser/depth.rs` | 111 | `MAX_PARSE_DEPTH`, `SZ2001`, `DepthGuard` |
+| `parser/cursor.rs` | 107 | advancing, precedence at the cursor, name classification |
 | `parser/directives.rs` | 107 | `import`, `export`, `use permissions` |
 | `parser/types.rs` | 93 | type syntax, and nothing about type compatibility |
 
-`mod.rs` is down 402 lines from 3,936. The infrastructure and the two smallest
-grammar areas are out; **what remains is the grammar proper**, and it is where
-the weight is: classes 250 lines, the prefix dispatcher 288, the infix chain
-217, `for` 184, `let` 149.
+**`mod.rs` is down 1,463 lines from 3,936 — 37%.** Infrastructure and every
+declaration form are out. What remains is statements and expressions:
+the prefix dispatcher 288, the infix chain 217, `for` 184,
+`parse_expression_statement` 157, `parse_statement` 161, plus switch/match/try
+and the assignment forms.
 
-Goals M1.4–M1.16 are that. The ordering in §9 still holds — leaves first,
-expressions last — but the next few goals are the first ones large enough that
-the diff itself needs reading, not just the snapshot.
+Goals M1.9–M1.16 are that, and the ordering in §9 still holds: assignment forms
+(M1.12) and the expression core (M1.16) are the two HIGH-risk ones and stay
+last.
 
 ---
 
