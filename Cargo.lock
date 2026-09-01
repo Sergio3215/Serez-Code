@@ -3689,7 +3689,7 @@ dependencies = [
 
 [[package]]
 name = "serez-code"
-version = "9.17.0"
+version = "10.0.0"
 dependencies = [
  "arboard",
  "chrono",
