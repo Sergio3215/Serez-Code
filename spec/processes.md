@@ -170,6 +170,11 @@ returns and carries no guarantee of being resolvable as a network name.
 These are snapshots. Nothing caches them and nothing guarantees two consecutive
 calls agree.
 
+`freeMemory` is not the same quantity on every host. Linux answers with
+`MemAvailable`, which counts reclaimable cache; macOS answers with the pages the
+kernel holds free right now, which excludes cache and so reads lower on the same
+machine. A memory or uptime reader the host cannot answer at all returns `-1`.
+
 ## Errors
 
 | Situation | Code | Kind | Catchable |

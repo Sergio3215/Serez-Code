@@ -2,8 +2,21 @@ name: CI
 
 on:
   push:
-    branches: [main, integration]
+    # `improve` is where the work is done. `merge.ps1` merges it into
+    # `integration` and `main` and pushes the release tag in one go, so without
+    # `improve` here the first CI signal arrives after `main` is already red and
+    # the tag is already burned — which is exactly how v10.0.0 got stuck.
+    # `integration` is kept because a push to it should still be checked, even
+    # though `merge.ps1` currently merges it locally without pushing.
+    branches: [main, integration, improve]
   pull_request:
+
+# Three OS jobs per run is too much to spend twice on a branch that has already
+# moved on. `main` still runs every push to completion: its history is the one
+# that has to stay readable.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:

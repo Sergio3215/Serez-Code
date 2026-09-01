@@ -79,7 +79,122 @@ fn os_hostname() -> String {
     std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string())
 }
 
-#[cfg(not(windows))]
+// ── macOS ────────────────────────────────────────────────────────────────────
+// Darwin has no `/proc`, so the readers below returned -1 there and every
+// `System` memory number was a lie on macOS. The same values come from
+// `sysctl`, declared here rather than taking on `libc` for one symbol.
+#[cfg(target_os = "macos")]
+mod darwin {
+    use std::ffi::{CString, c_char, c_int, c_void};
+
+    unsafe extern "C" {
+        fn sysctlbyname(
+            name: *const c_char,
+            oldp: *mut c_void,
+            oldlenp: *mut usize,
+            newp: *mut c_void,
+            newlen: usize,
+        ) -> c_int;
+    }
+
+    /// Reads a sysctl into `out` and reports how many bytes the kernel wrote.
+    /// A name the kernel does not know is `None`, never a half-filled buffer.
+    pub fn raw(name: &str, out: &mut [u8]) -> Option<usize> {
+        let cname = CString::new(name).ok()?;
+        let mut len = out.len();
+        let rc = unsafe {
+            sysctlbyname(
+                cname.as_ptr(),
+                out.as_mut_ptr() as *mut c_void,
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc == 0 && len <= out.len() {
+            Some(len)
+        } else {
+            None
+        }
+    }
+
+    /// The integer sysctls are 4 or 8 bytes wide depending on the name, so
+    /// both widths are accepted and widened.
+    pub fn integer(name: &str) -> Option<u64> {
+        let mut buf = [0u8; 8];
+        match raw(name, &mut buf)? {
+            8 => Some(u64::from_ne_bytes(buf)),
+            4 => Some(u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]) as u64),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn os_total_memory() -> i64 {
+    darwin::integer("hw.memsize")
+        .map(|v| v as i64)
+        .unwrap_or(-1)
+}
+
+#[cfg(target_os = "macos")]
+fn os_free_memory() -> i64 {
+    // Darwin publishes no `MemAvailable` equivalent. `vm.page_free_count` is
+    // the honest reading: the pages the kernel holds free right now, counted
+    // in `hw.pagesize` units. It sits below what a Linux caller would expect,
+    // because Darwin keeps cached pages out of it.
+    match (
+        darwin::integer("vm.page_free_count"),
+        darwin::integer("hw.pagesize"),
+    ) {
+        (Some(pages), Some(size)) => pages.saturating_mul(size) as i64,
+        _ => -1,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn os_uptime_secs() -> i64 {
+    // `kern.boottime` is a `struct timeval`; only `tv_sec`, its first eight
+    // bytes, is wanted.
+    let mut buf = [0u8; 16];
+    if !matches!(darwin::raw("kern.boottime", &mut buf), Some(n) if n >= 8) {
+        return -1;
+    }
+    let mut secs = [0u8; 8];
+    secs.copy_from_slice(&buf[..8]);
+    let boot = i64::from_ne_bytes(secs);
+    let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(_) => return -1,
+    };
+    if boot <= 0 || now < boot {
+        -1
+    } else {
+        now - boot
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn os_hostname() -> String {
+    // `/etc/hostname` does not exist on Darwin and `HOSTNAME` is not exported
+    // by every shell, so the reader below answered "unknown" on every Mac.
+    let mut buf = [0u8; 256];
+    if let Some(n) = darwin::raw("kern.hostname", &mut buf) {
+        let bytes = &buf[..n];
+        let bytes = match bytes.iter().position(|&b| b == 0) {
+            Some(nul) => &bytes[..nul],
+            None => bytes,
+        };
+        if let Ok(name) = std::str::from_utf8(bytes) {
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+    }
+    std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn os_total_memory() -> i64 {
     if let Ok(c) = std::fs::read_to_string("/proc/meminfo") {
         for line in c.lines() {
@@ -95,7 +210,7 @@ fn os_total_memory() -> i64 {
     -1
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn os_free_memory() -> i64 {
     if let Ok(c) = std::fs::read_to_string("/proc/meminfo") {
         for line in c.lines() {
@@ -123,12 +238,12 @@ fn os_uptime_secs() -> i64 {
     -1
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn os_uptime_secs() -> i64 {
     -1
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn os_hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()))

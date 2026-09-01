@@ -433,8 +433,12 @@ impl super::Evaluator {
                 };
                 match std::fs::metadata(&path) {
                     Ok(meta) => {
-                        let size = meta.len() as i64;
                         let is_dir = meta.is_dir();
+                        // `metadata().len()` on a directory is whatever the host
+                        // keeps in its entry: 0 on Windows, 4096 on ext4, 64 on
+                        // APFS. `spec/files.md` promises 0 for a directory, so
+                        // the host number never reaches the caller.
+                        let size = if is_dir { 0 } else { meta.len() as i64 };
                         let modified = meta
                             .modified()
                             .ok()
