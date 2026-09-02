@@ -230,11 +230,28 @@ impl Row {
     }
 }
 
+/// Read a corpus file with its line endings normalised to LF.
+///
+/// The manifest is committed and CI runs on three operating systems, one of
+/// which checks out with `core.autocrlf=true`. Since M2.3.2 the AST carries byte
+/// offsets, and a byte offset is a property of the byte sequence: `\r\n` is two
+/// bytes and `\n` is one, so every offset past the first newline legitimately
+/// differs between the two checkouts. That is arithmetic, not a defect.
+///
+/// So the snapshot is defined over LF-normalised source, which is the same
+/// everywhere. What that does *not* do is stop checking line-ending
+/// independence — `the_manifest_does_not_depend_on_what_the_checkout_did_to_line_endings`
+/// still parses both forms and compares everything a user can observe.
+fn read_normalised(path: &str, absolute: &Path) -> String {
+    std::fs::read_to_string(absolute)
+        .unwrap_or_else(|e| panic!("corpus file {path} is unreadable: {e}"))
+        .replace("\r\n", "\n")
+}
+
 fn measure() -> BTreeMap<String, (Row, PathBuf)> {
     let mut measured = BTreeMap::new();
     for (path, absolute) in corpus() {
-        let source = std::fs::read_to_string(&absolute)
-            .unwrap_or_else(|e| panic!("corpus file {path} is unreadable: {e}"));
+        let source = read_normalised(&path, &absolute);
         let parsed = parse(&path, source);
         let row = Row {
             tree_bytes: parsed.tree.len(),
@@ -335,6 +352,43 @@ fn the_parser_produces_the_trees_and_diagnostics_it_produced_before() {
     on_measurement_stack(compare_against_the_manifest)
 }
 
+/// A tree rendering with byte offsets blanked out.
+///
+/// Everything else in a span — `line`, `column` — is what a user sees, and must
+/// be identical whatever the checkout did to line endings. `start` and `end`
+/// are offsets *into the bytes*, so under CRLF they legitimately differ by one
+/// per preceding newline. Comparing the rendering with those two fields masked
+/// tests the whole tree, including that spans are still *present* and that no
+/// node changed shape, while allowing the one difference that is arithmetic
+/// rather than behaviour.
+fn without_offsets(tree: &str) -> String {
+    let mut out = String::with_capacity(tree.len());
+    let mut rest = tree;
+    loop {
+        // Whichever marker comes *first*. Reaching for `start:` preferentially —
+        // `find("start: ").or_else(|| find("end: "))` — looks equivalent and is
+        // not: once one span's `start` is masked, the next `start:` lies beyond
+        // this span's `end:`, so every `end:` was skipped and the mask did half
+        // its job. That mistake made this test report 342 files as differing
+        // when the real number was zero.
+        let next = ["start: ", "end: "]
+            .iter()
+            .filter_map(|marker| rest.find(marker).map(|at| (at, marker.len())))
+            .min_by_key(|(at, _)| *at);
+        let Some((at, field_len)) = next else { break };
+
+        out.push_str(&rest[..at + field_len]);
+        rest = &rest[at + field_len..];
+        let digits = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        out.push('_');
+        rest = &rest[digits..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[test]
 fn the_manifest_does_not_depend_on_what_the_checkout_did_to_line_endings() {
     // The manifest is committed, and CI runs on three operating systems. The
@@ -352,22 +406,21 @@ fn the_manifest_does_not_depend_on_what_the_checkout_did_to_line_endings() {
     on_measurement_stack(|| {
         let mut differing = Vec::new();
         for (path, absolute) in corpus() {
-            let raw = std::fs::read_to_string(&absolute)
-                .unwrap_or_else(|e| panic!("corpus file {path} is unreadable: {e}"));
-            let lf = raw.replace("\r\n", "\n");
+            let lf = read_normalised(&path, &absolute);
             let crlf = lf.replace('\n', "\r\n");
 
             let as_lf = parse(&path, lf);
             let as_crlf = parse(&path, crlf);
-            if as_lf.tree != as_crlf.tree || as_lf.diagnostics != as_crlf.diagnostics {
+            if without_offsets(&as_lf.tree) != without_offsets(&as_crlf.tree)
+                || as_lf.diagnostics != as_crlf.diagnostics
+            {
                 differing.push(path);
             }
         }
         assert!(
             differing.is_empty(),
-            "{} corpus files parse differently under CRLF than under LF, so the \
-             committed manifest is only valid on whichever platform generated \
-             it:\n  {}",
+            "{} corpus files parse differently under CRLF than under LF in a way \
+             that a user can observe:\n  {}",
             differing.len(),
             differing.join("\n  ")
         );

@@ -31,7 +31,6 @@ use super::literals::{parse_dec_literal, parse_interpolated_string};
 use super::types::is_type_keyword;
 use super::{DepthGuard, Parser};
 use crate::ast::*;
-use crate::span::Span;
 use crate::token::TokenType;
 
 #[derive(PartialEq, PartialOrd)]
@@ -431,14 +430,13 @@ impl Parser {
 
             if self.current_token.token_type == TokenType::LParen {
                 if let Some(left) = left_exp {
-                    let call_line = self.current_token.line;
-                    let call_column = self.current_token.column;
+                    let call_open = self.current_token.span;
 
                     if let Some(args) = self.parse_call_arguments() {
                         left_exp = Some(Expression::Call(CallExpression {
                             function: Box::new(left),
                             arguments: args,
-                            span: Span::point(call_line, call_column),
+                            span: self.span_to_here(call_open),
                         }));
                     } else {
                         return None;
@@ -487,8 +485,7 @@ impl Parser {
                 }
             } else if self.current_token.token_type == TokenType::KwIs {
                 // `expr is TypeName` → Infix("is", expr, Identifier("type_name"))
-                let op_line = self.current_token.line;
-                let op_column = self.current_token.column;
+                let op_open = self.current_token.span;
                 self.next_token(); // consume type name token (KwInt, KwString, Ident, etc.)
                 let type_name = self.current_token.literal.clone();
                 if let Some(left) = left_exp {
@@ -496,15 +493,14 @@ impl Parser {
                         left: Box::new(left),
                         operator: "is".to_string(),
                         right: Box::new(Expression::Identifier(type_name)),
-                        span: Span::point(op_line, op_column),
+                        span: self.span_to_here(op_open),
                     }));
                 }
             } else if self.current_token.token_type == TokenType::Dot
                 || self.current_token.token_type == TokenType::QuestionDot
             {
                 let is_optional = self.current_token.token_type == TokenType::QuestionDot;
-                let dot_line = self.current_token.line;
-                let dot_column = self.current_token.column;
+                let dot_open = self.current_token.span;
 
                 // After '.', accept identifiers AND keyword tokens as method names
                 // (e.g. tensor.get(), dict.set(), obj.new() should work)
@@ -530,20 +526,19 @@ impl Parser {
                         arguments,
                         has_parens,
                         is_optional,
-                        span: Span::point(dot_line, dot_column),
+                        span: self.span_to_here(dot_open),
                     }));
                 }
             } else if self.current_token.token_type == TokenType::Pipe {
                 // |> desugars: left |> fn  →  fn(left)
-                let call_line = self.current_token.line;
-                let call_column = self.current_token.column;
+                let call_open = self.current_token.span;
                 self.next_token(); // advance to the function expression
                 if let Some(left) = left_exp {
                     if let Some(func) = self.parse_expression(current_precedence) {
                         left_exp = Some(Expression::Call(CallExpression {
                             function: Box::new(func),
                             arguments: vec![left],
-                            span: Span::point(call_line, call_column),
+                            span: self.span_to_here(call_open),
                         }));
                     } else {
                         return None;
@@ -552,8 +547,7 @@ impl Parser {
                     return None;
                 }
             } else {
-                let op_line = self.current_token.line;
-                let op_column = self.current_token.column;
+                let op_open = self.current_token.span;
 
                 self.next_token();
 
@@ -573,7 +567,7 @@ impl Parser {
                             left: Box::new(left),
                             operator,
                             right: Box::new(right),
-                            span: Span::point(op_line, op_column),
+                            span: self.span_to_here(op_open),
                         }));
                     } else {
                         return None;

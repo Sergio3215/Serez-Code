@@ -21,6 +21,7 @@
 //! syntactic ones (ROADMAP_STATE.md §5.12).
 
 use super::{Parser, Precedence, token_precedence};
+use crate::span::Span;
 use crate::token::TokenType;
 
 impl Parser {
@@ -103,5 +104,30 @@ impl Parser {
 
     pub(super) fn current_precedence(&self) -> Precedence {
         token_precedence(&self.current_token.token_type)
+    }
+
+    /// A span reaching from a node's opening token to wherever the cursor has
+    /// got to.
+    ///
+    /// Recursive descent captures the opening token's position *before* parsing
+    /// a node's parts and builds the node *after*, so at construction time the
+    /// cursor sits on the node's last token. That makes the node's real extent
+    /// available for free: `open.start` to `self.current_token.span.end`.
+    ///
+    /// `line` and `column` stay the opening token's. They are what gets
+    /// rendered, and `spec/errors.md` promises a caught `Error.span` is the
+    /// *position* a failure is attributed to, not a range — widening the extent
+    /// must not move the point.
+    ///
+    /// The `max` guards the one case where the cursor has not advanced past the
+    /// opening token: a node built from a single token would otherwise get an
+    /// end before its start.
+    pub(super) fn span_to_here(&self, open: Span) -> Span {
+        Span {
+            line: open.line,
+            column: open.column,
+            start: open.start,
+            end: self.current_token.span.end.max(open.start),
+        }
     }
 }

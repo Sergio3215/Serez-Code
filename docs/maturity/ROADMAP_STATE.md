@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.3.2** — populate `start`/`end` at the nine `Span::point` sites in the parser, from the token that opened each node. See §9B.4. |
+| Next molecule | **M2.3.3** — the remaining 19 `Span::point` sites (assignment, classes, loops, the façade). Same shape as M2.3.2. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.3.1 |
+| Last state update | 2026-09-02, end of M2.3.2 |
 
 Milestone ledger:
 
@@ -1282,12 +1282,59 @@ now, which makes EOF the empty point at the end of the source, which is what it
 is. Nothing consumed the offsets yet, so nothing was broken; it would have been
 the day something did.
 
+### 9B.6 M2.3.2 — nodes get real extents, and the manifest stops being portable
+
+The five expression sites now build their span with `Parser::span_to_here`,
+which runs from the node's opening token to wherever the cursor has reached.
+Recursive descent captures the opening position *before* parsing a node's parts
+and constructs the node *after*, so the node's real extent is available for
+free.
+
+**What a node's extent covers, stated precisely because it is narrower than it
+sounds.** A call spans from its `(`, an infix expression from its operator, a
+dot call from its `.` — not from the start of the callee or the left operand,
+because those are `Identifier`s and do not carry spans until M2.6. So
+`foo(1, 2)` gives an extent of `(1, 2)`. That is correct and incomplete;
+`tests/ast_spans.rs` (6 tests) asserts what is true today rather than what is
+wanted later, so that widening it in M2.6 has to be deliberate.
+
+`line`/`column` are untouched by the widening — they stay the opening token's,
+because they are what `spec/errors.md` promises a caught `Error.span` reports.
+
+**Then this broke the manifest's portability, and the M1.0 test caught it.**
+`the_manifest_does_not_depend_on_what_the_checkout_did_to_line_endings` failed
+for 439 files. The cause is not a defect: `\r\n` is two bytes and `\n` is one,
+so every offset past the first newline legitimately differs between a CRLF and
+an LF checkout. It is arithmetic. But the *manifest* is committed and CI's
+Windows runner checks out CRLF, so a hash containing offsets would fail on
+exactly one of the three platforms.
+
+Resolved by separating the two things that were conflated:
+
+- **The snapshot is defined over LF-normalised source.** `read_normalised`
+  strips `\r\n` before parsing, so the manifest is the same everywhere. It is a
+  test artifact; defining it over a canonical form costs nothing.
+- **The line-ending test now asserts what is genuinely invariant.** It compares
+  diagnostics, and the tree with `start:`/`end:` masked — so it still checks
+  every node's shape and that spans are present, while permitting the one
+  difference that is arithmetic.
+
+**And the fix had a bug of its own, worth recording because it was nearly
+invisible.** The mask reached for `start:` preferentially:
+`find("start: ").or_else(|| find("end: "))`. That looks equivalent to "find the
+next marker" and is not — once a span's `start` is masked, the following
+`start:` lies beyond that span's `end:`, so every `end:` was skipped and the
+mask did half its job. It reported **342 files as differing when the true number
+is zero**. Caught because 342 was implausible: the offsets that differ under
+CRLF are *shifts*, and a shift affects `start` and `end` alike, so a mask that
+worked could not leave a third of the corpus differing.
+
 ### 9B.4 M2.3 onward — molecules (planned)
 
 | Molecule | Action | Verification |
 |---|---|---|
 | **M2.3.1** | Give `Token` a `span`, populated by the lexer | **done** — see §9B.5. Snapshot unchanged, as predicted: tokens are not in the AST |
-| **M2.3.2** | Populate `start`/`end` at the nine `Span::point` sites in the parser from the token that opened the node | snapshot changes only in the `start`/`end` fields; diagnostics identical |
+| **M2.3.2** | Populate `start`/`end` at the expression sites | **done** — §9B.6. Also made the manifest LF-normalised, since byte offsets are not portable across checkouts |
 | **M2.4** | Migrate the declaration nodes (`LetStatement`, `FunctionDeclaration`, `ClassDeclaration`, …) | snapshot + full gates |
 | **M2.5** | Migrate the statement nodes | snapshot + full gates |
 | **M2.6** | Migrate the expression nodes | snapshot + full gates |
