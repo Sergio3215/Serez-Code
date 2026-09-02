@@ -35,7 +35,7 @@ Milestone ledger:
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
 | M2 — AST + Spans Stable | **COMPLETE** (2026-09-02) — all 28 `Expression` variants and 39 of 40 structs carry a span |
 | M3 — Diagnostics Unified | **COMPLETE** (2026-09-02) — 5 diagnostic types -> 1, 4 rendered formats -> 1 renderer, §5.17 fixed |
-| M4 — Semantic Layer Established | **IN PROGRESS** |
+| M4 — Semantic Layer Established | **BLOCKED** — symbols delivered (§9F.2-9F.3); resolver, static scopes and moving `is_reserved_name` all need a product decision (§9F.4) |
 | M5 — Type System Stable | NOT STARTED |
 | M6 — Runtime Molecular | NOT STARTED (partially pre-empted; see §6) |
 | M7 — Semantics Frozen | NOT STARTED |
@@ -334,7 +334,7 @@ entangled because of a bug rather than because of the architecture.
 
 ## 5. Discoveries
 
-§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0; §5.22–5.24 are M2.3.3; §5.25 is M2.7; §5.26 is M3.5; §5.27 is M3.6; §5.28 is M3.7. §5.4 was corrected by M2.0 — see the note in it.
+§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0; §5.22–5.24 are M2.3.3; §5.25 is M2.7; §5.26 is M3.5; §5.27 is M3.6; §5.28 is M3.7; §5.29 is M4.4. §5.4 was corrected by M2.0 — see the note in it.
 
 All are **pre-existing**. Neither milestone changed any behavior; none was fixed.
 
@@ -2514,6 +2514,126 @@ practice. Exposing `lsp` from the library would let it move to `tests/`, but the
 LSP binary carries `#![allow(dead_code)]`, so compiling it into the library would
 move the clippy baseline. Not worth it for a test's address.
 
+### §5.29 — the type checker cannot see through `export` — **confirmed bug**, medium (found in M4.4)
+
+`TypeChecker::check` has three passes. **Pass 3 unwraps `Statement::Export`
+(`type_checker.rs:226`); passes 1 and 2 do not.** So the body of an exported
+function is checked, but the declaration itself never enters `self.functions`,
+and an exported `let` never enters `self.var_types`.
+
+Reproduced against the 10.0.0 build, twice:
+
+```
+$ sz a.sz     # fn int f(int a) {...}   let x = f("hello");
+❌ TYPE ERROR [SZ3000] [line 2:14]: Parameter 'a' of 'f' expected 'int' but received 'string'.
+❌ ERROR [SZ4002]: Parameter 'a' expected 'int' but received 'string'
+
+$ sz b.sz     # export fn int f(int a) {...}   let x = f("hello");
+❌ ERROR [SZ4002]: Parameter 'a' expected 'int' but received 'string'
+```
+
+The same mistake is caught statically for a plain declaration and only at run
+time for an exported one. The same holds for `export let`: its inferred type is
+missing, so calls using it are unchecked.
+
+**Why it is an oversight rather than a design choice:** the inconsistency is
+*inside one function*. Pass 3 handles `Export` and passes 1 and 2 forget to.
+`spec/types.md` never mentions `export`, so nothing documents the difference.
+`semantic::declarations` already unwraps `Export` correctly, which is how the
+discrepancy surfaced.
+
+**Not fixed here.** M4.4 found it while surveying consumers for migration, and
+the bug protocol says a bug found mid-milestone is documented and assigned, not
+fixed inside other work. Fixing it makes the checker report advisory `SZ3000`
+findings it does not report today — the exit code cannot move, since
+`spec/types.md` makes type findings advisory, but stderr does, so
+`diagnostic_render.manifest` would move for any affected fixture.
+
+**Assigned to M5**, whose charter is exactly this: *"Reglas de tipos coherentes,
+normativas y consistentes entre checker/runtime/tooling."* A checker that
+disagrees with the runtime about the same program is the milestone's subject.
+
+**Corpus exposure is small**: 3 of 483 files use `export`, and none combine it
+with a type error, which is why no manifest row would move today and why no test
+caught it.
+
+### §9F.3 — M4.2-M4.3: the symbol layer, delivered and corpus-validated
+
+`src/semantic.rs` — a leaf over `ast` and `span`, 8 unit tests, no consumers in
+the product. `declarations(&Program)` returns every declared name with its kind,
+its span, its container and, crucially, its **depth**. `top_level` filters on
+depth `0`.
+
+Depth is the fact a token scan cannot recover, and it is the whole of §9F.2's
+95-file gap.
+
+M4.3 then replaced the divergence test's hand-rolled walk with
+`semantic::top_level` itself. The numbers did not move — still 95 over-reporting,
+still 0 hiding — so the module reproduces the ad hoc walk on **all 483 corpus
+files**, not merely on its own unit tests. That is the validation; a second
+hand-written walk would only have proved the test agreed with itself.
+
+### §9F.4 — **M4 IS BLOCKED.** What is left, and why none of it is mine to decide
+
+Three items remain in M4's charter. Each one hits a stop-trigger, and the
+evidence for each is below so that the decision can be made quickly.
+
+#### (a) Move `is_reserved_name` out of the parser — **not behaviour-preserving by any route**
+
+I looked for a way to move it that changes nothing. There is none:
+
+  * The error is currently **fatal at parse time** and aborts the declaration —
+    `parse_class_declaration` returns `None`, so the class never enters the AST.
+    Moving the check later means the class *is* parsed, which changes
+    `parser_ast.manifest` by construction.
+  * The only pre-run pass that exists is the **type checker, which is advisory**.
+    `spec/types.md` makes its findings non-fatal. Moving a fatal error there
+    would make `class Task {}` **run**. That breaks a documented contract.
+  * The remaining option is a **new fatal phase** between parser and checker.
+    That is a pipeline change with public consequences: a new phase label in the
+    rendered diagnostic, a code range to choose, and a different position in the
+    diagnostic order.
+
+> **Decision needed:** accept a new fatal semantic phase, or leave the check in
+> the parser? *(Recommendation: a new phase is the right architecture, but it is
+> M4's largest public change and should be decided deliberately, not absorbed.)*
+
+#### (b) A static resolver — gated on a decision §6 already flagged
+
+`name -> declaration` is answered once, at run time, by `ScopeStack::lookup`.
+A resolver that answers it earlier is easy to write and useless until something
+consumes it; a resolver that **reports** an unresolved name changes which
+programs `--check` accepts. §6 already records this as *critical, open, needs an
+explicit product decision under `spec/compatibility.md`*, and it still does.
+
+> **Decision needed:** should a free variable be a diagnostic? *(Recommendation:
+> before deciding, measure how many real programs rely on it. That measurement
+> is the one piece of independent work here — see below.)*
+
+#### (c) `is_reserved_name` coverage — 7 of 22
+
+§5.20 already says extending it is breaking. Leaving it at 7 keeps a rule whose
+membership looks accidental: `class Gui {}` is rejected and `class Math {}` is
+accepted, and a program may define `class Math`, call `new Math()`, and still
+call `Math.floor(3.7)`.
+
+> **Decision needed:** extend to 22 (breaking), leave at 7 (arbitrary), or remove
+> the guard entirely (also breaking, in the other direction).
+
+#### What I did not do, and why
+
+The one genuinely independent piece of work left is **measuring free-variable use
+across the corpus**, which would quantify (b) for whoever decides it. I did not
+do it, and the reason is worth recording rather than hiding: a correct scope
+model has to handle closures, `this`, class bodies, `for`-in bindings, `catch`
+bindings, destructuring and generators. A half-correct one produces a *confident
+wrong number*, and a wrong number is worse input to a product decision than no
+number. It should be built deliberately, as its own molecule, once (a) is
+settled — because whether a semantic phase exists determines where it lives.
+
+**Repository state: green.** Gates below. Nothing is half-migrated: `semantic`
+has no product consumers, so there is no partial state to unwind.
+
 ---
 
 ## 10. Commits and checkpoints
@@ -2534,6 +2654,9 @@ move the clippy baseline. Not worth it for a test's address.
 | M3.7 | `e77aec0` | `nine rejected programs stop failing without saying why` — **behaviour change** |
 | M3.8 | `6028fe3` | `decide the ordering question, and change nothing` |
 | M4.0 | `53518e7` | `the semantic layer is absent, not misplaced` |
+| M4.1 | `6a32ade` | `measure how far the editor's outline is from the parse tree` |
+| M4.2 | `795d94f` | `the missing layer, as a leaf with no consumers` |
+| M4.3 | `c2775bd` | `validate the new module against the whole corpus` |
 | **M3 checkpoint** | `78202b5` | `M3 closes — the audit, and two rows that were out of date` |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
 
