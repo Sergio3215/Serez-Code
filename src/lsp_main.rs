@@ -16,6 +16,7 @@ mod lexer;
 mod lsp;
 mod parser;
 mod render;
+mod semantic;
 mod span;
 mod token;
 mod type_checker;

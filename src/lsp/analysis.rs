@@ -784,42 +784,35 @@ mod semantic_divergence {
     //! reach this code at all — itself one of §9F.0's findings.
 
     use super::*;
-    use crate::ast::Statement;
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
     /// Top-level declaration names according to the parse tree.
     ///
-    /// Only the forms `scan_symbols` also reports at the top level, so the two
-    /// sets are comparable: a difference means a real disagreement, not two
-    /// tools answering different questions.
+    /// This is `crate::semantic::top_level`, not a walk written for the test.
+    /// That is the point: running it over the whole corpus is what validates the
+    /// new module, and a second hand-rolled walk here would only prove the test
+    /// agrees with itself.
+    ///
+    /// Restricted to the four kinds `scan_symbols` also reports at the top
+    /// level, so a difference is a real disagreement rather than two tools
+    /// answering different questions.
     fn declared_by_the_tree(source: &str) -> BTreeSet<String> {
         let mut parser = Parser::new(Lexer::new(source.to_string()));
         let program = parser.parse_program();
-        let mut names = BTreeSet::new();
-        for statement in &program.statements {
-            // `export fn f() {}` declares `f`; the wrapper is not the symbol.
-            let statement = match statement {
-                Statement::Export(inner) => inner.as_ref(),
-                other => other,
-            };
-            match statement {
-                Statement::FunctionDeclaration(f) => {
-                    names.insert(f.name.clone());
-                }
-                Statement::ClassDeclaration(c) => {
-                    names.insert(c.name.clone());
-                }
-                Statement::InterfaceDeclaration(i) => {
-                    names.insert(i.name.clone());
-                }
-                Statement::EnumDeclaration(e) => {
-                    names.insert(e.name.clone());
-                }
-                _ => {}
-            }
-        }
-        names
+        crate::semantic::top_level(&program)
+            .into_iter()
+            .filter(|s| {
+                matches!(
+                    s.kind,
+                    crate::semantic::SymbolKind::Function
+                        | crate::semantic::SymbolKind::Class
+                        | crate::semantic::SymbolKind::Interface
+                        | crate::semantic::SymbolKind::Enum
+                )
+            })
+            .map(|s| s.name)
+            .collect()
     }
 
     /// The same question, asked of the token scan the editor actually uses.
