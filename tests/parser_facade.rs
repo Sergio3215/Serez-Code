@@ -144,9 +144,13 @@ fn lexical_diagnostics_arrive_after_syntactic_ones() {
     // by producer rather than sorted by position: a lexical failure on line 1
     // is reported after a syntax error on line 3.
     //
-    // This is the ordering M3 (unified diagnostics) has to decide about. It is
-    // pinned here as the current, unspecified behavior — `spec/errors.md`
-    // documents the codes and the stderr shape but says nothing about order.
+    // M3.8 decided this, as decision D6 in `docs/maturity/ROADMAP_STATE.md`:
+    // **keep it**. `spec/errors.md` documents the codes and the stderr shape and
+    // says nothing about order, so nothing is violated, and across all 499
+    // corpus files not one produces both a lexical and a syntactic diagnostic
+    // — the case below had to be constructed by hand. Changing the order a
+    // user reads diagnostics in is a UX call for Sergio, not a side effect of a
+    // diagnostics refactor. §9D.7 costs the alternative if he wants it.
     //
     // The malformed literal has to be `0x` rather than an unterminated string:
     // an unterminated string reads to EOF, so it would swallow the syntax error
@@ -165,9 +169,7 @@ fn lexical_diagnostics_arrive_after_syntactic_ones() {
     };
     assert!(
         syntactic < lexical,
-        "diagnostics are no longer grouped lexer-last. If they are sorted by \
-         position now, that is an improvement — but it is an M3 decision, not a \
-         side effect of moving code between files"
+        "diagnostics are no longer grouped lexer-last. Sorting by position may well be better — §9D.7 costs exactly how — but D6 decided to keep it, so reaching here means it changed by accident"
     );
 }
 

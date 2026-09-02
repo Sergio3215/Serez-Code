@@ -1947,7 +1947,7 @@ split decides it, explicitly.
 | **M3.5** | Migrate `RuntimeError`, preserving kind/stack/notes and the catchability bit | done — §9D.4 |
 | **M3.6** | One renderer; decide the unreachable second (§9D.2) | done — §9D.5, decision **D5** |
 | **M3.7** | **§5.17** — nine parser errors that reach nobody | done — §9D.6, **behaviour change** |
-| **M3.8** | **§5.12** — diagnostic ordering, grouped-by-producer vs by-position | **decision, then possibly a behaviour change** |
+| **M3.8** | **§5.12** — diagnostic ordering | done — §9D.7, decision **D6: no change**, one proposal left for Sergio |
 | **M3.9** | M3 milestone audit | — |
 
 M3.7 and M3.8 are marked because they are *not* refactors. Every other molecule
@@ -2214,6 +2214,67 @@ That is a span-mapping decision, which is M4's subject matter, not a diagnostics
 routing change. Recorded and assigned there rather than forced into M3. The
 `InterpolationFailure::Expression` variant marks the exact site.
 
+### §9D.7 — M3.8: diagnostic ordering (decision **D6** — no behaviour change)
+
+**The wart.** `flush_lexer_errors` runs at the end of `parse_program`, so the
+list is grouped by producer rather than sorted by position. Reproduced:
+
+```
+$ sz probe.sz          # let a = 0x; / let b = 2; / let = 3;
+❌ PARSER ERROR [SZ2000] [probe.sz 3:1]: Expected variable name after 'let'
+❌ PARSER ERROR [SZ2000] [probe.sz 3:5]: Unexpected token '=': expected an expression
+❌ LEXER ERROR [SZ1004] [probe.sz 1:9]: Invalid hexadecimal integer literal '0x'
+```
+
+Line 3 before line 1. `spec/errors.md` documents the codes and the rendered
+shape and says **nothing** about order, so nothing is currently violated.
+
+**Why the flush is at the end at all.** `Parser::new` pulls two tokens before
+`set_source` and `set_source_name` are called (§5.13), so a lexical error from
+construction cannot be rendered when it is detected — there is no file name and
+no source to draw a caret from yet. The deferral is not arbitrary.
+
+**Measured blast radius: zero.** Across all 499 corpus files, only **three**
+produce more than one diagnostic, and all three are pure `SZ2000`. **No file in
+the repository produces both a lexical and a syntactic diagnostic**, so the
+ordering is unobservable in the entire corpus; the reproduction above had to be
+constructed by hand, and had to use `0x` rather than an unterminated string,
+because an unterminated string reads to EOF and swallows the syntax error.
+
+**Decision D6: keep the current order. M3 changes nothing here.**
+
+The reasoning is about *who decides*, not about which order is nicer:
+
+  * The spec permits either. Nothing is broken, and no evidence of user harm
+    exists — the case is unreachable in 499 files.
+  * Changing it is a **user-facing UX decision**, and the roadmap chartered M3.8
+    to *decide*, not to adopt a particular outcome.
+  * The comment in `tests/parser_facade.rs` calling position-order "an
+    improvement" is **my own note from M1.0.3**, not Sergio's decision. Treating
+    it as authorization would be citing myself. It is a proposal, and it stays a
+    proposal until Sergio picks it.
+
+**The proposal, costed, for whenever Sergio wants it.** Three options were
+considered:
+
+| | Approach | Cost | Public consequence |
+|---|---|---|---|
+| **A** *(chosen)* | Leave it. | none | none |
+| **B** | Sort the list in `take_errors()`. | small | **Worse than either.** The printed order comes from eager printing at the producers, so the list and the output would disagree. Rejected outright. |
+| **C** | Flush the queue at the *start* of `parse_program` (labels are set by then) and again inside `next_token`, instead of at the end. | ~5 lines | Diagnostics print in the order the lexer and parser encounter them, i.e. source order. Because the lexer runs one token ahead, a lexical error can still be flushed at most one token early — "source order" is exact in practice, not by construction. |
+
+**C is the recommendation** if the order is ever to change: it is small,
+reversible, needs no move of rendering to the pipeline boundary, and the corpus
+measurement says **no manifest row would move**. It flips exactly one test,
+`lexical_diagnostics_arrive_after_syntactic_ones`, which was written to be
+flipped by this decision.
+
+What C is *not*: it is not "render once at the boundary". The producers still
+print eagerly. Fulfilling `spec/errors.md`'s boundary sentence literally would
+mean buffering every frontend diagnostic until `run.rs` — which touches imports,
+the REPL, `--watch` and the interpolation sub-parsers, and is a genuinely
+different architecture. Not proposed here.
+
 ---
 
 ## 10. Commits and checkpoints
@@ -2231,6 +2292,7 @@ routing change. Recorded and assigned there rather than forced into M3. The
 | M3.2-M3.3 | `c4657e3` | `one model, and the frontend moves onto it` |
 | M3.4-M3.5 | `aeeebf2` | `the checker and the runtime move onto the one model` |
 | M3.6 | `33e6211` | `four formats become one renderer` |
+| M3.7 | `e77aec0` | `nine rejected programs stop failing without saying why` — **behaviour change** |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
 
 ---
