@@ -21,12 +21,12 @@ Read before starting any milestone, in this order:
 | Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, delivered and corpus-validated (§9F.3) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
 | Last completed milestone | **M3 — Diagnostics Unified** (M0, M1, M2 before it) |
-| **Next molecule** | **None is authorized.** M4 cannot proceed on any of its three remaining items without an answer to §9F.4. Independent work that does *not* need one has been exhausted. |
+| **Next molecule** | **None is authorized.** M4's three remaining items each need a product decision — §9F.4. The blast radius of (a) and (c) is now **measured**, and §9F.5 gives the molecule-by-molecule plan each answer unlocks. First authorized molecule after a decision: **M4.5.1** if (a) is a new phase. |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02 — baseline re-verified at `9ca4d22`, §1.5; this table itself had drifted, §5.30 |
+| Last state update | 2026-09-02 — baseline re-verified at `9ca4d22` (§1.5); this table had drifted (§5.30); §9F.4 (a) and (c) measured; §5.31, §5.32 recorded; M4's conditional plan is §9F.5 |
 
 Milestone ledger:
 
@@ -903,6 +903,54 @@ with its own detail will. §0 is derived information: every row in it is stated
 authoritatively somewhere else in this file. The cheap guard is to make updating
 §0 the *last* step of a milestone audit rather than an independent chore — the
 audit already re-reads everything §0 summarises.
+
+---
+
+### 5.31 — a class and a namespace of the same name both resolve, in the same program — *compatibility hazard*, **medium** (probed 2026-09-02, pre-existing)
+
+§9F.0 asserted this. It is now run:
+
+```
+public class Math {
+    public Math(int v) { this.v = v; }
+    public int give() { return this.v; }
+}
+let m = new Math(42);
+out m.give();        // 42
+out Math.floor(3.7); // 3
+```
+
+**Exit 0. Both lines print.** One program holds two unrelated things called
+`Math`, and which one a site gets is decided by the *shape* of the site — `new`
+and instance dispatch reach the class, static dispatch reaches the builtin. The
+same file with `Task` in place of `Math` is rejected at parse time. Nothing about
+the language distinguishes the two cases; only the seven-name list does.
+
+This is the concrete cost of the 7-of-22 rule, and it is the evidence for §9F.4(c).
+
+### 5.32 — the reserved-name rejection emits two spurious follow-on errors — *diagnostic quality*, **low** (found 2026-09-02, pre-existing)
+
+The rejection is fatal *mid-declaration*: `parse_class_declaration` returns
+`None` with the class body still unconsumed, and the body is then re-parsed as
+top-level expressions. So this three-line file:
+
+```
+class Task {
+    public Task(int v) { this.v = v; }
+}
+```
+
+produces the real diagnostic **and two inventions** — `Unexpected token '}':
+expected an expression`, twice, pointing at the two closing braces. A reader is
+told about three problems when there is one. The identical file with an
+unguarded name (`Math`) parses cleanly, which isolates the guard as the cause.
+
+**This matters to §9F.4(a) as an argument, not just an annoyance.** The reason
+the cascade exists is precisely the reason the check is in the wrong place: a
+parser that rejects a name has to abandon a structure it was midway through
+building. A post-parse phase would parse the class normally, report one error
+against a complete node, and emit nothing else. Option (a) does not merely move
+the check — **it deletes this finding as a side effect.**
 
 ---
 
@@ -2697,9 +2745,26 @@ I looked for a way to move it that changes nothing. There is none:
     rendered diagnostic, a code range to choose, and a different position in the
     diagnostic order.
 
+**Measured 2026-09-02 — the change is one manifest row wide.** "Changes
+`parser_ast.manifest` by construction" was left as a worst case. It is now
+counted: exactly **one** file in the whole tracked corpus is rejected by this
+guard, `tests/err_task_reserved_class.sz`, and it is the fixture written to
+assert the guard. `diagnostic_render.manifest` pins it at one row (`exit 1`, 222
+bytes); `parser_ast.manifest` pins the failed parse. So the blast radius of
+moving the check is **two manifest rows on one fixture that exists to test the
+thing being moved** — not a corpus-wide re-baselining.
+
+**And it pays for itself immediately:** the 222 bytes are large because two of
+the three diagnostics in them are spurious (§5.32). A post-parse phase reports
+one error instead of three. The row does not merely move — it gets better, and
+that improvement is reviewable in a single diff.
+
 > **Decision needed:** accept a new fatal semantic phase, or leave the check in
-> the parser? *(Recommendation: a new phase is the right architecture, but it is
-> M4's largest public change and should be decided deliberately, not absorbed.)*
+> the parser? *(Recommendation: **a new phase.** It is the right architecture,
+> it fixes §5.32 for free, and the measured cost is two manifest rows on the
+> guard's own fixture. The reason to still decide it deliberately is the public
+> surface — a new phase label in rendered output and a code range to choose —
+> not the risk of the change.)*
 
 #### (b) A static resolver — gated on a decision §6 already flagged
 
@@ -2720,8 +2785,34 @@ membership looks accidental: `class Gui {}` is rejected and `class Math {}` is
 accepted, and a program may define `class Math`, call `new Math()`, and still
 call `Math.floor(3.7)`.
 
-> **Decision needed:** extend to 22 (breaking), leave at 7 (arbitrary), or remove
-> the guard entirely (also breaking, in the other direction).
+**Measured 2026-09-02 — extending to 22 breaks nothing that exists.** Every
+tracked `.sz`/`.szx` in this repository (the 491-file corpus, including `std/`,
+`apps/` and `benchmarks/`) and every source file in all **eight official
+ecosystem packages** was searched for a `class`, `interface` or `enum`
+declaration named after any of the 22 namespaces:
+
+| Scope | Collisions |
+|---|---|
+| Language repo, tracked corpus | **1** — `tests/err_task_reserved_class.sz`, the fixture that asserts the guard, on a name already among the 7 |
+| serez-ui, -http, -ai, -agentai, -pack, -apipack, -dotenv, -graph | **0** |
+
+So extending 7 → 22 is a **breaking change under SemVer with no measured
+victim**: it rejects programs that are legal today, and no program that exists
+today is one of them. That does not make it free — an unmeasured user program is
+still a user program, and `spec/compatibility.md` governs — but it moves the
+question from "how much do we break?" to "do we accept a theoretical break to
+close §5.31?"
+
+The guard covers three declaration forms (`class`, `interface`, `enum` —
+`parser/classes.rs:80,337,449`) and nothing else. Variables and functions may
+already take these names unguarded, which is a separate question this decision
+does not settle.
+
+> **Decision needed:** extend to 22 (breaking, **0 measured victims**), leave at
+> 7 (arbitrary, keeps §5.31), or remove the guard entirely (breaking in the other
+> direction, and makes §5.31 the rule rather than the exception). *(Recommendation:
+> **extend to 22**, in the same release as (a), so the rule and its location change
+> once rather than twice.)*
 
 #### What I did not do, and why
 
@@ -2736,6 +2827,59 @@ settled — because whether a semantic phase exists determines where it lives.
 
 **Repository state: green.** Gates below. Nothing is half-migrated: `semantic`
 has no product consumers, so there is no partial state to unwind.
+
+> **Correction, 2026-09-02.** The paragraph above concluded that the free-variable
+> measurement was "the one genuinely independent piece of work left", and that
+> everything else waited on a decision. That was too strong, and the re-entry
+> session found two pieces of independent work it had missed — both of them
+> *inputs to the decisions themselves* rather than steps past them: the blast
+> radius of (a) and (c), now measured above, and the probes behind §5.31 and
+> §5.32. The reasoning that excluded them is worth naming, because it is a
+> reusable mistake: "I am blocked on a decision" was read as "I can do nothing",
+> when the useful move while blocked is almost always **to make the decision
+> cheaper**. The free-variable judgement itself still stands — a half-correct
+> scope model produces a confident wrong number, and that is worse than none.
+
+### §9F.5 — M4's remaining molecules, conditioned on the decisions
+
+Nothing here is authorized. This is the decomposition each answer unlocks, so
+that the decision can be taken against the work it implies rather than in the
+abstract.
+
+**If (a) = "a new fatal semantic phase"** — the largest branch, and the one that
+also settles where (b) would live:
+
+| Molecule | Action | Risk |
+|---|---|---|
+| M4.5.1 | Choose the phase's public surface: label in rendered output, code range, position in the diagnostic order (D6 governs). Decision record, no code | LOW |
+| M4.5.2 | Introduce the phase as a no-op between parser and checker — runs, reports nothing, wired into `run::run_source_detailed`. Manifests must not move | LOW |
+| M4.5.3 | Prove the net sees it: make the empty phase report once, confirm the manifest moves, revert (the M1.0.2 method — the only step that proves the harness is load-bearing) | LOW |
+| M4.5.4 | Move the reserved-name check into it, unchanged at 7 names. **Behaviour change**: two manifest rows on one fixture; §5.32's cascade disappears | MEDIUM |
+| M4.5.5 | Delete the parser's copy and its three call sites; `parser/classes.rs` loses its only semantic rule | LOW |
+| M4.5.6 | Spec: record the phase in `spec/errors.md` and the reserved-name rule in `spec/classes.md`, which does not state it today | LOW |
+
+**If (c) = "extend to 22"** — one molecule, and it must land *after* M4.5.5 so
+the rule changes in its new home, not twice:
+
+| Molecule | Action | Risk |
+|---|---|---|
+| M4.6.1 | Extend the list to 22, generated from the same source as `lsp/builtins_gen.rs` rather than hand-written, so the parser and the editor cannot drift apart again. Fixtures for the 15 newly-rejected names. **Breaking, 0 measured victims** | MEDIUM |
+
+**If (b) = "a free variable should be a diagnostic"** — the largest and least
+determined branch; it needs its own goal decomposition after (a), because where
+the resolver reports determines what it may report:
+
+| Molecule | Action | Risk |
+|---|---|---|
+| M4.7.1 | Build the scope model *without reporting*: closures, `this`, class bodies, `for`-in, `catch`, destructuring, generators. No consumers, the `semantic.rs` pattern | MEDIUM |
+| M4.7.2 | Measure free-variable use across the 491-file corpus and all 8 ecosystem packages. **This is the number (b) actually needs**, and M4.7.1 is what makes it trustworthy | LOW |
+| M4.7.3 | *Then* decide severity — and only then does the rest of (b) decompose | — |
+
+**If all three are "leave it as it is"**, M4 closes as **INCOMPLETE by decision**
+rather than by omission: `src/semantic.rs` stays a validated leaf, §5.31 and the
+free-variable resolution stay recorded as accepted debt, and the milestone audit
+records that the layer was established but not adopted. That is a legitimate
+outcome and should be written down as one, not left ambiguous.
 
 ---
 
