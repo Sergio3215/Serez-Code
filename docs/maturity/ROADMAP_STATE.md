@@ -334,7 +334,7 @@ entangled because of a bug rather than because of the architecture.
 
 ## 5. Discoveries
 
-§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0; §5.22–5.24 are M2.3.3; §5.25 is M2.7. §5.4 was corrected by M2.0 — see the note in it.
+§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0; §5.22–5.24 are M2.3.3; §5.25 is M2.7; §5.26 is M3.5. §5.4 was corrected by M2.0 — see the note in it.
 
 All are **pre-existing**. Neither milestone changed any behavior; none was fixed.
 
@@ -1938,8 +1938,8 @@ split decides it, explicitly.
 | **M3.1** | `tests/diagnostic_render.rs`: pin stderr + exit code for 149 fixtures | done — §9D.1 |
 | **M3.2** | Introduce the common `Diagnostic` model in its own leaf module | refactor |
 | **M3.3** | Migrate `LexError` and `ParseError` onto it | refactor |
-| **M3.4** | Migrate `TypeError` | refactor |
-| **M3.5** | Migrate `RuntimeError`, preserving kind/stack/notes and the catchability bit | refactor |
+| **M3.4** | Migrate `TypeError` | done — §9D.3 |
+| **M3.5** | Migrate `RuntimeError`, preserving kind/stack/notes and the catchability bit | done — §9D.4 |
 | **M3.6** | One renderer; decide the unreachable second (§9D.2) | refactor + one declared decision |
 | **M3.7** | **§5.17** — nine parser errors that reach nobody | **behaviour change, its own commit** |
 | **M3.8** | **§5.12** — diagnostic ordering, grouped-by-producer vs by-position | **decision, then possibly a behaviour change** |
@@ -1948,6 +1948,99 @@ split decides it, explicitly.
 M3.7 and M3.8 are marked because they are *not* refactors. Every other molecule
 must leave `diagnostic_render.manifest` untouched; those two will change it, and
 each says so in its own commit rather than arriving mixed into a migration.
+
+### §9D.3 — M3.4: `TypeError` (refactor)
+
+`pub type TypeError = Diagnostic;`. `type_error_code` keeps its `eprintln!`
+byte-for-byte — including the `if line > 0` conditional that omits the position
+entirely rather than printing `line 0:0` — and now pushes
+`Diagnostic::frontend(code, Phase::Type, Span::point(line, column), message)`.
+
+`Phase::Type` maps to `Severity::Advisory`, which is the contract, not a default:
+`spec/types.md` states the checker is deliberately partial and that `sz file.sz`
+reports its findings **and still runs**. The exit code did not move.
+
+The checker's "unknown position" spelling and the span model's already agreed:
+the checker used `0`, and `Span::point(0, 0)` *is* `Span::unknown()`.
+
+One consumer moved: `src/lsp/analysis.rs:156-157`, `e.line`/`e.column` →
+`e.span.line`/`e.span.column`.
+
+Evidence: both manifests passed **without regeneration**.
+
+### §9D.4 — M3.5: `RuntimeError` (refactor)
+
+`pub type RuntimeError = Diagnostic;` and
+`pub type RuntimeErrorFrame = crate::diagnostic::Frame;`. `RuntimeErrorSpan` is
+gone entirely — `grep -rn RuntimeErrorSpan src/ tests/` returns nothing.
+
+There is exactly one producer, `record_runtime_error`, so the migration had one
+construction site to get right. `kind: String` became `kind: Some(String)`;
+`Option<RuntimeErrorSpan>` became a `Span`.
+
+**The one real hazard, and why it is not a behaviour change.** The caught
+`Error.span` is typed by `spec/errors.md` as `"line:column"` **or null**. The
+obvious replacement for the old `Option::is_none()` test is
+`Span::is_known()` — and it is *not the same question*. `is_known()` asks whether
+the line is non-zero; the old test asked whether there was a frame at all. A
+frame genuinely sitting at line 0 would have rendered `"0:0"` before and would
+start rendering `null` after. Whether such a frame is reachable is beside the
+point: a refactor may not depend on the answer.
+
+So the render site in `src/evaluator/control.rs` tests `error.stack.first()`
+instead. `span` and `stack` are built from the same `self.call_stack` inside
+`record_runtime_error` — the stack is empty exactly when there was no frame — so
+this is the same predicate as the `Option` it replaced, **for every input**, with
+no dependence on line values. The reasoning is written at the site.
+
+The latent question — *should* a frame at line 0 report `"0:0"`? — is a behaviour
+decision, and belongs with M3.7/M3.8, not here.
+
+**Evidence.** Both manifests passed without regeneration, but neither covers the
+caught `Error` object: it is a *language value* on stdout, not rendered stderr.
+So it was measured directly. A probe exercising both branches —
+
+```
+A code=SZ4003 kind=IndexOutOfBounds span=2:19
+A frame=inner at 2:19
+A frame=outer at 3:12
+B code=SZ4003 kind=IndexOutOfBounds
+B span-is-null=true
+B stacklen=0
+```
+
+— was run against a binary built from `c4657e3` (via `git stash`) and against the
+migrated binary. `diff` reported no difference. `A` is the nested case (span
+present, two frames); `B` is the top-level case (empty call stack → **null**,
+zero frames). Both `spec/errors.md` branches are covered.
+
+The catchability bit stayed on `PendingRuntimeError`, untouched, exactly as
+`src/diagnostic.rs` says it must.
+
+### §5.26 — the clippy gate as recorded is cache-sensitive
+
+Recorded as "exactly 186 warnings", counted with `cargo clippy --all-targets`
+piped to `grep -c "^warning: "`. During M3.5 that count read 187, which looked
+like a regression I had introduced.
+
+It was not. The same command run against `c4657e3` — the pre-migration commit,
+restored with `git stash` — **also** reads 187 once `src/lib.rs`, `src/main.rs`
+and `src/lsp_main.rs` are touched to force a full rebuild. The figure depends on
+how much of the crate clippy actually recompiles, because the per-target
+"generated N warnings (M duplicates)" summary lines are counted along with the
+warnings themselves.
+
+**The gate is now the unique per-site list, not the count.** Snapshot it with:
+
+```sh
+touch src/lib.rs src/main.rs src/lsp_main.rs
+cargo clippy --all-targets --message-format short 2>&1   | grep -E '^[^ ].*: warning: '   | sed -E 's/:[0-9]+:[0-9]+: warning: / :: /' | sed 's/: help:.*//' | sort
+```
+
+That yields **181 lines** and is stable across cache states. M3.4+M3.5 changed it
+by zero lines (`comm -13` and `comm -23` both empty against the `c4657e3`
+baseline). Prefer this to any count: it says *which* warning appeared, and a
+count that moves by one tells you nothing about which one.
 
 ---
 
@@ -1962,6 +2055,8 @@ each says so in its own commit rather than arriving mixed into a migration.
 | M1.2-M1.3 | `7775c2c` | `move type syntax and the file-level directives out of the grammar` |
 | M1.4-M1.6 | `61080fc` | `move every declaration form out of the grammar` — functions, variables, classes |
 | M1.9-M1.11 | `ca1f24a` | `move control flow and the literal forms out of the grammar` — loops, branches, literals |
+| M3.0-M3.1 | `e10bfd4` | `pin what every failing program prints before touching how it is produced` |
+| M3.2-M3.3 | `c4657e3` | `one model, and the frontend moves onto it` |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
 
 ---

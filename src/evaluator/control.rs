@@ -177,17 +177,29 @@ impl super::Evaluator {
                     Some(pending) => pending.error,
                     None => return EvalResult::Error,
                 };
-                let span = error
-                    .span
-                    .map(|span| OwnedValue::Str(format!("{}:{}", span.line, span.column)))
-                    .unwrap_or(OwnedValue::Null);
+                // `spec/errors.md` types this as `"line:column"` **or null**, and the
+                // null case is precisely "there was no frame to point at".
+                //
+                // `span.is_known()` would be the tempting test and is a subtly
+                // different question: it asks whether the line is non-zero, so a
+                // frame that genuinely sits at line 0 would start reporting null
+                // where it used to report `"0:0"`. `stack` and `span` are built
+                // from the same `call_stack` in `record_runtime_error` — empty
+                // stack exactly when there was no frame — so this is the same
+                // predicate as the `Option` it replaced, for every input.
+                let span = match error.stack.first() {
+                    Some(frame) => {
+                        OwnedValue::Str(format!("{}:{}", frame.span.line, frame.span.column))
+                    }
+                    None => OwnedValue::Null,
+                };
                 let stack = error
                     .stack
                     .into_iter()
                     .map(|frame| {
                         OwnedValue::Str(format!(
                             "{} at {}:{}",
-                            frame.name, frame.line, frame.column
+                            frame.name, frame.span.line, frame.span.column
                         ))
                     })
                     .collect();
@@ -197,7 +209,13 @@ impl super::Evaluator {
                     class_name: "Error".to_string(),
                     fields: vec![
                         ("code".to_string(), OwnedValue::Str(error.code.to_string())),
-                        ("kind".to_string(), OwnedValue::Str(error.kind)),
+                        (
+                            "kind".to_string(),
+                            // Every runtime failure is built with one; the
+                            // `Option` exists for frontend diagnostics, which
+                            // never reach here.
+                            OwnedValue::Str(error.kind.unwrap_or_default()),
+                        ),
                         ("message".to_string(), OwnedValue::Str(error.message)),
                         ("span".to_string(), span),
                         (

@@ -78,7 +78,9 @@ fn worker_outcome(outcome: ProgramOutcome) -> Result<(), String> {
         ProgramOutcome::Value(_) => Ok(()),
         ProgramOutcome::RuntimeError(error) => Err(format!(
             "[{}] {}: {}",
-            error.code, error.kind, error.message
+            error.code,
+            error.kind.as_deref().unwrap_or_default(),
+            error.message
         )),
         ProgramOutcome::UncaughtException { message } => {
             Err(format!("Uncaught exception: {}", message))
@@ -440,7 +442,7 @@ mod tests {
         match second.eval_program_outcome(&program) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4001");
-                assert_eq!(error.kind, "ReferenceError");
+                assert_eq!(error.kind.as_deref(), Some("ReferenceError"));
             }
             other => panic!("second evaluator observed first task: {other:?}"),
         }
@@ -510,7 +512,7 @@ mod tests {
         match evaluator.eval_program_outcome(&program) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ6002");
-                assert_eq!(error.kind, "ResourceError");
+                assert_eq!(error.kind.as_deref(), Some("ResourceError"));
             }
             other => panic!("expected fatal Task resource error, got {other:?}"),
         }

@@ -59,7 +59,7 @@ fn runtime_error_keeps_its_stable_payload() {
     match evaluate("out(1 / 0);") {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ4004");
-            assert_eq!(error.kind, "DivisionByZero");
+            assert_eq!(error.kind.as_deref(), Some("DivisionByZero"));
             assert_eq!(error.message, "Division by zero");
         }
         other => panic!("expected structured runtime error, got {other:?}"),
@@ -125,7 +125,7 @@ fn evaluator_reuse_never_reuses_a_stale_runtime_error() {
     match evaluator.eval_program_outcome(&legacy) {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ4001");
-            assert_eq!(error.kind, "ReferenceError");
+            assert_eq!(error.kind.as_deref(), Some("ReferenceError"));
             assert!(error.message.contains("MissingClass"));
         }
         other => panic!("expected a fresh class ReferenceError, got {other:?}"),
@@ -195,7 +195,7 @@ fn construction_validation_errors_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected structured construction error, got {other:?}"),
@@ -298,7 +298,7 @@ fn super_validation_errors_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected structured super error, got {other:?}"),
@@ -403,7 +403,7 @@ fn member_dispatch_errors_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected structured dispatch error, got {other:?}"),
@@ -480,7 +480,7 @@ fn property_dispatch_errors_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{src}");
-                assert_eq!(error.kind, "TypeError", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("TypeError"), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected structured property error, got {other:?}"),
@@ -559,7 +559,7 @@ fn invalid_inheritance_graphs_are_rejected_without_poisoning_the_registry() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected inheritance error, got {other:?}"),
@@ -607,7 +607,7 @@ fn array_and_call_spread_type_errors_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{src}");
-                assert_eq!(error.kind, "TypeError", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("TypeError"), "{src}");
                 assert!(error.message.contains("requires an array"), "{src}");
             }
             other => panic!("{src}: expected structured spread error, got {other:?}"),
@@ -652,7 +652,7 @@ fn iteration_and_destructuring_type_errors_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{src}");
-                assert_eq!(error.kind, "TypeError", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("TypeError"), "{src}");
                 assert!(error.message.contains(expected_message), "{src}");
             }
             other => panic!("{src}: expected structured type error, got {other:?}"),
@@ -794,7 +794,7 @@ fn math_type_errors_are_structured() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{src}");
-                assert_eq!(error.kind, "TypeError", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("TypeError"), "{src}");
                 assert!(error.message.contains("expects numeric"), "{src}");
             }
             other => panic!("{src}: expected structured Math TypeError, got {other:?}"),
@@ -842,7 +842,7 @@ fn ordinary_operator_errors_are_structured() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
             }
             other => panic!("{src}: expected structured operator error, got {other:?}"),
         }
@@ -863,7 +863,7 @@ fn fatal_resource_error_is_structured_but_not_catchable() {
     match evaluate(src) {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ6002");
-            assert_eq!(error.kind, "ResourceError");
+            assert_eq!(error.kind.as_deref(), Some("ResourceError"));
             assert!(error.message.contains("exceeds maximum"));
         }
         other => panic!("expected fatal structured resource error, got {other:?}"),
@@ -906,7 +906,7 @@ fn missing_namespace_permissions_are_structured_but_not_catchable() {
         match evaluate(&src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ6001", "{call}");
-                assert_eq!(error.kind, "PermissionError", "{call}");
+                assert_eq!(error.kind.as_deref(), Some("PermissionError"), "{call}");
                 assert!(
                     error.message.contains(operation),
                     "{call}: {}",
@@ -960,7 +960,7 @@ fn unsafe_gates_are_structured_but_not_catchable() {
         match evaluate_with_permissions(&src, &["Terminal", "OS", "Env"]) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ6003", "{body}");
-                assert_eq!(error.kind, "UnsafeError", "{body}");
+                assert_eq!(error.kind.as_deref(), Some("UnsafeError"), "{body}");
                 assert!(
                     error.message.contains(operation),
                     "{body}: {}",
@@ -1019,7 +1019,7 @@ fn call_depth_limit_is_structured_across_all_call_paths() {
                 match evaluate(src) {
                     ProgramOutcome::RuntimeError(error) => {
                         assert_eq!(error.code, "SZ6002");
-                        assert_eq!(error.kind, "ResourceError");
+                        assert_eq!(error.kind.as_deref(), Some("ResourceError"));
                         assert!(error.message.contains("maximum call depth"));
                     }
                     other => panic!("expected fatal call-depth error, got {other:?}"),
@@ -1066,7 +1066,7 @@ fn allocation_limits_and_dimension_overflow_are_structured_and_fatal() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ6002", "{operation}");
-                assert_eq!(error.kind, "ResourceError", "{operation}");
+                assert_eq!(error.kind.as_deref(), Some("ResourceError"), "{operation}");
                 assert!(
                     error.message.contains(operation),
                     "{operation}: {}",
@@ -1121,7 +1121,7 @@ fn oversized_file_reads_are_structured_and_fatal_without_reading_contents() {
         match outcome {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ6002", "{operation}");
-                assert_eq!(error.kind, "ResourceError", "{operation}");
+                assert_eq!(error.kind.as_deref(), Some("ResourceError"), "{operation}");
                 assert!(error.message.contains("maximum read size"));
             }
             other => panic!("{operation}: expected fatal file resource error, got {other:?}"),
@@ -1149,7 +1149,7 @@ fn protected_process_targets_are_structured_but_not_catchable() {
         match evaluate_with_permissions(&src, &["OS"]) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ6004", "{call}");
-                assert_eq!(error.kind, "SecurityError", "{call}");
+                assert_eq!(error.kind.as_deref(), Some("SecurityError"), "{call}");
                 assert!(error.message.contains("protected system path"));
             }
             other => panic!("{call}: expected fatal security error, got {other:?}"),
@@ -1170,7 +1170,7 @@ fn exact_decimal_arithmetic_errors_are_structured() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
             }
             other => panic!("{src}: expected structured decimal error, got {other:?}"),
         }
@@ -1270,7 +1270,7 @@ fn datetime_failures_are_structured_and_classified() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected structured DateTime error, got {other:?}"),
@@ -1330,7 +1330,7 @@ fn datetime_arguments_preserve_nested_runtime_errors_and_user_throws() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4004", "{src}");
-                assert_eq!(error.kind, "DivisionByZero", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("DivisionByZero"), "{src}");
             }
             other => panic!("{src}: expected original runtime error, got {other:?}"),
         }
@@ -1414,7 +1414,7 @@ fn random_failures_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected structured Random error, got {other:?}"),
@@ -1451,7 +1451,7 @@ fn random_arguments_preserve_nested_outcomes_and_arity_short_circuits() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4004", "{src}");
-                assert_eq!(error.kind, "DivisionByZero", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("DivisionByZero"), "{src}");
             }
             other => panic!("{src}: expected original Random argument error, got {other:?}"),
         }
@@ -1551,7 +1551,7 @@ fn string_method_failures_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected structured String error, got {other:?}"),
@@ -1585,7 +1585,7 @@ fn string_arguments_preserve_nested_outcomes_and_arity_short_circuits() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4004", "{src}");
-                assert_eq!(error.kind, "DivisionByZero", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("DivisionByZero"), "{src}");
             }
             other => panic!("{src}: expected original String argument error, got {other:?}"),
         }
@@ -1638,7 +1638,7 @@ fn string_padding_is_bounded_linear_and_preserves_valid_results() {
     match evaluate(limit) {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ6002");
-            assert_eq!(error.kind, "ResourceError");
+            assert_eq!(error.kind.as_deref(), Some("ResourceError"));
             assert!(error.message.contains("padding target length"));
         }
         other => panic!("expected fatal String padding limit, got {other:?}"),
@@ -1708,7 +1708,7 @@ fn array_method_failures_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected structured Array error, got {other:?}"),
@@ -1748,7 +1748,7 @@ fn array_arguments_and_callbacks_preserve_nested_outcomes() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4004", "{src}");
-                assert_eq!(error.kind, "DivisionByZero", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("DivisionByZero"), "{src}");
             }
             other => panic!("{src}: expected original Array runtime error, got {other:?}"),
         }
@@ -1941,7 +1941,11 @@ fn every_type_reports_an_unknown_member_the_same_way() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4001", "{label}: {src}");
-                assert_eq!(error.kind, "ReferenceError", "{label}: {src}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("ReferenceError"),
+                    "{label}: {src}"
+                );
             }
             other => panic!("{label}: expected SZ4001 ReferenceError, got {other:?}"),
         }
@@ -1961,7 +1965,7 @@ fn every_type_reports_an_unknown_member_the_same_way() {
         match evaluate_with_permissions(src, &[permission]) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4001", "{src}");
-                assert_eq!(error.kind, "ReferenceError", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("ReferenceError"), "{src}");
             }
             other => panic!("{src}: expected SZ4001 ReferenceError, got {other:?}"),
         }
@@ -2044,7 +2048,7 @@ fn exact_decimal_method_failures_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected a structured dec diagnostic, got {other:?}"),
@@ -2102,7 +2106,7 @@ fn callback_and_patch_dispatch_diagnostics_are_structured() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected a structured diagnostic, got {other:?}"),
@@ -2138,7 +2142,7 @@ fn a_value_too_deep_to_copy_stops_the_program_instead_of_truncating_it() {
     match evaluate(src) {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ6002", "{error:?}");
-            assert_eq!(error.kind, "ResourceError", "{error:?}");
+            assert_eq!(error.kind.as_deref(), Some("ResourceError"), "{error:?}");
             assert!(error.message.contains("500"), "{error:?}");
         }
         other => panic!("a value too deep to copy must fail, got {other:?}"),
@@ -2196,7 +2200,7 @@ fn statement_level_diagnostics_are_structured() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected a structured diagnostic, got {other:?}"),
@@ -2224,7 +2228,7 @@ fn a_module_that_cannot_be_loaded_is_told_apart_from_one_that_is_missing() {
     match evaluate(&src) {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ5002", "{error:?}");
-            assert_eq!(error.kind, "ImportError", "{error:?}");
+            assert_eq!(error.kind.as_deref(), Some("ImportError"), "{error:?}");
             assert!(error.message.contains("parse errors"), "{error:?}");
         }
         other => panic!("expected SZ5002 for an unparsable module, got {other:?}"),
@@ -2339,7 +2343,7 @@ fn core_expression_diagnostics_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected a structured diagnostic, got {other:?}"),
@@ -2484,7 +2488,7 @@ fn dict_and_set_failures_are_structured_and_catchable() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected a structured collection error, got {other:?}"),
@@ -2527,7 +2531,7 @@ fn dict_and_set_preserve_nested_outcomes_and_validate_arity_first() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4004", "{src}");
-                assert_eq!(error.kind, "DivisionByZero", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("DivisionByZero"), "{src}");
             }
             other => panic!("{src}: expected the nested runtime error, got {other:?}"),
         }
@@ -2594,7 +2598,7 @@ fn shared_argument_helpers_preserve_nested_outcomes() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4004", "{src}");
-                assert_eq!(error.kind, "DivisionByZero", "{src}");
+                assert_eq!(error.kind.as_deref(), Some("DivisionByZero"), "{src}");
             }
             other => panic!("{src}: expected the nested runtime error, got {other:?}"),
         }
@@ -2605,7 +2609,7 @@ fn shared_argument_helpers_preserve_nested_outcomes() {
     match evaluate("Crypto.randomBytes(\"nope\");") {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ4002");
-            assert_eq!(error.kind, "TypeError");
+            assert_eq!(error.kind.as_deref(), Some("TypeError"));
             assert!(
                 error.message.contains("Crypto.randomBytes"),
                 "message must name the call: {error:?}"
@@ -2671,7 +2675,7 @@ fn task_api_failures_are_structured_and_preserve_argument_outcomes() {
         match evaluate_with_permissions(src, &["Task"]) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, expected_code, "{src}");
-                assert_eq!(error.kind, expected_kind, "{src}");
+                assert_eq!(error.kind.as_deref(), Some(expected_kind), "{src}");
                 assert!(error.message.contains(expected_message), "{src}: {error:?}");
             }
             other => panic!("{src}: expected structured Task error, got {other:?}"),
@@ -2690,7 +2694,7 @@ fn task_api_failures_are_structured_and_preserve_argument_outcomes() {
     match evaluate_with_permissions("Task.poll(1 / 0);", &["Task"]) {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ4004");
-            assert_eq!(error.kind, "DivisionByZero");
+            assert_eq!(error.kind.as_deref(), Some("DivisionByZero"));
         }
         other => panic!("expected original nested Task runtime error, got {other:?}"),
     }
@@ -2794,7 +2798,7 @@ fn a_constructor_enforces_its_declared_parameter_types() {
     ) {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ4002", "{error:?}");
-            assert_eq!(error.kind, "TypeError", "{error:?}");
+            assert_eq!(error.kind.as_deref(), Some("TypeError"), "{error:?}");
             assert!(
                 error.message.contains("constructor 'Point'")
                     && error.message.contains("expected 'int'")
@@ -2867,7 +2871,11 @@ fn an_enum_value_satisfies_a_parameter_declared_with_its_enum() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{what}: {error:?}");
-                assert_eq!(error.kind, "TypeError", "{what}: {error:?}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("TypeError"),
+                    "{what}: {error:?}"
+                );
             }
             other => panic!("{what} must still be rejected, got {other:?}"),
         }
@@ -2981,7 +2989,7 @@ fn lockdown_denials_split_into_catchable_and_fatal() {
     match evaluate_with_permissions_and_lockdown(src, &[]) {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ6004", "{error:?}");
-            assert_eq!(error.kind, "SecurityError", "{error:?}");
+            assert_eq!(error.kind.as_deref(), Some("SecurityError"), "{error:?}");
         }
         other => panic!("`use permissions` under lockdown must be fatal, got {other:?}"),
     }
@@ -2991,7 +2999,7 @@ fn lockdown_denials_split_into_catchable_and_fatal() {
     match evaluate_with_permissions_and_lockdown(r#"Terminal.getSize();"#, &[]) {
         ProgramOutcome::RuntimeError(error) => {
             assert_eq!(error.code, "SZ6001", "{error:?}");
-            assert_eq!(error.kind, "PermissionError", "{error:?}");
+            assert_eq!(error.kind.as_deref(), Some("PermissionError"), "{error:?}");
         }
         other => panic!("a guarded namespace must stay fatally denied, got {other:?}"),
     }
@@ -3019,7 +3027,11 @@ fn the_string_and_crypto_ceilings_are_the_ones_the_document_names() {
         match evaluate(&src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ6002", "{what}: {error:?}");
-                assert_eq!(error.kind, "ResourceError", "{what}: {error:?}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("ResourceError"),
+                    "{what}: {error:?}"
+                );
             }
             other => panic!("{what} must be a fatal SZ6002, got {other:?}"),
         }
@@ -3090,7 +3102,11 @@ fn implicit_constructor_chaining_reaches_exactly_one_level() {
         )) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4001", "{what}: {error:?}");
-                assert_eq!(error.kind, "ReferenceError", "{what}: {error:?}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("ReferenceError"),
+                    "{what}: {error:?}"
+                );
             }
             other => panic!("{what} must leave the grandparent unrun, got {other:?}"),
         }
@@ -3175,7 +3191,11 @@ fn an_interface_shadows_a_class_of_the_same_name_in_both_orders() {
         match evaluate(src) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{what}: {error:?}");
-                assert_eq!(error.kind, "TypeError", "{what}: {error:?}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("TypeError"),
+                    "{what}: {error:?}"
+                );
             }
             other => panic!("{what}: the class must be unreachable, got {other:?}"),
         }
@@ -3363,7 +3383,11 @@ fn zero_argument_gui_methods_reject_arguments() {
         match evaluate_with_permissions(&src, &["Gui"]) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
-                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("TypeError"),
+                    "{call}: {error:?}"
+                );
                 assert!(
                     error.message.contains("takes no arguments"),
                     "{call}: {}",
@@ -3425,7 +3449,11 @@ fn a_supplied_gui_argument_of_the_wrong_type_is_rejected_not_defaulted() {
         match evaluate_with_permissions(&src, &["Gui"]) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
-                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("TypeError"),
+                    "{call}: {error:?}"
+                );
                 assert!(error.message.contains(param), "{call}: {}", error.message);
             }
             other => panic!("{call} must be rejected, got {other:?}"),
@@ -3493,7 +3521,11 @@ fn zero_argument_native_methods_reject_arguments() {
         match evaluate_with_permissions(&src, permissions) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
-                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("TypeError"),
+                    "{call}: {error:?}"
+                );
                 assert!(
                     error.message.contains("takes no arguments") && error.message.contains(ns),
                     "{call}: {}",
@@ -3888,7 +3920,11 @@ fn process_arguments_are_never_silently_dropped() {
         match evaluate_with_permissions(call, &["OS"]) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
-                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("TypeError"),
+                    "{call}: {error:?}"
+                );
                 assert!(
                     error.message.contains("args must be an array of strings"),
                     "{call}: {}",
@@ -3924,7 +3960,11 @@ fn process_arguments_are_never_silently_dropped() {
     let accepted = r#"unsafe { OS.exec("serez-no-such-command-xyz", ["a", "b"]) }"#;
     match evaluate_with_permissions(accepted, &["OS"]) {
         ProgramOutcome::RuntimeError(error) => {
-            assert_eq!(error.kind, "OSError", "{accepted}: {error:?}");
+            assert_eq!(
+                error.kind.as_deref(),
+                Some("OSError"),
+                "{accepted}: {error:?}"
+            );
         }
         other => panic!("{accepted}: expected the spawn itself to fail, got {other:?}"),
     }
@@ -3936,7 +3976,7 @@ fn process_arguments_are_never_silently_dropped() {
     ] {
         match evaluate_with_permissions(call, &["OS"]) {
             ProgramOutcome::RuntimeError(error) => {
-                assert_eq!(error.kind, "OSError", "{call}: {error:?}");
+                assert_eq!(error.kind.as_deref(), Some("OSError"), "{call}: {error:?}");
             }
             other => panic!("{call}: expected the spawn itself to fail, got {other:?}"),
         }
@@ -3978,7 +4018,7 @@ fn a_failed_kill_is_reported_instead_of_leaking() {
 
     match evaluate_with_permissions("unsafe { OS.kill(999999) }", &["OS"]) {
         ProgramOutcome::RuntimeError(error) => {
-            assert_eq!(error.kind, "OSError", "{error:?}");
+            assert_eq!(error.kind.as_deref(), Some("OSError"), "{error:?}");
             assert!(
                 error.message.contains("OS.kill 999999 failed"),
                 "the diagnostic names the pid: {}",
@@ -4027,7 +4067,11 @@ fn render_tree_refuses_a_root_that_is_not_a_tree() {
         match evaluate_with_permissions(call, &["Gui"]) {
             ProgramOutcome::RuntimeError(error) => {
                 assert_eq!(error.code, "SZ4002", "{call}: {error:?}");
-                assert_eq!(error.kind, "TypeError", "{call}: {error:?}");
+                assert_eq!(
+                    error.kind.as_deref(),
+                    Some("TypeError"),
+                    "{call}: {error:?}"
+                );
                 assert!(
                     error.message.contains("root must be a"),
                     "{call}: {}",
@@ -4044,7 +4088,7 @@ fn render_tree_refuses_a_root_that_is_not_a_tree() {
     let ok = r#"Gui.renderTree(["div", [], []], 0, 800, 600);"#;
     match evaluate_with_permissions(ok, &["Gui"]) {
         ProgramOutcome::RuntimeError(error) => {
-            assert_eq!(error.kind, "GuiError", "{ok}: {error:?}");
+            assert_eq!(error.kind.as_deref(), Some("GuiError"), "{ok}: {error:?}");
             assert!(error.message.contains("no window open"), "{ok}: {error:?}");
         }
         other => panic!("{ok}: expected the window check, got {other:?}"),

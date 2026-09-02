@@ -1,4 +1,6 @@
 use crate::ast::{self, Expression, Program, Statement};
+use crate::diagnostic::{Diagnostic, Phase};
+use crate::span::Span;
 use std::collections::HashMap;
 
 /// Generic semantic diagnostic: a type error not yet given a narrower code.
@@ -8,18 +10,15 @@ use std::collections::HashMap;
 /// get split out as individual checks acquire tests that pin their meaning.
 pub const SZ_TYPE_ERROR: &str = "SZ3000";
 
-/// A type error with its source position (1-based; 0 = unknown position), as
-/// reported alongside the stderr message. Collected so tools (LSP) can map
-/// errors to ranges; the CLI keeps using stderr.
-#[derive(Debug, Clone)]
-pub struct TypeError {
-    /// Stable `SZ3xxx` identifier. Tooling classifies on this; `message` is
-    /// for humans and its wording is not part of the contract.
-    pub code: &'static str,
-    pub line: usize,
-    pub column: usize,
-    pub message: String,
-}
+/// A type finding, collected so tools (the LSP) can map it to a range while
+/// the CLI renders it to stderr.
+///
+/// M3 collapsed this into the shared [`Diagnostic`]. It carries
+/// `Severity::Advisory`, which is not a detail: `spec/types.md` states the
+/// checker is deliberately partial and that `sz file.sz` reports its findings
+/// **and still runs**. A position of `0` means unknown and renders as no
+/// position at all rather than as `line 0:0`.
+pub type TypeError = Diagnostic;
 
 pub struct TypeChecker<'a> {
     program: &'a Program,
@@ -62,12 +61,14 @@ impl<'a> TypeChecker<'a> {
             },
             message
         );
-        self.errors.borrow_mut().push(TypeError {
+        self.errors.borrow_mut().push(Diagnostic::frontend(
             code,
-            line,
-            column,
+            Phase::Type,
+            // `0` is the checker's "unknown position"; `Span::point(0, 0)` is
+            // `Span::unknown()`, so the two spellings already agree.
+            Span::point(line, column),
             message,
-        });
+        ));
     }
 
     pub fn check(&mut self) {

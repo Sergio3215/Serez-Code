@@ -63,8 +63,10 @@ fn runtime_error_code(kind: &str) -> &'static str {
 }
 
 use crate::ast::{self, Program, Statement};
+use crate::diagnostic::{Diagnostic, Phase, Severity};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
+use crate::span::Span;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -115,28 +117,25 @@ struct CallFrame {
     column: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct RuntimeError {
-    pub code: &'static str,
-    pub kind: String,
-    pub message: String,
-    pub span: Option<RuntimeErrorSpan>,
-    pub stack: Vec<RuntimeErrorFrame>,
-    pub notes: Vec<String>,
-}
+/// A runtime failure.
+///
+/// M3 collapsed this into the shared [`Diagnostic`]. Two things it carries that
+/// no frontend diagnostic does, and both are contracts:
+///
+///   * **`kind`** is the compatibility category a caught `Error` exposes
+///     (`TypeError`, `IndexOutOfBounds`, …). `spec/errors.md` lists them.
+///   * **`stack`** is innermost-first, and a caught `Error.stack` renders each
+///     frame as `name at line:column`.
+///
+/// The optional span became [`Span::unknown`] rather than `Option<Span>`: the
+/// caught `Error.span` is `"line:column"` **or null**, and `Span::is_known` is
+/// the question that distinguishes them. A span of `0:0` must never render as a
+/// position.
+pub type RuntimeError = Diagnostic;
 
-#[derive(Debug, Clone)]
-pub struct RuntimeErrorSpan {
-    pub line: usize,
-    pub column: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeErrorFrame {
-    pub name: String,
-    pub line: usize,
-    pub column: usize,
-}
+/// A stack frame in a runtime failure. Alias kept because the name says what it
+/// is at the sites that build one.
+pub type RuntimeErrorFrame = crate::diagnostic::Frame;
 
 /// Internal delivery metadata for a structured runtime error.
 ///
@@ -587,18 +586,21 @@ impl Evaluator {
         catchable: bool,
     ) -> EvalResult {
         let code = runtime_error_code(&kind);
-        let span = self.call_stack.last().map(|frame| RuntimeErrorSpan {
-            line: frame.line,
-            column: frame.column,
-        });
+        // `Span::unknown()` when there is no frame: an empty call stack means
+        // there is no position to report, and the caught `Error.span` must be
+        // null in that case rather than the string "0:0".
+        let span = self
+            .call_stack
+            .last()
+            .map(|frame| Span::point(frame.line, frame.column))
+            .unwrap_or_else(Span::unknown);
         let stack = self
             .call_stack
             .iter()
             .rev()
             .map(|frame| RuntimeErrorFrame {
                 name: frame.name.clone(),
-                line: frame.line,
-                column: frame.column,
+                span: Span::point(frame.line, frame.column),
             })
             .collect();
         if self.diagnostic_capture_depth == 0 && (!catchable || self.try_depth == 0) {
@@ -609,7 +611,9 @@ impl Evaluator {
         self.last_error = Some(PendingRuntimeError {
             error: RuntimeError {
                 code,
-                kind,
+                phase: Phase::Runtime,
+                severity: Severity::Error,
+                kind: Some(kind),
                 message,
                 span,
                 stack,
@@ -1727,7 +1731,7 @@ in the program that was run. Please report it."
                 let frames: Vec<(&str, usize, usize)> = error
                     .stack
                     .iter()
-                    .map(|f| (f.name.as_str(), f.line, f.column))
+                    .map(|f| (f.name.as_str(), f.span.line, f.span.column))
                     .collect();
                 Self::print_frames(&frames, &self.source_lines);
             }
