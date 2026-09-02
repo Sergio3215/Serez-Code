@@ -25,7 +25,7 @@ Read before starting any milestone, in this order:
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, M2 milestone audit |
+| Last state update | 2026-09-02, M4.0 audit |
 
 Milestone ledger:
 
@@ -34,8 +34,8 @@ Milestone ledger:
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
 | M2 — AST + Spans Stable | **COMPLETE** (2026-09-02) — all 28 `Expression` variants and 39 of 40 structs carry a span |
-| M3 — Diagnostics Unified | **IN PROGRESS** |
-| M4 — Semantic Layer Established | NOT STARTED |
+| M3 — Diagnostics Unified | **COMPLETE** (2026-09-02) — 5 diagnostic types -> 1, 4 rendered formats -> 1 renderer, §5.17 fixed |
+| M4 — Semantic Layer Established | **IN PROGRESS** |
 | M5 — Type System Stable | NOT STARTED |
 | M6 — Runtime Molecular | NOT STARTED (partially pre-empted; see §6) |
 | M7 — Semantics Frozen | NOT STARTED |
@@ -2385,6 +2385,89 @@ only what it built.
 
 ## MILESTONE STATUS: **COMPLETE**
 
+## 9F. M4 — Semantic Layer Established
+
+Charter, from the master plan: *"Resolver, symbols, scopes y validaciones
+semánticas fuera del parser."*
+
+### 9F.0 The audit: there is no semantic layer, and four things do its job
+
+The charter's phrasing — *outside the parser* — implies the parser is where this
+work currently lives. **It is not.** The parser holds exactly one semantic
+validation. The real finding is the opposite shape: the responsibility is not
+misplaced, it is **absent and quadruply improvised**.
+
+**Four independent derivations of what a program declares and means:**
+
+| # | Owner | Input | State | Authority |
+|---|---|---|---|---|
+| 1 | Evaluator | the AST, at run time | `class_registry`, `interface_registry`, `enum_registry`, `global_bindings`, `ScopeStack` (`mod.rs:189-203`) | **authoritative** — this is what the program does |
+| 2 | Type checker | the AST, before running | `functions`, `var_types` (`type_checker.rs`) | advisory; `spec/types.md` records how partial |
+| 3 | LSP | **the token stream** — it re-lexes | `scan_symbols` -> `Vec<SymbolInfo>` (`lsp/analysis.rs:243`) | what the editor shows |
+| 4 | Parser | the token stream, while parsing | `is_reserved_name` (`parser/classes.rs:55`) | rejects 3 declaration forms |
+
+**The LSP throws the parse tree away.** `analysis.rs::analyze` parses, hands the
+`Program` to the type checker for warnings, and then calls
+`scan_symbols(text, &lines)` — `text`, not `program`. Its signature is
+`fn scan_symbols(_text: &str, lines: &[String])`, and it works off
+`collect_tokens(text)`, a second lex of the same source. So the outline, hover,
+go-to-definition, references and rename a user sees are derived from a token
+scan that **has no structural relationship to the AST the compiler built**. They
+can disagree, by construction, and nothing tells anyone when they do.
+
+**Nothing resolves a name statically.** There is no resolver. `name -> declaration`
+is answered exactly once, at run time, by `ScopeStack::lookup` (`scope.rs:135`).
+That is why free variables resolve dynamically and `--check` cannot flag them —
+already recorded as **critical, open** in §6.
+
+**The LSP's analysis is unreachable from the test suite.** `mod lsp` is declared
+in `src/lsp_main.rs`, not in `src/lib.rs`, so it is binary-local. No integration
+test in `tests/` can call `analyze` or `scan_symbols`. Whatever covers it is
+inside the binary's own unit tests. Any M4 net for the LSP's symbol view has to
+deal with this first.
+
+**The one semantic check in the parser is the smallest of the four problems.**
+`is_reserved_name` covers **7 names**; the generated table the LSP uses
+(`lsp/builtins_gen.rs`, produced by `tools/gen_lsp_builtins.py` *from the
+evaluator*) lists **22**. So the parser rejects `class Task {}` and `class Gui {}`
+and accepts `class Math {}`, `class File {}`, `class Socket {}` and
+`class Crypto {}` — and a program may then define `class Math`, call
+`new Math()`, and still call `Math.floor(3.7)`, both resolving. The guard does
+not prevent a collision the language cannot survive.
+
+> **Correction to §5.20:** it says "twenty namespaces". The measured count in
+> `builtins_gen.rs` today is **22** — Autodiff, Binary, Crypto, DateTime, Dec,
+> Env, File, GPU, Gui, JSON, Math, Media, Memory, OS, Random, Regex, Socket,
+> System, Task, Tensor, Terminal, Time. All 7 the parser guards are among them.
+> The ratio is 7 of 22, not 7 of 20.
+
+### 9F.1 What this means for M4's shape
+
+M4 cannot be an extraction, because there is nothing coherent to extract. It has
+to *establish* the layer, and then move consumers onto it one at a time —
+Strangler Pattern, as the plan requires. The order that follows from the audit:
+
+1. A net first. Two of the four derivations (evaluator, type checker) are
+   reachable from `tests/`; the LSP's is not, and that gap is itself a molecule.
+2. A symbol/scope model in its own leaf module, with **no consumers**, the way
+   `src/span.rs` and `src/diagnostic.rs` were introduced.
+3. Consumers migrated one at a time, each verified against the net.
+4. `is_reserved_name` moves **last**, and it is a **behaviour change** — moving
+   it changes *when* the error is reported, and any change to *which* names it
+   covers is breaking. Both need to be declared, not absorbed.
+
+**Two questions M4 cannot answer on its own** — both are product decisions, and
+both are flagged here rather than decided:
+
+  * **Should free variables resolve statically?** Making `--check` flag them is
+    what a resolver is for, and it would reject programs that run today. §6 marks
+    it critical and open and assigns it to M4/M7 "needs an explicit product
+    decision under `spec/compatibility.md`". It still does.
+  * **Should `is_reserved_name` cover all 22?** Extending it is breaking; §5.20
+    already says so. Leaving 7 keeps an arbitrary rule. Neither is mine to pick.
+
+Work that does **not** depend on either answer comes first.
+
 ---
 
 ## 10. Commits and checkpoints
@@ -2404,6 +2487,7 @@ only what it built.
 | M3.6 | `33e6211` | `four formats become one renderer` |
 | M3.7 | `e77aec0` | `nine rejected programs stop failing without saying why` — **behaviour change** |
 | M3.8 | `6028fe3` | `decide the ordering question, and change nothing` |
+| **M3 checkpoint** | `78202b5` | `M3 closes — the audit, and two rows that were out of date` |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
 
 ---
