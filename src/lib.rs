@@ -26,6 +26,7 @@ pub mod render;
 pub mod repl;
 pub mod run;
 pub mod scope;
+pub mod semantic;
 pub mod span;
 pub mod szx;
 pub mod token;
