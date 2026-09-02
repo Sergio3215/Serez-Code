@@ -764,3 +764,178 @@ fn int doble(int n) {
         assert_eq!(sym(&a.symbols, "z").kind, SymbolKind::Variable);
     }
 }
+
+#[cfg(test)]
+mod semantic_divergence {
+    //! Does the editor's symbol view agree with the parse tree?
+    //!
+    //! `analyze` parses, hands the `Program` to the type checker, and then
+    //! discards it: `scan_symbols(text, &lines)` re-lexes the source and builds
+    //! the outline from a token scan. So the two derivations share no
+    //! structure, and `docs/maturity/ROADMAP_STATE.md` §9F.0 records that they
+    //! *can* disagree.
+    //!
+    //! "Can" is an assertion. This measures it over the whole in-repo corpus and
+    //! turns it into a number, so M4 knows whether unifying the two views is a
+    //! real goal or a theoretical tidiness.
+    //!
+    //! It lives here rather than in `tests/` because `mod lsp` is declared in
+    //! `src/lsp_main.rs` and not in `src/lib.rs`, so no integration test can
+    //! reach this code at all — itself one of §9F.0's findings.
+
+    use super::*;
+    use crate::ast::Statement;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    /// Top-level declaration names according to the parse tree.
+    ///
+    /// Only the forms `scan_symbols` also reports at the top level, so the two
+    /// sets are comparable: a difference means a real disagreement, not two
+    /// tools answering different questions.
+    fn declared_by_the_tree(source: &str) -> BTreeSet<String> {
+        let mut parser = Parser::new(Lexer::new(source.to_string()));
+        let program = parser.parse_program();
+        let mut names = BTreeSet::new();
+        for statement in &program.statements {
+            // `export fn f() {}` declares `f`; the wrapper is not the symbol.
+            let statement = match statement {
+                Statement::Export(inner) => inner.as_ref(),
+                other => other,
+            };
+            match statement {
+                Statement::FunctionDeclaration(f) => {
+                    names.insert(f.name.clone());
+                }
+                Statement::ClassDeclaration(c) => {
+                    names.insert(c.name.clone());
+                }
+                Statement::InterfaceDeclaration(i) => {
+                    names.insert(i.name.clone());
+                }
+                Statement::EnumDeclaration(e) => {
+                    names.insert(e.name.clone());
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
+    /// The same question, asked of the token scan the editor actually uses.
+    fn declared_by_the_scan(source: &str) -> BTreeSet<String> {
+        analyze(source)
+            .symbols
+            .into_iter()
+            .filter(|s| {
+                s.container.is_none()
+                    && matches!(
+                        s.kind,
+                        SymbolKind::Function
+                            | SymbolKind::Class
+                            | SymbolKind::Interface
+                            | SymbolKind::Enum
+                    )
+            })
+            .map(|s| s.name)
+            .collect()
+    }
+
+    fn corpus(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let skip = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n == "target" || n == ".git" || n.starts_with('.'));
+                if !skip {
+                    corpus(&path, out);
+                }
+            } else if path.extension().and_then(|e| e.to_str()) == Some("sz") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The corpus contains fixtures built to reach `MAX_PARSE_DEPTH`, and a
+    /// 512-level tree overflows a 2 MiB test thread in a debug build. The same
+    /// 32 MiB measurement thread `tests/parser_snapshot.rs` and
+    /// `tests/frontend_robustness.rs` use. Not a product limit.
+    const MEASUREMENT_STACK: usize = 32 * 1024 * 1024;
+
+    #[test]
+    fn the_outline_the_editor_shows_matches_the_parse_tree() {
+        std::thread::Builder::new()
+            .stack_size(MEASUREMENT_STACK)
+            .spawn(compare_every_corpus_file)
+            .expect("cannot spawn the measurement thread")
+            .join()
+            .expect("the measurement thread panicked");
+    }
+
+    fn compare_every_corpus_file() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        corpus(&root.join("tests"), &mut files);
+        files.sort();
+        assert!(
+            files.len() > 400,
+            "only {} corpus files found; a collapsed corpus would pass this vacuously",
+            files.len()
+        );
+
+        // Two directions, and they are not equally serious.
+        //
+        //   * `tree - scan` — the parse tree has a top-level declaration the
+        //     outline does not show. The editor would be **hiding** a symbol
+        //     that exists: go-to-definition fails on real code. Asserted.
+        //   * `scan - tree` — the outline shows a top-level symbol the tree does
+        //     not have. Measured and reported, not asserted, because the count
+        //     moves whenever a fixture is added.
+        let mut hidden = Vec::new();
+        let mut over_reported = 0usize;
+        for path in &files {
+            let Ok(source) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let tree = declared_by_the_tree(&source);
+            let scan = declared_by_the_scan(&source);
+            let name = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            let missing: Vec<_> = tree.difference(&scan).cloned().collect();
+            if !missing.is_empty() {
+                hidden.push(format!("  {name}: the outline omits {missing:?}"));
+            }
+            if scan.difference(&tree).next().is_some() {
+                over_reported += 1;
+            }
+        }
+
+        // The number §9F.2 records, printed so a reader of the test output sees
+        // the size of the gap M4 is closing rather than only that it is green.
+        eprintln!(
+            "outline vs parse tree: {} of {} files over-report a top-level symbol",
+            over_reported,
+            files.len()
+        );
+
+        assert!(
+            hidden.is_empty(),
+            "{} of {} corpus files: the editor's outline omits a top-level              declaration the parse tree has. That is a symbol the user cannot              jump to in code that compiles.
+
+{}",
+            hidden.len(),
+            files.len(),
+            hidden.join("
+")
+        );
+    }
+}

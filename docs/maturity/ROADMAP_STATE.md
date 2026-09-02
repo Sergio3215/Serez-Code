@@ -2468,6 +2468,52 @@ both are flagged here rather than decided:
 
 Work that does **not** depend on either answer comes first.
 
+### 9F.2 — M4.1: the divergence, measured
+
+§9F.0 said the editor's outline and the parse tree "can disagree, by
+construction". That was an assertion. It is now a number.
+
+`src/lsp/analysis.rs::semantic_divergence` walks all 483 in-repo `.sz` files and
+asks both derivations the same question — *which names does this file declare at
+the top level?* — restricted to the four forms both report, so a difference is a
+real disagreement rather than two tools answering different questions.
+
+**Result: 95 of 483 files (~20%) disagree. Every one of them disagrees in the
+same direction.**
+
+| Direction | Meaning | Count |
+|---|---|---|
+| `scan - tree` | the outline shows a top-level symbol the tree does not have | **95** |
+| `tree - scan` | the outline **omits** a top-level declaration the tree has | **0** |
+
+The asymmetry is the useful part, and it identifies the mechanism. The token
+scanner is **not nesting-aware**: `tests/unit_unsafe_block.sz:51` declares
+`fn int double(int n)` *inside* a `test(…)` lambda, and `scan_symbols` reports it
+with `container: None` — as a top-level symbol. The corpus is full of unit-test
+files shaped that way, which is why it is a fifth of them.
+
+**This is a limitation of the design, not a coding error.** The scanner exists so
+that `.szx` documents — JSX, which the parser does not understand — still get an
+outline; the module says so. Tolerating arbitrary broken regions means not
+relying on structure. Applying that to plain `.sz`, where a correct AST has
+already been built and thrown away, is the waste M4 can remove.
+
+**What the test asserts, and what it only reports.** The two directions are not
+equally serious, so they are not treated alike:
+
+  * `tree - scan` is **asserted to be empty**. The editor omitting a symbol that
+    exists means go-to-definition failing on code that compiles — a correctness
+    property, and it holds today.
+  * `scan - tree` is **printed, not asserted**. It is the size of the gap M4 is
+    closing, and the count moves whenever a fixture is added, so pinning it would
+    produce noise rather than signal.
+
+It lives in `src/lsp/analysis.rs` rather than `tests/` because `mod lsp` is
+declared in `src/lsp_main.rs` and not in `src/lib.rs` — §9F.0's finding, met in
+practice. Exposing `lsp` from the library would let it move to `tests/`, but the
+LSP binary carries `#![allow(dead_code)]`, so compiling it into the library would
+move the clippy baseline. Not worth it for a test's address.
+
 ---
 
 ## 10. Commits and checkpoints
@@ -2487,6 +2533,7 @@ Work that does **not** depend on either answer comes first.
 | M3.6 | `33e6211` | `four formats become one renderer` |
 | M3.7 | `e77aec0` | `nine rejected programs stop failing without saying why` — **behaviour change** |
 | M3.8 | `6028fe3` | `decide the ordering question, and change nothing` |
+| M4.0 | `53518e7` | `the semantic layer is absent, not misplaced` |
 | **M3 checkpoint** | `78202b5` | `M3 closes — the audit, and two rows that were out of date` |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
 
