@@ -50,6 +50,7 @@ impl Parser {
                 rest,
                 value,
                 is_const,
+                span: self.span_to_here(open),
             }));
         }
 
@@ -72,6 +73,7 @@ impl Parser {
                 fields,
                 value,
                 is_const,
+                span: self.span_to_here(open),
             }));
         }
 

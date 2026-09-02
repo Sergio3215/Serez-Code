@@ -250,6 +250,9 @@ impl Parser {
                 self.parser_error("Expected method name in class body");
                 return None;
             }
+            // A member opens at its own name. The `public`/`private` prefix was
+            // consumed above, the same rule a class follows for its modifier.
+            let member_open = self.current_token.span;
             let member_name = self.current_token.literal.clone();
 
             if self.peek_token.token_type != TokenType::LParen {
@@ -286,10 +289,15 @@ impl Parser {
                     self.parser_error(&format!("Duplicate constructor in class '{}'", name));
                     return None;
                 }
-                constructor = Some(ClassConstructor { parameters, body });
+                constructor = Some(ClassConstructor {
+                    parameters,
+                    body,
+                    span: self.span_to_here(member_open),
+                });
             } else {
                 methods.push(ClassMethod {
                     name: member_name,
+                    span: self.span_to_here(member_open),
                     is_public: is_member_public,
                     is_abstract: is_member_abstract,
                     is_getter,
@@ -350,6 +358,7 @@ impl Parser {
                 self.parser_error("Expected field name in interface body");
                 return None;
             }
+            let field_open = self.current_token.span;
             let field_name = self.current_token.literal.clone();
 
             if self.peek_token.token_type != TokenType::Colon {
@@ -407,6 +416,7 @@ impl Parser {
             fields.push(InterfaceField {
                 name: field_name,
                 type_name,
+                span: self.span_to_here(field_open),
             });
 
             // consume ';' or ','

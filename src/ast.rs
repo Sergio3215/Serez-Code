@@ -93,6 +93,7 @@ pub struct Parameter {
     pub type_name: Option<String>,
     pub is_rest: bool,
     pub default_value: Option<Expression>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +167,7 @@ pub struct LetDestructureArray {
     pub rest: Option<String>,       // ...rest_name (captures remaining elements)
     pub value: Expression,
     pub is_const: bool,
+    pub span: Span,
 }
 
 // let {key, key: alias} = expr;
@@ -174,6 +176,7 @@ pub struct LetDestructureDict {
     pub fields: Vec<(String, Option<String>)>, // (key, local_alias) — None = use key as name
     pub value: Expression,
     pub is_const: bool,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -197,6 +200,7 @@ pub struct InterfaceDeclaration {
 pub struct InterfaceField {
     pub name: String,
     pub type_name: String,
+    pub span: Span,
 }
 
 // ── Classes ───────────────────────────────────────────────────────────────────
@@ -228,6 +232,7 @@ pub struct ClassDeclaration {
 pub struct ClassConstructor {
     pub parameters: Vec<Parameter>,
     pub body: BlockStatement,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +247,7 @@ pub struct ClassMethod {
     pub return_type: Option<String>,
     pub parameters: Vec<Parameter>,
     pub body: BlockStatement,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -279,6 +285,7 @@ pub struct SwitchStatement {
 pub struct SwitchCase {
     pub values: Vec<Expression>, // one case can match multiple values: case 1, 2:
     pub body: BlockStatement,
+    pub span: Span,
 }
 
 // ── Try / Catch / Finally ─────────────────────────────────────────────────────
@@ -400,6 +407,7 @@ pub struct MatchArm {
     pub pattern: MatchPattern,
     pub guard: Option<Box<Expression>>,
     pub body: BlockStatement,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

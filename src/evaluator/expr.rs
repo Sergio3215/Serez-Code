@@ -244,6 +244,7 @@ impl super::Evaluator {
                     .iter()
                     .map(|n| Parameter {
                         name: n.clone(),
+                        span: crate::span::Span::unknown(),
                         type_name: None,
                         is_rest: false,
                         default_value: None,

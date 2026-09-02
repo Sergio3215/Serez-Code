@@ -379,6 +379,63 @@ fn a_literal_spans_exactly_its_own_text() {
 }
 
 #[test]
+fn a_parameter_spans_its_own_declaration() {
+    // The component that most obviously needs a position: a type error on an
+    // argument wants to underline the parameter it failed against, and until
+    // M2.7 there was nothing to underline.
+    let source = "fn int add(int a, string b) { return a; }\n";
+    let program = parse(source);
+    let Statement::FunctionDeclaration(function) = first_statement(&program) else {
+        panic!("expected a function");
+    };
+    let parameters = &function.function.parameters;
+    assert_eq!(parameters.len(), 2);
+    assert_eq!(slice(source, parameters[0].span), "int a");
+    assert_eq!(slice(source, parameters[1].span), "string b");
+}
+
+#[test]
+fn a_switch_case_and_a_match_arm_each_span_themselves() {
+    let switch_source = "switch (x) {\n    case 1: { out 1; }\n}\n";
+    let program = parse(switch_source);
+    let Statement::Switch(switch) = first_statement(&program) else {
+        panic!("expected a switch");
+    };
+    assert_eq!(
+        slice(switch_source, switch.cases[0].span),
+        "case 1: { out 1; }"
+    );
+
+    let match_source = "let r = match x {\n    1 => \"one\",\n    _ => \"other\",\n};\n";
+    let program = parse(match_source);
+    let Statement::Let(binding) = first_statement(&program) else {
+        panic!("expected a let");
+    };
+    let Expression::Match(match_expression) = &binding.value else {
+        panic!("expected a match");
+    };
+    assert_eq!(
+        slice(match_source, match_expression.arms[0].span),
+        "1 => \"one\""
+    );
+}
+
+#[test]
+fn a_destructuring_declaration_spans_its_statement() {
+    // `let [a, b] = xs;` is a *statement*, not a component — it was missed by
+    // both M2.4 and M2.5 because its type is named `LetDestructureArray` rather
+    // than anything ending in `Statement` or `Declaration`, which is how those
+    // molecules enumerated their work. See ROADMAP_STATE.md §5.25.
+    let source = "let xs [int] = [1, 2];\nlet [a, b] = xs;\n";
+    let program = parse(source);
+    let Statement::LetDestructureArray(destructure) = &program.statements[1] else {
+        panic!("expected an array destructure");
+    };
+    assert_eq!(slice(source, destructure.span), "let [a, b] = xs;");
+    assert_eq!(destructure.span.line, 2);
+}
+
+#[test]
 fn every_populated_span_is_a_valid_slice_of_its_source() {
     // A sweep rather than a shape assertion: whatever the extents end up being,
     // none of them may be inverted, out of bounds, or mid-character. This is the

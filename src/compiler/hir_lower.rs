@@ -822,6 +822,7 @@ mod tests {
                     .iter()
                     .map(|(n, t)| ast::Parameter {
                         name: n.to_string(),
+                        span: crate::span::Span::unknown(),
                         type_name: Some(t.to_string()),
                         is_rest: false,
                         default_value: None,
@@ -1132,6 +1133,7 @@ mod tests {
             span: crate::span::Span::unknown(),
             cases: vec![
                 ast::SwitchCase {
+                    span: crate::span::Span::unknown(),
                     values: vec![ast::Expression::Integer {
                         value: 1,
                         span: crate::span::Span::unknown(),
@@ -1142,6 +1144,7 @@ mod tests {
                     })]),
                 },
                 ast::SwitchCase {
+                    span: crate::span::Span::unknown(),
                     values: vec![ast::Expression::Integer {
                         value: 2,
                         span: crate::span::Span::unknown(),

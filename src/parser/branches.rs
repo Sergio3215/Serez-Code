@@ -133,6 +133,7 @@ impl Parser {
                 let body = self.parse_inner_block()?;
                 default = Some(body);
             } else if self.current_token.token_type == TokenType::KwCase {
+                let case_open = self.current_token.span;
                 // case v1, v2, ...: { body }
                 let mut values = Vec::new();
                 self.next_token(); // first value
@@ -155,7 +156,11 @@ impl Parser {
                 }
                 self.next_token(); // '{'
                 let body = self.parse_inner_block()?;
-                cases.push(SwitchCase { values, body });
+                cases.push(SwitchCase {
+                    values,
+                    body,
+                    span: self.span_to_here(case_open),
+                });
             } else {
                 self.parser_error(&format!(
                     "Expected 'case' or 'default' inside switch, got '{}'",
@@ -193,6 +198,7 @@ impl Parser {
             && self.current_token.token_type != TokenType::Eof
         {
             // Parse pattern (possibly OR-ed with '|')
+            let arm_open = self.current_token.span;
             let pattern = self.parse_match_pattern()?;
 
             // Optional guard: if expr
@@ -224,6 +230,10 @@ impl Parser {
                 }
             };
 
+            // Taken before the separator is consumed: the comma divides arms, it
+            // is not part of one.
+            let arm_span = self.span_to_here(arm_open);
+
             // Optional trailing ','
             if self.peek_token.token_type == TokenType::Comma {
                 self.next_token(); // current = ','
@@ -233,6 +243,7 @@ impl Parser {
                 pattern,
                 guard,
                 body,
+                span: arm_span,
             });
 
             // Advance to next arm or closing '}'

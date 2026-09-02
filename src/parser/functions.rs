@@ -144,6 +144,10 @@ impl Parser {
         self.next_token();
 
         loop {
+            // The parameter opens at whichever token starts it — its type
+            // annotation when it has one, its `...` when it is a rest parameter,
+            // its name otherwise. Captured before any of them is consumed.
+            let param_open = self.current_token.span;
             let mut type_name = None;
 
             if self.current_token.token_type == TokenType::LBracket {
@@ -205,6 +209,7 @@ impl Parser {
 
             parameters.push(Parameter {
                 name,
+                span: self.span_to_here(param_open),
                 type_name,
                 is_rest,
                 default_value,
