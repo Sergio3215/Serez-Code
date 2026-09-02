@@ -245,8 +245,7 @@ impl Parser {
         let open = self.current_token.span;
         // native fn [return_type] name(params);
         if self.peek_token.token_type != TokenType::Function {
-            self.had_error.set(true);
-            eprintln!("❌ PARSE ERROR: expected 'fn' after 'native'");
+            self.parser_error("expected 'fn' after 'native'");
             return None;
         }
         self.next_token(); // consume 'fn'
@@ -260,8 +259,7 @@ impl Parser {
 
         // Disambiguate: native fn ClassName funcName  vs  native fn funcName
         if self.peek_token.token_type != TokenType::Ident {
-            self.had_error.set(true);
-            eprintln!("❌ PARSE ERROR: expected function name after 'native fn'");
+            self.parser_error("expected function name after 'native fn'");
             return None;
         }
         self.next_token();
@@ -275,8 +273,7 @@ impl Parser {
         };
 
         if self.peek_token.token_type != TokenType::LParen {
-            self.had_error.set(true);
-            eprintln!("❌ PARSE ERROR: expected '(' after native function name");
+            self.parser_error("expected '(' after native function name");
             return None;
         }
         self.next_token();

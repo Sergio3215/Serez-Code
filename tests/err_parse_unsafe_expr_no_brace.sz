@@ -1,0 +1,2 @@
+let x = unsafe 2;
+out x;

@@ -370,8 +370,7 @@ impl Parser {
     fn parse_unsafe_statement(&mut self) -> Option<Statement> {
         let open = self.current_token.span;
         if self.peek_token.token_type != TokenType::LBrace {
-            self.had_error.set(true);
-            eprintln!("❌ PARSE ERROR: expected '{{' after 'unsafe'");
+            self.parser_error("expected '{' after 'unsafe'");
             return None;
         }
         self.next_token(); // current = '{'

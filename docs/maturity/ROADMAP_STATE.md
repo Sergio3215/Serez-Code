@@ -334,7 +334,7 @@ entangled because of a bug rather than because of the architecture.
 
 ## 5. Discoveries
 
-§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0; §5.22–5.24 are M2.3.3; §5.25 is M2.7; §5.26 is M3.5; §5.27 is M3.6. §5.4 was corrected by M2.0 — see the note in it.
+§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0; §5.22–5.24 are M2.3.3; §5.25 is M2.7; §5.26 is M3.5; §5.27 is M3.6; §5.28 is M3.7. §5.4 was corrected by M2.0 — see the note in it.
 
 All are **pre-existing**. Neither milestone changed any behavior; none was fixed.
 
@@ -541,7 +541,12 @@ diffing the moved parser against `HEAD:src/parser.rs` — so the M0 baseline and
 the M1.0 evidence are intact. It is left in place and uncommitted. Worth knowing
 before a future milestone treats a clean `git status` as a precondition.
 
-### 5.17 Nine parser errors never reach the error list — **confirmed bug**, high (found in M1.1.1)
+### 5.17 Nine parser errors never reach the error list — **FIXED in M3.7**, see §9D.6 (found in M1.1.1)
+
+> **Status: fixed.** All nine now go through `parser_error`, so they carry
+> `SZ2000`, a file, a line, a column and a caret, and they reach `take_errors()`.
+> A tenth site was found while fixing them. The description below is the state
+> before M3.7 and is kept because §9D.6 refers to it.
 
 Nine sites in `parser/mod.rs` report by hand instead of calling
 `parser_error`: `had_error.set(true)` followed by a bare `eprintln!`. Lines
@@ -1941,7 +1946,7 @@ split decides it, explicitly.
 | **M3.4** | Migrate `TypeError` | done — §9D.3 |
 | **M3.5** | Migrate `RuntimeError`, preserving kind/stack/notes and the catchability bit | done — §9D.4 |
 | **M3.6** | One renderer; decide the unreachable second (§9D.2) | done — §9D.5, decision **D5** |
-| **M3.7** | **§5.17** — nine parser errors that reach nobody | **behaviour change, its own commit** |
+| **M3.7** | **§5.17** — nine parser errors that reach nobody | done — §9D.6, **behaviour change** |
 | **M3.8** | **§5.12** — diagnostic ordering, grouped-by-producer vs by-position | **decision, then possibly a behaviour change** |
 | **M3.9** | M3 milestone audit | — |
 
@@ -2136,6 +2141,79 @@ correction:** the M3.4/M3.5 commit message (`aeeebf2`) says the compiler's type
 is the one "which M3.6 takes". That was written ahead of the evidence and is
 withdrawn here; M3.6 does not take it.
 
+### §9D.6 — M3.7: the nine errors that reached nobody (**behaviour change**)
+
+The one molecule in M3 that is not a refactor, and it has its own commit.
+
+**What was wrong.** Nine sites in the grammar reported by hand:
+`had_error.set(true)` plus a bare `eprintln!`. Nothing was pushed into `errors`,
+so `take_errors()` came back **empty** for a program the parser had just
+rejected. Everything downstream was blind: the LSP published no diagnostic and
+underlined nothing; `run.rs` built `RunFailure::Frontend(vec![])`, a failure with
+no reason attached. The printed line carried no `SZ` code, no file, no line and
+no column, and said `❌ PARSE ERROR:` — a prefix that appears nowhere in
+`spec/errors.md`.
+
+**The spec did not change, because the spec was already right.**
+`spec/errors.md` says syntax errors are `SZ2000`, rendered as
+`❌ PARSER ERROR [SZ2000] [file line:col]: …`. These nine sites were violating
+it. M3.7 brings the code into compliance rather than the document into line with
+the code.
+
+**A tenth site.** `literals.rs::parse_interpolated_string` printed
+`❌ PARSER ERROR: Unclosed '{' in string interpolation` from a free function with
+no cursor and no error list — the same defect in miniature. It now returns an
+`InterpolationFailure` and the caller reports it through `parser_error`, so it
+gets a code and a position like the rest.
+
+**What changed for a user**, exactly: nine constructs that were rejected with an
+uncoded, unpositioned line are now rejected with a coded, positioned one plus a
+caret. **The exit code did not move** — `has_errors()` was already true, so all
+nine already exited 1.
+
+**The evidence, and what it revealed.** Both manifests passed *unchanged* after
+the fix. That is not the fix being invisible; it is proof that **none of the 490
+corpus files and none of the 149 error fixtures exercised any of these nine
+paths**. Zero coverage is why the defect survived to be found by reading the
+code. So nine fixtures were added, one per site, and the manifests regenerated:
+
+| Manifest | Before | After | Rows changed |
+|---|---|---|---|
+| `diagnostic_render.manifest` | 149 fixtures | 158 | **0 modified, 9 added** |
+| `parser_ast.manifest` | 490 files | 499 | **0 modified, 9 added** |
+
+Purely additive in both. No pre-existing row moved, which is the strongest
+available statement that the change reaches these nine constructs and nothing
+else.
+
+`tests/parser_facade.rs::some_syntax_errors_never_reach_the_error_list_at_all`
+was written in M1.0.3 to pin the defect and to fail the day it was fixed. It
+failed. It is now
+`every_rejected_program_says_why_in_the_error_list`, asserting the corrected
+contract over all nine constructs: non-empty `take_errors()`, code `SZ2000`, a
+1-based line and column, a non-empty message.
+
+### §5.28 — the interpolation sub-parser's diagnostics are discarded — **open**, medium
+
+Found while fixing §5.17, and **not fixed there**, because fixing it is a design
+decision rather than a routing change.
+
+`parse_interpolated_string` re-parses the inside of `"a {b + c} d"` with a
+*fresh* `Parser` over just the fragment. That sub-parser prints its own
+diagnostic — so the user does see a message — but its error list is dropped when
+the sub-parser goes out of scope. Nothing reaches the outer `take_errors()`, so
+the LSP still shows nothing for an error inside an interpolated string.
+
+Routing it is not mechanical: the sub-parser's positions are relative to the
+fragment, not to the file, so the fix requires **deciding how to map a span from
+an interpolated fragment back to the enclosing source** — including that the
+fragment has had its `\{` escapes replaced by a sentinel, so offsets do not
+correspond one-to-one.
+
+That is a span-mapping decision, which is M4's subject matter, not a diagnostics
+routing change. Recorded and assigned there rather than forced into M3. The
+`InterpolationFailure::Expression` variant marks the exact site.
+
 ---
 
 ## 10. Commits and checkpoints
@@ -2152,6 +2230,7 @@ withdrawn here; M3.6 does not take it.
 | M3.0-M3.1 | `e10bfd4` | `pin what every failing program prints before touching how it is produced` |
 | M3.2-M3.3 | `c4657e3` | `one model, and the frontend moves onto it` |
 | M3.4-M3.5 | `aeeebf2` | `the checker and the runtime move onto the one model` |
+| M3.6 | `33e6211` | `four formats become one renderer` |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
 
 ---

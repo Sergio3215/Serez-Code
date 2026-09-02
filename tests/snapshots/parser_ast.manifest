@@ -1,7 +1,7 @@
 # serez-parser-snapshot/1
 # Parser output for every .sz file under tests, benchmarks, std, apps.
 # path<TAB>tree-bytes<TAB>diagnostics<TAB>fnv1a64(tree)<TAB>fnv1a64(diagnostics)
-# files: 490
+# files: 499
 apps/01_task_manager.sz	62318	0	a3f338cdf17155ce	cbf29ce484222325
 apps/02_statistics.sz	67295	0	fc1fbbf98d0d7329	cbf29ce484222325
 apps/03_text_analyzer.sz	53830	0	2c9ae7ec03fdc6ba	cbf29ce484222325
@@ -167,13 +167,22 @@ tests/err_modulo_zero.sz	369	0	4d198a579ea435f5	cbf29ce484222325
 tests/err_not_function.sz	410	0	0372ad980ba2a346	cbf29ce484222325
 tests/err_overflow.sz	588	0	23bcacd821ba0d65	cbf29ce484222325
 tests/err_parent_missing.sz	421	0	bf71fd86a1d6d8c9	cbf29ce484222325
+tests/err_parse_class_member_visibility.sz	26	2	884d3c60e861b329	c171125d37ec1235
 tests/err_parse_depth_chain.sz	26	1	884d3c60e861b329	1b99270d282d87fd
 tests/err_parse_depth_nesting.sz	26	1	884d3c60e861b329	06a105a636c617a6
 tests/err_parse_incomplete_expr.sz	860	1	eb6101c370c2db88	69eb77d1c47e26d4
 tests/err_parse_let_noname.sz	184	2	2cdbd682fb8b133e	059c6a05c4aba495
 tests/err_parse_let_novalue.sz	189	1	b7e97be43fa3e111	f9c5b72321e44363
 tests/err_parse_named_typed_arrow.sz	659	1	16f9a11295453380	69eb77d1c47e26d4
+tests/err_parse_native_no_fn.sz	26	1	884d3c60e861b329	2f4444479f1f4a7d
+tests/err_parse_native_no_name.sz	114	1	9b261af6c668f8db	81e7eee36182b8e5
+tests/err_parse_native_no_paren.sz	26	1	884d3c60e861b329	545d7cff7b3d66bb
 tests/err_parse_required_after_default.sz	125	2	f26096ccbe5dde23	0a6938688f58bc8e
+tests/err_parse_sizeof_no_paren.sz	189	1	1c0b2335ee450cf0	4d3a4e7e33b5074c
+tests/err_parse_sizeof_unclosed.sz	189	1	337a2e61d4b5276b	c4d108f44e2ddc99
+tests/err_parse_unsafe_expr_no_brace.sz	189	1	54775fcdfb6dd6de	5bccfb0977c35327
+tests/err_parse_unsafe_no_brace.sz	114	1	fd10313c4f225e0f	5f19274b3f43a469
+tests/err_parse_visibility_not_class.sz	532	1	44b88bdf2b0baf3d	4b9106e57a27a739
 tests/err_parsedecimal_invalid.sz	385	0	9794afe01b28df8a	cbf29ce484222325
 tests/err_parseint_invalid.sz	381	0	14dd0050f9bf18e5	cbf29ce484222325
 tests/err_pop_empty.sz	509	0	9c14a4d2c51be621	cbf29ce484222325

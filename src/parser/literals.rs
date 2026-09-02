@@ -280,10 +280,27 @@ pub(super) fn parse_dec_literal(lit: &str) -> Option<rust_decimal::Decimal> {
     }
 }
 
+/// Why an interpolated string could not be parsed.
+///
+/// It exists so the failure can be *reported by the caller*. This is a free
+/// function with no cursor and no error list, so before M3.7 it printed its own
+/// bare line and returned `None`; the caller set `had_error` and pushed nothing,
+/// which is the §5.17 defect in miniature.
+pub(super) enum InterpolationFailure {
+    /// A `{` with no matching `}`. Nothing has reported it yet, so the caller
+    /// must.
+    Unclosed,
+    /// The expression between the braces did not parse. The sub-parser has
+    /// already printed its own diagnostic, so the caller must **not** print a
+    /// second one — but the structured error is discarded with the sub-parser.
+    /// See §5.28.
+    Expression,
+}
+
 pub(super) fn parse_interpolated_string(
     raw: &str,
     source_name: Option<&str>,
-) -> Option<Expression> {
+) -> Result<Expression, InterpolationFailure> {
     use crate::lexer::Lexer;
     let mut parts: Vec<StringPart> = Vec::new();
     let mut rest = raw;
@@ -319,10 +336,7 @@ pub(super) fn parse_interpolated_string(
             }
             match found {
                 Some(c) => c,
-                None => {
-                    eprintln!("❌ PARSER ERROR: Unclosed '{{' in string interpolation");
-                    return None;
-                }
+                None => return Err(InterpolationFailure::Unclosed),
             }
         };
         let expr_src = after_open[..close].trim();
@@ -332,7 +346,9 @@ pub(super) fn parse_interpolated_string(
             if let Some(n) = source_name {
                 sub.set_source_name(n);
             }
-            let expr = sub.parse_expression(Precedence::Lowest)?;
+            let expr = sub
+                .parse_expression(Precedence::Lowest)
+                .ok_or(InterpolationFailure::Expression)?;
             parts.push(StringPart::Expr(Box::new(expr)));
         }
         rest = &after_open[close + 1..];
@@ -344,7 +360,7 @@ pub(super) fn parse_interpolated_string(
 
     if parts.len() == 1 {
         if let StringPart::Literal(ref s) = parts[0] {
-            return Some(Expression::String {
+            return Ok(Expression::String {
                 value: s.clone(),
                 // A free function with no cursor: the interpolation collapsed to
                 // one literal, and its position is the string it came from.
@@ -353,7 +369,7 @@ pub(super) fn parse_interpolated_string(
         }
     }
 
-    Some(Expression::InterpolatedString {
+    Ok(Expression::InterpolatedString {
         parts,
         // A free function with no cursor: the pieces carry their own positions,
         // and the string that produced them is the caller's to know.

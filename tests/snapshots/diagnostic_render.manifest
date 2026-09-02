@@ -1,7 +1,7 @@
 # serez-diagnostic-render/1
 # stderr and exit code of every err_*.sz / sec_*.sz fixture.
 # name<TAB>exit<TAB>stderr-bytes<TAB>fnv1a64(stderr)
-# fixtures: 149
+# fixtures: 158
 err_arity.sz	1	205	52665bc115254ed6
 err_array_unknown_method.sz	1	59	1dc964c13a6629af
 err_bool_plus_int.sz	1	104	344fe7325b982d2a
@@ -37,13 +37,22 @@ err_modulo_zero.sz	1	37	028585868077dfc1
 err_not_function.sz	1	107	33663496dd4f6caf
 err_overflow.sz	1	38	2fd5a7e7fb3dece7
 err_parent_missing.sz	1	98	b9e3221613e4c805
+err_parse_class_member_visibility.sz	1	349	6b92d63be9f6ad66
 err_parse_depth_chain.sz	1	2460	b961b57bda1b5946
 err_parse_depth_nesting.sz	1	1953	350271f23456d7d6
 err_parse_incomplete_expr.sz	1	179	1d74a8c849c0c89e
 err_parse_let_noname.sz	1	300	066c219d7778416c
 err_parse_let_novalue.sz	1	180	8c9f3a95601cb6c5
 err_parse_named_typed_arrow.sz	1	181	9be3894fd2dea8a0
+err_parse_native_no_fn.sz	1	168	38279c4a8fdfad68
+err_parse_native_no_name.sz	1	192	0a0e97ff65a5f032
+err_parse_native_no_paren.sz	1	202	e6567813ba08abe1
 err_parse_required_after_default.sz	1	409	0a05fdba8c1bd981
+err_parse_sizeof_no_paren.sz	1	186	516eb074fbe67320
+err_parse_sizeof_unclosed.sz	1	200	e2c13e7625954572
+err_parse_unsafe_expr_no_brace.sz	1	199	4487a41c75a86aa3
+err_parse_unsafe_no_brace.sz	1	174	aeeb19e0345ccecf
+err_parse_visibility_not_class.sz	1	220	073513552b4933d5
 err_parsedecimal_invalid.sz	1	65	4cd537d0cdb98f41
 err_parseint_invalid.sz	1	57	cc6ef30580ef29d2
 err_pop_empty.sz	1	52	de64b3683c5838f5

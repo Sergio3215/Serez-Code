@@ -181,11 +181,10 @@ impl Parser {
                             continue;
                         }
                     }
-                    self.had_error.set(true);
-                    eprintln!(
-                        "❌ PARSER ERROR: Expected 'public' or 'private' for class member, got '{}'",
+                    self.parser_error(&format!(
+                        "Expected 'public' or 'private' for class member, got '{}'",
                         self.current_token.literal
-                    );
+                    ));
                     return None;
                 }
             };
@@ -530,10 +529,7 @@ impl Parser {
                 }
             }
             _ => {
-                self.had_error.set(true);
-                eprintln!(
-                    "❌ PARSER ERROR: Expected 'class' or 'interface' after visibility modifier"
-                );
+                self.parser_error("Expected 'class' or 'interface' after visibility modifier");
                 None
             }
         }

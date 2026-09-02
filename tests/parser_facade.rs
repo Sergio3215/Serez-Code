@@ -187,42 +187,70 @@ fn parsing_recovers_and_keeps_going_after_a_rejected_statement() {
 }
 
 #[test]
-fn some_syntax_errors_never_reach_the_error_list_at_all() {
-    // KNOWN DEFECT, pinned rather than endorsed. See ROADMAP_STATE.md §5.17.
+fn every_rejected_program_says_why_in_the_error_list() {
+    // This test used to assert the opposite. See ROADMAP_STATE.md §5.17 and
+    // §9D.6.
     //
-    // Nine sites in the parser report by hand — `had_error.set(true)` plus a
-    // bare `eprintln!` — instead of going through `parser_error`. Nothing is
-    // pushed into `errors`, so `take_errors()` comes back **empty** for a
-    // program the parser has just rejected. Everything downstream of the list
-    // is therefore blind to them:
+    // Nine sites in the parser reported by hand — `had_error.set(true)` plus a
+    // bare `eprintln!` — instead of going through `parser_error`. Nothing was
+    // pushed into `errors`, so `take_errors()` came back **empty** for a program
+    // the parser had just rejected, and everything downstream was blind: the LSP
+    // underlined nothing, and `run.rs` built a `RunFailure::Frontend(vec![])` —
+    // a failure with no reason attached. The lines they printed carried no `SZ`
+    // code, no file, no line and no column, which contradicted `spec/errors.md`.
     //
-    //   * the LSP publishes no diagnostic, so the editor underlines nothing;
-    //   * `run.rs` builds `RunFailure::Frontend(vec![])` — a failure with no
-    //     reason attached;
-    //   * the message carries no `SZ` code, no file, no line and no column,
-    //     which contradicts `spec/errors.md`: "SZ2000 | Syntax error", reported
-    //     as `❌ PARSER ERROR [SZ2000] [file line:col]`. These print
-    //     `❌ PARSE ERROR:` — a different prefix as well as a different shape.
-    //
-    // `has_errors()` is still true, which is why the CLI exits 1 and why the
-    // 63 error tests pass: they assert an exit code and the presence of a
-    // `❌`, and both survive.
-    //
-    // Pinned so that M1 cannot silently change it in either direction. When it
-    // is fixed — routed through `parser_error_code` with a real span — this
-    // test fails, and that failure is the reminder to update §5.17,
-    // `spec/errors.md` and the snapshot manifest together.
-    for source in ["let n = sizeof 5;\n", "unsafe out 2;\n", "native x;\n"] {
+    // M3.7 routed all nine through `parser_error`. The nine constructs below are
+    // one per site, and each is also a conformance fixture
+    // (`tests/err_parse_*.sz`) so the rendered form is pinned too.
+    let cases = [
+        "let n = sizeof 5;
+",
+        "let n = sizeof(int;
+",
+        "unsafe out 2;
+",
+        "let x = unsafe 2;
+",
+        "native x;
+",
+        "native fn 5;
+",
+        "native fn doThing;
+",
+        "class C {
+    int x = 1;
+}
+",
+        "public fn f() { out 1; }
+",
+    ];
+
+    for source in cases {
         let (_, parser) = parse(source, "uncoded.sz");
         assert!(
             parser.has_errors(),
             "{source:?} was supposed to be rejected"
         );
+
+        let errors = parser.take_errors();
         assert!(
-            parser.take_errors().is_empty(),
-            "{source:?} now produces a structured diagnostic. That is the right \
-             behavior and the wrong way to arrive at it — if it was deliberate, \
-             update ROADMAP_STATE.md §5.17 and this test together"
+            !errors.is_empty(),
+            "{source:?} is rejected but reports nothing to a caller — the §5.17              defect is back, and the LSP shows the user a clean file"
+        );
+        let first = &errors[0];
+        assert_eq!(
+            first.code, SZ_PARSE_ERROR,
+            "{source:?} reported {} — these are plain syntax errors and stay              SZ2000 until a narrower code is deliberately split out",
+            first.code
+        );
+        assert!(
+            first.span.line >= 1 && first.span.column >= 1,
+            "{source:?} reported a diagnostic with no position: {:?}",
+            first.span
+        );
+        assert!(
+            !first.message.is_empty(),
+            "{source:?} reported an empty message"
         );
     }
 }

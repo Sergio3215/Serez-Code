@@ -27,7 +27,7 @@
 //! the dispatcher reaches directly, not because they have anything else in
 //! common.
 
-use super::literals::{parse_dec_literal, parse_interpolated_string};
+use super::literals::{InterpolationFailure, parse_dec_literal, parse_interpolated_string};
 use super::types::is_type_keyword;
 use super::{DepthGuard, Parser};
 use crate::ast::*;
@@ -155,11 +155,19 @@ impl Parser {
             TokenType::String => {
                 let s = self.current_token.literal.clone();
                 if s.contains('{') {
-                    let parsed = parse_interpolated_string(&s, self.source_name.as_deref());
-                    if parsed.is_none() {
-                        self.had_error.set(true);
+                    match parse_interpolated_string(&s, self.source_name.as_deref()) {
+                        Ok(expr) => Some(expr),
+                        Err(InterpolationFailure::Unclosed) => {
+                            self.parser_error("Unclosed '{' in string interpolation");
+                            None
+                        }
+                        // The sub-parser printed its own line already; a second
+                        // one here would say the same thing twice.
+                        Err(InterpolationFailure::Expression) => {
+                            self.had_error.set(true);
+                            None
+                        }
                     }
-                    parsed
                 } else {
                     // Replace \{ sentinel (\x01) with literal { in non-interpolated strings
                     Some(Expression::String {
@@ -393,8 +401,7 @@ impl Parser {
             TokenType::KwUnsafe => {
                 self.next_token(); // consume 'unsafe'
                 if self.current_token.token_type != TokenType::LBrace {
-                    self.had_error.set(true);
-                    eprintln!("❌ PARSE ERROR: expected '{{' after 'unsafe'");
+                    self.parser_error("expected '{' after 'unsafe'");
                     return None;
                 }
                 let block_stmt = self.parse_block_statement()?;
@@ -729,8 +736,7 @@ impl Parser {
         let open = self.current_token.span;
         use crate::ast::SizeOfTarget;
         if self.peek_token.token_type != TokenType::LParen {
-            self.had_error.set(true);
-            eprintln!("❌ PARSE ERROR: expected '(' after 'sizeof'");
+            self.parser_error("expected '(' after 'sizeof'");
             return None;
         }
         self.next_token(); // consume '('
@@ -765,8 +771,7 @@ impl Parser {
         };
 
         if self.current_token.token_type != TokenType::RParen {
-            self.had_error.set(true);
-            eprintln!("❌ PARSE ERROR: expected ')' to close sizeof");
+            self.parser_error("expected ')' to close sizeof");
             return None;
         }
         Some(Expression::SizeOf {

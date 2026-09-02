@@ -1,0 +1,2 @@
+let n = sizeof 5;
+out n;
