@@ -28,6 +28,8 @@ use crate::token::TokenType;
 
 impl Parser {
     pub(super) fn parse_function_statement(&mut self) -> Option<Statement> {
+        // The `fn` keyword, before the optional `*` is consumed.
+        let open = self.current_token.span;
         // fn* generator syntax: consume the '*'
         let is_generator = self.peek_token.token_type == TokenType::Asterisk;
         if is_generator {
@@ -96,6 +98,7 @@ impl Parser {
             Some(Statement::FunctionDeclaration(FunctionDeclaration {
                 name,
                 function,
+                span: self.span_to_here(open),
             }))
         } else {
             if self.peek_token.token_type != TokenType::LParen {
@@ -231,6 +234,8 @@ impl Parser {
 
     pub(super) fn parse_native_declaration(&mut self) -> Option<Statement> {
         use crate::ast::NativeFnDeclaration;
+        // The `native` keyword.
+        let open = self.current_token.span;
         // native fn [return_type] name(params);
         if self.peek_token.token_type != TokenType::Function {
             self.had_error.set(true);
@@ -288,6 +293,7 @@ impl Parser {
             name,
             return_type,
             parameters,
+            span: self.span_to_here(open),
         }))
     }
 

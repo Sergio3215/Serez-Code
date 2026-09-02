@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.4** — migrate the declaration nodes (`LetStatement`, `FunctionDeclaration`, `ClassDeclaration`, …), which today carry no span at all. See §9B.4. |
+| Next molecule | **M2.5** — the statement nodes (`ReturnStatement`, `OutStatement`, `WhileStatement`, `ForStatement`, `SwitchStatement`, `TryStatement`, …). See §9B.4. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.3.3 |
+| Last state update | 2026-09-02, end of M2.4 |
 
 Milestone ledger:
 
@@ -1409,13 +1409,42 @@ is zero**. Caught because 342 was implausible: the offsets that differ under
 CRLF are *shifts*, and a shift affects `start` and `end` alike, so a mask that
 worked could not leave a third of the corpus differing.
 
+### 9B.7 M2.4 — the declaration nodes: **COMPLETE**
+
+Five declarations gained a span and had it populated: `LetStatement`,
+`FunctionDeclaration`, `ClassDeclaration`, `InterfaceDeclaration`,
+`NativeFnDeclaration`. AST coverage goes from 5 of 48 node types to **10**.
+
+**These extents are complete, unlike the expression ones.** A declaration starts
+at its own first token — there is no callee or left operand in front of it — so
+`let x = 1 + 2;` spans the whole statement, and a function spans its whole body.
+Five new tests in `tests/ast_spans.rs` pin that, including two decisions worth
+being explicit about:
+
+- **A class spans from `class`, not from `public`.** The modifier prefix is
+  consumed by `parse_visibility_statement` before `parse_class_declaration`
+  runs, so the extent begins at the keyword that names the construct — the same
+  rule every other declaration follows. `a_class_declaration_spans_from_class_not_from_its_modifier`
+  asserts the column is 8 rather than 1, so the choice cannot drift unnoticed.
+- **A `for` initializer needed its span captured early.** By the time the
+  `LetStatement` is constructed the cursor has moved past the `;` onto the
+  condition, so `span_to_here` there would have swallowed `i < 3`. It is
+  captured right after the initializer expression parses instead, and
+  `a_for_loop_initializer_stops_at_the_semicolon` is what proves the early
+  capture was necessary rather than defensive.
+
+The synthetic fixtures in `compiler/hir_lower.rs` take `Span::unknown()` — they
+build ASTs that never came from source, which is the case §5.23 names.
+
+Snapshot: **399 of 490** files changed, every diagnostic hash identical.
+
 ### 9B.4 M2.3 onward — molecules (planned)
 
 | Molecule | Action | Verification |
 |---|---|---|
 | **M2.3.1** | Give `Token` a `span`, populated by the lexer | **done** — see §9B.5. Snapshot unchanged, as predicted: tokens are not in the AST |
 | **M2.3.2** | Populate `start`/`end` at the expression sites | **done** — §9B.6. Also made the manifest LF-normalised, since byte offsets are not portable across checkouts |
-| **M2.4** | Migrate the declaration nodes (`LetStatement`, `FunctionDeclaration`, `ClassDeclaration`, …) | snapshot + full gates |
+| **M2.4** | Migrate the declaration nodes | **done** — §9B.7. Coverage 5 of 48 -> 10 |
 | **M2.5** | Migrate the statement nodes | snapshot + full gates |
 | **M2.6** | Migrate the expression nodes | snapshot + full gates |
 | **M2.7** | Resolve the two dead fields — `ClassField` and `EnumDeclaration` now have spans nothing reads; either give them a consumer or state why they stay | a decision recorded, not a silent deletion |

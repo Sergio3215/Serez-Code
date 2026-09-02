@@ -40,6 +40,11 @@ impl Parser {
             return None;
         }
 
+        // The `let` inside `for (`. Captured here because by the time the
+        // initializer is built the cursor has moved past the `;` onto the
+        // condition, and an extent taken then would swallow it.
+        let init_open = self.current_token.span;
+
         // ── ForEach with array destructuring: for (let [a, b] in ...) ─────────
         if self.peek_token.token_type == TokenType::LBracket {
             self.next_token(); // current = '['
@@ -120,6 +125,8 @@ impl Parser {
         self.next_token(); // current = '='
         self.next_token(); // current = first token of init value
         let init_value = self.parse_expression(Precedence::Lowest)?;
+        // Cursor is on the last token of the initializer, before the `;`.
+        let init_span = self.span_to_here(init_open);
 
         if self.peek_token.token_type == TokenType::Semicolon {
             self.next_token(); // current = ';'
@@ -133,6 +140,7 @@ impl Parser {
             name: var_name,
             value: init_value,
             is_const: false,
+            span: init_span,
         };
 
         let condition = self.parse_expression(Precedence::Lowest)?;

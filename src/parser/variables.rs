@@ -26,6 +26,9 @@ use crate::token::TokenType;
 impl Parser {
     pub(super) fn parse_let_statement(&mut self) -> Option<Statement> {
         let is_const = self.current_token.token_type == TokenType::KwConst;
+        // The `let` or `const` keyword: the declaration opens here, and the
+        // cursor is on it before anything is consumed.
+        let open = self.current_token.span;
 
         // Array destructuring: let [a, b, ...rest] = expr;
         if self.peek_token.token_type == TokenType::LBracket {
@@ -119,6 +122,7 @@ impl Parser {
                 name,
                 value,
                 is_const,
+                span: self.span_to_here(open),
             }));
         }
 
@@ -147,6 +151,7 @@ impl Parser {
                 name,
                 value,
                 is_const,
+                span: self.span_to_here(open),
             }));
         }
 
@@ -171,6 +176,7 @@ impl Parser {
             name,
             value,
             is_const,
+            span: self.span_to_here(open),
         }))
     }
 

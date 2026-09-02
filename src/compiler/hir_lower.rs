@@ -752,6 +752,7 @@ mod tests {
             name: name.to_string(),
             value: ast::Expression::Integer(val),
             is_const: false,
+            span: crate::span::Span::unknown(),
         })
     }
 
@@ -760,6 +761,7 @@ mod tests {
             name: name.to_string(),
             value: ast::Expression::Boolean(val),
             is_const: false,
+            span: crate::span::Span::unknown(),
         })
     }
 
@@ -802,6 +804,7 @@ mod tests {
                 body: block(body),
                 is_generator: false,
             },
+            span: crate::span::Span::unknown(),
         })
     }
 
@@ -875,6 +878,7 @@ mod tests {
                 name: "r".into(),
                 value: expr,
                 is_const: false,
+                span: crate::span::Span::unknown(),
             })]))
             .unwrap();
         match &main_fn(&hir).body[0] {
@@ -897,6 +901,7 @@ mod tests {
                 name: "c".into(),
                 value: expr,
                 is_const: false,
+                span: crate::span::Span::unknown(),
             })]))
             .unwrap();
         match &main_fn(&hir).body[0] {
@@ -1008,6 +1013,7 @@ mod tests {
                 name: "v".into(),
                 value: ternary,
                 is_const: false,
+                span: crate::span::Span::unknown(),
             })]))
             .unwrap();
         match &main_fn(&hir).body[0] {
@@ -1027,6 +1033,7 @@ mod tests {
                 name: "v".into(),
                 value: nc,
                 is_const: false,
+                span: crate::span::Span::unknown(),
             })]))
             .unwrap();
         match &main_fn(&hir).body[0] {

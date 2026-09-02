@@ -8,13 +8,21 @@
 //!
 //! # What a node's extent currently covers, and why not more
 //!
-//! A node's span runs from **its own opening token** to its last token — for a
-//! call, from `(`; for an infix expression, from the operator. Not from the
-//! start of the callee or the left operand, because those are `Identifier`s and
-//! the like, which do not carry spans until M2.6. So the extents here are real
-//! and correct, and they are narrower than they will eventually be. These tests
-//! assert what is true today rather than what is wanted later; when M2.6 widens
-//! them, they are the tests that have to be updated deliberately.
+//! A node's span runs from **its own opening token** to its last token. What
+//! that means differs by kind, and the difference is the point:
+//!
+//! - **Declarations are complete.** `let`, `fn`, `class`, `interface` and
+//!   `native fn` each begin with the keyword that names them, so the extent is
+//!   the whole construct — `let x = 1 + 2;`, or a function including its body.
+//! - **Expressions are partial.** A call spans from its `(` and an infix
+//!   expression from its operator, *not* from the callee or the left operand,
+//!   because those are `Identifier`s and the like which carry no span until
+//!   M2.6. `foo(1, 2)` therefore yields `(1, 2)`.
+//!
+//! Both are real and correct; the second is narrower than it will eventually be.
+//! These tests assert what is true today rather than what is wanted later, so
+//! that when M2.6 widens the expression extents it has to update them
+//! deliberately rather than discovering the change afterwards.
 //!
 //! `line` and `column` are unaffected by any of this and must stay so — they
 //! are what `spec/errors.md` promises a caught `Error.span` reports.
@@ -123,6 +131,89 @@ fn a_span_with_multibyte_source_slices_on_character_boundaries() {
         call.span
     );
     assert_eq!(slice(source, call.span), "(\"ñ\")");
+}
+
+/// The first statement, for the declaration fixtures below.
+fn first_statement(program: &Program) -> &Statement {
+    program
+        .statements
+        .first()
+        .expect("fixture has no statement")
+}
+
+#[test]
+fn a_let_declaration_spans_from_its_keyword() {
+    // Unlike an expression node, a declaration *does* start at its own first
+    // token — there is no callee or left operand in front of it — so these
+    // extents are complete rather than partial.
+    let source = "let x = 1 + 2;\n";
+    let program = parse(source);
+    let Statement::Let(let_statement) = first_statement(&program) else {
+        panic!("expected a let");
+    };
+    assert_eq!(slice(source, let_statement.span), "let x = 1 + 2;");
+    assert_eq!((let_statement.span.line, let_statement.span.column), (1, 1));
+}
+
+#[test]
+fn a_const_declaration_spans_from_its_own_keyword_not_from_let() {
+    let source = "const k = 7;\n";
+    let program = parse(source);
+    let Statement::Let(let_statement) = first_statement(&program) else {
+        panic!("expected a const");
+    };
+    assert_eq!(slice(source, let_statement.span), "const k = 7;");
+}
+
+#[test]
+fn a_function_declaration_spans_its_whole_body() {
+    let source = "fn int add(int a, int b) {\n    return a + b;\n}\n";
+    let program = parse(source);
+    let Statement::FunctionDeclaration(function) = first_statement(&program) else {
+        panic!("expected a function");
+    };
+    assert_eq!(
+        slice(source, function.span),
+        "fn int add(int a, int b) {\n    return a + b;\n}"
+    );
+    assert_eq!((function.span.line, function.span.column), (1, 1));
+}
+
+#[test]
+fn a_class_declaration_spans_from_class_not_from_its_modifier() {
+    // `public`/`abstract`/`sealed` are consumed by the caller before
+    // `parse_class_declaration` runs, so the extent starts at `class`. Recorded
+    // as a deliberate choice rather than left to be rediscovered: it is the same
+    // rule every other declaration follows — the extent begins at the keyword
+    // that names the construct.
+    let source = "public class K {\n    public int m() { return 1; }\n}\n";
+    let program = parse(source);
+    let Statement::ClassDeclaration(class) = first_statement(&program) else {
+        panic!("expected a class");
+    };
+    assert!(
+        slice(source, class.span).starts_with("class K {"),
+        "expected the extent to begin at `class`, got {:?}",
+        slice(source, class.span)
+    );
+    assert_eq!(
+        class.span.column, 8,
+        "column 8 is `class`, not the `public` at column 1"
+    );
+}
+
+#[test]
+fn a_for_loop_initializer_stops_at_the_semicolon() {
+    // The one declaration whose extent could not be taken at construction time:
+    // by then the cursor has moved past the `;` onto the condition. It is
+    // captured earlier instead, and this is what proves the earlier capture was
+    // needed — an extent taken at construction would have swallowed `i < 3`.
+    let source = "for (let i = 0; i < 3; i = i + 1) { out i; }\n";
+    let program = parse(source);
+    let Statement::For(for_statement) = first_statement(&program) else {
+        panic!("expected a for");
+    };
+    assert_eq!(slice(source, for_statement.init.span), "let i = 0");
 }
 
 #[test]

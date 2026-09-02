@@ -67,6 +67,10 @@ impl Parser {
         is_sealed: bool,
     ) -> Option<Statement> {
         // current = 'class'
+        // The `class` keyword. A `public`/`abstract`/`sealed` prefix was
+        // consumed by the caller, so the extent starts at `class` rather than
+        // at the modifier — the same rule the other declarations follow.
+        let open = self.current_token.span;
         if self.peek_token.token_type != TokenType::Ident {
             self.parser_error("Expected class name after 'class'");
             return None;
@@ -305,12 +309,14 @@ impl Parser {
             constructor,
             methods,
             fields,
+            span: self.span_to_here(open),
         }))
     }
 
     // ── Interface declaration ─────────────────────────────────────────────────
     pub(super) fn parse_interface_declaration(&mut self, is_public: bool) -> Option<Statement> {
         // current = 'interface'
+        let open = self.current_token.span;
         if self.peek_token.token_type != TokenType::Ident {
             self.parser_error("Expected interface name after 'interface'");
             return None;
@@ -412,6 +418,7 @@ impl Parser {
             name,
             is_public,
             fields,
+            span: self.span_to_here(open),
         }))
     }
 

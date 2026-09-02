@@ -53,6 +53,7 @@ pub struct NativeFnDeclaration {
     pub name: String,
     pub return_type: Option<String>,
     pub parameters: Vec<Parameter>,
+    pub span: Span,
 }
 
 // Estructura específica para "let nombre = valor;"
@@ -61,6 +62,7 @@ pub struct LetStatement {
     pub name: String,      // El nombre de la variable (ej. "ii")
     pub value: Expression, // La expresión que se le asigna (ej. 1)
     pub is_const: bool,    // true if declared with 'const'
+    pub span: Span,
 }
 
 // Estructura específica para reasignación "nombre = valor;"
@@ -109,6 +111,7 @@ pub struct FunctionLiteral {
 pub struct FunctionDeclaration {
     pub name: String,
     pub function: FunctionLiteral,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +181,7 @@ pub struct InterfaceDeclaration {
     #[allow(dead_code)]
     pub is_public: bool,
     pub fields: Vec<InterfaceField>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +212,7 @@ pub struct ClassDeclaration {
     pub constructor: Option<ClassConstructor>,
     pub methods: Vec<ClassMethod>,
     pub fields: Vec<ClassField>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
