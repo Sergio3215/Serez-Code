@@ -201,12 +201,18 @@ impl super::Evaluator {
 
     pub(super) fn eval_expression(&mut self, expr: &Expression) -> EvalResult {
         match expr {
-            Expression::Integer(i) => EvalResult::Value(self.int_ref(*i)),
-            Expression::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(*d))),
-            Expression::Dec(d) => EvalResult::Value(self.alloc(ObjectData::Dec(*d))),
-            Expression::String(s) => EvalResult::Value(self.alloc(ObjectData::Str(s.clone()))),
-            Expression::Boolean(b) => EvalResult::Value(self.alloc(ObjectData::Boolean(*b))),
-            Expression::Null => EvalResult::Value(self.null_ref),
+            Expression::Integer { value: i, .. } => EvalResult::Value(self.int_ref(*i)),
+            Expression::Decimal { value: d, .. } => {
+                EvalResult::Value(self.alloc(ObjectData::Decimal(*d)))
+            }
+            Expression::Dec { value: d, .. } => EvalResult::Value(self.alloc(ObjectData::Dec(*d))),
+            Expression::String { value: s, .. } => {
+                EvalResult::Value(self.alloc(ObjectData::Str(s.clone())))
+            }
+            Expression::Boolean { value: b, .. } => {
+                EvalResult::Value(self.alloc(ObjectData::Boolean(*b)))
+            }
+            Expression::Null { .. } => EvalResult::Value(self.null_ref),
 
             Expression::Identifier { name, .. } => match self.lookup_var(name) {
                 Some(r) => EvalResult::Value(r),

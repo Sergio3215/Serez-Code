@@ -303,7 +303,10 @@ impl Parser {
             TokenType::Ident => Some(MatchPattern::Binding(self.current_token.literal.clone())),
             TokenType::Int => {
                 let n: i64 = self.current_token.literal.parse().ok()?;
-                Some(MatchPattern::Literal(Expression::Integer(n)))
+                Some(MatchPattern::Literal(Expression::Integer {
+                    value: n,
+                    span: self.current_token.span,
+                }))
             }
             TokenType::Minus => {
                 // Negative literal: -42
@@ -313,25 +316,44 @@ impl Parser {
                     return None;
                 }
                 let n: i64 = self.current_token.literal.parse().ok()?;
-                Some(MatchPattern::Literal(Expression::Integer(-n)))
+                Some(MatchPattern::Literal(Expression::Integer {
+                    value: -n,
+                    span: self.current_token.span,
+                }))
             }
             TokenType::Decimal => {
                 let n: f64 = self.current_token.literal.parse().ok()?;
-                Some(MatchPattern::Literal(Expression::Decimal(n)))
+                Some(MatchPattern::Literal(Expression::Decimal {
+                    value: n,
+                    span: self.current_token.span,
+                }))
             }
             TokenType::Dec => {
                 let d = parse_dec_literal(&self.current_token.literal)?;
-                Some(MatchPattern::Literal(Expression::Dec(d)))
+                Some(MatchPattern::Literal(Expression::Dec {
+                    value: d,
+                    span: self.current_token.span,
+                }))
             }
-            TokenType::String => Some(MatchPattern::Literal(Expression::String(
-                self.current_token.literal.clone(),
-            ))),
-            TokenType::RawString => Some(MatchPattern::Literal(Expression::String(
-                self.current_token.literal.clone(),
-            ))),
-            TokenType::True => Some(MatchPattern::Literal(Expression::Boolean(true))),
-            TokenType::False => Some(MatchPattern::Literal(Expression::Boolean(false))),
-            TokenType::KwNull => Some(MatchPattern::Literal(Expression::Null)),
+            TokenType::String => Some(MatchPattern::Literal(Expression::String {
+                value: self.current_token.literal.clone(),
+                span: self.current_token.span,
+            })),
+            TokenType::RawString => Some(MatchPattern::Literal(Expression::String {
+                value: self.current_token.literal.clone(),
+                span: self.current_token.span,
+            })),
+            TokenType::True => Some(MatchPattern::Literal(Expression::Boolean {
+                value: true,
+                span: self.current_token.span,
+            })),
+            TokenType::False => Some(MatchPattern::Literal(Expression::Boolean {
+                value: false,
+                span: self.current_token.span,
+            })),
+            TokenType::KwNull => Some(MatchPattern::Literal(Expression::Null {
+                span: self.current_token.span,
+            })),
             _ => {
                 self.parser_error(&format!(
                     "Unexpected token '{}' in match pattern",

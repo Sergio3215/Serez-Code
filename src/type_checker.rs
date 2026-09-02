@@ -99,12 +99,14 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_type(&self, expr: &Expression) -> Option<String> {
         match expr {
-            Expression::Integer(_) => Some("int".to_string()),
-            Expression::Decimal(_) => Some("decimal".to_string()),
-            Expression::Dec(_) => Some("dec".to_string()),
-            Expression::String(_) | Expression::InterpolatedString(_) => Some("string".to_string()),
-            Expression::Boolean(_) => Some("bool".to_string()),
-            Expression::Null => Some("null".to_string()),
+            Expression::Integer { value: _, .. } => Some("int".to_string()),
+            Expression::Decimal { value: _, .. } => Some("decimal".to_string()),
+            Expression::Dec { value: _, .. } => Some("dec".to_string()),
+            Expression::String { value: _, .. } | Expression::InterpolatedString(_) => {
+                Some("string".to_string())
+            }
+            Expression::Boolean { value: _, .. } => Some("bool".to_string()),
+            Expression::Null { .. } => Some("null".to_string()),
             Expression::Identifier { name, .. } => self.var_types.get(name).cloned(),
             Expression::Call(call) => {
                 if let Expression::Identifier { name: fname, .. } = call.function.as_ref() {

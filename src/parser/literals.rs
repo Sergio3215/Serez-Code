@@ -326,7 +326,12 @@ pub(super) fn parse_interpolated_string(
 
     if parts.len() == 1 {
         if let StringPart::Literal(ref s) = parts[0] {
-            return Some(Expression::String(s.clone()));
+            return Some(Expression::String {
+                value: s.clone(),
+                // A free function with no cursor: the interpolation collapsed to
+                // one literal, and its position is the string it came from.
+                span: crate::span::Span::unknown(),
+            });
         }
     }
 

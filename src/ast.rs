@@ -308,13 +308,32 @@ pub enum Expression {
         name: String,
         span: Span,
     },
-    Integer(i64),
-    Decimal(f64),
-    Dec(rust_decimal::Decimal),
-    String(String),
-    Boolean(bool),
+    Integer {
+        value: i64,
+        span: Span,
+    },
+    Decimal {
+        value: f64,
+        span: Span,
+    },
+    Dec {
+        value: rust_decimal::Decimal,
+        span: Span,
+    },
+    String {
+        value: String,
+        span: Span,
+    },
+    Boolean {
+        value: bool,
+        span: Span,
+    },
     ArrayLiteral(ArrayLiteral),
-    Null,
+    /// A `null` literal. A struct variant with only a span, so that the one
+    /// expression with no value still says where it was written.
+    Null {
+        span: Span,
+    },
     Prefix(String, Box<Expression>),  // Ej: -5 o !true
     Infix(InfixExpression),           // Ej: 5 + 5 o x * 2
     FunctionLiteral(FunctionLiteral), // fn void() {} o void () => {}

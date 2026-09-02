@@ -184,7 +184,10 @@ impl Parser {
                             span: Span::point(line, col),
                         }),
                         operator: op.to_string(),
-                        right: Box::new(Expression::Integer(1)),
+                        right: Box::new(Expression::Integer {
+                            value: 1,
+                            span: Span::point(line, col),
+                        }),
                         span: Span::point(line, col),
                     }),
                     span: Span::point(line, col),

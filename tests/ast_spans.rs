@@ -19,17 +19,18 @@
 //!   `foo(1, 2)` therefore yields `(1, 2)`.
 //!
 //! Until M2.6b the reason was that the callee had no span to reach back to.
-//! That is no longer true — an `Identifier` now carries one, and
-//! `an_identifier_spans_exactly_its_name` proves it. What remains is the
-//! widening itself: every construction site would have to take the left
-//! operand's span instead of the operator's token, which changes what a
-//! diagnostic points at and is therefore its own molecule (M2.6c) rather than a
-//! side effect of this one.
+//! That is no longer true — an `Identifier` carries one, and
+//! `an_identifier_spans_exactly_its_name` proves it.
 //!
-//! Both forms are real and correct; the second is narrower than it will
-//! eventually be. These tests assert what is true today rather than what is
-//! wanted later, so that widening has to update them deliberately instead of
-//! being discovered afterwards.
+//! The widening was then examined and **reclassified out of M2 entirely**
+//! (`ROADMAP_STATE.md` §9B.12). It moves where a diagnostic points —
+//! `f(1, 2)` reports column 6, the `(`, and would report column 5 — in the type
+//! checker, the runtime error and every stack frame. That is M3's subject, not
+//! a representation change. Half-widening is worse than either: moving `start`
+//! while leaving `line`/`column` gives a span that contradicts itself.
+//!
+//! So the narrow form is now a deliberate pin rather than a placeholder. These
+//! tests assert what is true today, and changing it has to be an explicit act.
 //!
 //! `line` and `column` are unaffected by any of this and must stay so — they
 //! are what `spec/errors.md` promises a caught `Error.span` reports.
@@ -78,7 +79,7 @@ fn a_call_spans_its_argument_list() {
         slice(source, call.span),
         "(1, 2)",
         "a call's extent runs from its own `(`. Since M2.6b the callee has a \
-         span to reach back to; widening to use it is M2.6c"
+         span to reach back to; widening is M3's call, see ROADMAP_STATE §9B.12"
     );
     // The rendered position is unchanged by any of that: it is the `(`.
     assert_eq!((call.span.line, call.span.column), (1, 8));
@@ -344,6 +345,37 @@ fn a_multibyte_identifier_spans_its_bytes_while_its_column_counts_characters() {
         5,
         "café is five bytes, four characters"
     );
+}
+
+#[test]
+fn a_literal_spans_exactly_its_own_text() {
+    // Like an identifier, a literal's extent involves no judgement: it is the
+    // token and nothing else. Each kind is checked because each is built by a
+    // different arm of the prefix dispatcher, and one of them getting the wrong
+    // token is exactly the mistake that would otherwise go unseen.
+    for (source, expected) in [
+        ("out 42;\n", "42"),
+        ("out 3.5;\n", "3.5"),
+        ("out \"hi\";\n", "\"hi\""),
+        ("out true;\n", "true"),
+        ("out null;\n", "null"),
+    ] {
+        let program = parse(source);
+        let span = match first_out_expression(&program) {
+            Expression::Integer { span, .. } => *span,
+            Expression::Decimal { span, .. } => *span,
+            Expression::String { span, .. } => *span,
+            Expression::Boolean { span, .. } => *span,
+            Expression::Null { span } => *span,
+            other => panic!("unexpected expression for {source:?}: {other:?}"),
+        };
+        // A string literal's token span covers the quotes; its `value` does not.
+        // That is the right answer for a *span* — the quotes are part of the
+        // source the literal occupies — and the reason this asserts against the
+        // source text rather than against the value.
+        assert_eq!(slice(source, span), expected, "wrong extent for {source:?}");
+        assert_eq!(span.line, 1);
+    }
 }
 
 #[test]

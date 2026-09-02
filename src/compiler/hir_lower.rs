@@ -492,14 +492,14 @@ impl HirLowerer {
 
     fn lower_expr(&mut self, expr: &Expression) -> HirExpr {
         match expr {
-            Expression::Integer(i) => HirExpr::LitInt(*i),
-            Expression::Decimal(d) => HirExpr::LitDecimal(*d),
+            Expression::Integer { value: i, .. } => HirExpr::LitInt(*i),
+            Expression::Decimal { value: d, .. } => HirExpr::LitDecimal(*d),
             // The LLVM backend has no exact-decimal type; `dec` lowers to f64
             // (lossy). Exact arithmetic is only guaranteed on the interpreter.
-            Expression::Dec(_) => self.unsupported_expr("exact decimal literals"),
-            Expression::Boolean(b) => HirExpr::LitBool(*b),
-            Expression::String(s) => HirExpr::LitStr(s.clone()),
-            Expression::Null => HirExpr::Null,
+            Expression::Dec { value: _, .. } => self.unsupported_expr("exact decimal literals"),
+            Expression::Boolean { value: b, .. } => HirExpr::LitBool(*b),
+            Expression::String { value: s, .. } => HirExpr::LitStr(s.clone()),
+            Expression::Null { .. } => HirExpr::Null,
 
             Expression::Identifier { name, .. } => {
                 let ty = self.type_env.get(name).cloned().unwrap_or(SzType::Unknown);
@@ -753,7 +753,10 @@ mod tests {
     fn let_int(name: &str, val: i64) -> ast::Statement {
         ast::Statement::Let(ast::LetStatement {
             name: name.to_string(),
-            value: ast::Expression::Integer(val),
+            value: ast::Expression::Integer {
+                value: val,
+                span: crate::span::Span::unknown(),
+            },
             is_const: false,
             span: crate::span::Span::unknown(),
         })
@@ -762,7 +765,10 @@ mod tests {
     fn let_bool(name: &str, val: bool) -> ast::Statement {
         ast::Statement::Let(ast::LetStatement {
             name: name.to_string(),
-            value: ast::Expression::Boolean(val),
+            value: ast::Expression::Boolean {
+                value: val,
+                span: crate::span::Span::unknown(),
+            },
             is_const: false,
             span: crate::span::Span::unknown(),
         })
@@ -879,9 +885,15 @@ mod tests {
     #[test]
     fn addition_becomes_binop_add() {
         let expr = infix(
-            ast::Expression::Integer(3),
+            ast::Expression::Integer {
+                value: 3,
+                span: crate::span::Span::unknown(),
+            },
             "+",
-            ast::Expression::Integer(4),
+            ast::Expression::Integer {
+                value: 4,
+                span: crate::span::Span::unknown(),
+            },
         );
         let hir = HirLowerer::new()
             .lower_program(&program(vec![ast::Statement::Let(ast::LetStatement {
@@ -905,7 +917,14 @@ mod tests {
 
     #[test]
     fn comparison_produces_bool_type() {
-        let expr = infix(ident("x"), "<", ast::Expression::Integer(10));
+        let expr = infix(
+            ident("x"),
+            "<",
+            ast::Expression::Integer {
+                value: 10,
+                span: crate::span::Span::unknown(),
+            },
+        );
         let hir = HirLowerer::new()
             .lower_program(&program(vec![ast::Statement::Let(ast::LetStatement {
                 name: "c".into(),
@@ -932,7 +951,10 @@ mod tests {
     #[test]
     fn out_statement_lowers_correctly() {
         let hir = HirLowerer::new()
-            .lower_program(&program(vec![out(ast::Expression::Integer(42))]))
+            .lower_program(&program(vec![out(ast::Expression::Integer {
+                value: 42,
+                span: crate::span::Span::unknown(),
+            })]))
             .unwrap();
         assert!(matches!(
             &main_fn(&hir).body[0],
@@ -943,7 +965,10 @@ mod tests {
     #[test]
     fn while_loop_lowers_to_hir_while() {
         let w = ast::Statement::While(ast::WhileStatement {
-            condition: ast::Expression::Boolean(true),
+            condition: ast::Expression::Boolean {
+                value: true,
+                span: crate::span::Span::unknown(),
+            },
             body: block(vec![ast::Statement::Break]),
             label: None,
             span: crate::span::Span::unknown(),
@@ -973,10 +998,19 @@ mod tests {
     #[test]
     fn if_statement_with_else_lowers_correctly() {
         let if_stmt = ast::Statement::Expression(ast::Expression::If(ast::IfExpression {
-            condition: Box::new(ast::Expression::Boolean(true)),
+            condition: Box::new(ast::Expression::Boolean {
+                value: true,
+                span: crate::span::Span::unknown(),
+            }),
             span: crate::span::Span::unknown(),
-            consequence: block(vec![out(ast::Expression::Integer(1))]),
-            alternative: Some(block(vec![out(ast::Expression::Integer(2))])),
+            consequence: block(vec![out(ast::Expression::Integer {
+                value: 1,
+                span: crate::span::Span::unknown(),
+            })]),
+            alternative: Some(block(vec![out(ast::Expression::Integer {
+                value: 2,
+                span: crate::span::Span::unknown(),
+            })])),
         }));
         let hir = HirLowerer::new()
             .lower_program(&program(vec![if_stmt]))
@@ -999,8 +1033,14 @@ mod tests {
     #[test]
     fn do_while_desugars_to_body_plus_while() {
         let dw = ast::Statement::DoWhile(ast::WhileStatement {
-            condition: ast::Expression::Boolean(false),
-            body: block(vec![out(ast::Expression::Integer(0))]),
+            condition: ast::Expression::Boolean {
+                value: false,
+                span: crate::span::Span::unknown(),
+            },
+            body: block(vec![out(ast::Expression::Integer {
+                value: 0,
+                span: crate::span::Span::unknown(),
+            })]),
             label: None,
             span: crate::span::Span::unknown(),
         });
@@ -1017,10 +1057,19 @@ mod tests {
     #[test]
     fn ternary_desugars_to_hir_if_expr() {
         let ternary = ast::Expression::Ternary(ast::TernaryExpression {
-            condition: Box::new(ast::Expression::Boolean(true)),
+            condition: Box::new(ast::Expression::Boolean {
+                value: true,
+                span: crate::span::Span::unknown(),
+            }),
             span: crate::span::Span::unknown(),
-            then_expr: Box::new(ast::Expression::Integer(1)),
-            else_expr: Box::new(ast::Expression::Integer(0)),
+            then_expr: Box::new(ast::Expression::Integer {
+                value: 1,
+                span: crate::span::Span::unknown(),
+            }),
+            else_expr: Box::new(ast::Expression::Integer {
+                value: 0,
+                span: crate::span::Span::unknown(),
+            }),
         });
         let hir = HirLowerer::new()
             .lower_program(&program(vec![ast::Statement::Let(ast::LetStatement {
@@ -1041,7 +1090,14 @@ mod tests {
 
     #[test]
     fn null_coalescing_desugars_to_hir_if_expr() {
-        let nc = infix(ident("maybe"), "??", ast::Expression::Integer(0));
+        let nc = infix(
+            ident("maybe"),
+            "??",
+            ast::Expression::Integer {
+                value: 0,
+                span: crate::span::Span::unknown(),
+            },
+        );
         let hir = HirLowerer::new()
             .lower_program(&program(vec![ast::Statement::Let(ast::LetStatement {
                 name: "v".into(),
@@ -1066,15 +1122,30 @@ mod tests {
             span: crate::span::Span::unknown(),
             cases: vec![
                 ast::SwitchCase {
-                    values: vec![ast::Expression::Integer(1)],
-                    body: block(vec![out(ast::Expression::Integer(10))]),
+                    values: vec![ast::Expression::Integer {
+                        value: 1,
+                        span: crate::span::Span::unknown(),
+                    }],
+                    body: block(vec![out(ast::Expression::Integer {
+                        value: 10,
+                        span: crate::span::Span::unknown(),
+                    })]),
                 },
                 ast::SwitchCase {
-                    values: vec![ast::Expression::Integer(2)],
-                    body: block(vec![out(ast::Expression::Integer(20))]),
+                    values: vec![ast::Expression::Integer {
+                        value: 2,
+                        span: crate::span::Span::unknown(),
+                    }],
+                    body: block(vec![out(ast::Expression::Integer {
+                        value: 20,
+                        span: crate::span::Span::unknown(),
+                    })]),
                 },
             ],
-            default: Some(block(vec![out(ast::Expression::Integer(0))])),
+            default: Some(block(vec![out(ast::Expression::Integer {
+                value: 0,
+                span: crate::span::Span::unknown(),
+            })])),
         });
         let hir = HirLowerer::new().lower_program(&program(vec![sw])).unwrap();
         // Switch → Block([let_tmp, If{...}])
@@ -1119,7 +1190,10 @@ mod tests {
                 "greet",
                 vec![],
                 "void",
-                vec![out(ast::Expression::String("hi".to_string()))],
+                vec![out(ast::Expression::String {
+                    value: "hi".to_string(),
+                    span: crate::span::Span::unknown(),
+                })],
             )]))
             .unwrap();
         let f = hir.functions.iter().find(|f| f.name == "greet").unwrap();
@@ -1153,7 +1227,14 @@ mod tests {
         // fn int fib(int n) { if (n <= 1) { return n; } return fib(n-1) + fib(n-2); }
         let body = vec![
             ast::Statement::Expression(ast::Expression::If(ast::IfExpression {
-                condition: Box::new(infix(ident("n"), "<=", ast::Expression::Integer(1))),
+                condition: Box::new(infix(
+                    ident("n"),
+                    "<=",
+                    ast::Expression::Integer {
+                        value: 1,
+                        span: crate::span::Span::unknown(),
+                    },
+                )),
                 span: crate::span::Span::unknown(),
                 consequence: block(vec![ast::Statement::Return(ast::ReturnStatement {
                     return_value: ident("n"),
@@ -1166,13 +1247,27 @@ mod tests {
                 return_value: infix(
                     ast::Expression::Call(ast::CallExpression {
                         function: Box::new(ident("fib")),
-                        arguments: vec![infix(ident("n"), "-", ast::Expression::Integer(1))],
+                        arguments: vec![infix(
+                            ident("n"),
+                            "-",
+                            ast::Expression::Integer {
+                                value: 1,
+                                span: crate::span::Span::unknown(),
+                            },
+                        )],
                         span: crate::span::Span::unknown(),
                     }),
                     "+",
                     ast::Expression::Call(ast::CallExpression {
                         function: Box::new(ident("fib")),
-                        arguments: vec![infix(ident("n"), "-", ast::Expression::Integer(2))],
+                        arguments: vec![infix(
+                            ident("n"),
+                            "-",
+                            ast::Expression::Integer {
+                                value: 2,
+                                span: crate::span::Span::unknown(),
+                            },
+                        )],
                         span: crate::span::Span::unknown(),
                     }),
                 ),

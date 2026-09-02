@@ -121,11 +121,11 @@ impl super::Evaluator {
 
     pub(super) fn estimate_expression(&self, expr: &ast::Expression) -> usize {
         match expr {
-            ast::Expression::Integer(_) => 8,
-            ast::Expression::Decimal(_) => 8,
-            ast::Expression::Dec(_) => 16,
-            ast::Expression::Boolean(_) => 1,
-            ast::Expression::String(s) => 24 + s.len(),
+            ast::Expression::Integer { value: _, .. } => 8,
+            ast::Expression::Decimal { value: _, .. } => 8,
+            ast::Expression::Dec { value: _, .. } => 16,
+            ast::Expression::Boolean { value: _, .. } => 1,
+            ast::Expression::String { value: s, .. } => 24 + s.len(),
             ast::Expression::Identifier { name: _, .. } => 8,
             ast::Expression::Lambda(_) => 32,
             ast::Expression::Prefix(_, right) => 8 + self.estimate_expression(right),
@@ -147,7 +147,7 @@ impl super::Evaluator {
                 }
                 cost
             }
-            ast::Expression::Null => 0,
+            ast::Expression::Null { .. } => 0,
             ast::Expression::DictLiteral(d) => {
                 let mut cost = 24; // Vec overhead
                 for (k, v) in &d.entries {

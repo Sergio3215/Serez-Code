@@ -175,7 +175,10 @@ impl Parser {
                                 span: Span::point(dline, dcol),
                             })),
                             operator: op.to_string(),
-                            right: Box::new(Expression::Integer(1)),
+                            right: Box::new(Expression::Integer {
+                                value: 1,
+                                span: Span::point(line, column),
+                            }),
                             span: Span::point(line, column),
                         });
                         return Some(Statement::FieldAssign(FieldAssignStatement {
@@ -198,7 +201,10 @@ impl Parser {
                 let value = Expression::Infix(InfixExpression {
                     left: Box::new(expr.clone()),
                     operator: op.to_string(),
-                    right: Box::new(Expression::Integer(1)),
+                    right: Box::new(Expression::Integer {
+                        value: 1,
+                        span: Span::point(line, column),
+                    }),
                     span: Span::point(line, column),
                 });
                 return Some(Statement::IndexAssign(IndexAssignStatement {
@@ -245,7 +251,10 @@ impl Parser {
                 let value = Expression::Infix(InfixExpression {
                     left: Box::new(expr),
                     operator: op.to_string(),
-                    right: Box::new(Expression::Integer(1)),
+                    right: Box::new(Expression::Integer {
+                        value: 1,
+                        span: Span::point(line, column),
+                    }),
                     span: Span::point(line, column),
                 });
                 return Some(Statement::IndexAssign(IndexAssignStatement {

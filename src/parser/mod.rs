@@ -251,7 +251,10 @@ impl Parser {
                             span: Span::point(line, col),
                         }),
                         operator: "+".to_string(),
-                        right: Box::new(Expression::Integer(1)),
+                        right: Box::new(Expression::Integer {
+                            value: 1,
+                            span: Span::point(line, col),
+                        }),
                         span: Span::point(line, col),
                     }),
                     span: Span::point(line, col),
@@ -274,7 +277,10 @@ impl Parser {
                             span: Span::point(line, col),
                         }),
                         operator: "-".to_string(),
-                        right: Box::new(Expression::Integer(1)),
+                        right: Box::new(Expression::Integer {
+                            value: 1,
+                            span: Span::point(line, col),
+                        }),
                         span: Span::point(line, col),
                     }),
                     span: Span::point(line, col),
@@ -297,7 +303,10 @@ impl Parser {
                             span: Span::point(line, col),
                         }),
                         operator: "+".to_string(),
-                        right: Box::new(Expression::Integer(1)),
+                        right: Box::new(Expression::Integer {
+                            value: 1,
+                            span: Span::point(line, col),
+                        }),
                         span: Span::point(line, col),
                     }),
                     span: Span::point(line, col),
@@ -320,7 +329,10 @@ impl Parser {
                             span: Span::point(line, col),
                         }),
                         operator: "-".to_string(),
-                        right: Box::new(Expression::Integer(1)),
+                        right: Box::new(Expression::Integer {
+                            value: 1,
+                            span: Span::point(line, col),
+                        }),
                         span: Span::point(line, col),
                     }),
                     span: Span::point(line, col),
@@ -392,7 +404,9 @@ impl Parser {
             TokenType::Semicolon | TokenType::RBrace | TokenType::Eof
         ) {
             return Some(Statement::Return(ReturnStatement {
-                return_value: Expression::Null,
+                return_value: Expression::Null {
+                    span: crate::span::Span::unknown(),
+                },
                 span: self.span_to_here(open),
             }));
         }
@@ -402,7 +416,9 @@ impl Parser {
         // Bare `return;` — no expression, return null
         if self.current_token.token_type == TokenType::Semicolon {
             return Some(Statement::Return(ReturnStatement {
-                return_value: Expression::Null,
+                return_value: Expression::Null {
+                    span: crate::span::Span::unknown(),
+                },
                 span: self.span_to_here(open),
             }));
         }

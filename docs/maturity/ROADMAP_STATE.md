@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions · **M2.6b** identifiers |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions · **M2.6b** identifiers · **M2.6d** literals |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.6c** — widen the expression extents now that the callee has a span. Changes what a diagnostic points at, so it is its own molecule; see §9B.12. |
+| Next molecule | **M2.6e** — the eight remaining wrapper variants (`Prefix`, `Spread`, `AddressOf`, `Deref`, `EntryLiteral`, `InterpolatedString`, `ObjectPatch`, `SizeOf`). Same shape as M2.6d. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.6b |
+| Last state update | 2026-09-02, end of M2.6d |
 
 Milestone ledger:
 
@@ -32,7 +32,7 @@ Milestone ledger:
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
-| M2 — AST + Spans Stable | **IN PROGRESS** — span coverage 5 of 48 node types -> **32**; tokens carry byte offsets |
+| M2 — AST + Spans Stable | **IN PROGRESS** — span coverage: 31 of 40 structs and 7 of 28 `Expression` variants carry one; tokens carry byte offsets |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
 | M5 — Type System Stable | NOT STARTED |
@@ -1556,23 +1556,81 @@ Snapshot: 448 of 490 files changed, every diagnostic hash identical.
 `DictLiteral`'s entries, `Match`) — M2.6d, now that the representation question
 is settled and the shape is proven.
 
-### 9B.12 M2.6c — widening the expression extents (next)
+### 9B.12 M2.6c — widening the expression extents: **RECLASSIFIED OUT OF M2**
 
-Until M2.6b a call spanned from its `(` because the callee had no span to reach
-back to. That reason is gone. What remains is the widening itself: each
-construction site would take the left operand's span as its start instead of the
-operator token's.
+Planned as the next molecule, then examined before writing it, and it does not
+belong in this milestone.
 
-It is deliberately *not* folded into M2.6b, because it changes what a diagnostic
-points at — `foo(1, 2)` would report column 1 rather than column 4 — and that is
-a behaviour change rather than a representation one. `tests/ast_spans.rs` asserts
-the narrow form precisely so this cannot happen by accident.
+**Why it looked like M2's work.** Until M2.6b a call spanned from its `(`
+because the callee had no span to reach back to. That reason is gone, so
+widening looks like finishing the job.
+
+**Why it is not.** Measured against the 10.0.0 binary:
+
+```
+fn int f(int n) { return n; }
+out f(1, 2);
+
+❌ TYPE ERROR [SZ3000] [line 2:6]: 'f' expects 1 argument(s) but got 2.
+❌ ERROR  [SZ4002]: Function expected 1 argument(s), got 2
+    called from 'f' [line 2:6]
+```
+
+Column 6 is the `(`. Widening moves both of those to column 5, the `f` — in the
+type checker, in the runtime error, and in the call frame that appears in every
+stack trace. That is a change to **where a diagnostic points**, which is exactly
+what the milestone's governing rule forbids a representation change from doing.
+
+**And half-widening is worse than either.** Moving `start` to the callee while
+leaving `line`/`column` on the `(` would make the span internally incoherent:
+`start` would no longer be the byte offset of the position `line`/`column`
+names. A span that contradicts itself is a worse artifact than a narrow one.
+
+**Owner: M3.** Deciding what a diagnostic points at is that milestone's subject
+— it already has to decide where a runtime error's position comes from at all
+(§9B.1), and this is the same question one level down. M7 owns it if it is
+treated as a frozen contract instead.
+
+`tests/ast_spans.rs` keeps asserting the narrow form, which is now a deliberate
+pin rather than a placeholder.
 
 **It is also what unblocks widening the M2.3.2 extents.** A call spans from its
 `(` and not from its callee precisely because the callee is usually an
 `Identifier`, which carries nothing. Once the scalar variants have spans, the
 extents in `tests/ast_spans.rs` can widen — and those tests were written to
 assert the narrow form so that widening has to be deliberate.
+
+### 9B.13 M2.6d — the literal variants: **COMPLETE**
+
+Six converted to struct variants under the M2.6b decision: `Integer`,
+`Decimal`, `Dec`, `String`, `Boolean` and `Null`.
+
+`Null` is the interesting one. It was a *unit* variant — no payload at all — and
+becomes `Null { span: Span }`: the one expression with no value still has to say
+where it was written. That is what "uniform spans" means when taken seriously
+rather than only where it is convenient.
+
+77 sites, and the same three kinds as before: real constructions take the
+token's span, desugared ones take a point at the construct they came from (the
+`1` inside `i = i + 1`), and two are genuinely unknown — the implicit `null` of
+a bare `return;`, which the programmer never wrote, and the collapsed
+single-literal case of `parse_interpolated_string`, a free function with no
+cursor to ask.
+
+`a_literal_spans_exactly_its_own_text` checks each of the five spellable kinds
+separately, because each is built by a different arm of the prefix dispatcher
+and one arm reading the wrong token is exactly the mistake nothing else would
+catch. It also pins a decision worth stating: **a string literal's span includes
+its quotes** while its `value` does not. That is right for a *span* — the quotes
+are source the literal occupies — and it is why the test asserts against the
+source text rather than against the value.
+
+Snapshot: 459 of 490 files changed, every diagnostic hash identical.
+
+**Coverage: 31 of 40 structs, and 7 of 28 `Expression` variants.** Eight
+wrapper variants remain (`Prefix`, `Spread`, `AddressOf`, `Deref`,
+`EntryLiteral`, `InterpolatedString`, `ObjectPatch`, `SizeOf`); `Match` and
+`UnsafeBlock` already carry one through their payloads.
 
 ### 9B.4 M2.3 onward — molecules (planned)
 
@@ -1584,8 +1642,9 @@ assert the narrow form so that widening has to be deliberate.
 | **M2.5** | Migrate the statement nodes | **done** — §9B.8. Coverage 10 -> 22 of 48 |
 | **M2.6a** | The struct-shaped expression nodes | **done** — §9B.9. Coverage 22 -> 31 of 48 |
 | **M2.6b** | `Identifier` as a struct variant | **done** — §9B.11. Coverage 31 -> 32 |
-| **M2.6c** | Widen the expression extents to their left operand | next — §9B.12. A behaviour change, so its own molecule |
-| **M2.6d** | The 16 remaining scalar variants | after M2.6c; representation now settled |
+| **M2.6c** | Widen the expression extents | **reclassified out of M2** — §9B.12. It moves where a diagnostic points; M3 owns it |
+| **M2.6d** | The literal variants (`Integer`, `Decimal`, `Dec`, `String`, `Boolean`, `Null`) | **done** — §9B.13 |
+| **M2.6e** | The 8 remaining wrapper variants (`Prefix`, `Spread`, `Deref`, …) | next, same shape |
 | **M2.7** | Resolve the two dead fields — `ClassField` and `EnumDeclaration` now have spans nothing reads; either give them a consumer or state why they stay | a decision recorded, not a silent deletion |
 | **M2.8** | M2 milestone audit | full gates + ecosystem |
 

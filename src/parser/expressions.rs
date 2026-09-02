@@ -110,7 +110,10 @@ impl Parser {
 
             TokenType::Int => {
                 if let Ok(num) = self.current_token.literal.parse::<i64>() {
-                    Some(Expression::Integer(num))
+                    Some(Expression::Integer {
+                        value: num,
+                        span: self.current_token.span,
+                    })
                 } else {
                     self.parser_error(&format!(
                         "Invalid integer literal '{}' (out of 64-bit range?)",
@@ -122,7 +125,10 @@ impl Parser {
 
             TokenType::Decimal => {
                 if let Ok(num) = self.current_token.literal.parse::<f64>() {
-                    Some(Expression::Decimal(num))
+                    Some(Expression::Decimal {
+                        value: num,
+                        span: self.current_token.span,
+                    })
                 } else {
                     self.parser_error(&format!(
                         "Invalid decimal literal '{}'",
@@ -133,7 +139,10 @@ impl Parser {
             }
 
             TokenType::Dec => match parse_dec_literal(&self.current_token.literal) {
-                Some(d) => Some(Expression::Dec(d)),
+                Some(d) => Some(Expression::Dec {
+                    value: d,
+                    span: self.current_token.span,
+                }),
                 None => {
                     self.parser_error(&format!(
                         "Invalid dec literal '{}'",
@@ -153,16 +162,30 @@ impl Parser {
                     parsed
                 } else {
                     // Replace \{ sentinel (\x01) with literal { in non-interpolated strings
-                    Some(Expression::String(s.replace('\x01', "{")))
+                    Some(Expression::String {
+                        value: s.replace('\x01', "{"),
+                        span: self.current_token.span,
+                    })
                 }
             }
 
             // Raw string r"..." — already literal (braces not interpolated).
-            TokenType::RawString => Some(Expression::String(self.current_token.literal.clone())),
+            TokenType::RawString => Some(Expression::String {
+                value: self.current_token.literal.clone(),
+                span: self.current_token.span,
+            }),
 
-            TokenType::True => Some(Expression::Boolean(true)),
-            TokenType::False => Some(Expression::Boolean(false)),
-            TokenType::KwNull => Some(Expression::Null),
+            TokenType::True => Some(Expression::Boolean {
+                value: true,
+                span: self.current_token.span,
+            }),
+            TokenType::False => Some(Expression::Boolean {
+                value: false,
+                span: self.current_token.span,
+            }),
+            TokenType::KwNull => Some(Expression::Null {
+                span: self.current_token.span,
+            }),
 
             TokenType::Bang | TokenType::Minus | TokenType::BitNot => {
                 let operator = self.current_token.literal.clone();
