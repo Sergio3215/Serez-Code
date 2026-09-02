@@ -17,10 +17,11 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M3 — Diagnostics Unified. STARTING.** |
+| **Current milestone** | **M3 — Diagnostics Unified. IN PROGRESS.** |
+| Goals done in M3 | **M3.0** audit (§9D.0) · **M3.1** the rendering net (§9D.1) |
 | Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions · **M2.6b** identifiers · **M2.6d** literals · **M2.6e** wrappers · **M2.7** components · **M2.8** audit + Token collapse |
 | Last completed milestone | **M2 — AST + Spans Stable** (M0, M1 before it) |
-| Next molecule | **M3.0** — audit the four diagnostic types before changing any of them |
+| Next molecule | **M3.2** — introduce the common `Diagnostic` model in its own leaf module |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
@@ -1857,6 +1858,96 @@ documents what each *kind* of extent covers and why they differ.
 | 5.21 | The AST already satisfied every "must not" | closed |
 
 ## MILESTONE STATUS: **COMPLETE**
+
+---
+
+## 9D. M3 — Diagnostics Unified
+
+### 9D.0 The audit: five types, six renderers, one spec sentence
+
+**The five diagnostic types**, and what each carries:
+
+| Type | Where | Fields |
+|---|---|---|
+| `LexError` | `lexer.rs` | code, line, column, message |
+| `ParseError` | `parser/diagnostics.rs` | code, line, column, message |
+| `TypeError` | `type_checker.rs` | code, line, column, message |
+| `RuntimeError` | `evaluator/mod.rs` | code, **kind**, message, **span**, **stack**, **notes** |
+| `CompilerDiagnostic` | `compiler/hir_lower.rs` | code, kind, message |
+
+Three are the same four fields written out three times. `RuntimeError` is the
+only one with a kind, a stack or notes. `CompilerDiagnostic` is the only one
+that is *returned* rather than printed — it has a `Display` impl and reaches the
+caller as `Err`, which is the shape the other four should have.
+
+**The rendering is scattered across producers.** `LexError` has no renderer of
+its own: the *parser* renders it, through `print_frontend_error("LEXER", …)` —
+so the lexer already produces data only, which is the state M3 wants for all of
+them. The type checker prints inside `type_error_code`. The evaluator has
+sixteen `eprintln!` calls.
+
+**What M3 must not move**, all normative: the `SZ1xxx`–`SZ7xxx` codes
+(`spec/errors.md`), the exit codes (`spec/cli.md`), the rendered shape
+`❌ PARSER ERROR [SZ2000] [file line:col]: …`, the catchable/fatal split, the
+`Error.span` string-or-null contract, and stack frames.
+
+### 9D.1 The net: `tests/diagnostic_render.rs`
+
+M3 changes the code that produces what a user reads, and the conformance
+suite's **149 error fixtures assert only that some `❌` appeared and the exit
+code was non-zero**. A reworded message, a moved column, a dropped note, a
+diagnostic that stops printing entirely — all pass today.
+
+So the harness runs the real `sz` binary against every `err_*.sz` and `sec_*.sz`
+and hashes the **complete stderr plus the exit code** into a committed manifest.
+149 fixtures. It is the M3 analogue of `parser_snapshot.rs`: between them the
+data and the rendering are both pinned.
+
+**Proved it catches things, as M1.0.2 did.** A single trailing space added to
+one runtime-error format string: **129 of 149 fixtures** flagged.
+
+### 9D.2 What the proof itself found — *architectural debt*, medium
+
+The first perturbation changed **nothing**, because it hit the wrong renderer.
+There are two:
+
+| Site | When |
+|---|---|
+| `record_runtime_error` (`mod.rs:605`) | as the error is raised |
+| `report_program_outcome` (`mod.rs:1726`) | at the pipeline boundary |
+
+Only the second fires. `eval_program_outcome` raises
+`diagnostic_capture_depth` for the whole evaluation, which suppresses the first
+— deliberately, and `spec/errors.md` says so: *"Human diagnostics are rendered
+once at the pipeline boundary."*
+
+**The first renderer is unreachable from anywhere in the crate.** Every caller —
+`run.rs`, `repl.rs`, `namespaces_task.rs`, `stmt.rs` and the tests — goes
+through `eval_program_outcome` or the legacy `eval_program`, and both raise the
+depth. It can only fire for an external embedder driving `Evaluator` directly.
+
+Recorded rather than removed: deleting it is a behaviour change for such an
+embedder, and `Evaluator` is `pub`. M3's own molecule for the data/rendering
+split decides it, explicitly.
+
+### 9D.3 M3 — molecules
+
+| Molecule | Action | Kind |
+|---|---|---|
+| **M3.0** | Audit the five types, their renderers and consumers | done — §9D.0 |
+| **M3.1** | `tests/diagnostic_render.rs`: pin stderr + exit code for 149 fixtures | done — §9D.1 |
+| **M3.2** | Introduce the common `Diagnostic` model in its own leaf module | refactor |
+| **M3.3** | Migrate `LexError` and `ParseError` onto it | refactor |
+| **M3.4** | Migrate `TypeError` | refactor |
+| **M3.5** | Migrate `RuntimeError`, preserving kind/stack/notes and the catchability bit | refactor |
+| **M3.6** | One renderer; decide the unreachable second (§9D.2) | refactor + one declared decision |
+| **M3.7** | **§5.17** — nine parser errors that reach nobody | **behaviour change, its own commit** |
+| **M3.8** | **§5.12** — diagnostic ordering, grouped-by-producer vs by-position | **decision, then possibly a behaviour change** |
+| **M3.9** | M3 milestone audit | — |
+
+M3.7 and M3.8 are marked because they are *not* refactors. Every other molecule
+must leave `diagnostic_render.manifest` untouched; those two will change it, and
+each says so in its own commit rather than arriving mixed into a migration.
 
 ---
 
