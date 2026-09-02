@@ -17,15 +17,16 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M3 — Diagnostics Unified. IN PROGRESS.** |
-| Goals done in M3 | **M3.0** audit (§9D.0) · **M3.1** the rendering net (§9D.1) |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions · **M2.6b** identifiers · **M2.6d** literals · **M2.6e** wrappers · **M2.7** components · **M2.8** audit + Token collapse |
-| Last completed milestone | **M2 — AST + Spans Stable** (M0, M1 before it) |
-| Next molecule | **M3.2** — introduce the common `Diagnostic` model in its own leaf module |
+| **Current milestone** | **M4 — Semantic Layer Established. BLOCKED.** Three items remain and each one needs a product decision — §9F.4 (a), (b), (c). |
+| Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, delivered and corpus-validated (§9F.3) |
+| Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
+| Last completed milestone | **M3 — Diagnostics Unified** (M0, M1, M2 before it) |
+| **Next molecule** | **None is authorized.** M4 cannot proceed on any of its three remaining items without an answer to §9F.4. Independent work that does *not* need one has been exhausted. |
 | Branch | `improve` |
-| Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
+| HEAD | `9ca4d22` |
+| M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, M4.0 audit |
+| Last state update | 2026-09-02 — baseline re-verified at `9ca4d22`, §1.5; this table itself had drifted, §5.30 |
 
 Milestone ledger:
 
@@ -114,9 +115,68 @@ M0 changed no behavior. It wrote documentation only:
 - `MATURITY_AUDIT.md` — evidence rows re-measured where they had drifted
   (see §5.1 for the drift itself).
 
+### 1.5 Baseline re-verified at `9ca4d22` — 2026-09-02
+
+M0's claim is that the baseline is **reproducible**, not merely that it was once
+measured. A session opening after M1–M3 landed has to re-establish it against the
+current HEAD before trusting anything else in this file, because a green figure
+recorded at `d8662c2` says nothing about `9ca4d22`. Every row below was executed
+in this session, on the same host, from the repository root.
+
+| Gate | Command | At `d8662c2` (M0) | At `9ca4d22` (now) |
+|---|---|---|---|
+| Format | `cargo fmt --check` | PASS | **PASS**, exit 0 |
+| Check | `cargo check --all-targets` | PASS, no warnings | **PASS**, no warnings |
+| Clippy | `cargo clippy --all-targets` | PASS, 0 errors | **PASS**, 0 errors |
+| Clippy per-site list (§5.26) | the `--message-format short` pipeline | 181 lines | **181 lines — unchanged** |
+| Rust tests | `cargo test --all-targets` | 318 / 0 failed | **398 / 0 failed** |
+| Serez runner (PowerShell) | `.un_tests.ps1 -json <f>` | 490 / 0 / 0 | **499 / 0 / 0** |
+| Serez runner (bash) | `./run_tests.sh --json <f>` | 490 / 0 / 0 | **499 / 0 / 0** |
+| Runner parity | per-category, both reports | identical | **identical** |
+| Ecosystem canary | `.un_ecosystem.ps1 -SkipBuild` | 8 / 8, 56 tests | **8 / 8, 56 tests** |
+
+Seven gates plus the canary: **all green.**
+
+Rust tests at 398 (from 318): 199 library · 56 + 10 `sz-lsp` binary · 79
+`tests/runtime_outcome.rs` · 22 · 16 `tests/frontend_robustness.rs` · 4 + 4 + 4 ·
+3 · 1. The growth is the nets M1–M4 added — the parser snapshot, the diagnostic
+render manifest, the semantic unit tests and the corpus divergence measurement.
+
+Serez runner at 499 (from 490), **identical per category in both runners**:
+
+```
+ai 5 · check 3 · cli 14 · e2e 91 · error 72 · eval 13 · import 4
+package-manager 15 · repl 11 · runner-integrity 1 · rust 2 · security 104 · unit 164
+```
+
+The whole of the +9 is `error` 63 → 72: the nine fixtures M3.7 added for the nine
+parser errors that used to reach nobody (§9D.6). Every other category is
+unmoved, which is the shape a milestone chain that changed one behaviour on
+purpose should produce.
+
+**The clippy per-site list is the row that matters most.** §5.26 established it
+as the real gate because the raw count is cache-sensitive. It reads **181 lines,
+byte-identical to the figure recorded there** — so M1, M2, M3 and M4's delivered
+half introduced no new lint site anywhere in the crate, across four milestones.
+The raw count reads 174 today against 186 at M0; that difference is the cache
+artefact §5.26 documents, not an improvement, and it is why the count is not the
+gate.
+
+**Working tree.** `git status --porcelain` reports one entry, `?? audit/` — an
+untracked report written by the peer session of §5.16, not by this work. The
+` M README.md` of §1.3 is gone: it was the CRLF/LF artefact described there, and
+it has since normalised. No tracked file differs from `9ca4d22`.
+
 ---
 
 ## 2. Codebase size
+
+> **Measured at M0 (`d8662c2`), before M1–M4.** Kept as the frozen reference
+> point. Current figures, re-measured at `9ca4d22`: **80 Rust files, 56,787
+> lines**; the parser is 14 files totalling 4,738, `mod.rs` 468,
+> `expressions.rs` 829; `src/semantic.rs` (360) and `src/span.rs` and
+> `src/diagnostic.rs` are new since. `namespaces_gui.rs` is still the largest
+> file at 6,264 and has not been touched.
 
 63 Rust files, 54,555 lines. Largest:
 
@@ -179,7 +239,14 @@ Mostly a clean DAG. The edges worth naming:
 No `parser → evaluator`, no `ast → gui`, no `lexer → package_manager`. The
 inversions M10 warns about are, with the exceptions above, absent already.
 
-### 3.2 Diagnostics as they actually are
+### 3.2 Diagnostics as they actually were, at M0
+
+> **Superseded by M3.** This section describes `d8662c2`, and M3 undid every
+> problem it names: the five diagnostic types became one model (`src/diagnostic.rs`),
+> the four rendered formats became one renderer, and data is now separated from
+> rendering. It is kept because it is the *before* half of M3's evidence — see
+> §9D.0 for the audit that replaced it and §9E for what actually changed. Do not
+> read the table below as current.
 
 Four unrelated error types, one per phase, each printing to stderr at the point
 of production:
@@ -800,6 +867,42 @@ name is a guess about naming discipline. The reliable enumeration was available
 the whole time — the variants of `enum Statement` — and would have caught it.
 Later milestones that sweep a category should enumerate from the type system,
 not from a naming convention.
+
+---
+
+### 5.30 — §0 of this file had drifted three milestones behind its own ledger — *documentation mismatch*, **medium** (found on re-entry, 2026-09-02)
+
+The file's job is to let a session with no conversational memory resume the work.
+Its §0 said **"Current milestone: M3 — Diagnostics Unified. IN PROGRESS"** and
+**"Next molecule: M3.2"**, while the milestone ledger eight lines below it, in
+the same section, said M3 was **COMPLETE** and M4 **BLOCKED**, and §9F.4 gave the
+three reasons why.
+
+The mismatch is not cosmetic, and the failure mode is specific: §0 is the part a
+resuming session reads first and trusts most, so a session following it would
+have re-implemented M3.2 — the `Diagnostic` model — on top of the one that
+already exists, and would have discovered the collision only after writing the
+code. The rows disagreeing were the *authoritative* row and the *summary* row of
+the same table.
+
+**Cause.** §12's last line already prescribes the fix — *"update §0 whenever the
+next authorized molecule changes"* — and M3.2 through M4.3 each updated the
+ledger, the milestone body and the commit table without touching the header. The
+rule was written; keeping the header current simply lost to keeping the evidence
+current, seven molecules running.
+
+**Corrected here**, along with two sections that had gone stale the same way but
+carry no resumption risk, because they are dated evidence rather than
+instructions: §2 (codebase size, an M0 measurement) and §3.2 (diagnostics, which
+describes exactly the world M3 dismantled). Both are now marked as M0-era and
+point at the current figures rather than being rewritten — a frozen baseline is
+worth more than a tidy one.
+
+**The structural lesson, for whoever closes M5.** A summary that can disagree
+with its own detail will. §0 is derived information: every row in it is stated
+authoritatively somewhere else in this file. The cheap guard is to make updating
+§0 the *last* step of a milestone audit rather than an independent chore — the
+audit already re-reads everything §0 summarises.
 
 ---
 
@@ -2659,6 +2762,7 @@ has no product consumers, so there is no partial state to unwind.
 | M4.3 | `c2775bd` | `validate the new module against the whole corpus` |
 | **M3 checkpoint** | `78202b5` | `M3 closes — the audit, and two rows that were out of date` |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
+| **Re-entry checkpoint** | the commit that added §1.5 — `git log -1 --format=%h -S'1.5 Baseline re-verified' -- docs/maturity/ROADMAP_STATE.md` | `re-verify the baseline, and correct a header three milestones out of date`. Documentation only; no behaviour change. Seven gates plus the canary re-measured green at `9ca4d22`; §0 corrected; §5.30 recorded. Same self-naming problem as the M1 row, resolved the same way. |
 
 ---
 
@@ -2687,4 +2791,11 @@ constrains M1–M2 work:
 - Do not start M(n+1) because M(n) looks close enough. Each milestone needs
   implementation, tests, documentation, self-audit and full gates.
 - Update this file at every milestone boundary, and update §0 whenever the
-  "next authorized molecule" changes.
+  "next authorized molecule" changes. **Make §0 the last step of the milestone
+  audit, not a separate chore** — it drifted three milestones behind its own
+  ledger by being treated as one (§5.30). Every row in §0 is stated
+  authoritatively elsewhere in this file; the audit already re-reads all of it.
+- **Re-verify the baseline on re-entry**, before trusting any figure here. A
+  green gate recorded at one commit says nothing about the next. §1.5 is the
+  worked example; the clippy *per-site list* (§5.26), not the count, is the row
+  that actually detects drift.
