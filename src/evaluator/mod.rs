@@ -65,6 +65,7 @@ fn runtime_error_code(kind: &str) -> &'static str {
 use crate::ast::{self, Program, Statement};
 use crate::diagnostic::{Diagnostic, Phase, Severity};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
+use crate::render;
 use crate::scope::ScopeStack;
 use crate::span::Span;
 use std::collections::{HashMap, HashSet};
@@ -603,24 +604,37 @@ impl Evaluator {
                 span: Span::point(frame.line, frame.column),
             })
             .collect();
+        let error = RuntimeError {
+            code,
+            phase: Phase::Runtime,
+            severity: Severity::Error,
+            kind: Some(kind),
+            message,
+            span,
+            stack,
+            notes: Vec::new(),
+        };
+
+        // Unreachable by construction, and kept deliberately. `spec/errors.md`
+        // says human diagnostics are rendered once at the pipeline boundary,
+        // and `eval_program_outcome` enforces that by raising
+        // `diagnostic_capture_depth` for the whole evaluation. It and
+        // `eval_program` — which delegates to it — are the *only* public methods
+        // that evaluate anything, so this guard is false for every caller,
+        // inside the crate or outside it. `report_program_outcome` does the
+        // real printing.
+        //
+        // It stays as the fallback for a future path that forgets to raise the
+        // depth, where the alternative is a non-zero exit with no output at all.
+        // It goes through the same renderer as everything else, so it cannot
+        // drift into a second format the way it had before M3.6 — which is how
+        // it swallowed the first M3.1 perturbation without a trace.
         if self.diagnostic_capture_depth == 0 && (!catchable || self.try_depth == 0) {
-            eprintln!("❌ ERROR [{code}]: {message}");
+            eprintln!("{}", render::render(&error, &render::Context::default()));
             self.print_call_stack();
         }
         self.error_generation = self.error_generation.wrapping_add(1);
-        self.last_error = Some(PendingRuntimeError {
-            error: RuntimeError {
-                code,
-                phase: Phase::Runtime,
-                severity: Severity::Error,
-                kind: Some(kind),
-                message,
-                span,
-                stack,
-                notes: Vec::new(),
-            },
-            catchable,
-        });
+        self.last_error = Some(PendingRuntimeError { error, catchable });
         EvalResult::Error
     }
 
@@ -1727,7 +1741,9 @@ in the program that was run. Please report it."
                 eprintln!("{}", Self::unstructured_outcome_diagnostic());
             }
             ProgramOutcome::RuntimeError(error) => {
-                eprintln!("❌ ERROR [{}]: {}", error.code, error.message);
+                // No context: a runtime headline carries neither a file name
+                // nor a caret. The frames printed below carry the position.
+                eprintln!("{}", render::render(error, &render::Context::default()));
                 let frames: Vec<(&str, usize, usize)> = error
                     .stack
                     .iter()

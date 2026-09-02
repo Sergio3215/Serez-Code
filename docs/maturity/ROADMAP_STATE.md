@@ -334,7 +334,7 @@ entangled because of a bug rather than because of the architecture.
 
 ## 5. Discoveries
 
-§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0; §5.22–5.24 are M2.3.3; §5.25 is M2.7; §5.26 is M3.5. §5.4 was corrected by M2.0 — see the note in it.
+§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0; §5.22–5.24 are M2.3.3; §5.25 is M2.7; §5.26 is M3.5; §5.27 is M3.6. §5.4 was corrected by M2.0 — see the note in it.
 
 All are **pre-existing**. Neither milestone changed any behavior; none was fixed.
 
@@ -1940,7 +1940,7 @@ split decides it, explicitly.
 | **M3.3** | Migrate `LexError` and `ParseError` onto it | refactor |
 | **M3.4** | Migrate `TypeError` | done — §9D.3 |
 | **M3.5** | Migrate `RuntimeError`, preserving kind/stack/notes and the catchability bit | done — §9D.4 |
-| **M3.6** | One renderer; decide the unreachable second (§9D.2) | refactor + one declared decision |
+| **M3.6** | One renderer; decide the unreachable second (§9D.2) | done — §9D.5, decision **D5** |
 | **M3.7** | **§5.17** — nine parser errors that reach nobody | **behaviour change, its own commit** |
 | **M3.8** | **§5.12** — diagnostic ordering, grouped-by-producer vs by-position | **decision, then possibly a behaviour change** |
 | **M3.9** | M3 milestone audit | — |
@@ -2042,6 +2042,100 @@ by zero lines (`comm -13` and `comm -23` both empty against the `c4657e3`
 baseline). Prefer this to any count: it says *which* warning appeared, and a
 count that moves by one tells you nothing about which one.
 
+### §9D.5 — M3.6: one renderer (refactor + decision D5)
+
+`src/render.rs`, a leaf module over `diagnostic` and `span`. It takes a
+`Diagnostic` and a `Context` and returns a `String`; it does not print. Returning
+a string rather than writing to stderr is the point — the five unit tests in it
+pin the exact byte layout of every phase without running a binary or capturing a
+stream.
+
+Four producers now call it, where before each had its own format:
+
+| Producer | Was | Now |
+|---|---|---|
+| `parser/diagnostics.rs::print_frontend_error` | its own `match` on `source_name`, two `eprintln!` for the caret | builds a `Context` and calls `render` |
+| the same, for lexical errors | passed six loose arguments | passes the `Diagnostic` |
+| `type_checker.rs::type_error_code` | its own `eprintln!` with an inline `if line > 0` | `render` with a default `Context` |
+| `evaluator/mod.rs::report_program_outcome` | its own `eprintln!` | `render` with a default `Context` |
+| `evaluator/mod.rs::record_runtime_error` | its own `eprintln!` — **the unreachable one** | `render`; see D5 |
+
+**Three format differences were preserved rather than tidied**, and only one of
+them needed a rule:
+
+  * Runtime failures print no position bracket even though they have a span,
+    because the frames underneath carry it. That is the one genuine phase rule,
+    `Phase::shows_position()`.
+  * The file name appears only when the caller knows it. The parser is told;
+    the type checker never is, so its diagnostics still say `[line L:C]` even
+    when `sz` was given a path. **This is an inconsistency** — recorded, not
+    fixed, because fixing it changes what a user reads.
+  * The snippet and caret appear only when the caller supplies the source, which
+    again only the parser does.
+
+The last two need no phase rule at all: they follow from what the caller puts in
+the `Context`. Only the first is a decision, so only the first is written down.
+
+### §5.27 — the rule that made one renderer possible, and the gate under it
+
+The type checker has always omitted the position bracket when `line == 0`,
+printing a bare code rather than `[line 0:0]`. Making that uniform — *omit the
+bracket whenever the span is unknown* — is what let four formats collapse into
+one.
+
+It is byte-identical for the lexer and the parser **only if their diagnostics
+never carry an unknown span**. One that did would have printed `[file 0:0]`
+before and would print nothing after: a silent, user-visible change hiding inside
+a refactor.
+
+So it is not assumed. The new
+`tests/parser_snapshot.rs::every_frontend_diagnostic_carries_a_real_position`
+parses all 490 corpus files and asserts every collected diagnostic has
+`span.line > 0`. It passes. The assumption is now a gate, and if it ever fails
+the message says what was lost.
+
+### D5 — the unreachable runtime renderer stays, routed through `render`
+
+**The finding (§9D.2), now proved stronger than it was stated.** The audit said
+`record_runtime_error`'s `eprintln!` was unreachable from inside the crate and
+could still fire for an external embedder driving `Evaluator` directly. That
+second half is **wrong**. `Evaluator` exposes exactly two public methods that
+evaluate anything — `eval_program_outcome` and `eval_program`, and the latter
+delegates to the former — and `eval_program_outcome` raises
+`diagnostic_capture_depth` for the whole evaluation. `record_runtime_error` is
+private. So the guard is false for **every** caller, inside the crate or outside
+it. There is no embedder for whom deleting it would change anything.
+
+**The decision: keep it, and route it through the single renderer.**
+
+  * M3.6's goal is one *renderer*, not one *call site*. Both sites calling
+    `render::render` achieves it completely; the formats can no longer diverge.
+  * Deleting it is the only irreversible option and buys nothing structural.
+  * It is a real fallback. If a future path ever evaluates without raising the
+    depth, the alternative to this branch is a non-zero exit with **no output at
+    all** — the least actionable thing the runtime can do, and exactly the
+    failure `unstructured_outcome_diagnostic` already exists to prevent.
+  * It was a trap, and routing it fixes the trap. This is the site that
+    swallowed the first M3.1 perturbation without a trace. It can no longer
+    hold a second format, and the comment at the site now says it is
+    unreachable and why.
+
+**Reclassified out of M3: `CompilerDiagnostic`.** M3.0 counted five diagnostic
+types; four are now one. The fifth is not, and forcing it in would be wrong:
+
+  * it has **no consumer outside `src/compiler/`**, so it has no user-visible
+    surface to preserve or change;
+  * its rendered form comes from a `Display` impl with no marker, no phase word
+    and no position — nothing in common with the other four. Migrating it either
+    changes that text or makes the renderer carry a second format for a type
+    nobody reads;
+  * it carries no span at all, so it cannot exercise anything the model adds.
+
+It belongs to whichever milestone owns the experimental AOT compiler. **A
+correction:** the M3.4/M3.5 commit message (`aeeebf2`) says the compiler's type
+is the one "which M3.6 takes". That was written ahead of the evidence and is
+withdrawn here; M3.6 does not take it.
+
 ---
 
 ## 10. Commits and checkpoints
@@ -2057,6 +2151,7 @@ count that moves by one tells you nothing about which one.
 | M1.9-M1.11 | `ca1f24a` | `move control flow and the literal forms out of the grammar` — loops, branches, literals |
 | M3.0-M3.1 | `e10bfd4` | `pin what every failing program prints before touching how it is produced` |
 | M3.2-M3.3 | `c4657e3` | `one model, and the frontend moves onto it` |
+| M3.4-M3.5 | `aeeebf2` | `the checker and the runtime move onto the one model` |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
 
 ---

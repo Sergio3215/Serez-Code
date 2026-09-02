@@ -23,6 +23,7 @@
 
 use super::Parser;
 use crate::diagnostic::{Diagnostic, Phase};
+use crate::render;
 use crate::span::Span;
 
 /// Generic parser diagnostic: a syntax error not yet given a narrower code.
@@ -70,42 +71,28 @@ impl Parser {
         self.had_error.set(true);
         let line = self.current_token.span.line;
         let col = self.current_token.span.column;
-        self.errors.borrow_mut().push(Diagnostic::frontend(
-            code,
-            Phase::Parser,
-            Span::point(line, col),
-            msg,
-        ));
-        self.print_frontend_error("PARSER", code, line, col, msg);
+        let diagnostic = Diagnostic::frontend(code, Phase::Parser, Span::point(line, col), msg);
+        self.print_frontend_error(&diagnostic);
+        self.errors.borrow_mut().push(diagnostic);
     }
 
-    fn print_frontend_error(
-        &self,
-        phase: &str,
-        code: &'static str,
-        line: usize,
-        col: usize,
-        msg: &str,
-    ) {
-        match &self.source_name {
-            Some(name) => eprintln!(
-                "❌ {} ERROR [{}] [{} {}:{}]: {}",
-                phase, code, name, line, col, msg
-            ),
-            None => eprintln!(
-                "❌ {} ERROR [{}] [line {}:{}]: {}",
-                phase, code, line, col, msg
-            ),
-        }
-        if let Some(src) = self.source_lines.get(line.saturating_sub(1)) {
-            let ln = line.to_string();
-            eprintln!("  {} | {}", ln, src.trim_end());
-            eprintln!(
-                "  {}   {}^",
-                " ".repeat(ln.len()),
-                " ".repeat(col.saturating_sub(1))
-            );
-        }
+    /// Print one frontend diagnostic, via the single renderer.
+    ///
+    /// The parser is the only producer that knows both the file name and the
+    /// source text, so it is the only one whose output carries a name in the
+    /// bracket and a caret line underneath. Both follow from what it puts in
+    /// the [`Context`]; `crate::render` has no parser-specific rule.
+    fn print_frontend_error(&self, diagnostic: &Diagnostic) {
+        eprintln!(
+            "{}",
+            render::render(
+                diagnostic,
+                &render::Context {
+                    source_name: self.source_name.as_deref(),
+                    source_lines: &self.source_lines,
+                },
+            )
+        );
     }
 
     pub(super) fn flush_lexer_errors(&self) {
@@ -115,13 +102,7 @@ impl Parser {
         }
         self.had_error.set(true);
         for error in lexical {
-            self.print_frontend_error(
-                "LEXER",
-                error.code,
-                error.span.line,
-                error.span.column,
-                &error.message,
-            );
+            self.print_frontend_error(&error);
             self.errors.borrow_mut().push(error);
         }
     }

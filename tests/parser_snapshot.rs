@@ -517,3 +517,48 @@ fn compare_against_the_manifest() {
         );
     }
 }
+
+#[test]
+fn every_frontend_diagnostic_carries_a_real_position() {
+    // The invariant `crate::render` rests on.
+    //
+    // The single renderer omits the `[…]` bracket when the span is unknown,
+    // because the type checker has always done exactly that — a finding with
+    // `line == 0` prints no position rather than `line 0:0`. Applying that rule
+    // uniformly is only byte-identical for the lexer and the parser if *their*
+    // diagnostics never carry an unknown span: one that did would have printed
+    // `[file 0:0]` before M3.6 and would print nothing after.
+    //
+    // Rather than assume it, this asserts it over the whole corpus, so the
+    // assumption is a gate instead of a comment. If it ever fails, the renderer
+    // is silently dropping a position a user used to see — decide it, do not
+    // regenerate around it.
+    let failures = on_measurement_stack(|| {
+        let mut failures = Vec::new();
+        for (name, absolute) in corpus() {
+            let source = read_normalised(&name, &absolute);
+            let lines: Vec<String> = source.lines().map(str::to_string).collect();
+            let mut parser = Parser::new(Lexer::new(source));
+            parser.set_source(lines);
+            parser.set_source_name(&name);
+            parser.parse_program();
+            for error in parser.take_errors() {
+                if error.span.line == 0 {
+                    failures.push(format!(
+                        "  {name}: {} at line 0, column {} — {}",
+                        error.code, error.span.column, error.message
+                    ));
+                }
+            }
+        }
+        failures
+    });
+
+    assert!(
+        failures.is_empty(),
+        "{} frontend diagnostic(s) carry an unknown span, so the renderer now \
+         drops a position that used to be printed as 0:0:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

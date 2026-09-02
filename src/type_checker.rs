@@ -1,5 +1,6 @@
 use crate::ast::{self, Expression, Program, Statement};
 use crate::diagnostic::{Diagnostic, Phase};
+use crate::render;
 use crate::span::Span;
 use std::collections::HashMap;
 
@@ -51,24 +52,24 @@ impl<'a> TypeChecker<'a> {
 
     /// Report a type error under a specific stable diagnostic code.
     fn type_error_code(&self, code: &'static str, line: usize, column: usize, message: String) {
-        eprintln!(
-            "❌ TYPE ERROR [{}]{}: {}",
-            code,
-            if line > 0 {
-                format!(" [line {}:{}]", line, column)
-            } else {
-                String::new()
-            },
-            message
-        );
-        self.errors.borrow_mut().push(Diagnostic::frontend(
+        let diagnostic = Diagnostic::frontend(
             code,
             Phase::Type,
             // `0` is the checker's "unknown position"; `Span::point(0, 0)` is
-            // `Span::unknown()`, so the two spellings already agree.
+            // `Span::unknown()`, so the two spellings already agree, and the
+            // renderer drops the bracket rather than printing `line 0:0`.
             Span::point(line, column),
             message,
-        ));
+        );
+        // No source name and no source lines: the checker is never handed
+        // either, which is why its diagnostics say `[line L:C]` even when `sz`
+        // was given a path, and carry no caret. Recorded as an inconsistency in
+        // `docs/maturity/ROADMAP_STATE.md`, preserved here.
+        eprintln!(
+            "{}",
+            render::render(&diagnostic, &render::Context::default())
+        );
+        self.errors.borrow_mut().push(diagnostic);
     }
 
     pub fn check(&mut self) {

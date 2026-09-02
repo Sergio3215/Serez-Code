@@ -22,6 +22,7 @@ pub mod package_manager;
 pub mod parser;
 pub mod permissions;
 pub mod region;
+pub mod render;
 pub mod repl;
 pub mod run;
 pub mod scope;
