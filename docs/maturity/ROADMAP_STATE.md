@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.3.1** — give `Token` a span, populated by the lexer. See §9B.4. |
+| Next molecule | **M2.3.2** — populate `start`/`end` at the nine `Span::point` sites in the parser, from the token that opened each node. See §9B.4. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.2 |
+| Last state update | 2026-09-02, end of M2.3.1 |
 
 Milestone ledger:
 
@@ -1241,11 +1241,52 @@ A second-order observation: `cargo test` went from 331 to **337**, not 334, for
 three new tests. They run twice — once in the library, once in the `sz-lsp`
 binary, because `lsp_main.rs` now declares `mod span;` too. §5.18 made concrete.
 
+### 9B.5 M2.3.1 — the lexer supplies offsets: **COMPLETE**
+
+`Token` now carries a `span`, and the lexer fills in real byte offsets.
+
+**The shape of the change.** `next_token` does not have one exit — identifiers,
+numbers and strings return early with the cursor already one past the token,
+while every other kind falls through to a final `read_char()` that leaves it in
+the same place. So rather than thread an offset through 55 `Token::new` calls
+that have no use for it, the body became `next_token_inner` and `next_token` is
+a short wrapper that stamps the span. `self.position` on return is
+one-past-the-token on every path, and the wrapper is the one place where that
+holds regardless of which path ran. The start offset is recorded once per token
+onto a new `Lexer::token_start` field, beside the existing `tok_line`/`tok_col`.
+
+`Token` keeps `line`/`column` beside the span for now. Collapsing them is its
+own migration, and doing it here would have mixed a mechanical rename into a
+change that needed thinking about.
+
+**`tests/lexer_spans.rs` (5 tests) — and it earned its keep immediately.**
+Offsets were added ahead of any consumer, which is exactly the condition in
+which one can be wrong for months unnoticed. So the tests assert the properties
+that make an offset mean anything, over the whole 490-file corpus:
+
+- every span is a valid, char-boundary-respecting slice of its source;
+- an identifier's span **slices back to the identifier** — the decisive one,
+  since literal and source text are the same string there, so an off-by-one or a
+  stale offset fails it loudly;
+- spans advance and never overlap;
+- `span.line`/`column` still agree with the pair beside them, so the two cannot
+  drift while both exist;
+- a multi-byte identifier moves columns and offsets by *different* amounts —
+  written out by hand because it is invisible in ASCII and the corpus might not
+  contain it. `café` is four columns and five bytes.
+
+**The first run found a real bug.** The EOF token came out inverted —
+`Span { start: 15, end: 14 }` on a 14-byte source — because `read_char` runs
+`position` one past the end at EOF and only `end` was clamped. Both ends clamp
+now, which makes EOF the empty point at the end of the source, which is what it
+is. Nothing consumed the offsets yet, so nothing was broken; it would have been
+the day something did.
+
 ### 9B.4 M2.3 onward — molecules (planned)
 
 | Molecule | Action | Verification |
 |---|---|---|
-| **M2.3.1** | Give `Token` a `span: Span`, populated by the lexer from `position` / `read_position`, keeping `line`/`column` beside it | snapshot unchanged (tokens are not in the AST); lexer tests |
+| **M2.3.1** | Give `Token` a `span`, populated by the lexer | **done** — see §9B.5. Snapshot unchanged, as predicted: tokens are not in the AST |
 | **M2.3.2** | Populate `start`/`end` at the nine `Span::point` sites in the parser from the token that opened the node | snapshot changes only in the `start`/`end` fields; diagnostics identical |
 | **M2.4** | Migrate the declaration nodes (`LetStatement`, `FunctionDeclaration`, `ClassDeclaration`, …) | snapshot + full gates |
 | **M2.5** | Migrate the statement nodes | snapshot + full gates |

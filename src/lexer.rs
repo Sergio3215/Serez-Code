@@ -1,3 +1,4 @@
+use crate::span::Span;
 use crate::token::{self, Token, TokenType};
 
 pub const SZ_LEX_UNEXPECTED_CHARACTER: &str = "SZ1001";
@@ -21,6 +22,9 @@ pub struct Lexer {
     line: usize,
     column: usize,
     errors: Vec<LexError>,
+    /// Byte offset of the first character of the token being read. Set once
+    /// per token; consumed by `next_token` to build its span.
+    token_start: usize,
 }
 
 impl Lexer {
@@ -33,6 +37,7 @@ impl Lexer {
             line: 1,
             column: 0,
             errors: Vec::new(),
+            token_start: 0,
         };
         l.read_char();
         l
@@ -56,7 +61,35 @@ impl Lexer {
         }
     }
 
+    /// The next token, with its span filled in.
+    ///
+    /// The body is [`Lexer::next_token_inner`]; this wrapper exists only to
+    /// stamp the span's *end*, and it has to be a wrapper because the inner
+    /// function does not have one exit. Identifiers, numbers and strings return
+    /// early with the cursor already one past the token; every other kind falls
+    /// through to a final `read_char()` that leaves it in the same place. So
+    /// `self.position` on return is one-past-the-token on every path, and this
+    /// is the one place where that holds regardless of which path ran.
     pub fn next_token(&mut self) -> Token {
+        let token = self.next_token_inner();
+        Token {
+            span: Span {
+                line: token.line,
+                column: token.column,
+                // Both ends clamp, and both need to. `read_char` runs `position`
+                // one past the end at EOF, so an unclamped EOF token comes out
+                // inverted — `start: 15, end: 14` on a 14-byte source, which
+                // `tests/lexer_spans.rs` caught the first time it ran. Clamping
+                // makes EOF the empty point at the end of the source, which is
+                // what it is.
+                start: self.token_start.min(self.input.len()),
+                end: self.position.min(self.input.len()),
+            },
+            ..token
+        }
+    }
+
+    fn next_token_inner(&mut self) -> Token {
         // Comments are whitespace, so consume them iteratively. The previous
         // implementation called `next_token` recursively after every comment;
         // enough consecutive comments could exhaust the native stack before a
@@ -80,6 +113,9 @@ impl Lexer {
         // token kinds (multi-char operators, identifiers, numbers, strings).
         let tok_line = self.line;
         let tok_col = self.column;
+        // Byte offset of that same first character. Kept on the lexer rather
+        // than threaded through 55 `Token::new` calls that have no use for it.
+        self.token_start = self.position;
 
         let token = match self.ch {
             '=' => {

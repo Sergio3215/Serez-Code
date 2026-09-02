@@ -139,6 +139,10 @@ pub enum TokenType {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Token {
+    /// Where this token is. Carried alongside `line` and `column` rather than
+    /// replacing them: every consumer still reads the pair, and collapsing them
+    /// is its own migration. See ROADMAP_STATE.md §9B.4.
+    pub span: crate::span::Span,
     pub token_type: TokenType,
     pub literal: String,
     pub line: usize,
@@ -148,6 +152,7 @@ pub struct Token {
 impl Token {
     pub fn new(token_type: TokenType, literal: String, line: usize, column: usize) -> Self {
         Token {
+            span: crate::span::Span::point(line, column),
             token_type,
             literal,
             line,
