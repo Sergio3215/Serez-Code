@@ -58,7 +58,11 @@ impl Parser {
         if is_assign || is_compound {
             // *ptr = val
             if is_assign {
-                if let Expression::Deref(ref ptr_expr) = expr {
+                if let Expression::Deref {
+                    value: ref ptr_expr,
+                    ..
+                } = expr
+                {
                     let ptr_clone = ptr_expr.clone();
                     self.next_token(); // consume '='
                     self.next_token(); // first token of rhs

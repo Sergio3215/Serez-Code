@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions · **M2.6b** identifiers · **M2.6d** literals |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions · **M2.6b** identifiers · **M2.6d** literals · **M2.6e** wrappers |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.6e** — the eight remaining wrapper variants (`Prefix`, `Spread`, `AddressOf`, `Deref`, `EntryLiteral`, `InterpolatedString`, `ObjectPatch`, `SizeOf`). Same shape as M2.6d. |
+| Next molecule | **M2.7** — triage the nine component structs (`Parameter`, `SwitchCase`, `MatchArm`, …). Which of them anything would ever point at is a question, not a sweep; see §9B.15. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.6d |
+| Last state update | 2026-09-02, end of M2.6e |
 
 Milestone ledger:
 
@@ -32,7 +32,7 @@ Milestone ledger:
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
-| M2 — AST + Spans Stable | **IN PROGRESS** — span coverage: 31 of 40 structs and 7 of 28 `Expression` variants carry one; tokens carry byte offsets |
+| M2 — AST + Spans Stable | **IN PROGRESS** — **all 28 `Expression` variants** carry a span; 31 of 40 structs; tokens carry byte offsets |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
 | M5 — Type System Stable | NOT STARTED |
@@ -1632,6 +1632,48 @@ wrapper variants remain (`Prefix`, `Spread`, `AddressOf`, `Deref`,
 `EntryLiteral`, `InterpolatedString`, `ObjectPatch`, `SizeOf`); `Match` and
 `UnsafeBlock` already carry one through their payloads.
 
+### 9B.14 M2.6e — the wrapper variants, and expressions are finished
+
+Eight converted: `Prefix`, `Spread`, `AddressOf`, `Deref`, `EntryLiteral`,
+`InterpolatedString`, `ObjectPatch`, `SizeOf`.
+
+**Every one of the 28 `Expression` variants now carries a span** — 15 directly,
+and 13 through a payload struct that has one. Verified rather than assumed: each
+tuple variant's payload was checked for the field.
+
+| | |
+|---|---|
+| `Expression` variants with a position | **28 of 28** |
+| Structs in `ast.rs` with a span | 31 of 40 |
+
+Two spans here are honestly unknown, and both for the same reason:
+`parse_interpolated_string` is a free function with no cursor to ask. The
+interpolated string itself and its collapsed single-literal case take
+`Span::unknown()`. Its *parts* carry their own positions, because those are
+built by a nested parser that does have one.
+
+Snapshot: 191 of 490 files changed — much lower than the 459 of M2.6d, because
+these variants are rarer in real source. Every diagnostic hash identical.
+
+**On method.** The redundant-field-name warnings this produced were fixed with
+`cargo fix --allow-dirty` rather than by hand-written regex. Two of my own
+`perl -0pi` invocations had already gone wrong this session — one inserting a
+field inside the wrong struct, one mangled by shell escaping — and a tool that
+understands the syntax is the right instrument when one exists.
+
+### 9B.15 What is left in M2
+
+| Remaining | Status |
+|---|---|
+| The 9 structs without a span | `Program`, `SwitchCase`, `MatchArm`, `Parameter`, `InterfaceField`, `ClassMethod`, `ClassConstructor`, `LetDestructureArray`, `LetDestructureDict` — mostly *parts* of a node rather than nodes, which is why they were not swept in with their parents |
+| M2 milestone audit | Not started |
+
+The nine are a real question rather than a leftover: a `Parameter` or a
+`SwitchCase` is a component, and whether a component needs its own position
+depends on whether anything would ever point at one. `Parameter` plainly would —
+a type error on an argument wants to underline the parameter it failed against.
+`Program` plainly would not. That triage is the next molecule.
+
 ### 9B.4 M2.3 onward — molecules (planned)
 
 | Molecule | Action | Verification |
@@ -1644,7 +1686,8 @@ wrapper variants remain (`Prefix`, `Spread`, `AddressOf`, `Deref`,
 | **M2.6b** | `Identifier` as a struct variant | **done** — §9B.11. Coverage 31 -> 32 |
 | **M2.6c** | Widen the expression extents | **reclassified out of M2** — §9B.12. It moves where a diagnostic points; M3 owns it |
 | **M2.6d** | The literal variants (`Integer`, `Decimal`, `Dec`, `String`, `Boolean`, `Null`) | **done** — §9B.13 |
-| **M2.6e** | The 8 remaining wrapper variants (`Prefix`, `Spread`, `Deref`, …) | next, same shape |
+| **M2.6e** | The 8 wrapper variants | **done** — §9B.14. All 28 `Expression` variants now carry a span |
+| **M2.7** | Triage the 9 component structs (`Parameter`, `SwitchCase`, …) | next — §9B.15 |
 | **M2.7** | Resolve the two dead fields — `ClassField` and `EnumDeclaration` now have spans nothing reads; either give them a consumer or state why they stay | a decision recorded, not a silent deletion |
 | **M2.8** | M2 milestone audit | full gates + ecosystem |
 

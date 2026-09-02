@@ -73,7 +73,11 @@ impl super::Evaluator {
                 }
 
                 // Interface patch: person = { field: val, ... }
-                if let Expression::ObjectPatch(patch_fields) = &assign_stmt.value {
+                if let Expression::ObjectPatch {
+                    fields: patch_fields,
+                    ..
+                } = &assign_stmt.value
+                {
                     return self.eval_object_patch(&assign_stmt.name, patch_fields.clone());
                 }
 

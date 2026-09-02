@@ -272,7 +272,7 @@ impl super::Evaluator {
                 }))
             }
 
-            Expression::InterpolatedString(parts) => {
+            Expression::InterpolatedString { parts, .. } => {
                 let mut result = String::new();
                 for part in parts {
                     match part {
@@ -396,7 +396,7 @@ impl super::Evaluator {
                 let mut arg_refs = Vec::new();
                 for arg in &call_expr.arguments {
                     // Spread: ...expr expands an array into the argument list
-                    if let Expression::Spread(inner) = arg {
+                    if let Expression::Spread { value: inner, .. } = arg {
                         let spread_ref = match self.eval_expression(inner) {
                             EvalResult::Value(r) => r,
                             EvalResult::Throw(v) => {
@@ -679,7 +679,7 @@ impl super::Evaluator {
                 let mut owned_elems = Vec::new();
                 for el in &arr.elements {
                     // Spread: ...expr expands an array into this array
-                    if let Expression::Spread(inner) = el {
+                    if let Expression::Spread { value: inner, .. } = el {
                         let spread_ref = match self.eval_expression(inner) {
                             EvalResult::Value(r) => r,
                             EvalResult::Throw(v) => return EvalResult::Throw(v),
@@ -889,7 +889,9 @@ impl super::Evaluator {
                 }))
             }
 
-            Expression::EntryLiteral(_, _) => self.rt_err_kind(
+            Expression::EntryLiteral {
+                key: _, value: _, ..
+            } => self.rt_err_kind(
                 "TypeError",
                 "Entry literal {k,v} is only valid as an argument to a dict method",
             ),
@@ -1322,7 +1324,7 @@ impl super::Evaluator {
                 self.rt_err_kind("ReferenceError", message)
             }
 
-            Expression::ObjectPatch(_) => self.rt_err_kind(
+            Expression::ObjectPatch { fields: _, .. } => self.rt_err_kind(
                 "TypeError",
                 "Object patch '{field: val}' is only valid in an assignment context",
             ),
@@ -1341,7 +1343,11 @@ impl super::Evaluator {
                 }
             }
 
-            Expression::Prefix(op, right_expr) => {
+            Expression::Prefix {
+                operator: op,
+                right: right_expr,
+                ..
+            } => {
                 let right_ref = match self.eval_expression(right_expr) {
                     EvalResult::Value(r) => r,
                     EvalResult::Throw(v) => return EvalResult::Throw(v),
@@ -1446,9 +1452,9 @@ impl super::Evaluator {
 
             // Spread used as a standalone expression — evaluate the inner value.
             // Actual spreading (into arrays/calls) is handled at the call/array site.
-            Expression::Spread(inner) => self.eval_expression(inner),
+            Expression::Spread { value: inner, .. } => self.eval_expression(inner),
 
-            Expression::SizeOf(target) => {
+            Expression::SizeOf { target, .. } => {
                 use crate::ast::SizeOfTarget;
                 let size: i64 = match target {
                     SizeOfTarget::Type(name) => match name.as_str() {
@@ -1480,7 +1486,7 @@ impl super::Evaluator {
                 EvalResult::Value(self.alloc(ObjectData::Integer(size)))
             }
 
-            Expression::AddressOf(inner) => {
+            Expression::AddressOf { value: inner, .. } => {
                 if let Expression::Identifier { name, .. } = inner.as_ref() {
                     if self.lookup_var(name).is_none() {
                         let message =
@@ -1494,7 +1500,9 @@ impl super::Evaluator {
                 }
             }
 
-            Expression::Deref(ptr_expr) => {
+            Expression::Deref {
+                value: ptr_expr, ..
+            } => {
                 let ptr_ref = match self.eval_expression(ptr_expr) {
                     EvalResult::Value(r) => r,
                     other => return other,

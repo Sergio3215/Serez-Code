@@ -43,9 +43,13 @@ impl Parser {
 
         loop {
             let expr = if self.current_token.token_type == TokenType::DotDotDot {
+                let spread_open = self.current_token.span;
                 self.next_token();
                 let inner = self.parse_expression(Precedence::Lowest)?;
-                Some(Expression::Spread(Box::new(inner)))
+                Some(Expression::Spread {
+                    value: Box::new(inner),
+                    span: self.span_to_here(spread_open),
+                })
             } else {
                 self.parse_expression(Precedence::Lowest)
             };
@@ -143,6 +147,7 @@ impl Parser {
     }
 
     pub(super) fn parse_entry_literal(&mut self) -> Option<Expression> {
+        let open = self.current_token.span;
         self.next_token();
 
         let key = self.parse_expression(Precedence::Lowest)?;
@@ -162,7 +167,11 @@ impl Parser {
         }
         self.next_token();
 
-        Some(Expression::EntryLiteral(Box::new(key), Box::new(value)))
+        Some(Expression::EntryLiteral {
+            key: Box::new(key),
+            value: Box::new(value),
+            span: self.span_to_here(open),
+        })
     }
 
     // current = first ident of key (already consumed '{'); continue parsing full key expression
@@ -170,6 +179,7 @@ impl Parser {
         &mut self,
         key_start: Expression,
     ) -> Option<Expression> {
+        let open = self.current_token.span;
         // The key might be more than just the ident (e.g. nombres[i])
         let key = self.parse_infix_chain(Some(key_start), Precedence::Lowest)?;
 
@@ -185,7 +195,11 @@ impl Parser {
             return None;
         }
         self.next_token(); // '}'
-        Some(Expression::EntryLiteral(Box::new(key), Box::new(value)))
+        Some(Expression::EntryLiteral {
+            key: Box::new(key),
+            value: Box::new(value),
+            span: self.span_to_here(open),
+        })
     }
 
     // ── { ... } disambiguation ────────────────────────────────────────────────
@@ -213,6 +227,7 @@ impl Parser {
 
     // current = first field name (already consumed '{' and Ident)
     pub(super) fn parse_object_patch_from_ident(&mut self) -> Option<Expression> {
+        let open = self.current_token.span;
         let mut fields = Vec::new();
         loop {
             if self.current_token.token_type != TokenType::Ident {
@@ -248,7 +263,10 @@ impl Parser {
                 }
             }
         }
-        Some(Expression::ObjectPatch(fields))
+        Some(Expression::ObjectPatch {
+            fields,
+            span: self.span_to_here(open),
+        })
     }
 }
 
@@ -335,5 +353,10 @@ pub(super) fn parse_interpolated_string(
         }
     }
 
-    Some(Expression::InterpolatedString(parts))
+    Some(Expression::InterpolatedString {
+        parts,
+        // A free function with no cursor: the pieces carry their own positions,
+        // and the string that produced them is the caller's to know.
+        span: crate::span::Span::unknown(),
+    })
 }

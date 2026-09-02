@@ -128,7 +128,9 @@ impl super::Evaluator {
             ast::Expression::String { value: s, .. } => 24 + s.len(),
             ast::Expression::Identifier { name: _, .. } => 8,
             ast::Expression::Lambda(_) => 32,
-            ast::Expression::Prefix(_, right) => 8 + self.estimate_expression(right),
+            ast::Expression::Prefix {
+                operator: _, right, ..
+            } => 8 + self.estimate_expression(right),
             ast::Expression::Infix(infix) => {
                 8 + self.estimate_expression(&infix.left) + self.estimate_expression(&infix.right)
             }
@@ -155,9 +157,9 @@ impl super::Evaluator {
                 }
                 cost
             }
-            ast::Expression::EntryLiteral(k, v) => {
-                self.estimate_expression(k) + self.estimate_expression(v)
-            }
+            ast::Expression::EntryLiteral {
+                key: k, value: v, ..
+            } => self.estimate_expression(k) + self.estimate_expression(v),
             ast::Expression::DotCall(dc) => {
                 let mut cost = 8;
                 for arg in &dc.arguments {
@@ -192,7 +194,7 @@ impl super::Evaluator {
                 8 + self.estimate_expression(&idx_expr.left)
                     + self.estimate_expression(&idx_expr.index)
             }
-            ast::Expression::InterpolatedString(parts) => {
+            ast::Expression::InterpolatedString { parts, .. } => {
                 let mut cost = 24usize;
                 for part in parts {
                     match part {
@@ -214,7 +216,7 @@ impl super::Evaluator {
                 };
                 32 + arg_cost
             }
-            ast::Expression::ObjectPatch(fields) => {
+            ast::Expression::ObjectPatch { fields, .. } => {
                 32 + fields
                     .iter()
                     .map(|(_, e)| self.estimate_expression(e))
@@ -227,10 +229,10 @@ impl super::Evaluator {
                         self.estimate_expression(&t.else_expr),
                     )
             }
-            ast::Expression::Spread(inner) => self.estimate_expression(inner),
-            ast::Expression::SizeOf(_) => 8,
-            ast::Expression::AddressOf(inner) => 8 + self.estimate_expression(inner),
-            ast::Expression::Deref(inner) => 8 + self.estimate_expression(inner),
+            ast::Expression::Spread { value: inner, .. } => self.estimate_expression(inner),
+            ast::Expression::SizeOf { target: _, .. } => 8,
+            ast::Expression::AddressOf { value: inner, .. } => 8 + self.estimate_expression(inner),
+            ast::Expression::Deref { value: inner, .. } => 8 + self.estimate_expression(inner),
             ast::Expression::Match(m) => {
                 let subject_cost = self.estimate_expression(&m.subject);
                 let arms_cost: usize = m

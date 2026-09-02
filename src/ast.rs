@@ -334,26 +334,52 @@ pub enum Expression {
     Null {
         span: Span,
     },
-    Prefix(String, Box<Expression>),  // Ej: -5 o !true
+    Prefix {
+        operator: String,
+        right: Box<Expression>,
+        span: Span,
+    }, // Ej: -5 o !true
     Infix(InfixExpression),           // Ej: 5 + 5 o x * 2
     FunctionLiteral(FunctionLiteral), // fn void() {} o void () => {}
     Lambda(LambdaExpression),         // item => body  /  (a, b) => body
     Call(CallExpression),             // sumar(1, 2)
     If(IfExpression),
     Index(IndexExpression),
-    DictLiteral(DictLiteral),                       // ({"k","v"}, ...)
-    EntryLiteral(Box<Expression>, Box<Expression>), // {key, value} in method args
-    DotCall(DotCallExpression),                     // obj.method(args)
-    InterpolatedString(Vec<StringPart>),            // "Hello, {name}!"
-    New(NewExpression),                             // new ClassName(args)
-    ObjectPatch(Vec<(String, Expression)>),         // { field: val, ... } for interface update
-    Ternary(TernaryExpression),                     // cond ? then : else
-    Spread(Box<Expression>),                        // ...expr (spread operator)
-    SizeOf(SizeOfTarget),                           // sizeof(int)  /  sizeof(expr)
-    AddressOf(Box<Expression>),                     // &varname
-    Deref(Box<Expression>),                         // *ptr
-    Match(Box<MatchExpression>),                    // match expr { pat => body, ... }
-    UnsafeBlock(BlockStatement),                    // unsafe { ... } as expression
+    DictLiteral(DictLiteral), // ({"k","v"}, ...)
+    EntryLiteral {
+        key: Box<Expression>,
+        value: Box<Expression>,
+        span: Span,
+    }, // {key, value} in method args
+    DotCall(DotCallExpression), // obj.method(args)
+    InterpolatedString {
+        parts: Vec<StringPart>,
+        span: Span,
+    }, // "Hello, {name}!"
+    New(NewExpression),       // new ClassName(args)
+    ObjectPatch {
+        fields: Vec<(String, Expression)>,
+        span: Span,
+    }, // { field: val, ... } for interface update
+    Ternary(TernaryExpression), // cond ? then : else
+    Spread {
+        value: Box<Expression>,
+        span: Span,
+    }, // ...expr (spread operator)
+    SizeOf {
+        target: SizeOfTarget,
+        span: Span,
+    }, // sizeof(int)  /  sizeof(expr)
+    AddressOf {
+        value: Box<Expression>,
+        span: Span,
+    }, // &varname
+    Deref {
+        value: Box<Expression>,
+        span: Span,
+    }, // *ptr
+    Match(Box<MatchExpression>), // match expr { pat => body, ... }
+    UnsafeBlock(BlockStatement), // unsafe { ... } as expression
 }
 
 #[derive(Debug, Clone)]

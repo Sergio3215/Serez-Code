@@ -358,9 +358,14 @@ fn collect_idents_expr(e: &crate::ast::Expression, out: &mut Vec<String>) {
     use crate::ast::Expression as Ex;
     match e {
         Ex::Identifier { name: n, .. } => out.push(n.clone()),
-        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) => {
-            collect_idents_expr(inner, out)
+        Ex::Prefix {
+            operator: _,
+            right: inner,
+            ..
         }
+        | Ex::Spread { value: inner, .. }
+        | Ex::AddressOf { value: inner, .. }
+        | Ex::Deref { value: inner, .. } => collect_idents_expr(inner, out),
         Ex::Infix(i) => {
             collect_idents_expr(&i.left, out);
             collect_idents_expr(&i.right, out);
@@ -392,7 +397,9 @@ fn collect_idents_expr(e: &crate::ast::Expression, out: &mut Vec<String>) {
                 collect_idents_expr(v, out);
             }
         }
-        Ex::EntryLiteral(k, v) => {
+        Ex::EntryLiteral {
+            key: k, value: v, ..
+        } => {
             collect_idents_expr(k, out);
             collect_idents_expr(v, out);
         }
@@ -408,7 +415,7 @@ fn collect_idents_expr(e: &crate::ast::Expression, out: &mut Vec<String>) {
                 collect_idents_block(alt, out);
             }
         }
-        Ex::InterpolatedString(parts) => {
+        Ex::InterpolatedString { parts, .. } => {
             for p in parts {
                 if let crate::ast::StringPart::Expr(ex) = p {
                     collect_idents_expr(ex, out);
@@ -442,7 +449,7 @@ fn collect_idents_expr(e: &crate::ast::Expression, out: &mut Vec<String>) {
             crate::ast::LambdaBody::Expr(ex) => collect_idents_expr(ex, out),
         },
         Ex::UnsafeBlock(b) => collect_idents_block(b, out),
-        Ex::ObjectPatch(fields) => {
+        Ex::ObjectPatch { fields, .. } => {
             for (_, ex) in fields {
                 collect_idents_expr(ex, out);
             }

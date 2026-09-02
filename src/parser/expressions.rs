@@ -191,21 +191,31 @@ impl Parser {
                 let operator = self.current_token.literal.clone();
                 self.next_token();
                 let right = self.parse_expression(Precedence::Prefix)?;
-                Some(Expression::Prefix(operator, Box::new(right)))
+                Some(Expression::Prefix {
+                    operator,
+                    right: Box::new(right),
+                    span: self.span_to_here(open),
+                })
             }
 
             // &varname — address-of
             TokenType::BitAnd => {
                 self.next_token();
                 let inner = self.parse_expression(Precedence::Prefix)?;
-                Some(Expression::AddressOf(Box::new(inner)))
+                Some(Expression::AddressOf {
+                    value: Box::new(inner),
+                    span: self.span_to_here(open),
+                })
             }
 
             // *ptr — dereference
             TokenType::Asterisk => {
                 self.next_token();
                 let inner = self.parse_expression(Precedence::Prefix)?;
-                Some(Expression::Deref(Box::new(inner)))
+                Some(Expression::Deref {
+                    value: Box::new(inner),
+                    span: self.span_to_here(open),
+                })
             }
 
             // sizeof(type | expr)
@@ -716,6 +726,7 @@ impl Parser {
     }
 
     pub(super) fn parse_sizeof_expression(&mut self) -> Option<Expression> {
+        let open = self.current_token.span;
         use crate::ast::SizeOfTarget;
         if self.peek_token.token_type != TokenType::LParen {
             self.had_error.set(true);
@@ -758,7 +769,10 @@ impl Parser {
             eprintln!("❌ PARSE ERROR: expected ')' to close sizeof");
             return None;
         }
-        Some(Expression::SizeOf(target))
+        Some(Expression::SizeOf {
+            target,
+            span: self.span_to_here(open),
+        })
     }
 
     pub(super) fn parse_call_arguments(&mut self) -> Option<Vec<Expression>> {
@@ -773,9 +787,13 @@ impl Parser {
 
         // Handle spread in first argument position
         if self.current_token.token_type == TokenType::DotDotDot {
+            let spread_open = self.current_token.span;
             self.next_token();
             let inner = self.parse_expression(Precedence::Lowest)?;
-            args.push(Expression::Spread(Box::new(inner)));
+            args.push(Expression::Spread {
+                value: Box::new(inner),
+                span: self.span_to_here(spread_open),
+            });
         } else {
             args.push(self.parse_expression(Precedence::Lowest)?);
         }
@@ -784,9 +802,13 @@ impl Parser {
             self.next_token();
             self.next_token();
             if self.current_token.token_type == TokenType::DotDotDot {
+                let spread_open = self.current_token.span;
                 self.next_token();
                 let inner = self.parse_expression(Precedence::Lowest)?;
-                args.push(Expression::Spread(Box::new(inner)));
+                args.push(Expression::Spread {
+                    value: Box::new(inner),
+                    span: self.span_to_here(spread_open),
+                });
             } else {
                 args.push(self.parse_expression(Precedence::Lowest)?);
             }

@@ -102,9 +102,8 @@ impl<'a> TypeChecker<'a> {
             Expression::Integer { value: _, .. } => Some("int".to_string()),
             Expression::Decimal { value: _, .. } => Some("decimal".to_string()),
             Expression::Dec { value: _, .. } => Some("dec".to_string()),
-            Expression::String { value: _, .. } | Expression::InterpolatedString(_) => {
-                Some("string".to_string())
-            }
+            Expression::String { value: _, .. }
+            | Expression::InterpolatedString { parts: _, .. } => Some("string".to_string()),
             Expression::Boolean { value: _, .. } => Some("bool".to_string()),
             Expression::Null { .. } => Some("null".to_string()),
             Expression::Identifier { name, .. } => self.var_types.get(name).cloned(),
@@ -327,7 +326,7 @@ impl<'a> TypeChecker<'a> {
         let has_spread_arg = call
             .arguments
             .iter()
-            .any(|a| matches!(a, Expression::Spread(_)));
+            .any(|a| matches!(a, Expression::Spread { value: _, .. }));
         if has_spread_arg {
             return;
         }

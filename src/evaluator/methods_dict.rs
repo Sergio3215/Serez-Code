@@ -192,7 +192,11 @@ impl super::Evaluator {
             );
         }
         let (key_ref, val_ref) = match &dot_call.arguments[0] {
-            ast::Expression::EntryLiteral(k_expr, v_expr) => {
+            ast::Expression::EntryLiteral {
+                key: k_expr,
+                value: v_expr,
+                ..
+            } => {
                 let k = match self.eval_expression(k_expr) {
                     EvalResult::Value(r) => r,
                     other => return other,

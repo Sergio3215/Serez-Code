@@ -506,7 +506,11 @@ impl HirLowerer {
                 HirExpr::Var(name.clone(), ty)
             }
 
-            Expression::Prefix(op, operand) => {
+            Expression::Prefix {
+                operator: op,
+                right: operand,
+                ..
+            } => {
                 let operand = self.lower_expr(operand);
                 let ty = operand.ty();
                 let hir_op = match op.as_str() {
@@ -632,7 +636,7 @@ impl HirLowerer {
             }
 
             // "Hello {name}!" → "Hello " + name.toString()
-            Expression::InterpolatedString(parts) => {
+            Expression::InterpolatedString { parts, .. } => {
                 self.unsupported_expr("interpolated strings");
                 for part in parts {
                     if let StringPart::Expr(expr) = part {
@@ -643,7 +647,7 @@ impl HirLowerer {
             }
 
             // sizeof → constant integer at HIR level
-            Expression::SizeOf(target) => {
+            Expression::SizeOf { target, .. } => {
                 use crate::ast::SizeOfTarget;
                 let size: i64 = match target {
                     SizeOfTarget::Type(name) => match name.as_str() {
@@ -658,16 +662,22 @@ impl HirLowerer {
             }
 
             // Pointer expressions — stub as Null until native pointer support lands
-            Expression::AddressOf(_) => self.unsupported_expr("address-of expressions"),
-            Expression::Deref(_) => self.unsupported_expr("pointer dereference expressions"),
+            Expression::AddressOf { value: _, .. } => {
+                self.unsupported_expr("address-of expressions")
+            }
+            Expression::Deref { value: _, .. } => {
+                self.unsupported_expr("pointer dereference expressions")
+            }
 
             // Phase 1: lambdas, dicts, spread, object-patch are unsupported
             Expression::FunctionLiteral(_) => self.unsupported_expr("function literals"),
             Expression::Lambda(_) => self.unsupported_expr("lambdas"),
             Expression::DictLiteral(_) => self.unsupported_expr("dictionary literals"),
-            Expression::EntryLiteral(_, _) => self.unsupported_expr("dictionary entries"),
-            Expression::ObjectPatch(_) => self.unsupported_expr("object patches"),
-            Expression::Spread(_) => self.unsupported_expr("spread expressions"),
+            Expression::EntryLiteral {
+                key: _, value: _, ..
+            } => self.unsupported_expr("dictionary entries"),
+            Expression::ObjectPatch { fields: _, .. } => self.unsupported_expr("object patches"),
+            Expression::Spread { value: _, .. } => self.unsupported_expr("spread expressions"),
             Expression::Match(_) => self.unsupported_expr("match expressions"),
             Expression::UnsafeBlock(_) => self.unsupported_expr("unsafe expressions"),
         }

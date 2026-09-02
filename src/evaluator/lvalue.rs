@@ -468,9 +468,14 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
                 writes_self_expr(a, found);
             }
         }
-        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) => {
-            writes_self_expr(inner, found)
+        Ex::Prefix {
+            operator: _,
+            right: inner,
+            ..
         }
+        | Ex::Spread { value: inner, .. }
+        | Ex::AddressOf { value: inner, .. }
+        | Ex::Deref { value: inner, .. } => writes_self_expr(inner, found),
         Ex::Infix(i) => {
             writes_self_expr(&i.left, found);
             writes_self_expr(&i.right, found);
@@ -496,7 +501,9 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
                 writes_self_expr(v, found);
             }
         }
-        Ex::EntryLiteral(k, v) => {
+        Ex::EntryLiteral {
+            key: k, value: v, ..
+        } => {
             writes_self_expr(k, found);
             writes_self_expr(v, found);
         }
@@ -512,7 +519,7 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
                 writes_self_block(alt, found);
             }
         }
-        Ex::InterpolatedString(parts) => {
+        Ex::InterpolatedString { parts, .. } => {
             for p in parts {
                 if let ast::StringPart::Expr(ex) = p {
                     writes_self_expr(ex, found);
@@ -546,7 +553,7 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
             ast::LambdaBody::Expr(ex) => writes_self_expr(ex, found),
         },
         Ex::UnsafeBlock(b) => writes_self_block(b, found),
-        Ex::ObjectPatch(fields) => {
+        Ex::ObjectPatch { fields, .. } => {
             for (_, ex) in fields {
                 writes_self_expr(ex, found);
             }
@@ -630,9 +637,14 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
                 calls_super_expr(a, found);
             }
         }
-        Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) => {
-            calls_super_expr(inner, found)
+        Ex::Prefix {
+            operator: _,
+            right: inner,
+            ..
         }
+        | Ex::Spread { value: inner, .. }
+        | Ex::AddressOf { value: inner, .. }
+        | Ex::Deref { value: inner, .. } => calls_super_expr(inner, found),
         Ex::Infix(i) => {
             calls_super_expr(&i.left, found);
             calls_super_expr(&i.right, found);
@@ -658,7 +670,9 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
                 calls_super_expr(v, found);
             }
         }
-        Ex::EntryLiteral(k, v) => {
+        Ex::EntryLiteral {
+            key: k, value: v, ..
+        } => {
             calls_super_expr(k, found);
             calls_super_expr(v, found);
         }
@@ -674,7 +688,7 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
                 calls_super_block(alt, found);
             }
         }
-        Ex::InterpolatedString(parts) => {
+        Ex::InterpolatedString { parts, .. } => {
             for p in parts {
                 if let ast::StringPart::Expr(ex) = p {
                     calls_super_expr(ex, found);
@@ -708,7 +722,7 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
             ast::LambdaBody::Expr(ex) => calls_super_expr(ex, found),
         },
         Ex::UnsafeBlock(b) => calls_super_block(b, found),
-        Ex::ObjectPatch(fields) => {
+        Ex::ObjectPatch { fields, .. } => {
             for (_, ex) in fields {
                 calls_super_expr(ex, found);
             }
