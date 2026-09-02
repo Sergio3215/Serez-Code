@@ -64,6 +64,7 @@ impl Parser {
                 if let Some(if_expr) = self.parse_if_expression() {
                     alternative = Some(BlockStatement {
                         statements: vec![Statement::Expression(if_expr)],
+                        span: crate::span::Span::unknown(),
                     });
                 }
             } else {
@@ -88,6 +89,7 @@ impl Parser {
 
     // ── switch (expr) { case v1, v2: { body } ... default: { body } } ─────────
     pub(super) fn parse_switch_statement(&mut self) -> Option<Statement> {
+        let open = self.current_token.span;
         // switch (expr)
         if self.peek_token.token_type != TokenType::LParen {
             self.parser_error("Expected '(' after 'switch'");
@@ -166,6 +168,7 @@ impl Parser {
             value,
             cases,
             default,
+            span: self.span_to_here(open),
         }))
     }
 
@@ -214,6 +217,7 @@ impl Parser {
                 let expr = self.parse_expression(Precedence::Lowest)?;
                 BlockStatement {
                     statements: vec![Statement::Expression(expr)],
+                    span: crate::span::Span::unknown(),
                 }
             };
 
@@ -333,6 +337,7 @@ impl Parser {
 
     // ── try { } catch (e) { } finally { } ────────────────────────────────────
     pub(super) fn parse_try_statement(&mut self) -> Option<Statement> {
+        let open = self.current_token.span;
         // try { body }
         if self.peek_token.token_type != TokenType::LBrace {
             self.parser_error("Expected '{{' after 'try'");
@@ -384,12 +389,14 @@ impl Parser {
             body,
             catch_var,
             catch_body,
+            span: self.span_to_here(open),
             finally_body,
         }))
     }
 
     /// Parse `{ stmts }` — current_token is `{`, leaves current_token on `}`
     pub(super) fn parse_inner_block(&mut self) -> Option<BlockStatement> {
+        let open = self.current_token.span;
         self.next_token(); // skip '{'
         let mut statements = Vec::new();
         while self.current_token.token_type != TokenType::RBrace
@@ -400,6 +407,9 @@ impl Parser {
             }
             self.next_token();
         }
-        Some(BlockStatement { statements })
+        Some(BlockStatement {
+            statements,
+            span: self.span_to_here(open),
+        })
     }
 }

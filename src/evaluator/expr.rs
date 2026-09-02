@@ -245,7 +245,11 @@ impl super::Evaluator {
                     LambdaBody::Expr(e) => BlockStatement {
                         statements: vec![Statement::Return(ReturnStatement {
                             return_value: *e.clone(),
+                            // A shorthand lambda body has no `return` in the source, so the
+                            // statement wrapping it is synthetic. See ROADMAP_STATE.md §5.23.
+                            span: crate::span::Span::unknown(),
                         })],
+                        span: crate::span::Span::unknown(),
                     },
                 };
                 let captured = self.capture_lambda_env(&body); // snapshot incl. referenced globals (B-83)

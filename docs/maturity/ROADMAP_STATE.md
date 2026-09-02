@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.5** — the statement nodes (`ReturnStatement`, `OutStatement`, `WhileStatement`, `ForStatement`, `SwitchStatement`, `TryStatement`, …). See §9B.4. |
+| Next molecule | **M2.6** — the expression nodes that still carry nothing (`Identifier`, `Index`, `Ternary`, `ArrayLiteral`, …). This is also what widens the M2.3.2 extents from the operator to the whole expression. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.4 |
+| Last state update | 2026-09-02, end of M2.5 |
 
 Milestone ledger:
 
@@ -32,7 +32,7 @@ Milestone ledger:
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
-| M2 — AST + Spans Stable | **IN PROGRESS** — `Span` exists; the AST's five positions use it |
+| M2 — AST + Spans Stable | **IN PROGRESS** — span coverage 5 of 48 node types -> **22**; tokens carry byte offsets |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
 | M5 — Type System Stable | NOT STARTED |
@@ -1438,6 +1438,36 @@ build ASTs that never came from source, which is the case §5.23 names.
 
 Snapshot: **399 of 490** files changed, every diagnostic hash identical.
 
+### 9B.8 M2.5 — the statement nodes: **COMPLETE**
+
+Twelve statement nodes gained a span: `AssignStatement`, `BlockStatement`,
+`ReturnStatement`, `WhileStatement`, `IndexAssignStatement`, `ForStatement`,
+`ForEachStatement`, `OutStatement`, `FieldAssignStatement`,
+`NestedFieldAssignStatement`, `SwitchStatement`, `TryStatement`.
+
+**Coverage: 5 of 48 node types when M2 began, 10 after M2.4, now 22 — 46%.**
+
+43 construction sites, and sorting them was the work rather than the edit.
+§5.23's three kinds all appear here, and two of them needed handling that a
+uniform rewrite would have got wrong:
+
+- **The `try_build_*` helpers receive an already-parsed expression**, so they
+  cannot see where the statement began. The opening span is now an explicit
+  parameter rather than something recovered from the expression, because the
+  statement starts before the expression does — `a.b[i] = x` begins at `a`, and
+  the node that knows that is gone by the time the assignment is built.
+- **Three blocks are synthetic and one is empty by construction**: the `else if`
+  wrapper, a single-expression match arm, the shorthand-lambda `return`, and an
+  abstract member's absent body. None has braces in the source. They take
+  `Span::unknown()`.
+
+Two new tests assert the classification rather than leaving it as prose:
+`a_synthetic_node_gets_a_position_but_no_extent` (the `i++` assignment reports
+line 2 column 1 and claims no text) and `an_else_if_wrapper_has_no_position_at_all`
+(the wrapper has no position, because there is nothing to point at).
+
+Snapshot: **416 of 490** files changed, every diagnostic hash identical.
+
 ### 9B.4 M2.3 onward — molecules (planned)
 
 | Molecule | Action | Verification |
@@ -1445,7 +1475,7 @@ Snapshot: **399 of 490** files changed, every diagnostic hash identical.
 | **M2.3.1** | Give `Token` a `span`, populated by the lexer | **done** — see §9B.5. Snapshot unchanged, as predicted: tokens are not in the AST |
 | **M2.3.2** | Populate `start`/`end` at the expression sites | **done** — §9B.6. Also made the manifest LF-normalised, since byte offsets are not portable across checkouts |
 | **M2.4** | Migrate the declaration nodes | **done** — §9B.7. Coverage 5 of 48 -> 10 |
-| **M2.5** | Migrate the statement nodes | snapshot + full gates |
+| **M2.5** | Migrate the statement nodes | **done** — §9B.8. Coverage 10 -> 22 of 48 |
 | **M2.6** | Migrate the expression nodes | snapshot + full gates |
 | **M2.7** | Resolve the two dead fields — `ClassField` and `EnumDeclaration` now have spans nothing reads; either give them a consumer or state why they stay | a decision recorded, not a silent deletion |
 | **M2.8** | M2 milestone audit | full gates + ecosystem |

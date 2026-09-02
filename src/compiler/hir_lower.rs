@@ -744,7 +744,10 @@ mod tests {
     }
 
     fn block(stmts: Vec<ast::Statement>) -> ast::BlockStatement {
-        ast::BlockStatement { statements: stmts }
+        ast::BlockStatement {
+            statements: stmts,
+            span: crate::span::Span::unknown(),
+        }
     }
 
     fn let_int(name: &str, val: i64) -> ast::Statement {
@@ -779,7 +782,10 @@ mod tests {
     }
 
     fn out(expr: ast::Expression) -> ast::Statement {
-        ast::Statement::Out(ast::OutStatement { value: expr })
+        ast::Statement::Out(ast::OutStatement {
+            value: expr,
+            span: crate::span::Span::unknown(),
+        })
     }
 
     fn fn_decl(
@@ -936,6 +942,7 @@ mod tests {
             condition: ast::Expression::Boolean(true),
             body: block(vec![ast::Statement::Break]),
             label: None,
+            span: crate::span::Span::unknown(),
         });
         let hir = HirLowerer::new().lower_program(&program(vec![w])).unwrap();
         let stmt = &main_fn(&hir).body[0];
@@ -990,6 +997,7 @@ mod tests {
             condition: ast::Expression::Boolean(false),
             body: block(vec![out(ast::Expression::Integer(0))]),
             label: None,
+            span: crate::span::Span::unknown(),
         });
         let hir = HirLowerer::new().lower_program(&program(vec![dw])).unwrap();
         // DoWhile → Block([Block(body), While{...}])
@@ -1049,6 +1057,7 @@ mod tests {
     fn switch_desugars_to_if_else_chain() {
         let sw = ast::Statement::Switch(ast::SwitchStatement {
             value: ident("x"),
+            span: crate::span::Span::unknown(),
             cases: vec![
                 ast::SwitchCase {
                     values: vec![ast::Expression::Integer(1)],
@@ -1085,6 +1094,7 @@ mod tests {
                 "int",
                 vec![ast::Statement::Return(ast::ReturnStatement {
                     return_value: infix(ident("a"), "+", ident("b")),
+                    span: crate::span::Span::unknown(),
                 })],
             )]))
             .unwrap();
@@ -1115,6 +1125,7 @@ mod tests {
     fn foreach_is_rejected_until_backend_support_is_complete() {
         let fe = ast::Statement::ForEach(ast::ForEachStatement {
             var: ast::ForEachVar::Name("n".to_string()),
+            span: crate::span::Span::unknown(),
             iterable: ident("items"),
             body: block(vec![out(ident("n"))]),
             label: None,
@@ -1139,10 +1150,12 @@ mod tests {
                 condition: Box::new(infix(ident("n"), "<=", ast::Expression::Integer(1))),
                 consequence: block(vec![ast::Statement::Return(ast::ReturnStatement {
                     return_value: ident("n"),
+                    span: crate::span::Span::unknown(),
                 })]),
                 alternative: None,
             })),
             ast::Statement::Return(ast::ReturnStatement {
+                span: crate::span::Span::unknown(),
                 return_value: infix(
                     ast::Expression::Call(ast::CallExpression {
                         function: Box::new(ident("fib")),

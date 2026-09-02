@@ -217,6 +217,87 @@ fn a_for_loop_initializer_stops_at_the_semicolon() {
 }
 
 #[test]
+fn a_while_loop_spans_from_its_keyword_to_its_closing_brace() {
+    let source = "while (x < 3) {\n    out x;\n}\n";
+    let program = parse(source);
+    let Statement::While(loop_statement) = first_statement(&program) else {
+        panic!("expected a while");
+    };
+    assert_eq!(
+        slice(source, loop_statement.span),
+        "while (x < 3) {\n    out x;\n}"
+    );
+}
+
+#[test]
+fn a_return_spans_its_statement() {
+    let source = "fn int f() {\n    return 1 + 2;\n}\n";
+    let program = parse(source);
+    let Statement::FunctionDeclaration(function) = first_statement(&program) else {
+        panic!("expected a function");
+    };
+    let Statement::Return(returned) = &function.function.body.statements[0] else {
+        panic!("expected a return");
+    };
+    assert_eq!(slice(source, returned.span), "return 1 + 2;");
+    assert_eq!(returned.span.line, 2);
+}
+
+#[test]
+fn a_block_spans_its_braces() {
+    let source = "fn void f() {\n    out 1;\n}\n";
+    let program = parse(source);
+    let Statement::FunctionDeclaration(function) = first_statement(&program) else {
+        panic!("expected a function");
+    };
+    assert_eq!(
+        slice(source, function.function.body.span),
+        "{\n    out 1;\n}"
+    );
+}
+
+#[test]
+fn a_synthetic_node_gets_a_position_but_no_extent() {
+    // The rule in ROADMAP_STATE.md §5.23, asserted rather than merely written
+    // down. `i++` desugars to `i = i + 1`; the assignment and the `+ 1` inside
+    // it are nodes the programmer never wrote, so giving them an extent would
+    // hand them source text that says something else. They get a point.
+    let source = "let i = 0;\ni++;\n";
+    let program = parse(source);
+    let Statement::Assign(assignment) = &program.statements[1] else {
+        panic!("expected the desugared assignment");
+    };
+    assert!(
+        assignment.span.is_known(),
+        "a synthetic node still reports where it came from"
+    );
+    assert!(
+        !assignment.span.has_extent(),
+        "a synthetic node must not claim source text it does not occupy, got {:?}",
+        assignment.span
+    );
+    assert_eq!((assignment.span.line, assignment.span.column), (2, 1));
+}
+
+#[test]
+fn an_else_if_wrapper_has_no_position_at_all() {
+    // The other side of §5.23: `else if` is parsed by recursion into a
+    // single-statement block that has no braces in the source. It is not merely
+    // extent-less, it has no position — there is nothing to point at.
+    let source = "if (a) {\n    out 1;\n} else if (b) {\n    out 2;\n}\n";
+    let program = parse(source);
+    let Statement::Expression(Expression::If(outer)) = first_statement(&program) else {
+        panic!("expected an if");
+    };
+    let alternative = outer.alternative.as_ref().expect("expected an else branch");
+    assert!(
+        !alternative.span.is_known(),
+        "the synthetic else-if wrapper should carry no position, got {:?}",
+        alternative.span
+    );
+}
+
+#[test]
 fn every_populated_span_is_a_valid_slice_of_its_source() {
     // A sweep rather than a shape assertion: whatever the extents end up being,
     // none of them may be inverted, out of bounds, or mid-character. This is the

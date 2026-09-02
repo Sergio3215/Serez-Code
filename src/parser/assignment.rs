@@ -47,6 +47,9 @@ fn is_writable_chain(e: &Expression) -> bool {
 
 impl Parser {
     pub(super) fn parse_expression_statement(&mut self) -> Option<Statement> {
+        // Where the statement begins, before `parse_expression` moves the
+        // cursor. Every assignment form below reaches from here to the cursor.
+        let open = self.current_token.span;
         let expr = self.parse_expression(Precedence::Lowest)?;
 
         let is_assign = self.peek_token.token_type == TokenType::Assign;
@@ -110,10 +113,11 @@ impl Parser {
                             object,
                             field,
                             value,
+                            span: self.span_to_here(open),
                         }));
                     }
 
-                    if let Some(st) = self.try_build_nested_field_assign(dot, is_compound) {
+                    if let Some(st) = self.try_build_nested_field_assign(dot, is_compound, open) {
                         return Some(st);
                     }
                 }
@@ -122,9 +126,9 @@ impl Parser {
             // expr[idx] = val  or  expr[idx] += val
             if let Expression::Index(_) = &expr {
                 if is_assign {
-                    return self.try_build_index_assign(expr);
+                    return self.try_build_index_assign(expr, open);
                 } else {
-                    return self.try_build_index_compound_assign(expr);
+                    return self.try_build_index_compound_assign(expr, open);
                 }
             }
         }
@@ -166,6 +170,7 @@ impl Parser {
                             object,
                             field,
                             value,
+                            span: self.span_to_here(open),
                         }));
                     }
                 }
@@ -188,6 +193,7 @@ impl Parser {
                     target,
                     index,
                     value,
+                    span: self.span_to_here(open),
                 }));
             }
         }
@@ -200,9 +206,10 @@ impl Parser {
     }
 
     pub(super) fn parse_index_assign_or_expr_statement(&mut self) -> Option<Statement> {
+        let open = self.current_token.span;
         let expr = self.parse_expression(Precedence::Lowest)?;
         if self.is_compound_assign(&self.peek_token.token_type) {
-            return self.try_build_index_compound_assign(expr);
+            return self.try_build_index_compound_assign(expr, open);
         }
         // arr[i]++  /  arr[i]--
         if matches!(
@@ -233,13 +240,18 @@ impl Parser {
                     target,
                     index,
                     value,
+                    span: self.span_to_here(open),
                 }));
             }
         }
-        self.try_build_index_assign(expr)
+        self.try_build_index_assign(expr, open)
     }
 
-    pub(super) fn try_build_index_assign(&mut self, expr: Expression) -> Option<Statement> {
+    pub(super) fn try_build_index_assign(
+        &mut self,
+        expr: Expression,
+        open: Span,
+    ) -> Option<Statement> {
         let is_assign = self.peek_token.token_type == TokenType::Assign;
         let is_compound = self.is_compound_assign(&self.peek_token.token_type);
         if is_assign {
@@ -256,6 +268,7 @@ impl Parser {
                     target,
                     index,
                     value,
+                    span: self.span_to_here(open),
                 }));
             }
         }
@@ -264,7 +277,7 @@ impl Parser {
         // Index. Sin esto el '=' quedaba sin consumir y era un error de parseo.
         if is_assign || is_compound {
             if let Expression::DotCall(ref dot) = expr {
-                if let Some(st) = self.try_build_nested_field_assign(dot, is_compound) {
+                if let Some(st) = self.try_build_nested_field_assign(dot, is_compound, open) {
                     return Some(st);
                 }
             }
@@ -287,6 +300,7 @@ impl Parser {
         &mut self,
         dot: &DotCallExpression,
         is_compound: bool,
+        open: Span,
     ) -> Option<Statement> {
         if dot.has_parens || !dot.arguments.is_empty() {
             return None;
@@ -335,6 +349,7 @@ impl Parser {
             object,
             field,
             value,
+            span: self.span_to_here(open),
         }))
     }
 
@@ -342,6 +357,7 @@ impl Parser {
     pub(super) fn try_build_index_compound_assign(
         &mut self,
         expr: Expression,
+        open: Span,
     ) -> Option<Statement> {
         if let Expression::Index(ref idx_expr) = expr {
             let target = (*idx_expr.left).clone();
@@ -365,6 +381,7 @@ impl Parser {
                 target,
                 index,
                 value,
+                span: self.span_to_here(open),
             }));
         }
         if self.peek_token.token_type == TokenType::Semicolon {
@@ -376,6 +393,7 @@ impl Parser {
     /// Desugar `x += rhs` → `x = x + rhs`
     pub(super) fn parse_compound_assign_statement(&mut self) -> Option<Statement> {
         let name = self.current_token.literal.clone();
+        let open = self.current_token.span;
         let line = self.current_token.line;
         let column = self.current_token.column;
         let op = Self::compound_op(&self.peek_token.token_type).to_string();
@@ -391,11 +409,16 @@ impl Parser {
             right: Box::new(rhs),
             span: Span::point(line, column),
         });
-        Some(Statement::Assign(AssignStatement { name, value }))
+        Some(Statement::Assign(AssignStatement {
+            name,
+            value,
+            span: self.span_to_here(open),
+        }))
     }
 
     pub(super) fn parse_assign_statement(&mut self) -> Option<Statement> {
         let name = self.current_token.literal.clone();
+        let open = self.current_token.span;
         self.next_token(); // '='
         self.next_token(); // first token of value
 
@@ -405,7 +428,11 @@ impl Parser {
             self.next_token();
         }
 
-        Some(Statement::Assign(AssignStatement { name, value }))
+        Some(Statement::Assign(AssignStatement {
+            name,
+            value,
+            span: self.span_to_here(open),
+        }))
     }
 
     pub(super) fn is_compound_assign(&self, tt: &TokenType) -> bool {

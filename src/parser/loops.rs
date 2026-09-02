@@ -28,6 +28,9 @@ use crate::token::TokenType;
 
 impl Parser {
     pub(super) fn parse_for_inner(&mut self, label: Option<String>) -> Option<Statement> {
+        // The `for` keyword. Both the classic and the for-in shapes end up
+        // here, and both report from it.
+        let open = self.current_token.span;
         if self.peek_token.token_type != TokenType::LParen {
             self.parser_error("Expected '(' after 'for'");
             return None;
@@ -76,6 +79,7 @@ impl Parser {
                 iterable,
                 body,
                 label: label.clone(),
+                span: self.span_to_here(open),
             }));
         }
 
@@ -114,6 +118,7 @@ impl Parser {
                 iterable,
                 body,
                 label: label.clone(),
+                span: self.span_to_here(open),
             }));
         }
 
@@ -179,6 +184,7 @@ impl Parser {
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),
                     }),
+                    span: Span::point(line, col),
                 }
             }
             ref tt if self.is_compound_assign(&tt.clone()) => {
@@ -216,6 +222,7 @@ impl Parser {
             update,
             body,
             label,
+            span: self.span_to_here(open),
         }))
     }
 
@@ -238,6 +245,7 @@ impl Parser {
         &mut self,
         label: Option<String>,
     ) -> Option<Statement> {
+        let open = self.current_token.span;
         if self.peek_token.token_type != TokenType::LParen {
             self.parser_error("Expected '(' after 'while'");
             return None;
@@ -268,10 +276,12 @@ impl Parser {
             condition,
             body,
             label,
+            span: self.span_to_here(open),
         }))
     }
 
     pub(super) fn parse_do_while_statement(&mut self) -> Option<Statement> {
+        let open = self.current_token.span;
         // current = 'do'
         if self.peek_token.token_type != TokenType::LBrace {
             self.parser_error("Expected '{{' after 'do'");
@@ -307,6 +317,7 @@ impl Parser {
             condition,
             body,
             label: None,
+            span: self.span_to_here(open),
         }))
     }
 

@@ -70,18 +70,21 @@ pub struct LetStatement {
 pub struct AssignStatement {
     pub name: String,
     pub value: Expression,
+    pub span: Span,
 }
 
 // Estructura para un bloque local { sentencia1; sentencia2; ... }
 #[derive(Debug, Clone)]
 pub struct BlockStatement {
     pub statements: Vec<Statement>,
+    pub span: Span,
 }
 
 // Estructura para un retorno "return valor;"
 #[derive(Debug, Clone)]
 pub struct ReturnStatement {
     pub return_value: Expression,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +122,7 @@ pub struct WhileStatement {
     pub condition: Expression,
     pub body: BlockStatement,
     pub label: Option<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +130,7 @@ pub struct IndexAssignStatement {
     pub target: Expression, // Identifier or DotCall (for this.field[i] = val)
     pub index: Expression,
     pub value: Expression,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +140,7 @@ pub struct ForStatement {
     pub update: AssignStatement,
     pub body: BlockStatement,
     pub label: Option<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +155,7 @@ pub struct ForEachStatement {
     pub iterable: Expression,
     pub body: BlockStatement,
     pub label: Option<String>,
+    pub span: Span,
 }
 
 // let [a, b, ...rest] = expr;
@@ -171,6 +178,7 @@ pub struct LetDestructureDict {
 #[derive(Debug, Clone)]
 pub struct OutStatement {
     pub value: Expression,
+    pub span: Span,
 }
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
@@ -240,6 +248,7 @@ pub struct FieldAssignStatement {
     pub object: String, // "this" or a variable name
     pub field: String,
     pub value: Expression,
+    pub span: Span,
 }
 
 /// `a.b.c = expr` — el caso de MÁS DE UN salto, que `FieldAssignStatement` no
@@ -252,6 +261,7 @@ pub struct NestedFieldAssignStatement {
     pub object: Expression,
     pub field: String,
     pub value: Expression,
+    pub span: Span,
 }
 
 // ── Switch ────────────────────────────────────────────────────────────────────
@@ -261,6 +271,7 @@ pub struct SwitchStatement {
     pub value: Expression,
     pub cases: Vec<SwitchCase>,
     pub default: Option<BlockStatement>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +288,7 @@ pub struct TryStatement {
     pub catch_var: Option<String>, // catch (e) → Some("e"), bare catch → None
     pub catch_body: Option<BlockStatement>,
     pub finally_body: Option<BlockStatement>,
+    pub span: Span,
 }
 
 // 3. LAS EXPRESIONES (Expressions)

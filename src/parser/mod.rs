@@ -251,6 +251,7 @@ impl Parser {
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),
                     }),
+                    span: Span::point(line, col),
                 }))
             }
             // Postfix: i--  →  i = i - 1
@@ -270,6 +271,7 @@ impl Parser {
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),
                     }),
+                    span: Span::point(line, col),
                 }))
             }
             // Prefix: ++i  →  i = i + 1
@@ -289,6 +291,7 @@ impl Parser {
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),
                     }),
+                    span: Span::point(line, col),
                 }))
             }
             // Prefix: --i  →  i = i - 1
@@ -308,6 +311,7 @@ impl Parser {
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),
                     }),
+                    span: Span::point(line, col),
                 }))
             }
             _ => self.parse_expression_statement(),
@@ -315,6 +319,7 @@ impl Parser {
     }
 
     fn parse_block_statement(&mut self) -> Option<Statement> {
+        let open = self.current_token.span;
         self.next_token();
         let mut statements = Vec::new();
 
@@ -332,10 +337,14 @@ impl Parser {
             self.next_token();
         }
 
-        Some(Statement::Block(BlockStatement { statements }))
+        Some(Statement::Block(BlockStatement {
+            statements,
+            span: self.span_to_here(open),
+        }))
     }
 
     fn parse_unsafe_statement(&mut self) -> Option<Statement> {
+        let open = self.current_token.span;
         if self.peek_token.token_type != TokenType::LBrace {
             self.had_error.set(true);
             eprintln!("❌ PARSE ERROR: expected '{{' after 'unsafe'");
@@ -357,10 +366,14 @@ impl Parser {
             }
             self.next_token();
         }
-        Some(Statement::Unsafe(BlockStatement { statements }))
+        Some(Statement::Unsafe(BlockStatement {
+            statements,
+            span: self.span_to_here(open),
+        }))
     }
 
     fn parse_return_statement(&mut self) -> Option<Statement> {
+        let open = self.current_token.span;
         // Bare `return` followed by `}`, `;`, or EOF — return null without consuming the delimiter
         if matches!(
             self.peek_token.token_type,
@@ -368,6 +381,7 @@ impl Parser {
         ) {
             return Some(Statement::Return(ReturnStatement {
                 return_value: Expression::Null,
+                span: self.span_to_here(open),
             }));
         }
 
@@ -377,6 +391,7 @@ impl Parser {
         if self.current_token.token_type == TokenType::Semicolon {
             return Some(Statement::Return(ReturnStatement {
                 return_value: Expression::Null,
+                span: self.span_to_here(open),
             }));
         }
 
@@ -386,10 +401,14 @@ impl Parser {
             self.next_token();
         }
 
-        Some(Statement::Return(ReturnStatement { return_value }))
+        Some(Statement::Return(ReturnStatement {
+            return_value,
+            span: self.span_to_here(open),
+        }))
     }
 
     fn parse_out_statement(&mut self) -> Option<Statement> {
+        let open = self.current_token.span;
         self.next_token();
 
         let value = self.parse_expression(Precedence::Lowest)?;
@@ -398,7 +417,10 @@ impl Parser {
             self.next_token();
         }
 
-        Some(Statement::Out(OutStatement { value }))
+        Some(Statement::Out(OutStatement {
+            value,
+            span: self.span_to_here(open),
+        }))
     }
 
     // ── Lambda parsing ────────────────────────────────────────────────────────

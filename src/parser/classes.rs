@@ -262,7 +262,11 @@ impl Parser {
             // Abstract methods may have no body (semicolon) or empty body
             let body = if is_member_abstract && self.peek_token.token_type == TokenType::Semicolon {
                 self.next_token(); // ';'
-                BlockStatement { statements: vec![] }
+                BlockStatement {
+                    // An abstract member has no body in the source.
+                    statements: vec![],
+                    span: crate::span::Span::unknown(),
+                }
             } else {
                 if self.peek_token.token_type != TokenType::LBrace {
                     self.parser_error(&format!("Expected '{{' to start body of '{}'", member_name));

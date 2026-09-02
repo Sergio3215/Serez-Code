@@ -471,11 +471,15 @@ impl super::Evaluator {
                     },
                 };
 
-                // Re-bind stmt fields from clones so the existing code below can use them
+                // Re-bind stmt fields from clones so the existing code below can use them.
+                // This is a local carrier rather than a node the program contains —
+                // ROADMAP_STATE.md §5.21 records the untidiness — so it inherits the
+                // span of the statement it was rebuilt from.
                 let stmt = ast::IndexAssignStatement {
                     target,
                     index,
                     value,
+                    span: stmt.span,
                 };
 
                 // Evaluate index and new value
