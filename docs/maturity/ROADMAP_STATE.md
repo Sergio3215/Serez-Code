@@ -2137,7 +2137,7 @@ types; four are now one. The fifth is not, and forcing it in would be wrong:
   * it carries no span at all, so it cannot exercise anything the model adds.
 
 It belongs to whichever milestone owns the experimental AOT compiler. **A
-correction:** the M3.4/M3.5 commit message (`aeeebf2`) says the compiler's type
+correction:** the M3.4/M3.5 commit message (`361c2cb`) says the compiler's type
 is the one "which M3.6 takes". That was written ahead of the evidence and is
 withdrawn here; M3.6 does not take it.
 
@@ -2275,6 +2275,116 @@ mean buffering every frontend diagnostic until `run.rs` — which touches import
 the REPL, `--watch` and the interpolation sub-parsers, and is a genuinely
 different architecture. Not proposed here.
 
+## 9E. M3 MILESTONE AUDIT
+
+Run at the end of M3.8.
+
+### Definition of Done
+
+| Criterion | Status |
+|---|---|
+| One diagnostic model | **met** — `LexError`, `ParseError`, `TypeError`, `RuntimeError` are all `pub type … = Diagnostic`. `CompilerDiagnostic` reclassified out with evidence (§9D.5) |
+| Data separated from rendering | **met** — `src/diagnostic.rs` does not print; `src/render.rs` returns a `String` and does not decide |
+| One renderer | **met** — five print sites, one `render::render` |
+| Codes, exit codes, catchability, `Error.span` unchanged | **met** — measured, not assumed; see below |
+| The §5.17 defect fixed | **met** — M3.7, its own commit, nine fixtures added |
+| Ordering decided | **met** — D6, no change, alternative costed (§9D.7) |
+| Gates green | **met** |
+
+### 1. What M3 was for, and whether it happened
+
+Five types, four rendered formats, and producers that printed. Now: one type,
+one renderer, and producers that hand it data. `src/diagnostic.rs` (199 lines)
+and `src/render.rs` (214) are both leaves — they depend on `span` and on each
+other, and on nothing else, which is what let the lexer, the parser, the checker
+and the evaluator all adopt them without any of them depending on another.
+
+### 2. The line M3 was told not to cross
+
+> *"No cambies semántica del lenguaje como parte de una migración de
+> diagnostics."*
+
+Six of the seven molecules are refactors, and every one of them left **both**
+manifests untouched — `parser_ast.manifest` (499 files, structured diagnostics)
+and `diagnostic_render.manifest` (158 fixtures, complete stderr plus exit code).
+No regeneration, so nothing a user reads moved.
+
+Three hazards were found where the obvious refactor *would* have changed
+behaviour, and each was measured rather than reasoned about:
+
+| Hazard | The tempting move | Why it was wrong | What was done instead |
+|---|---|---|---|
+| Caught `Error.span` (§9D.4) | `Span::is_known()` in place of `Option::is_none()` | asks whether the line is non-zero, not whether there was a frame — a frame at line 0 would flip `"0:0"` to `null` | test `stack.first()`, provably the same predicate for every input |
+| The position bracket (§5.27) | omit it whenever the span is unknown | byte-identical only if lexer/parser diagnostics never carry line 0 | asserted over all 499 corpus files, as a permanent test |
+| Advisory severity (§9D.3) | let `Phase::Type` default like the rest | `spec/types.md` makes the checker's findings non-fatal; the exit code depends on it | `Diagnostic::frontend` maps `Phase::Type` to `Advisory` explicitly |
+
+Catchability was never modelled. It stays on the evaluator's private
+`PendingRuntimeError`, so no diagnostic change can make a fatal error catchable.
+
+### 3. The one behaviour change, and its evidence
+
+M3.7 only. Nine parser sites that rejected a program without telling anyone why
+now report through `parser_error`. The exit code did not move — `has_errors()`
+was already true.
+
+The evidence is unusually clean: **both manifests regenerated purely additively**
+— 0 rows modified, 9 added in each. A behaviour change that touches exactly its
+nine constructs and provably nothing else.
+
+It also exposed why the defect survived: those nine paths had **zero coverage**
+in 490 files and 149 fixtures. They have nine fixtures now.
+
+### 4. What the nets caught that the pre-existing suite could not
+
+The 808-test gate asserts an exit code and the presence of a `❌`. Both new nets
+were perturbation-tested before being trusted:
+
+  * `parser_snapshot` (M1.0.1) — the structured data.
+  * `diagnostic_render` (M3.1) — the bytes. One trailing space in a format
+    string flagged **129 of 149** fixtures.
+
+The second perturbation is also what found §9D.2: the first attempt changed
+nothing because it hit a renderer that cannot fire. That became decision D5.
+
+### 5. Corrections made during M3
+
+Recorded because the protocol says a milestone reports what it got wrong, not
+only what it built.
+
+  * **§9D.2 was too weak.** It said the unreachable renderer could still fire
+    for an external embedder. It cannot: both public entry points raise the
+    capture depth and the method is private. Corrected in D5.
+  * **The clippy gate was cache-sensitive** (§5.26). "Exactly 186" reads 187 on
+    a forced rebuild *at the baseline commit too*, because per-target summary
+    lines get counted. Replaced with the unique per-site list — 181 lines, and
+    unchanged by every M3 molecule.
+  * **`git add -A` swept an untracked audit report** into `361c2cb`. Amended out;
+    the repository is back to the state it was in, plus the molecule.
+  * **The M3.4/M3.5 commit message over-claimed**, saying M3.6 would take
+    `CompilerDiagnostic`. It does not, and the reasoning is in §9D.5.
+
+### 6. What M3 leaves open, and where it goes
+
+| Item | Where | Why not here |
+|---|---|---|
+| §5.28 — the interpolation sub-parser's diagnostics are discarded | **M4** | needs a decision on mapping a span from a fragment back to the source, including that `\{` escapes shift offsets. Span work, not routing |
+| `CompilerDiagnostic` | whichever milestone owns the AOT compiler | no consumer outside `src/compiler/`, no span, unrelated rendered form |
+| The type checker never learns the file name | open, low | its diagnostics say `[line L:C]` where the parser says `[file L:C]`. Fixing it changes what a user reads |
+| Ordering (D6) | Sergio's call | costed in §9D.7; option C is ~5 lines and moves no manifest row |
+
+### 7. Gates at close
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --check` | clean |
+| `cargo clippy --all-targets` | **181 unique sites, identical to the M3 baseline** (`comm` both directions empty) |
+| `cargo test` | **381 passed, 0 failed** |
+| `run_tests.ps1` | **499 passed, 0 failed, 0 skipped** |
+| `parser_ast.manifest` | 499 files; regenerated once in M3, additively |
+| `diagnostic_render.manifest` | 158 fixtures; regenerated once in M3, additively |
+
+## MILESTONE STATUS: **COMPLETE**
+
 ---
 
 ## 10. Commits and checkpoints
@@ -2290,9 +2400,10 @@ different architecture. Not proposed here.
 | M1.9-M1.11 | `ca1f24a` | `move control flow and the literal forms out of the grammar` — loops, branches, literals |
 | M3.0-M3.1 | `e10bfd4` | `pin what every failing program prints before touching how it is produced` |
 | M3.2-M3.3 | `c4657e3` | `one model, and the frontend moves onto it` |
-| M3.4-M3.5 | `aeeebf2` | `the checker and the runtime move onto the one model` |
+| M3.4-M3.5 | `361c2cb` | `the checker and the runtime move onto the one model`. Amended once, to drop an untracked audit report that `git add -A` had swept into it; `33e6211`'s message still names the pre-amend hash `aeeebf2`. |
 | M3.6 | `33e6211` | `four formats become one renderer` |
 | M3.7 | `e77aec0` | `nine rejected programs stop failing without saying why` — **behaviour change** |
+| M3.8 | `6028fe3` | `decide the ordering question, and change nothing` |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
 
 ---
