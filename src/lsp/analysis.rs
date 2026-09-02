@@ -106,7 +106,7 @@ pub fn occurrences(text: &str, name: &str) -> Vec<(usize, usize)> {
     collect_tokens(text)
         .iter()
         .filter(|t| t.token_type == TokenType::Ident && t.literal == name)
-        .map(|t| (t.line, ident_start_col(t)))
+        .map(|t| (t.span.line, ident_start_col(t)))
         .collect()
 }
 
@@ -189,7 +189,7 @@ fn collect_tokens(text: &str) -> Vec<Token> {
 /// stamps every token with its first char's position, so this is the column
 /// itself (kept as a named helper for intent at the call sites).
 fn ident_start_col(tok: &Token) -> usize {
-    tok.column.max(1)
+    tok.span.column.max(1)
 }
 
 fn is_type_token(tt: &TokenType) -> bool {
@@ -303,10 +303,10 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                     symbols.push(SymbolInfo {
                         name: nt.literal.clone(),
                         kind,
-                        line: nt.line,
+                        line: nt.span.line,
                         column: ident_start_col(nt),
                         detail: lines
-                            .get(nt.line.saturating_sub(1))
+                            .get(nt.span.line.saturating_sub(1))
                             .map(|l| l.trim().trim_end_matches('{').trim().to_string())
                             .unwrap_or_default(),
                         container: class_stack.last().map(|(n, _)| n.clone()),
@@ -324,10 +324,10 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                         symbols.push(SymbolInfo {
                             name: nt.literal.clone(),
                             kind,
-                            line: nt.line,
+                            line: nt.span.line,
                             column: ident_start_col(nt),
                             detail: lines
-                                .get(nt.line.saturating_sub(1))
+                                .get(nt.span.line.saturating_sub(1))
                                 .map(|l| l.trim().trim_end_matches('{').trim().to_string())
                                 .unwrap_or_default(),
                             container: None,
@@ -407,8 +407,8 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                         symbols.push(SymbolInfo {
                             name: nt.literal.clone(),
                             kind: SymbolKind::Import,
-                            line: nt.line,
-                            column: nt.column,
+                            line: nt.span.line,
+                            column: nt.span.column,
                             detail: format!("import \"{}\"", nt.literal),
                             container: None,
                         });
@@ -465,13 +465,13 @@ fn push_callable(
     let close_tok = &tokens[close];
     let detail = source_slice(
         lines,
-        (name_tok.line, 1),
-        (close_tok.line, close_tok.column + 1),
+        (name_tok.span.line, 1),
+        (close_tok.span.line, close_tok.span.column + 1),
     );
     symbols.push(SymbolInfo {
         name: name_tok.literal.clone(),
         kind,
-        line: name_tok.line,
+        line: name_tok.span.line,
         column: ident_start_col(name_tok),
         detail,
         container,

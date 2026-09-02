@@ -17,14 +17,14 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions · **M2.6b** identifiers · **M2.6d** literals · **M2.6e** wrappers · **M2.7** components |
-| Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.8** — the M2 milestone audit. Span coverage is complete bar `Program`, which was excluded deliberately. |
+| **Current milestone** | **M3 — Diagnostics Unified. STARTING.** |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions · **M2.6b** identifiers · **M2.6d** literals · **M2.6e** wrappers · **M2.7** components · **M2.8** audit + Token collapse |
+| Last completed milestone | **M2 — AST + Spans Stable** (M0, M1 before it) |
+| Next molecule | **M3.0** — audit the four diagnostic types before changing any of them |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.7 |
+| Last state update | 2026-09-02, M2 milestone audit |
 
 Milestone ledger:
 
@@ -32,8 +32,8 @@ Milestone ledger:
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
-| M2 — AST + Spans Stable | **IN PROGRESS** — **all 28 `Expression` variants** and **39 of 40 structs** carry a span; tokens carry byte offsets |
-| M3 — Diagnostics Unified | NOT STARTED |
+| M2 — AST + Spans Stable | **COMPLETE** (2026-09-02) — all 28 `Expression` variants and 39 of 40 structs carry a span |
+| M3 — Diagnostics Unified | **IN PROGRESS** |
 | M4 — Semantic Layer Established | NOT STARTED |
 | M5 — Type System Stable | NOT STARTED |
 | M6 — Runtime Molecular | NOT STARTED (partially pre-empted; see §6) |
@@ -1741,7 +1741,7 @@ Snapshot: 184 of 490 files changed, every diagnostic hash identical.
 | **M2.6d** | The literal variants (`Integer`, `Decimal`, `Dec`, `String`, `Boolean`, `Null`) | **done** — §9B.13 |
 | **M2.6e** | The 8 wrapper variants | **done** — §9B.14. All 28 `Expression` variants now carry a span |
 | **M2.7** | Triage the 9 component structs | **done** — §9B.16. 8 got spans; `Program` deliberately did not |
-| **M2.8** | M2 milestone audit | next |
+| **M2.8** | Collapse `Token`'s duplicated position; M2 milestone audit | **done** — §9C |
 | **M2.7** | Resolve the two dead fields — `ClassField` and `EnumDeclaration` now have spans nothing reads; either give them a consumer or state why they stay | a decision recorded, not a silent deletion |
 | **M2.8** | M2 milestone audit | full gates + ecosystem |
 
@@ -1761,6 +1761,102 @@ is cheap — two `cut`s and a `diff`.
 Only after M2.1.3 do M2.2+ (introduce the type, migrate node families, remove
 the two dead fields) become writable. Decomposing them now would presume the
 answer.
+
+---
+
+## 9C. M2 MILESTONE AUDIT
+
+Run at the end of M2.8.
+
+### Definition of Done
+
+| Criterion | Status |
+|---|---|
+| Spans uniform | **met** — 39 of 40 structs and all 28 `Expression` variants. `Program` excluded deliberately (§9B.16) |
+| AST source-oriented | **met** — `ast.rs` has one `use` (`crate::span::Span`, a leaf) and zero functions |
+| Responsibilities clear | **met** — the AST consumes no tokens, resolves no symbols, checks no types, executes nothing, reaches no runtime, renders no diagnostics |
+| Legacy positional state removed once unconsumed | **met in M2.8** — see below |
+| Behaviour preserved | **met** — ten snapshot regenerations, each with diagnostic columns identical across all 490 files |
+| Gates green | **met** |
+
+### 1. Objective vs implementation
+
+The charter asked for an AST that is a clean representation of the source, with
+uniform spans, and for legacy positional state to go once it had no consumers.
+
+The first half was **already true** when M2 began — M2.0 measured it and the
+milestone was re-scoped accordingly (§5.21). The work was spans, and it is done:
+every node that can be pointed at can now say where it is.
+
+### 2. Legacy positional state — the last DoD item, closed in M2.8
+
+`Token` carried `line`/`column` *and* `span`, added that way in M2.3.1 because
+collapsing them was a separate migration from producing them. M2.8 did the
+collapse: 26 reader sites across the parser, the LSP and the lexer now go
+through the span, and the pair is gone.
+
+One test was **deleted rather than updated**:
+`the_span_agrees_with_the_line_and_column_it_was_built_from` compared the two
+representations. With one representation left, the invariant it checked cannot
+be violated. A test retired because the type system took over its job is the
+only kind that should go without a replacement, and the file says so where it
+stood.
+
+### 3. Circular or new dependencies
+
+None. `span` is a leaf — zero `use` statements — which is why it could be given
+to both the lexer and the AST without either depending on the other. Had it
+lived in `ast.rs`, the lexer would have had to depend on the AST to produce a
+token.
+
+### 4. Duplication
+
+None. No node carries two positions; the one case that did (`Token`) was the
+subject of M2.8.
+
+### 5. Semantic drift
+
+None, and this is the milestone where it was most at risk — every one of the
+fourteen molecules changed the `Debug` rendering of the tree, so the snapshot
+failed every time and could not itself distinguish representation from
+behaviour. The discriminator was the manifest's diagnostic columns, diffed
+before every regeneration:
+
+```
+diff <(old manifest: path, diagnostic-count, diagnostic-hash)
+     <(new manifest: path, diagnostic-count, diagnostic-hash)
+```
+
+Ten regenerations, ten times identical across all 490 files.
+
+**One planned molecule was cancelled for this reason.** M2.6c would have widened
+a call's extent to its callee, which moves `f(1, 2)`'s reported column from 6 to
+5 in the type checker, the runtime error and every stack frame. That is a
+diagnostic change, not a representation one; reclassified to M3 (§9B.12).
+
+### 6–7. Full gates and ecosystem
+
+fmt PASS · check PASS, no warnings · clippy 0 errors and **exactly 186
+warnings**, the M0 number, unmoved across all 25 commits · `cargo test` 364/0 ·
+`run_tests.ps1` 490/0/0 · `run_ecosystem.ps1` 8/8.
+
+### 8–9. Documentation and MATURITY_AUDIT.md
+
+`src/span.rs` states what a span stores and why both halves. `tests/ast_spans.rs`
+documents what each *kind* of extent covers and why they differ.
+`MATURITY_AUDIT.md`'s AST row is updated.
+
+### 10. Findings raised by M2
+
+| § | Finding | Owner |
+|---|---|---|
+| 5.24 | A match pattern that fails to evaluate is silently a non-match | **M7** / M3 |
+| 9B.12 | Widening expression extents moves diagnostics | **M3** |
+| 5.25 | M2.4 and M2.5 both missed two statement forms; enumeration by name is a guess | method, recorded |
+| 5.4 | Corrected: 3 of 5 original positional fields were live, not 1 | closed |
+| 5.21 | The AST already satisfied every "must not" | closed |
+
+## MILESTONE STATUS: **COMPLETE**
 
 ---
 

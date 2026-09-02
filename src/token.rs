@@ -139,24 +139,28 @@ pub enum TokenType {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Token {
-    /// Where this token is. Carried alongside `line` and `column` rather than
-    /// replacing them: every consumer still reads the pair, and collapsing them
-    /// is its own migration. See ROADMAP_STATE.md §9B.4.
+    /// Where this token is.
+    ///
+    /// M2.3.1 added this beside the `line`/`column` pair it duplicated, because
+    /// collapsing them was a separate migration from producing them. M2.8 did
+    /// that migration: every reader now goes through the span, so the pair is
+    /// gone and there is one answer to "where is this token" rather than two
+    /// that could drift.
     pub span: crate::span::Span,
     pub token_type: TokenType,
     pub literal: String,
-    pub line: usize,
-    pub column: usize,
 }
 
 impl Token {
     pub fn new(token_type: TokenType, literal: String, line: usize, column: usize) -> Self {
+        // The lexer's 55 call sites pass a position rather than a span, and
+        // `Lexer::next_token` widens this point into the token's real extent
+        // on the way out. Keeping the signature meant M2.3.1 did not have to
+        // touch any of them.
         Token {
             span: crate::span::Span::point(line, column),
             token_type,
             literal,
-            line,
-            column,
         }
     }
 }

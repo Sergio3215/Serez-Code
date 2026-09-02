@@ -149,8 +149,8 @@ impl Parser {
         let is_decr = self.peek_token.token_type == TokenType::MinusMinus;
         if is_incr || is_decr {
             let op = if is_incr { "+" } else { "-" };
-            let line = self.current_token.line;
-            let column = self.current_token.column;
+            let line = self.current_token.span.line;
+            let column = self.current_token.span.column;
 
             if let Expression::DotCall(ref dot) = expr {
                 if dot.arguments.is_empty() {
@@ -241,8 +241,8 @@ impl Parser {
             if let Expression::Index(ref idx_expr) = expr {
                 let target = (*idx_expr.left).clone();
                 let index = (*idx_expr.index).clone();
-                let line = self.current_token.line;
-                let column = self.current_token.column;
+                let line = self.current_token.span.line;
+                let column = self.current_token.span.column;
                 let op = if self.peek_token.token_type == TokenType::PlusPlus {
                     "+"
                 } else {
@@ -387,8 +387,8 @@ impl Parser {
         if let Expression::Index(ref idx_expr) = expr {
             let target = (*idx_expr.left).clone();
             let index = (*idx_expr.index).clone();
-            let line = self.current_token.line;
-            let column = self.current_token.column;
+            let line = self.current_token.span.line;
+            let column = self.current_token.span.column;
             let op = Self::compound_op(&self.peek_token.token_type).to_string();
             self.next_token(); // compound token
             self.next_token(); // first token of rhs
@@ -419,8 +419,8 @@ impl Parser {
     pub(super) fn parse_compound_assign_statement(&mut self) -> Option<Statement> {
         let name = self.current_token.literal.clone();
         let open = self.current_token.span;
-        let line = self.current_token.line;
-        let column = self.current_token.column;
+        let line = self.current_token.span.line;
+        let column = self.current_token.span.column;
         let op = Self::compound_op(&self.peek_token.token_type).to_string();
         self.next_token(); // compound token
         self.next_token(); // first token of rhs

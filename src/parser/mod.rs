@@ -237,8 +237,8 @@ impl Parser {
             // Postfix: i++  →  i = i + 1
             TokenType::Ident if self.peek_token.token_type == TokenType::PlusPlus => {
                 let name = self.current_token.literal.clone();
-                let line = self.current_token.line;
-                let col = self.current_token.column;
+                let line = self.current_token.span.line;
+                let col = self.current_token.span.column;
                 self.next_token(); // '++'
                 if self.peek_token.token_type == TokenType::Semicolon {
                     self.next_token();
@@ -263,8 +263,8 @@ impl Parser {
             // Postfix: i--  →  i = i - 1
             TokenType::Ident if self.peek_token.token_type == TokenType::MinusMinus => {
                 let name = self.current_token.literal.clone();
-                let line = self.current_token.line;
-                let col = self.current_token.column;
+                let line = self.current_token.span.line;
+                let col = self.current_token.span.column;
                 self.next_token(); // '--'
                 if self.peek_token.token_type == TokenType::Semicolon {
                     self.next_token();
@@ -290,8 +290,8 @@ impl Parser {
             TokenType::PlusPlus => {
                 self.next_token(); // current = identifier
                 let name = self.current_token.literal.clone();
-                let line = self.current_token.line;
-                let col = self.current_token.column;
+                let line = self.current_token.span.line;
+                let col = self.current_token.span.column;
                 if self.peek_token.token_type == TokenType::Semicolon {
                     self.next_token();
                 }
@@ -316,8 +316,8 @@ impl Parser {
             TokenType::MinusMinus => {
                 self.next_token(); // current = identifier
                 let name = self.current_token.literal.clone();
-                let line = self.current_token.line;
-                let col = self.current_token.column;
+                let line = self.current_token.span.line;
+                let col = self.current_token.span.column;
                 if self.peek_token.token_type == TokenType::Semicolon {
                     self.next_token();
                 }

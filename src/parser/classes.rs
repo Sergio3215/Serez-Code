@@ -130,8 +130,8 @@ impl Parser {
                     // Try to parse as a class field
                     if self.current_token.token_type == TokenType::Ident {
                         let field_name = self.current_token.literal.clone();
-                        let field_line = self.current_token.line;
-                        let field_col = self.current_token.column;
+                        let field_line = self.current_token.span.line;
+                        let field_col = self.current_token.span.column;
 
                         if self.peek_token.token_type == TokenType::Colon {
                             // field: type [= expr];
@@ -439,8 +439,8 @@ impl Parser {
     // ── enum declaration ──────────────────────────────────────────────────────
     pub(super) fn parse_enum_declaration(&mut self) -> Option<Statement> {
         // current = 'enum'
-        let line = self.current_token.line;
-        let column = self.current_token.column;
+        let line = self.current_token.span.line;
+        let column = self.current_token.span.column;
         if self.peek_token.token_type != TokenType::Ident {
             self.parser_error("Expected enum name after 'enum'");
             return None;

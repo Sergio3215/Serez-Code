@@ -164,26 +164,12 @@ fn spans_advance_and_never_overlap() {
     }
 }
 
-#[test]
-fn the_span_agrees_with_the_line_and_column_it_was_built_from() {
-    // `Token` still carries `line`/`column` beside the span while the migration
-    // finishes. They must not drift apart in the meantime — if they do, half the
-    // pipeline reports one position and half the other.
-    for path in corpus() {
-        let Ok(source) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        for token in tokens(&source) {
-            assert_eq!(
-                (token.span.line, token.span.column),
-                (token.line, token.column),
-                "{}: {:?} span and pair disagree",
-                path.display(),
-                token.token_type
-            );
-        }
-    }
-}
+// `the_span_agrees_with_the_line_and_column_it_was_built_from` lived here until
+// M2.8, asserting that `Token.span.line`/`.column` matched the `line`/`column`
+// pair beside them. It was deleted rather than updated because the pair is gone:
+// there is now one representation of a token's position, so the invariant it
+// checked cannot be violated. A test removed because the type system took over
+// its job is the only kind that should be removed without a replacement.
 
 #[test]
 fn a_multibyte_identifier_spans_its_bytes_not_its_characters() {

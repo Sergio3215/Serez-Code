@@ -168,8 +168,8 @@ impl Parser {
             },
             TokenType::PlusPlus | TokenType::MinusMinus => {
                 let name = self.current_token.literal.clone();
-                let line = self.current_token.line;
-                let col = self.current_token.column;
+                let line = self.current_token.span.line;
+                let col = self.current_token.span.column;
                 let op = if self.peek_token.token_type == TokenType::PlusPlus {
                     "+"
                 } else {

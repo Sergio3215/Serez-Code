@@ -74,8 +74,8 @@ impl Lexer {
         let token = self.next_token_inner();
         Token {
             span: Span {
-                line: token.line,
-                column: token.column,
+                line: token.span.line,
+                column: token.span.column,
                 // Both ends clamp, and both need to. `read_char` runs `position`
                 // one past the end at EOF, so an unclamped EOF token comes out
                 // inverted — `start: 15, end: 14` on a 14-byte source, which

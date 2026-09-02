@@ -70,8 +70,8 @@ impl Parser {
     /// Report a parse error under a specific stable diagnostic code.
     pub(super) fn parser_error_code(&self, code: &'static str, msg: &str) {
         self.had_error.set(true);
-        let line = self.current_token.line;
-        let col = self.current_token.column;
+        let line = self.current_token.span.line;
+        let col = self.current_token.span.column;
         self.errors.borrow_mut().push(ParseError {
             code,
             line,
