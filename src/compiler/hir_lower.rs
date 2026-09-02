@@ -768,8 +768,7 @@ mod tests {
             left: Box::new(l),
             operator: op.to_string(),
             right: Box::new(r),
-            line: 0,
-            column: 0,
+            span: crate::span::Span::unknown(),
         })
     }
 
@@ -1141,15 +1140,13 @@ mod tests {
                     ast::Expression::Call(ast::CallExpression {
                         function: Box::new(ident("fib")),
                         arguments: vec![infix(ident("n"), "-", ast::Expression::Integer(1))],
-                        line: 0,
-                        column: 0,
+                        span: crate::span::Span::unknown(),
                     }),
                     "+",
                     ast::Expression::Call(ast::CallExpression {
                         function: Box::new(ident("fib")),
                         arguments: vec![infix(ident("n"), "-", ast::Expression::Integer(2))],
-                        line: 0,
-                        column: 0,
+                        span: crate::span::Span::unknown(),
                     }),
                 ),
             }),

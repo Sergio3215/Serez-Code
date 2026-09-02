@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1.1–M2.1.2** cost and consumer measurement |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.1.3 — blocked on a decision.** The measurements say spans have no consumer today; §9B.2 sets out three options and recommends reordering M3 before M2. |
+| Next molecule | **M2.3.1** — give `Token` a span, populated by the lexer. See §9B.4. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.0 |
+| Last state update | 2026-09-02, end of M2.2 |
 
 Milestone ledger:
 
@@ -32,7 +32,7 @@ Milestone ledger:
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
-| M2 — AST + Spans Stable | **IN PROGRESS** — M2.0 (audit) done |
+| M2 — AST + Spans Stable | **IN PROGRESS** — `Span` exists; the AST's five positions use it |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
 | M5 — Type System Stable | NOT STARTED |
@@ -412,6 +412,12 @@ else. Every one of those six prohibitions already holds.
 
 So M2 is not a purification project. Its whole content is spans: making them
 uniform, giving them a type, and deciding how far coverage should reach.
+
+*Updated by M2.2:* `ast.rs` now has exactly one `use` — `crate::span::Span`.
+That is not a regression of the property measured above. `span` is a leaf: it
+depends on nothing, so `ast -> span` adds no coupling to any subsystem and the
+six prohibitions still hold. It is noted because the sentence "zero use
+statements" would otherwise read as stale the next time someone checks it.
 
 One small exception, recorded rather than fixed: `evaluator/stmt.rs:475`
 constructs an `ast::IndexAssignStatement` — not to synthesise source, but as an
@@ -1173,12 +1179,84 @@ are set out in §9B.2; M2.1.3 is where it gets decided rather than drifted into.
 | **B. M3 before M2** | Reorders the roadmap. M3 fixes §5.17 (nine errors that reach nobody) and decides where a runtime error's position comes from; M2 then adds spans *to the nodes M3 proved it needs*. | Every span added has a consumer the day it lands. Fixes a user-visible defect first. |
 | **C. M2 as chartered** | 48 types, the lexer, 29 parser sites, and a larger AST node. | Maximum fidelity, no user-visible improvement until M3 lands anyway. |
 
-**Recommended: B, with A folded into it.** The evidence is that spans are not the
+**DECIDED 2026-09-02: option C — M2 proceeds as chartered.** The recommendation below was option B; the measurements were presented and the choice was made for the full scope. Recorded so a later session sees the evidence *and* the decision, and does not re-open it.
+
+The consequence to hold on to: spans will land before their consumers exist, so
+M2 cannot be judged by "did a diagnostic improve" — none will, until M3 changes
+where a runtime error gets its position. M2 is judged on the AST being uniform
+and the behaviour being unchanged.
+
+*(Original recommendation, retained as the evidence trail:)* **B, with A folded into it.** The evidence is that spans are not the
 bottleneck — the bottleneck is that diagnostics do not know where they happened
 and, for nine of them, do not exist at all. Doing M3 first means M2's work is
 sized by measured need instead of guessed at, and it fixes something a user can
 see. `Span` itself (option A's cheap part) can land first either way, since M3
 will want the type.
+
+### 9B.3 M2.2 — the `Span` type: **COMPLETE**
+
+`src/span.rs` (128 lines). It lives in its own module rather than in `ast.rs`
+for a reason that will matter in M2.3: `Token` is about to carry a span, and if
+the type lived with the AST the **lexer would have to depend on the AST** to
+produce a token. A span is neither syntax nor a value — it is a fact about text
+— so it depends on nothing and everything may depend on it.
+
+```rust
+pub struct Span { line: usize, column: usize, start: usize, end: usize }
+```
+
+Both halves, deliberately. `line`/`column` are what gets rendered and are
+normative — one-based, columns in Unicode scalar values, and `Error.span` is
+`"line:column"` or null. `start`/`end` are byte offsets, the half a *range*
+needs. Carrying both means no conversion in the path of any diagnostic the
+language already renders correctly; deriving line/column from offsets instead
+would put one there. 16 bytes is the cheap direction to be wrong in.
+
+`start == end` is a point, which is what every node gets until M2.3 populates
+offsets from tokens.
+
+The five inlined pairs in `ast.rs` are gone, replaced by one `span: Span` field
+each, and the `#[allow(dead_code)]` attributes with them.
+
+**Behavior: UNCHANGED — and this one needed proving, because the snapshot
+failed.** 445 of 490 files reported a different tree. That is correct and
+expected: the `Debug` rendering went from flat `line: 7, column: 1` to nested
+`span: Span { line: 7, column: 1, start: 0, end: 0 }`. The values are the same;
+the text is not.
+
+The proof that it is representation and not behaviour:
+
+```
+$ diff <(old manifest | cut path, diagnostic-count, diagnostic-hash)
+       <(new manifest | cut path, diagnostic-count, diagnostic-hash)
+IDENTICAL — every diagnostic count and hash unchanged across all 490 files
+```
+
+Diagnostics do not contain the AST, so if a position had moved, a parse error's
+`line`/`column` would have moved with it. None did. The manifest was then
+regenerated, which is what `parser_snapshot.rs` documents as the correct
+response to a difference that has been read and understood.
+
+A second-order observation: `cargo test` went from 331 to **337**, not 334, for
+three new tests. They run twice — once in the library, once in the `sz-lsp`
+binary, because `lsp_main.rs` now declares `mod span;` too. §5.18 made concrete.
+
+### 9B.4 M2.3 onward — molecules (planned)
+
+| Molecule | Action | Verification |
+|---|---|---|
+| **M2.3.1** | Give `Token` a `span: Span`, populated by the lexer from `position` / `read_position`, keeping `line`/`column` beside it | snapshot unchanged (tokens are not in the AST); lexer tests |
+| **M2.3.2** | Populate `start`/`end` at the nine `Span::point` sites in the parser from the token that opened the node | snapshot changes only in the `start`/`end` fields; diagnostics identical |
+| **M2.4** | Migrate the declaration nodes (`LetStatement`, `FunctionDeclaration`, `ClassDeclaration`, …) | snapshot + full gates |
+| **M2.5** | Migrate the statement nodes | snapshot + full gates |
+| **M2.6** | Migrate the expression nodes | snapshot + full gates |
+| **M2.7** | Resolve the two dead fields — `ClassField` and `EnumDeclaration` now have spans nothing reads; either give them a consumer or state why they stay | a decision recorded, not a silent deletion |
+| **M2.8** | M2 milestone audit | full gates + ecosystem |
+
+Each of M2.4–M2.6 will fail the snapshot the same way M2.2 did, for the same
+reason, and each needs the same proof before regenerating: **the diagnostic
+columns must be identical.** That check is the milestone's safety rail, and it
+is cheap — two `cut`s and a `diff`.
 
 ### M2.1 — molecules (planned)
 

@@ -23,6 +23,7 @@
 
 use super::{Parser, Precedence};
 use crate::ast::*;
+use crate::span::Span;
 use crate::token::TokenType;
 
 impl Parser {
@@ -168,8 +169,7 @@ impl Parser {
                         left: Box::new(Expression::Identifier(name)),
                         operator: op.to_string(),
                         right: Box::new(Expression::Integer(1)),
-                        line,
-                        column: col,
+                        span: Span::point(line, col),
                     }),
                 }
             }

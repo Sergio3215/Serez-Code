@@ -23,6 +23,7 @@
 use super::literals::parse_dec_literal;
 use super::{Parser, Precedence};
 use crate::ast::*;
+use crate::span::Span;
 use crate::token::TokenType;
 
 impl Parser {
@@ -279,8 +280,7 @@ impl Parser {
                     arguments: vec![],
                     has_parens: false,
                     is_optional: false,
-                    line: 0,
-                    column: 0,
+                    span: Span::point(0, 0),
                 });
                 Some(MatchPattern::Literal(expr))
             }

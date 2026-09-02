@@ -44,6 +44,7 @@ mod loops;
 mod types;
 mod variables;
 
+use crate::span::Span;
 use depth::DepthGuard;
 #[allow(unused_imports)]
 pub use expressions::{Precedence, token_precedence};
@@ -248,8 +249,7 @@ impl Parser {
                         left: Box::new(Expression::Identifier(name)),
                         operator: "+".to_string(),
                         right: Box::new(Expression::Integer(1)),
-                        line,
-                        column: col,
+                        span: Span::point(line, col),
                     }),
                 }))
             }
@@ -268,8 +268,7 @@ impl Parser {
                         left: Box::new(Expression::Identifier(name)),
                         operator: "-".to_string(),
                         right: Box::new(Expression::Integer(1)),
-                        line,
-                        column: col,
+                        span: Span::point(line, col),
                     }),
                 }))
             }
@@ -288,8 +287,7 @@ impl Parser {
                         left: Box::new(Expression::Identifier(name)),
                         operator: "+".to_string(),
                         right: Box::new(Expression::Integer(1)),
-                        line,
-                        column: col,
+                        span: Span::point(line, col),
                     }),
                 }))
             }
@@ -308,8 +306,7 @@ impl Parser {
                         left: Box::new(Expression::Identifier(name)),
                         operator: "-".to_string(),
                         right: Box::new(Expression::Integer(1)),
-                        line,
-                        column: col,
+                        span: Span::point(line, col),
                     }),
                 }))
             }

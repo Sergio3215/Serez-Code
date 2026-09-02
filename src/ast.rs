@@ -1,3 +1,5 @@
+use crate::span::Span;
+
 // Un programa entero es simplemente una lista secuencial de sentencias.
 #[derive(Debug, Clone)]
 pub struct Program {
@@ -92,10 +94,7 @@ pub struct Parameter {
 pub struct EnumDeclaration {
     pub name: String,
     pub variants: Vec<String>,
-    #[allow(dead_code)]
-    pub line: usize,
-    #[allow(dead_code)]
-    pub column: usize,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -195,10 +194,7 @@ pub struct ClassField {
     #[allow(dead_code)]
     pub type_annotation: Option<String>,
     pub default_value: Option<Expression>,
-    #[allow(dead_code)]
-    pub line: usize,
-    #[allow(dead_code)]
-    pub column: usize,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -386,20 +382,14 @@ pub struct DotCallExpression {
     pub arguments: Vec<Expression>,
     pub has_parens: bool, // true if written as obj.method(...), false if obj.field
     pub is_optional: bool, // true if written as obj?.method(...)
-    #[allow(dead_code)]
-    pub line: usize,
-    #[allow(dead_code)]
-    pub column: usize,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct CallExpression {
     pub function: Box<Expression>, // Identificador o FunctionLiteral
     pub arguments: Vec<Expression>,
-    #[allow(dead_code)]
-    pub line: usize,
-    #[allow(dead_code)]
-    pub column: usize,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -434,6 +424,5 @@ pub struct InfixExpression {
     pub left: Box<Expression>,
     pub operator: String,
     pub right: Box<Expression>,
-    pub line: usize,
-    pub column: usize,
+    pub span: Span,
 }

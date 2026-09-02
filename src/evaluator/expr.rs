@@ -327,8 +327,8 @@ impl super::Evaluator {
                     Expression::Identifier(name) => name.clone(),
                     _ => "<anonymous>".to_string(),
                 };
-                let call_line = call_expr.line;
-                let call_col = call_expr.column;
+                let call_line = call_expr.span.line;
+                let call_col = call_expr.span.column;
                 self.call_stack.push(CallFrame {
                     name: call_name,
                     line: call_line,
@@ -1426,8 +1426,8 @@ impl super::Evaluator {
                     &infix_expr.operator,
                     left_data,
                     right_data,
-                    infix_expr.line,
-                    infix_expr.column,
+                    infix_expr.span.line,
+                    infix_expr.span.column,
                 )
             }
 

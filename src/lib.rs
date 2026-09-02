@@ -24,6 +24,7 @@ pub mod region;
 pub mod repl;
 pub mod run;
 pub mod scope;
+pub mod span;
 pub mod szx;
 pub mod token;
 pub mod type_checker;

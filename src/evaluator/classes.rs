@@ -689,8 +689,8 @@ impl super::Evaluator {
 
         self.call_stack.push(CallFrame {
             name: format!("{}::{}", parent_name, dot_call.method),
-            line: dot_call.line,
-            column: dot_call.column,
+            line: dot_call.span.line,
+            column: dot_call.span.column,
         });
         self.scopes.push();
         self.call_depth += 1;
@@ -873,8 +873,8 @@ impl super::Evaluator {
                     &class_name,
                     &getter,
                     vec![],
-                    dot_call.line,
-                    dot_call.column,
+                    dot_call.span.line,
+                    dot_call.span.column,
                 );
             }
             // Referencia a método: no hay campo ni getter, pero sí un método con ese
@@ -918,8 +918,8 @@ impl super::Evaluator {
                     &class_name,
                     &m,
                     arg_vals,
-                    dot_call.line,
-                    dot_call.column,
+                    dot_call.span.line,
+                    dot_call.span.column,
                 )
             }
             None => {

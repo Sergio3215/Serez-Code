@@ -27,6 +27,7 @@
 
 use super::{Parser, Precedence};
 use crate::ast::*;
+use crate::span::Span;
 use crate::token::TokenType;
 
 /// ¿La expresión es una cadena de LECTURAS (`a`, `a.b`, `a[i]`, `a.b[i].c`)?
@@ -75,8 +76,8 @@ impl Parser {
                     if let Expression::Identifier(ref obj_name) = *dot.object {
                         let object = obj_name.clone();
                         let field = dot.method.clone();
-                        let line = dot.line;
-                        let column = dot.column;
+                        let line = dot.span.line;
+                        let column = dot.span.column;
                         let op_str = if is_compound {
                             Some(Self::compound_op(&self.peek_token.token_type).to_string())
                         } else {
@@ -93,13 +94,11 @@ impl Parser {
                                     arguments: vec![],
                                     has_parens: false,
                                     is_optional: false,
-                                    line,
-                                    column,
+                                    span: Span::point(line, column),
                                 })),
                                 operator: op,
                                 right: Box::new(rhs),
-                                line,
-                                column,
+                                span: Span::point(line, column),
                             })
                         } else {
                             rhs
@@ -144,8 +143,8 @@ impl Parser {
                     if let Expression::Identifier(ref obj_name) = *dot.object {
                         let object = obj_name.clone();
                         let field = dot.method.clone();
-                        let dline = dot.line;
-                        let dcol = dot.column;
+                        let dline = dot.span.line;
+                        let dcol = dot.span.column;
                         self.next_token(); // ++ or --
                         if self.peek_token.token_type == TokenType::Semicolon {
                             self.next_token();
@@ -157,13 +156,11 @@ impl Parser {
                                 arguments: vec![],
                                 has_parens: false,
                                 is_optional: false,
-                                line: dline,
-                                column: dcol,
+                                span: Span::point(dline, dcol),
                             })),
                             operator: op.to_string(),
                             right: Box::new(Expression::Integer(1)),
-                            line,
-                            column,
+                            span: Span::point(line, column),
                         });
                         return Some(Statement::FieldAssign(FieldAssignStatement {
                             object,
@@ -185,8 +182,7 @@ impl Parser {
                     left: Box::new(expr.clone()),
                     operator: op.to_string(),
                     right: Box::new(Expression::Integer(1)),
-                    line,
-                    column,
+                    span: Span::point(line, column),
                 });
                 return Some(Statement::IndexAssign(IndexAssignStatement {
                     target,
@@ -231,8 +227,7 @@ impl Parser {
                     left: Box::new(expr),
                     operator: op.to_string(),
                     right: Box::new(Expression::Integer(1)),
-                    line,
-                    column,
+                    span: Span::point(line, column),
                 });
                 return Some(Statement::IndexAssign(IndexAssignStatement {
                     target,
@@ -306,8 +301,8 @@ impl Parser {
 
         let object = (*dot.object).clone();
         let field = dot.method.clone();
-        let line = dot.line;
-        let column = dot.column;
+        let line = dot.span.line;
+        let column = dot.span.column;
         let op_str = if is_compound {
             Some(Self::compound_op(&self.peek_token.token_type).to_string())
         } else {
@@ -324,13 +319,11 @@ impl Parser {
                     arguments: vec![],
                     has_parens: false,
                     is_optional: false,
-                    line,
-                    column,
+                    span: Span::point(line, column),
                 })),
                 operator: op,
                 right: Box::new(rhs),
-                line,
-                column,
+                span: Span::point(line, column),
             })
         } else {
             rhs
@@ -363,8 +356,7 @@ impl Parser {
                 left: Box::new(expr.clone()),
                 operator: op,
                 right: Box::new(rhs),
-                line,
-                column,
+                span: Span::point(line, column),
             });
             if self.peek_token.token_type == TokenType::Semicolon {
                 self.next_token();
@@ -397,8 +389,7 @@ impl Parser {
             left: Box::new(Expression::Identifier(name.clone())),
             operator: op,
             right: Box::new(rhs),
-            line,
-            column,
+            span: Span::point(line, column),
         });
         Some(Statement::Assign(AssignStatement { name, value }))
     }

@@ -31,6 +31,7 @@ use super::literals::{parse_dec_literal, parse_interpolated_string};
 use super::types::is_type_keyword;
 use super::{DepthGuard, Parser};
 use crate::ast::*;
+use crate::span::Span;
 use crate::token::TokenType;
 
 #[derive(PartialEq, PartialOrd)]
@@ -437,8 +438,7 @@ impl Parser {
                         left_exp = Some(Expression::Call(CallExpression {
                             function: Box::new(left),
                             arguments: args,
-                            line: call_line,
-                            column: call_column,
+                            span: Span::point(call_line, call_column),
                         }));
                     } else {
                         return None;
@@ -496,8 +496,7 @@ impl Parser {
                         left: Box::new(left),
                         operator: "is".to_string(),
                         right: Box::new(Expression::Identifier(type_name)),
-                        line: op_line,
-                        column: op_column,
+                        span: Span::point(op_line, op_column),
                     }));
                 }
             } else if self.current_token.token_type == TokenType::Dot
@@ -531,8 +530,7 @@ impl Parser {
                         arguments,
                         has_parens,
                         is_optional,
-                        line: dot_line,
-                        column: dot_column,
+                        span: Span::point(dot_line, dot_column),
                     }));
                 }
             } else if self.current_token.token_type == TokenType::Pipe {
@@ -545,8 +543,7 @@ impl Parser {
                         left_exp = Some(Expression::Call(CallExpression {
                             function: Box::new(func),
                             arguments: vec![left],
-                            line: call_line,
-                            column: call_column,
+                            span: Span::point(call_line, call_column),
                         }));
                     } else {
                         return None;
@@ -576,8 +573,7 @@ impl Parser {
                             left: Box::new(left),
                             operator,
                             right: Box::new(right),
-                            line: op_line,
-                            column: op_column,
+                            span: Span::point(op_line, op_column),
                         }));
                     } else {
                         return None;

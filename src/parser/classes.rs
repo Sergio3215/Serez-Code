@@ -28,6 +28,7 @@
 use super::types::is_type_keyword;
 use super::{Parser, Precedence};
 use crate::ast::*;
+use crate::span::Span;
 use crate::token::TokenType;
 
 impl Parser {
@@ -154,8 +155,7 @@ impl Parser {
                                 name: field_name,
                                 type_annotation,
                                 default_value,
-                                line: field_line,
-                                column: field_col,
+                                span: Span::point(field_line, field_col),
                             });
                             self.next_token();
                             continue;
@@ -171,8 +171,7 @@ impl Parser {
                                 name: field_name,
                                 type_annotation: None,
                                 default_value,
-                                line: field_line,
-                                column: field_col,
+                                span: Span::point(field_line, field_col),
                             });
                             self.next_token();
                             continue;
@@ -473,8 +472,7 @@ impl Parser {
         Some(Statement::EnumDeclaration(EnumDeclaration {
             name,
             variants,
-            line,
-            column,
+            span: Span::point(line, column),
         }))
     }
 

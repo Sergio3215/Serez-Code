@@ -352,8 +352,8 @@ impl<'a> TypeChecker<'a> {
                 format!("{}-{}", min_params, max_params)
             };
             self.type_error(
-                call.line,
-                call.column,
+                call.span.line,
+                call.span.column,
                 format!(
                     "'{}' expects {} argument(s) but got {}.",
                     func_name,
@@ -380,8 +380,8 @@ impl<'a> TypeChecker<'a> {
 
             if !types_compatible(expected, &actual) {
                 self.type_error(
-                    call.line,
-                    call.column,
+                    call.span.line,
+                    call.span.column,
                     format!(
                         "Parameter '{}' of '{}' expected '{}' but received '{}'.",
                         param.name, func_name, expected, actual
