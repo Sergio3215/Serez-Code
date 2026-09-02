@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.3.3** — the remaining 19 `Span::point` sites (assignment, classes, loops, the façade). Same shape as M2.3.2. |
+| Next molecule | **M2.4** — migrate the declaration nodes (`LetStatement`, `FunctionDeclaration`, `ClassDeclaration`, …), which today carry no span at all. See §9B.4. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.3.2 |
+| Last state update | 2026-09-02, end of M2.3.3 |
 
 Milestone ledger:
 
@@ -333,7 +333,7 @@ entangled because of a bug rather than because of the architecture.
 
 ## 5. Discoveries
 
-§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0. §5.4 was corrected by M2.0 — see the note in it.
+§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0; §5.22–5.24 are M2.3.3. §5.4 was corrected by M2.0 — see the note in it.
 
 All are **pre-existing**. Neither milestone changed any behavior; none was fixed.
 
@@ -694,6 +694,86 @@ extending it to all twenty is a breaking change for anyone with a `class File`.
 Either is M4's or M7's decision. M1.15 moved the function from the façade to
 `classes.rs`, where its only three callers are, and wrote the finding at the
 site so it cannot be mistaken for settled design.
+
+### 5.22 An enum match pattern had no position at all — **fixed in M2.3.3**, low
+
+`parse_single_match_pattern` built the `Enum.Variant` node with
+`Span::point(0, 0)` — the "unknown" span — although the variant's real position
+was in `self.current_token` two lines above. Every other `DotCall` in the
+language carries its position, and `evaluator/classes.rs` reads exactly that
+field when a dispatch fails, so a failure on an enum pattern reported `0:0`.
+
+Unlike §5.17 and §5.19 this one was fixed rather than recorded, because fixing
+it *is* M2's charter — a node that has a position and does not carry it is the
+inconsistency the milestone exists to remove — and because the fix is confined
+to one construct.
+
+**Correction: no user-visible diagnostic changes, and the first draft of this
+entry said one would.** The claim was that a failure on an enum pattern would
+stop reporting `0:0`. Checked rather than assumed, and it is wrong — see §5.24.
+`match_pattern` discards the error before any diagnostic is built, so the
+position was never surfaced and still is not. The fix is real but latent: the
+node now carries what it always should have, and it will matter when §5.24 is
+addressed.
+
+Precisely scoped, and the snapshot measured that: **4 of 490 corpus files**
+changed, all four containing an `Enum.Variant` pattern, with every diagnostic
+hash identical.
+
+### 5.24 A match pattern that fails to evaluate is silently treated as "no match" — *semantic debt / silent failure*, medium (found in M2.3.3)
+
+`evaluator/expr.rs:1592`, evaluating a literal match pattern:
+
+```rust
+let lit_ref = match self.eval_expression(lit_expr) {
+    EvalResult::Value(v) => v,
+    _ => return false,          // every failure becomes "did not match"
+};
+```
+
+Any error raised while evaluating a pattern — an undefined name, a bad member,
+a thrown exception — is discarded and reported to the `match` as a
+non-match. Measured:
+
+```
+enum Direction { North, South }
+let d = Direction.North;
+let r = match d {
+    Nonexistent.Nope => "x",    # `Nonexistent` does not exist
+    _ => "other",
+};
+out r;                          # -> "other".  No error, no warning, nothing.
+```
+
+A typo in a pattern silently falls through to the next arm. Combined with the
+fact that `match` is not checked for exhaustiveness (`spec/control-flow.md`), a
+misspelled variant can send a program down a `_` arm with no signal at all.
+
+Found while trying to *demonstrate* the §5.22 fix and failing to make any
+diagnostic appear — the fix was correct, and the reason nothing changed is this.
+
+**Not fixed.** Deciding what a failing pattern should do is a semantics
+question: raise, or treat as non-match and say so. It touches `match`'s contract,
+so it belongs to **M7**, with the diagnostic half belonging to **M3**'s "zero
+silent failures".
+
+### 5.23 Three kinds of span site, and the rule for telling them apart (M2.3.3)
+
+Working through the 24 construction sites turned up a distinction the charter
+does not make, and it is worth writing down because the wrong choice at any one
+of them is invisible:
+
+| Kind | Example | What it gets |
+|---|---|---|
+| **Parsed** | a call, an infix expression, a dot call | `span_to_here(open)` — a real extent, opening token to cursor |
+| **Copied** | the `a.b` rebuilt when desugaring `a.b += x` | the original node's span, inherited whole |
+| **Synthetic** | the `+ 1` in `i++`, which has no `+` in the source | `Span::point(…)` — a position with no extent, because there is no source text to point at |
+
+The synthetic sites are the interesting ones: five of the 24 (four in the façade
+for `++`/`--`, one in `loops.rs` for a `for` step) build nodes the programmer
+never wrote. Giving them an extent would be a lie — `span_to_here` would hand
+them the text of the statement they were desugared *from*. A point is the honest
+answer, and `Span::point`'s documentation says so.
 
 ---
 

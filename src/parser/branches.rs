@@ -23,7 +23,6 @@
 use super::literals::parse_dec_literal;
 use super::{Parser, Precedence};
 use crate::ast::*;
-use crate::span::Span;
 use crate::token::TokenType;
 
 impl Parser {
@@ -267,6 +266,12 @@ impl Parser {
             TokenType::Ident if self.peek_token.token_type == TokenType::Dot => {
                 // Enum.Variant pattern — e.g. Direction.North
                 let name = self.current_token.literal.clone();
+                // The pattern's own position, captured before the cursor moves
+                // off it. Until M2.3.3 this node was built with
+                // `Span::point(0, 0)` — no position at all, though one was right
+                // here — so a dispatch failure on an enum pattern reported
+                // `0:0`. See ROADMAP_STATE.md §5.22.
+                let pattern_open = self.current_token.span;
                 self.next_token(); // consume '.'
                 if !self.peek_token_is_name() {
                     self.parser_error("Expected variant name after '.' in match pattern");
@@ -280,7 +285,7 @@ impl Parser {
                     arguments: vec![],
                     has_parens: false,
                     is_optional: false,
-                    span: Span::point(0, 0),
+                    span: self.span_to_here(pattern_open),
                 });
                 Some(MatchPattern::Literal(expr))
             }
