@@ -93,6 +93,7 @@ impl Parser {
                 parameters,
                 body,
                 is_generator,
+                span: self.span_to_here(open),
             };
 
             Some(Statement::FunctionDeclaration(FunctionDeclaration {
@@ -124,6 +125,7 @@ impl Parser {
                 parameters,
                 body,
                 is_generator,
+                span: self.span_to_here(open),
             };
 
             Some(Statement::Expression(Expression::FunctionLiteral(function)))
@@ -298,6 +300,7 @@ impl Parser {
     }
 
     pub(super) fn parse_arrow_function(&mut self) -> Option<Expression> {
+        let open = self.current_token.span;
         let return_type = self.parse_type_string();
 
         if self.peek_token.token_type != TokenType::LParen {
@@ -328,6 +331,7 @@ impl Parser {
             parameters,
             body,
             is_generator: false,
+            span: self.span_to_here(open),
         }))
     }
 

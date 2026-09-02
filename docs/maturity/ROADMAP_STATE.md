@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.6** — the expression nodes that still carry nothing (`Identifier`, `Index`, `Ternary`, `ArrayLiteral`, …). This is also what widens the M2.3.2 extents from the operator to the whole expression. |
+| Next molecule | **M2.6b** — the 17 scalar `Expression` variants. Needs a representation choice first (tuple field / struct variant / side table); see §9B.10. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.5 |
+| Last state update | 2026-09-02, end of M2.6a |
 
 Milestone ledger:
 
@@ -32,7 +32,7 @@ Milestone ledger:
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
-| M2 — AST + Spans Stable | **IN PROGRESS** — span coverage 5 of 48 node types -> **22**; tokens carry byte offsets |
+| M2 — AST + Spans Stable | **IN PROGRESS** — span coverage 5 of 48 node types -> **31**; tokens carry byte offsets |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
 | M5 — Type System Stable | NOT STARTED |
@@ -1468,6 +1468,63 @@ line 2 column 1 and claims no text) and `an_else_if_wrapper_has_no_position_at_a
 
 Snapshot: **416 of 490** files changed, every diagnostic hash identical.
 
+### 9B.9 M2.6a — the struct-shaped expression nodes: **COMPLETE**
+
+Nine gained a span: `ArrayLiteral`, `IndexExpression`, `TernaryExpression`,
+`DictLiteral`, `NewExpression`, `LambdaExpression`, `IfExpression`,
+`MatchExpression`, `FunctionLiteral`.
+
+**Coverage: 22 of 48 → 31. Sixty-five percent.**
+
+Snapshot: 351 of 490 files changed, every diagnostic hash identical.
+
+### 9B.10 M2.6b — the scalar variants, and why they are their own molecule
+
+Seventeen `Expression` variants remain, and they are a different shape of
+problem. They are not structs:
+
+```rust
+Identifier(String),  Integer(i64),  Decimal(f64),  String(String),
+Boolean(bool),  Null,  Prefix(String, Box<Expression>),  Spread(Box<Expression>),
+AddressOf(Box<Expression>),  Deref(Box<Expression>),  …
+```
+
+Giving one a span means changing the variant's shape, and every `match` arm in
+the crate that names it has to change with it. Measured:
+
+| Variant | Match sites |
+|---|---|
+| `Expression::Identifier` | 38 |
+| `Expression::Integer` | 34 |
+| `Expression::Boolean` | 13 |
+| `Expression::String` | 10 |
+| `Expression::Null` | 8 |
+| `Expression::Prefix` | 4 |
+
+Roughly 110 sites for the six most common alone, spread across the evaluator's
+hot paths, the type checker, the compiler and the LSP. That is not the
+mechanical edit the last four molecules were, and it needs its own decision
+about representation before any of it is written:
+
+- **a tuple field** — `Identifier(String, Span)` — smallest diff per site, but
+  every existing `Expression::Identifier(name)` pattern has to gain a `, _`, and
+  a positional `Span` in a tuple is easy to misread at a construction site;
+- **a struct variant** — `Identifier { name: String, span: Span }` — reads
+  better and makes construction explicit, but rewrites every pattern;
+- **a side table** keyed by node id — leaves every existing match arm alone,
+  and introduces node identity to an AST that has none, which is a much larger
+  idea than M2 is chartered for.
+
+**This is the second genuine design decision in M2**, and unlike §9B.2 it is not
+about *whether* to do the work but about *how*. It is left as the next molecule
+rather than being chosen unilaterally in passing.
+
+**It is also what unblocks widening the M2.3.2 extents.** A call spans from its
+`(` and not from its callee precisely because the callee is usually an
+`Identifier`, which carries nothing. Once the scalar variants have spans, the
+extents in `tests/ast_spans.rs` can widen — and those tests were written to
+assert the narrow form so that widening has to be deliberate.
+
 ### 9B.4 M2.3 onward — molecules (planned)
 
 | Molecule | Action | Verification |
@@ -1476,7 +1533,8 @@ Snapshot: **416 of 490** files changed, every diagnostic hash identical.
 | **M2.3.2** | Populate `start`/`end` at the expression sites | **done** — §9B.6. Also made the manifest LF-normalised, since byte offsets are not portable across checkouts |
 | **M2.4** | Migrate the declaration nodes | **done** — §9B.7. Coverage 5 of 48 -> 10 |
 | **M2.5** | Migrate the statement nodes | **done** — §9B.8. Coverage 10 -> 22 of 48 |
-| **M2.6** | Migrate the expression nodes | snapshot + full gates |
+| **M2.6a** | The struct-shaped expression nodes | **done** — §9B.9. Coverage 22 -> 31 of 48 |
+| **M2.6b** | The scalar variants (`Identifier`, `Integer`, …) | **next** — §9B.10. ~110 match sites and a representation decision |
 | **M2.7** | Resolve the two dead fields — `ClassField` and `EnumDeclaration` now have spans nothing reads; either give them a consumer or state why they stay | a decision recorded, not a silent deletion |
 | **M2.8** | M2 milestone audit | full gates + ecosystem |
 

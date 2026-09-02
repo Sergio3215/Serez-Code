@@ -83,6 +83,9 @@ pub fn token_precedence(token_type: &TokenType) -> Precedence {
 
 impl Parser {
     pub(super) fn parse_expression(&mut self, precedence: Precedence) -> Option<Expression> {
+        // Where this expression begins. Every node built below reaches from
+        // here to wherever the cursor has got to.
+        let open = self.current_token.span;
         // Every nested sub-expression re-enters here, so this is the one place
         // that has to hold the line against runaway nesting. See MAX_PARSE_DEPTH.
         let _depth = self.enter_depth()?;
@@ -96,6 +99,7 @@ impl Parser {
                 Some(Expression::Lambda(LambdaExpression {
                     params: vec![param],
                     body,
+                    span: self.span_to_here(open),
                 }))
             }
 
@@ -190,6 +194,7 @@ impl Parser {
                     Some(Expression::Lambda(LambdaExpression {
                         params: vec![],
                         body,
+                        span: self.span_to_here(open),
                     }))
                 } else {
                     self.parser_error("Empty parentheses '()' are not a valid expression");
@@ -226,7 +231,11 @@ impl Parser {
                         }
                         self.next_token(); // '=>'
                         let body = self.parse_lambda_body()?;
-                        Some(Expression::Lambda(LambdaExpression { params, body }))
+                        Some(Expression::Lambda(LambdaExpression {
+                            params,
+                            body,
+                            span: self.span_to_here(open),
+                        }))
                     }
 
                     // (a) => body  or  just (a)
@@ -238,6 +247,7 @@ impl Parser {
                             Some(Expression::Lambda(LambdaExpression {
                                 params: vec![first_name],
                                 body,
+                                span: self.span_to_here(open),
                             }))
                         } else {
                             Some(Expression::Identifier(first_name))
@@ -258,6 +268,7 @@ impl Parser {
                         Some(Expression::Lambda(LambdaExpression {
                             params: vec![first_name],
                             body,
+                            span: self.span_to_here(open),
                         }))
                     }
 
@@ -329,6 +340,7 @@ impl Parser {
                     parameters,
                     body,
                     is_generator: false,
+                    span: self.span_to_here(open),
                 }))
             }
 
@@ -444,6 +456,9 @@ impl Parser {
                 }
             } else if self.current_token.token_type == TokenType::LBracket {
                 if let Some(left) = left_exp {
+                    // The `[`. Like a call, the extent runs from the bracket rather
+                    // than from the indexed expression, which carries no span yet.
+                    let index_open = self.current_token.span;
                     self.next_token();
                     if let Some(index) = self.parse_expression(Precedence::Lowest) {
                         if self.peek_token.token_type != TokenType::RBracket {
@@ -454,6 +469,7 @@ impl Parser {
                         left_exp = Some(Expression::Index(IndexExpression {
                             left: Box::new(left),
                             index: Box::new(index),
+                            span: self.span_to_here(index_open),
                         }));
                     } else {
                         return None;
@@ -462,6 +478,7 @@ impl Parser {
             } else if self.current_token.token_type == TokenType::Question {
                 // Ternary: condition ? then_expr : else_expr
                 if let Some(condition) = left_exp {
+                    let ternary_open = self.current_token.span;
                     self.next_token(); // first token of then_expr
                     let then_expr = match self.parse_expression(Precedence::Lowest) {
                         Some(e) => e,
@@ -481,6 +498,7 @@ impl Parser {
                         condition: Box::new(condition),
                         then_expr: Box::new(then_expr),
                         else_expr: Box::new(else_expr),
+                        span: self.span_to_here(ternary_open),
                     }));
                 }
             } else if self.current_token.token_type == TokenType::KwIs {
@@ -583,6 +601,7 @@ impl Parser {
 
     // ── new expression ────────────────────────────────────────────────────────
     pub(super) fn parse_new_expression(&mut self) -> Option<Expression> {
+        let open = self.current_token.span;
         // current = 'new'
         if self.peek_token.token_type != TokenType::Ident {
             self.parser_error("Expected class name after 'new'");
@@ -646,12 +665,14 @@ impl Parser {
             self.next_token(); // ')'
             Some(Expression::New(NewExpression {
                 class_name,
+                span: self.span_to_here(open),
                 args: NewArgs::Fields(fields),
             }))
         } else {
             let args = self.parse_call_arguments()?;
             Some(Expression::New(NewExpression {
                 class_name,
+                span: self.span_to_here(open),
                 args: NewArgs::Positional(args),
             }))
         }

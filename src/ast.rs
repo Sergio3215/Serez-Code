@@ -108,6 +108,7 @@ pub struct FunctionLiteral {
     pub parameters: Vec<Parameter>,
     pub body: BlockStatement,
     pub is_generator: bool,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +337,7 @@ pub enum SizeOfTarget {
 pub struct MatchExpression {
     pub subject: Box<Expression>,
     pub arms: Vec<MatchArm>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -358,12 +360,14 @@ pub struct TernaryExpression {
     pub condition: Box<Expression>,
     pub then_expr: Box<Expression>,
     pub else_expr: Box<Expression>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct LambdaExpression {
     pub params: Vec<String>,
     pub body: LambdaBody,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -383,6 +387,7 @@ pub enum StringPart {
 pub struct ArrayLiteral {
     pub element_type: Option<String>,
     pub elements: Vec<Expression>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -390,6 +395,7 @@ pub struct DictLiteral {
     pub key_type: String,
     pub value_type: String,
     pub entries: Vec<(Expression, Expression)>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -414,12 +420,14 @@ pub struct IfExpression {
     pub condition: Box<Expression>,
     pub consequence: BlockStatement,
     pub alternative: Option<BlockStatement>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct IndexExpression {
     pub left: Box<Expression>,
     pub index: Box<Expression>,
+    pub span: Span,
 }
 
 // ── New expression ────────────────────────────────────────────────────────────
@@ -428,6 +436,7 @@ pub struct IndexExpression {
 pub struct NewExpression {
     pub class_name: String,
     pub args: NewArgs,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

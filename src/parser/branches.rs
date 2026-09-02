@@ -27,6 +27,7 @@ use crate::token::TokenType;
 
 impl Parser {
     pub(super) fn parse_if_expression(&mut self) -> Option<Expression> {
+        let open = self.current_token.span;
         if self.peek_token.token_type != TokenType::LParen {
             self.parser_error("Expected '(' after 'if'");
             return None;
@@ -84,6 +85,7 @@ impl Parser {
             condition: Box::new(condition),
             consequence,
             alternative,
+            span: self.span_to_here(open),
         }))
     }
 
@@ -174,6 +176,7 @@ impl Parser {
 
     /// Called when current_token == KwMatch. Returns Expression::Match.
     pub(super) fn parse_match_expression(&mut self) -> Option<Expression> {
+        let open = self.current_token.span;
         // Advance past 'match' to the subject expression
         self.next_token();
         let subject = self.parse_expression(Precedence::Lowest)?;
@@ -245,6 +248,7 @@ impl Parser {
         Some(Expression::Match(Box::new(MatchExpression {
             subject: Box::new(subject),
             arms,
+            span: self.span_to_here(open),
         })))
     }
 

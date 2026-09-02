@@ -798,6 +798,7 @@ mod tests {
             name: name.to_string(),
             function: ast::FunctionLiteral {
                 return_type: Some(ret.to_string()),
+                span: crate::span::Span::unknown(),
                 parameters: params
                     .iter()
                     .map(|(n, t)| ast::Parameter {
@@ -970,6 +971,7 @@ mod tests {
     fn if_statement_with_else_lowers_correctly() {
         let if_stmt = ast::Statement::Expression(ast::Expression::If(ast::IfExpression {
             condition: Box::new(ast::Expression::Boolean(true)),
+            span: crate::span::Span::unknown(),
             consequence: block(vec![out(ast::Expression::Integer(1))]),
             alternative: Some(block(vec![out(ast::Expression::Integer(2))])),
         }));
@@ -1013,6 +1015,7 @@ mod tests {
     fn ternary_desugars_to_hir_if_expr() {
         let ternary = ast::Expression::Ternary(ast::TernaryExpression {
             condition: Box::new(ast::Expression::Boolean(true)),
+            span: crate::span::Span::unknown(),
             then_expr: Box::new(ast::Expression::Integer(1)),
             else_expr: Box::new(ast::Expression::Integer(0)),
         });
@@ -1148,6 +1151,7 @@ mod tests {
         let body = vec![
             ast::Statement::Expression(ast::Expression::If(ast::IfExpression {
                 condition: Box::new(infix(ident("n"), "<=", ast::Expression::Integer(1))),
+                span: crate::span::Span::unknown(),
                 consequence: block(vec![ast::Statement::Return(ast::ReturnStatement {
                     return_value: ident("n"),
                     span: crate::span::Span::unknown(),

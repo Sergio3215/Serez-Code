@@ -27,6 +27,7 @@ use crate::token::TokenType;
 
 impl Parser {
     pub(super) fn parse_array_literal(&mut self) -> Option<Expression> {
+        let open = self.current_token.span;
         let mut elements = Vec::new();
 
         if self.peek_token.token_type == TokenType::RBracket {
@@ -34,6 +35,7 @@ impl Parser {
             return Some(Expression::ArrayLiteral(ArrayLiteral {
                 element_type: None,
                 elements,
+                span: self.span_to_here(open),
             }));
         }
 
@@ -69,6 +71,7 @@ impl Parser {
         Some(Expression::ArrayLiteral(ArrayLiteral {
             element_type: None,
             elements,
+            span: self.span_to_here(open),
         }))
     }
 
@@ -77,6 +80,7 @@ impl Parser {
         key_type: String,
         value_type: String,
     ) -> Option<Expression> {
+        let open = self.current_token.span;
         let mut entries = Vec::new();
 
         if self.peek_token.token_type == TokenType::RParen {
@@ -85,6 +89,7 @@ impl Parser {
                 key_type,
                 value_type,
                 entries,
+                span: self.span_to_here(open),
             }));
         }
 
@@ -133,6 +138,7 @@ impl Parser {
             key_type,
             value_type,
             entries,
+            span: self.span_to_here(open),
         }))
     }
 
