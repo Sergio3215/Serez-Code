@@ -17,14 +17,14 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M1 — Parser Molecular. COMPLETE.** Awaiting authorization for M2. |
-| Goals done in M1 | **all of them** — the 17 planned became 13 after reading the code; see §9A |
+| **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
+| Goals done in M2 | **M2.0** — span audit (§5.4 corrected, §5.21) |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **none** — M2.1 is unplanned and unauthorized. M2 starts by auditing spans, per §5.4: four of five positional AST fields have no consumer and `Token` carries no byte offset, so M2 reaches into the lexer. |
+| Next molecule | **M2.1** — decide the `Span` contract before writing one: what it stores, what it renders, and how far coverage should reach. See §9B. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-01, M1 milestone audit |
+| Last state update | 2026-09-02, end of M2.0 |
 
 Milestone ledger:
 
@@ -32,7 +32,7 @@ Milestone ledger:
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
-| M2 — AST + Spans Stable | NOT STARTED |
+| M2 — AST + Spans Stable | **IN PROGRESS** — M2.0 (audit) done |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
 | M5 — Type System Stable | NOT STARTED |
@@ -333,7 +333,7 @@ entangled because of a bug rather than because of the architecture.
 
 ## 5. Discoveries
 
-§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15.
+§5.1–5.9 are M0; §5.10–5.16 are M1.0; §5.17–5.18 are M1.1; §5.19 is M1.14; §5.20 is M1.15; §5.21 is M2.0. §5.4 was corrected by M2.0 — see the note in it.
 
 All are **pre-existing**. Neither milestone changed any behavior; none was fixed.
 
@@ -366,18 +366,59 @@ in `lib.rs`, `main.rs` or `Cargo.toml`, so it is not compiled, not formatted, no
 linted. It reads `test.serez` — an extension the language no longer uses.
 **Not fixed**; removal is an independent task.
 
-### 5.4 Four of five positional AST fields have no consumer — *architectural debt*, medium (M2 input)
+### 5.4 Only 5 of 48 AST types carry a position, and 2 of those 5 are dead — *architectural debt*, medium (M2 input)
 
-Only 5 of 48 AST types carry `line`/`column`: `EnumDeclaration`, `ClassField`,
-`MethodCallExpression`, `CallExpression`, `InfixExpression`. The first four are
-marked `#[allow(dead_code)]` and nothing reads them. Only `InfixExpression`'s
-position is consumed (`evaluator/expr.rs:1429`).
+> **Corrected 2026-09-02 by the M2.0 audit.** This entry originally said four of
+> the five positional fields had no consumer. That was wrong: it was written by
+> reading the `#[allow(dead_code)]` attributes in `ast.rs` rather than by tracing
+> who reads the fields. Three of the five are load-bearing. The error mattered —
+> it would have told M2 it could normalise the positions away freely, when in
+> fact three of them feed runtime and type-checker diagnostics.
 
-Two consequences for M2:
-- The AST is not merely inconsistent about spans, it is 90% *absent* of them.
-- `Token` carries `line`/`column` but **no byte offsets**, and `Lexer` never
-  computes one. A byte-offset `Span` therefore requires a lexer change, not just
-  an AST change. Plan M2 around that.
+Five of 48 AST types carry `line`/`column`. Traced to their consumers:
+
+| Node | Position consumed by | Live? |
+|---|---|---|
+| `CallExpression` | `evaluator/expr.rs:330`, `type_checker.rs:355`, `:383` | **yes** |
+| `DotCallExpression` | `evaluator/classes.rs:692`, `:876`, `:921` | **yes** |
+| `InfixExpression` | `evaluator/expr.rs:1429` | **yes** |
+| `ClassField` | — | no |
+| `EnumDeclaration` | — | no |
+
+Consequences for M2:
+
+- **Coverage is 10%.** The other 43 node types carry nothing, so a diagnostic
+  about a `let`, an `if`, a class, a loop or a literal has no position to report
+  — which is why `spec/errors.md` types the caught `Error.span` as `string?`,
+  nullable, "best available".
+- **There is no `Span` type.** Position is an inlined `line: usize, column:
+  usize` pair, written out five times in `ast.rs` and populated at 29 sites in
+  the parser.
+- **`Token` carries no byte offset.** The lexer tracks `position` and
+  `read_position` internally but never puts either on a `Token`, so a range span
+  (`start..end`) cannot be built in the AST alone — M2 reaches into the lexer.
+- **Two normative constraints bound the design.**
+  `spec/lexical-grammar.md`: columns count *Unicode scalar values, not UTF-8
+  bytes*. `spec/errors.md`: the caught `Error.span` is a `"line:column"` string
+  or `null`. A byte-offset span is therefore an internal representation only,
+  and must render identically.
+
+### 5.21 The AST already satisfies every "must not" M2 asks of it — *audit result*, no action (M2.0)
+
+M2's charter says the AST must not consume tokens, resolve symbols, check types,
+execute, access the runtime, or render diagnostics. Measured: **`src/ast.rs` has
+zero `use` statements and zero functions.** It is 48 plain data types and nothing
+else. Every one of those six prohibitions already holds.
+
+So M2 is not a purification project. Its whole content is spans: making them
+uniform, giving them a type, and deciding how far coverage should reach.
+
+One small exception, recorded rather than fixed: `evaluator/stmt.rs:475`
+constructs an `ast::IndexAssignStatement` — not to synthesise source, but as an
+ad-hoc tuple to re-bundle three already-cloned values, with a comment saying so.
+The runtime reusing a syntax type as a data carrier is untidy; it is not a
+layering violation, since the dependency runs runtime → AST, which is the
+correct direction.
 
 ### 5.5 Crate-level `#![allow(dead_code)]` — *test/quality deficiency*, low
 
@@ -1036,6 +1077,57 @@ With one qualification stated plainly rather than buried: the "no semantic
 validation" criterion has a single documented exception (§5.20) that M1 was
 forbidden to remove, because doing so is a semantic change and the milestone's
 governing rule is that a refactor is not one.
+
+---
+
+## 9B. M2 — AST + Spans Stable: discovered goal decomposition
+
+M2.0's audit (§5.4, §5.21) changed what this milestone is. The charter's
+pipeline-purity half is **already satisfied** — `ast.rs` has no imports and no
+functions, so none of the six prohibitions is violated. What remains is spans,
+and the audit says the shape of that work is:
+
+| | |
+|---|---|
+| Coverage | 5 of 48 node types (10%); 3 of the 5 are load-bearing, 2 dead |
+| Representation | no `Span` type — an inlined `line`/`column` pair, five times |
+| Source of truth | `Token` has line/column but **no byte offset** |
+| Constraint | columns are Unicode scalar values (`lexical-grammar.md`); `Error.span` is `"line:column"` or null (`errors.md`) |
+
+### The question M2.1 has to answer first
+
+**How far should coverage reach, and what should a span store?** These are not
+independent, and getting them wrong in either direction is expensive:
+
+- *Every node gets a full byte range.* Maximum fidelity, and what a mature
+  frontend eventually wants. It also means touching all 48 types, changing
+  `Token`, threading offsets through 29 parser sites, and growing every AST node
+  — for a language whose diagnostics currently render one `line:column`.
+- *Every node gets line/column only.* Cheaper, matches what is rendered today,
+  and cannot ever underline a range in an editor. The LSP already wants ranges;
+  `lsp/analysis.rs` reconstructs them by re-lexing.
+- *Only the nodes that report errors get a span.* What exists now, arrived at by
+  accident rather than decision. Its failure mode is exactly what
+  `spec/errors.md` documents: `Error.span` is nullable because most nodes have
+  nothing to give.
+
+**This is a product decision with a real cost, and M2.1 is where it gets made
+rather than drifted into.** It is the first genuine design choice in the roadmap
+so far — M0 and M1 were measurement and relocation, where the right answer was
+discoverable from the code. This one is not: all three options are defensible,
+and the choice depends on what the LSP is meant to become.
+
+### M2.1 — molecules (planned)
+
+| Molecule | Action | Verification |
+|---|---|---|
+| **M2.1.1** | Measure the cost of each option: how many `Token` sites, parser sites and AST types each touches; what it does to `size_of` on the hot nodes | Numbers in this file; no code change |
+| **M2.1.2** | Measure what the LSP loses today by re-lexing for ranges, so the benefit side is evidence rather than assertion | Numbers in this file; no code change |
+| **M2.1.3** | Write the `Span` contract into `spec/` — what it stores, what renders, what stays nullable — and get the choice confirmed before implementing | A spec section; **stop for the decision** |
+
+Only after M2.1.3 do M2.2+ (introduce the type, migrate node families, remove
+the two dead fields) become writable. Decomposing them now would presume the
+answer.
 
 ---
 
