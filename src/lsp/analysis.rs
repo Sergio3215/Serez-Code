@@ -140,8 +140,8 @@ pub fn analyze(text: &str) -> Analysis {
     for e in parser.take_errors() {
         diagnostics.push(Diag {
             code: e.code,
-            line: e.line,
-            column: e.column,
+            line: e.span.line,
+            column: e.span.column,
             message: e.message,
             severity: 1,
         });

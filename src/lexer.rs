@@ -1,3 +1,4 @@
+use crate::diagnostic::{Diagnostic, Phase};
 use crate::span::Span;
 use crate::token::{self, Token, TokenType};
 
@@ -6,13 +7,12 @@ pub const SZ_LEX_UNTERMINATED_STRING: &str = "SZ1002";
 pub const SZ_LEX_UNTERMINATED_COMMENT: &str = "SZ1003";
 pub const SZ_LEX_INVALID_BASE_INTEGER: &str = "SZ1004";
 
-#[derive(Debug, Clone)]
-pub struct LexError {
-    pub code: &'static str,
-    pub line: usize,
-    pub column: usize,
-    pub message: String,
-}
+/// A lexical diagnostic.
+///
+/// M3 collapsed this into the shared [`Diagnostic`]; the alias remains so the
+/// lexer's own vocabulary still reads as "lex error" at its producer, where
+/// that is the clearer word.
+pub type LexError = Diagnostic;
 
 pub struct Lexer {
     input: String,
@@ -362,12 +362,12 @@ impl Lexer {
     }
 
     fn lex_error(&mut self, code: &'static str, line: usize, column: usize, message: String) {
-        self.errors.push(LexError {
+        self.errors.push(Diagnostic::frontend(
             code,
-            line,
-            column,
+            Phase::Lexer,
+            Span::point(line, column),
             message,
-        });
+        ));
     }
 
     fn read_string(&mut self, start_line: usize, start_column: usize) -> String {
@@ -826,7 +826,7 @@ if (5 < 10) {
             let errors = lexer.take_errors();
             assert_eq!(errors.len(), 1, "source {source:?}");
             assert_eq!(errors[0].code, SZ_LEX_UNTERMINATED_STRING);
-            assert_eq!((errors[0].line, errors[0].column), (1, 1));
+            assert_eq!((errors[0].span.line, errors[0].span.column), (1, 1));
         }
     }
 

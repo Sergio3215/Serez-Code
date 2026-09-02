@@ -11,6 +11,7 @@
 // go-to-definition and document symbols.
 #![allow(dead_code)]
 mod ast;
+mod diagnostic;
 mod lexer;
 mod lsp;
 mod parser;

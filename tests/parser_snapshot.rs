@@ -186,7 +186,7 @@ fn parse(relative_path: &str, source: String) -> Parsed {
         let _ = writeln!(
             diagnostics,
             "{}|{}|{}|{}",
-            error.code, error.line, error.column, error.message
+            error.code, error.span.line, error.span.column, error.message
         );
     }
 
@@ -312,7 +312,7 @@ fn dump(path: &str, absolute: &Path) -> PathBuf {
         let _ = writeln!(
             text,
             "{}|{}|{}|{}",
-            error.code, error.line, error.column, error.message
+            error.code, error.span.line, error.span.column, error.message
         );
     }
     let _ = write!(text, "\n-- tree --\n{:#?}\n", program);

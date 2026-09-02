@@ -54,8 +54,8 @@ fn a_syntax_error_is_coded_and_positioned() {
         "a plain syntax error must stay SZ2000; narrower codes are promises and \
          get split out one at a time"
     );
-    assert_eq!(first.line, 1, "lines are 1-based");
-    assert!(first.column >= 1, "columns are 1-based");
+    assert_eq!(first.span.line, 1, "lines are 1-based");
+    assert!(first.span.column >= 1, "columns are 1-based");
     assert!(!first.message.is_empty());
 }
 
@@ -96,8 +96,8 @@ fn the_structured_payload_does_not_depend_on_the_source_label() {
     assert_eq!(bare_errors.len(), labelled_errors.len());
     for (a, b) in bare_errors.iter().zip(labelled_errors.iter()) {
         assert_eq!(a.code, b.code);
-        assert_eq!(a.line, b.line);
-        assert_eq!(a.column, b.column);
+        assert_eq!(a.span.line, b.span.line);
+        assert_eq!(a.span.column, b.span.column);
         assert_eq!(
             a.message, b.message,
             "the source label leaked into the structured message"

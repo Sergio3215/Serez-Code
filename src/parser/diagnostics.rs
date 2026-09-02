@@ -22,6 +22,8 @@
 //! M1 preserves that; M3 owns the fix.
 
 use super::Parser;
+use crate::diagnostic::{Diagnostic, Phase};
+use crate::span::Span;
 
 /// Generic parser diagnostic: a syntax error not yet given a narrower code.
 ///
@@ -31,18 +33,14 @@ use super::Parser;
 /// numbering every message at once and freezing distinctions nobody checked.
 pub const SZ_PARSE_ERROR: &str = "SZ2000";
 
-/// A frontend error with its source position (1-based line/column). Parser
-/// diagnostics use `SZ2xxx`; lexical diagnostics are forwarded as `SZ1xxx` so
-/// callers and the LSP consume one ordered diagnostic shape.
-#[derive(Debug, Clone)]
-pub struct ParseError {
-    /// Stable `SZ1xxx`/`SZ2xxx` identifier. Tooling classifies on this; `message` is
-    /// for humans and its wording is not part of the contract.
-    pub code: &'static str,
-    pub line: usize,
-    pub column: usize,
-    pub message: String,
-}
+/// A frontend diagnostic. Parser findings use `SZ2xxx`; lexical ones are
+/// forwarded as `SZ1xxx` so callers and the LSP consume one ordered shape.
+///
+/// M3 collapsed this into the shared [`Diagnostic`]. The alias remains because
+/// `parser::ParseError` is a published path — `run.rs`, the robustness tests and
+/// any embedder name it — and because "parse error" is still the right word at
+/// the point of production.
+pub type ParseError = Diagnostic;
 
 impl Parser {
     /// Whether any parse error was reported while building the program.
@@ -72,12 +70,12 @@ impl Parser {
         self.had_error.set(true);
         let line = self.current_token.span.line;
         let col = self.current_token.span.column;
-        self.errors.borrow_mut().push(ParseError {
+        self.errors.borrow_mut().push(Diagnostic::frontend(
             code,
-            line,
-            column: col,
-            message: msg.to_string(),
-        });
+            Phase::Parser,
+            Span::point(line, col),
+            msg,
+        ));
         self.print_frontend_error("PARSER", code, line, col, msg);
     }
 
@@ -120,16 +118,11 @@ impl Parser {
             self.print_frontend_error(
                 "LEXER",
                 error.code,
-                error.line,
-                error.column,
+                error.span.line,
+                error.span.column,
                 &error.message,
             );
-            self.errors.borrow_mut().push(ParseError {
-                code: error.code,
-                line: error.line,
-                column: error.column,
-                message: error.message,
-            });
+            self.errors.borrow_mut().push(error);
         }
     }
 }
