@@ -430,7 +430,7 @@ impl super::Evaluator {
                 // method call like obj.get()[i] returns a temporary and cannot be assigned into.
                 let writeback: Option<(String, String)> = match &target {
                     Expression::DotCall(dc) if dc.arguments.is_empty() && !dc.has_parens => {
-                        if let Expression::Identifier(obj_name) = dc.object.as_ref() {
+                        if let Expression::Identifier { name: obj_name, .. } = dc.object.as_ref() {
                             Some((obj_name.clone(), dc.method.clone()))
                         } else {
                             None
@@ -449,15 +449,15 @@ impl super::Evaluator {
                 // se rechaza: se resuelve como una ruta escribible desde la variable
                 // raíz. Lo que sigue siendo un error es un TEMPORAL (`getArr()[i] = x`),
                 // donde no hay ningún lugar al que volver.
-                let is_persistable =
-                    matches!(&target, Expression::Identifier(_)) || writeback.is_some();
+                let is_persistable = matches!(&target, Expression::Identifier { name: _, .. })
+                    || writeback.is_some();
                 if !is_persistable {
                     return self.nested_index_assign(&target, &index, &value);
                 }
 
                 // Resolve the target array
                 let arr_ref = match &target {
-                    Expression::Identifier(name) => match self.lookup_var(name) {
+                    Expression::Identifier { name, .. } => match self.lookup_var(name) {
                         Some(r) => r,
                         None => {
                             let message = format!("Variable not found: {name}");

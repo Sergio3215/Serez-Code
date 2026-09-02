@@ -246,7 +246,10 @@ impl Parser {
                 Some(Statement::Assign(AssignStatement {
                     name: name.clone(),
                     value: Expression::Infix(InfixExpression {
-                        left: Box::new(Expression::Identifier(name)),
+                        left: Box::new(Expression::Identifier {
+                            name,
+                            span: Span::point(line, col),
+                        }),
                         operator: "+".to_string(),
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),
@@ -266,7 +269,10 @@ impl Parser {
                 Some(Statement::Assign(AssignStatement {
                     name: name.clone(),
                     value: Expression::Infix(InfixExpression {
-                        left: Box::new(Expression::Identifier(name)),
+                        left: Box::new(Expression::Identifier {
+                            name,
+                            span: Span::point(line, col),
+                        }),
                         operator: "-".to_string(),
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),
@@ -286,7 +292,10 @@ impl Parser {
                 Some(Statement::Assign(AssignStatement {
                     name: name.clone(),
                     value: Expression::Infix(InfixExpression {
-                        left: Box::new(Expression::Identifier(name)),
+                        left: Box::new(Expression::Identifier {
+                            name,
+                            span: Span::point(line, col),
+                        }),
                         operator: "+".to_string(),
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),
@@ -306,7 +315,10 @@ impl Parser {
                 Some(Statement::Assign(AssignStatement {
                     name: name.clone(),
                     value: Expression::Infix(InfixExpression {
-                        left: Box::new(Expression::Identifier(name)),
+                        left: Box::new(Expression::Identifier {
+                            name,
+                            span: Span::point(line, col),
+                        }),
                         operator: "-".to_string(),
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),

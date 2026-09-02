@@ -103,7 +103,10 @@ impl Parser {
                 }))
             }
 
-            TokenType::Ident => Some(Expression::Identifier(self.current_token.literal.clone())),
+            TokenType::Ident => Some(Expression::Identifier {
+                name: self.current_token.literal.clone(),
+                span: self.current_token.span,
+            }),
 
             TokenType::Int => {
                 if let Ok(num) = self.current_token.literal.parse::<i64>() {
@@ -206,6 +209,7 @@ impl Parser {
             TokenType::LParen if self.peek_token.token_type == TokenType::Ident => {
                 self.next_token(); // consume '(' → current = first ident
                 let first_name = self.current_token.literal.clone();
+                let first_name_span = self.current_token.span;
 
                 match self.peek_token.token_type {
                     // (a, b, ...) => body
@@ -250,7 +254,10 @@ impl Parser {
                                 span: self.span_to_here(open),
                             }))
                         } else {
-                            Some(Expression::Identifier(first_name))
+                            Some(Expression::Identifier {
+                                name: first_name,
+                                span: first_name_span,
+                            })
                         }
                     }
 
@@ -274,7 +281,10 @@ impl Parser {
 
                     // (ident op ...) — grouped expression starting with an identifier
                     _ => {
-                        let first = Some(Expression::Identifier(first_name));
+                        let first = Some(Expression::Identifier {
+                            name: first_name,
+                            span: first_name_span,
+                        });
                         let inner = self.parse_infix_chain(first, Precedence::Lowest)?;
                         if self.peek_token.token_type != TokenType::RParen {
                             self.parser_error("Expected ')' in grouped expression");
@@ -506,11 +516,15 @@ impl Parser {
                 let op_open = self.current_token.span;
                 self.next_token(); // consume type name token (KwInt, KwString, Ident, etc.)
                 let type_name = self.current_token.literal.clone();
+                let type_name_span = self.current_token.span;
                 if let Some(left) = left_exp {
                     left_exp = Some(Expression::Infix(InfixExpression {
                         left: Box::new(left),
                         operator: "is".to_string(),
-                        right: Box::new(Expression::Identifier(type_name)),
+                        right: Box::new(Expression::Identifier {
+                            name: type_name,
+                            span: type_name_span,
+                        }),
                         span: self.span_to_here(op_open),
                     }));
                 }

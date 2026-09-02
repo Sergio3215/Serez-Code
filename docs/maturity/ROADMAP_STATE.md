@@ -18,13 +18,13 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions |
+| Goals done in M2 | **M2.0** audit · **M2.1** measurement + decision · **M2.2** the `Span` type · **M2.3.1** lexer offsets · **M2.3.2** expression extents · **M2.3.3** the remaining sites · **M2.4** declarations · **M2.5** statements · **M2.6a** expressions · **M2.6b** identifiers |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.6b** — the 17 scalar `Expression` variants. Needs a representation choice first (tuple field / struct variant / side table); see §9B.10. |
+| Next molecule | **M2.6c** — widen the expression extents now that the callee has a span. Changes what a diagnostic points at, so it is its own molecule; see §9B.12. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02, end of M2.6a |
+| Last state update | 2026-09-02, end of M2.6b |
 
 Milestone ledger:
 
@@ -32,7 +32,7 @@ Milestone ledger:
 |---|---|
 | M0 — Baseline Frozen | **COMPLETE** (2026-09-01) |
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
-| M2 — AST + Spans Stable | **IN PROGRESS** — span coverage 5 of 48 node types -> **31**; tokens carry byte offsets |
+| M2 — AST + Spans Stable | **IN PROGRESS** — span coverage 5 of 48 node types -> **32**; tokens carry byte offsets |
 | M3 — Diagnostics Unified | NOT STARTED |
 | M4 — Semantic Layer Established | NOT STARTED |
 | M5 — Type System Stable | NOT STARTED |
@@ -1515,9 +1515,58 @@ about representation before any of it is written:
   and introduces node identity to an AST that has none, which is a much larger
   idea than M2 is chartered for.
 
-**This is the second genuine design decision in M2**, and unlike §9B.2 it is not
-about *whether* to do the work but about *how*. It is left as the next molecule
-rather than being chosen unilaterally in passing.
+**DECIDED — struct variant.** A positional `Span` beside a `String` is correct
+only by remembering which is which, which is the shape of defect
+`MATURITY_AUDIT.md` records twice already (the GUI handle arithmetic, the
+unchecked SVG index). `{ name, .. }` in a pattern also survives the next field
+being added, where `(name, _)` would not. The side table was rejected outright:
+it introduces node identity to an AST that has none, which is a larger idea than
+M2 is chartered for.
+
+Applied to `Identifier` first, alone, as M2.6b — it is the highest-value span in
+the language and doing one variant proves the shape before sixteen more follow.
+
+### 9B.11 M2.6b — `Identifier` carries its span: **COMPLETE**
+
+```rust
+Identifier { name: String, span: Span }
+```
+
+38 sites, and the compiler found every one. Three groups:
+
+- **Patterns** became `{ name, .. }`, so the bodies below them did not change.
+- **Real constructions** take the token's own span — `parse_expression`'s
+  identifier arm, a dict key, the type name on the right of `is`, and the
+  binding in a grouped expression.
+- **Desugared identifiers** take the position of the construct they were
+  rewritten from: the `i` rebuilt inside `i = i + 1` gets a point at the
+  original `i`, and the `Enum` rebuilt for a match pattern gets the pattern's
+  own span.
+
+`an_identifier_spans_exactly_its_name` is the sharpest check in the whole span
+suite: an identifier is the one node whose extent involves no judgement — it is
+exactly the name — so an off-by-one has nowhere to hide. A second test uses
+`café` to keep bytes and columns visibly distinct.
+
+Snapshot: 448 of 490 files changed, every diagnostic hash identical.
+
+**Coverage: 32 of 48.** Sixteen scalar variants remain (`Integer`, `Decimal`,
+`String`, `Boolean`, `Null`, `Prefix`, `Spread`, `AddressOf`, `Deref`,
+`EntryLiteral`, `InterpolatedString`, `ObjectPatch`, `SizeOf`, `UnsafeBlock`,
+`DictLiteral`'s entries, `Match`) — M2.6d, now that the representation question
+is settled and the shape is proven.
+
+### 9B.12 M2.6c — widening the expression extents (next)
+
+Until M2.6b a call spanned from its `(` because the callee had no span to reach
+back to. That reason is gone. What remains is the widening itself: each
+construction site would take the left operand's span as its start instead of the
+operator token's.
+
+It is deliberately *not* folded into M2.6b, because it changes what a diagnostic
+points at — `foo(1, 2)` would report column 1 rather than column 4 — and that is
+a behaviour change rather than a representation one. `tests/ast_spans.rs` asserts
+the narrow form precisely so this cannot happen by accident.
 
 **It is also what unblocks widening the M2.3.2 extents.** A call spans from its
 `(` and not from its callee precisely because the callee is usually an
@@ -1534,7 +1583,9 @@ assert the narrow form so that widening has to be deliberate.
 | **M2.4** | Migrate the declaration nodes | **done** — §9B.7. Coverage 5 of 48 -> 10 |
 | **M2.5** | Migrate the statement nodes | **done** — §9B.8. Coverage 10 -> 22 of 48 |
 | **M2.6a** | The struct-shaped expression nodes | **done** — §9B.9. Coverage 22 -> 31 of 48 |
-| **M2.6b** | The scalar variants (`Identifier`, `Integer`, …) | **next** — §9B.10. ~110 match sites and a representation decision |
+| **M2.6b** | `Identifier` as a struct variant | **done** — §9B.11. Coverage 31 -> 32 |
+| **M2.6c** | Widen the expression extents to their left operand | next — §9B.12. A behaviour change, so its own molecule |
+| **M2.6d** | The 16 remaining scalar variants | after M2.6c; representation now settled |
 | **M2.7** | Resolve the two dead fields — `ClassField` and `EnumDeclaration` now have spans nothing reads; either give them a consumer or state why they stay | a decision recorded, not a silent deletion |
 | **M2.8** | M2 milestone audit | full gates + ecosystem |
 

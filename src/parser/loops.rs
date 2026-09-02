@@ -179,7 +179,10 @@ impl Parser {
                 AssignStatement {
                     name: name.clone(),
                     value: Expression::Infix(InfixExpression {
-                        left: Box::new(Expression::Identifier(name)),
+                        left: Box::new(Expression::Identifier {
+                            name,
+                            span: Span::point(line, col),
+                        }),
                         operator: op.to_string(),
                         right: Box::new(Expression::Integer(1)),
                         span: Span::point(line, col),

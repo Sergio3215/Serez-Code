@@ -297,7 +297,17 @@ pub struct TryStatement {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Expression {
-    Identifier(String),
+    /// A name as written. The span is what makes an undefined-variable error,
+    /// go-to-definition and rename able to point at it — the most load-bearing
+    /// span in the language once anything consumes one.
+    ///
+    /// A struct variant rather than `Identifier(String, Span)`: a positional
+    /// `Span` beside a `String` is correct only by remembering which is which,
+    /// and `{ name, .. }` in a pattern also survives the next field being added.
+    Identifier {
+        name: String,
+        span: Span,
+    },
     Integer(i64),
     Decimal(f64),
     Dec(rust_decimal::Decimal),

@@ -105,9 +105,9 @@ impl<'a> TypeChecker<'a> {
             Expression::String(_) | Expression::InterpolatedString(_) => Some("string".to_string()),
             Expression::Boolean(_) => Some("bool".to_string()),
             Expression::Null => Some("null".to_string()),
-            Expression::Identifier(name) => self.var_types.get(name).cloned(),
+            Expression::Identifier { name, .. } => self.var_types.get(name).cloned(),
             Expression::Call(call) => {
-                if let Expression::Identifier(fname) = call.function.as_ref() {
+                if let Expression::Identifier { name: fname, .. } = call.function.as_ref() {
                     self.functions
                         .get(fname)
                         .and_then(|f| f.return_type.clone())
@@ -312,7 +312,7 @@ impl<'a> TypeChecker<'a> {
 
     fn check_call(&self, call: &ast::CallExpression) {
         let func_name = match call.function.as_ref() {
-            Expression::Identifier(n) => n,
+            Expression::Identifier { name: n, .. } => n,
             _ => return,
         };
 

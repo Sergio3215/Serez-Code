@@ -56,7 +56,7 @@ impl super::Evaluator {
         expr: &Expression,
     ) -> Option<(ObjectRef, Vec<PathStep>)> {
         match expr {
-            Expression::Identifier(name) => self.lookup_var(name).map(|r| (r, Vec::new())),
+            Expression::Identifier { name, .. } => self.lookup_var(name).map(|r| (r, Vec::new())),
 
             // Lectura de campo: sin paréntesis y sin argumentos. Con paréntesis
             // es una llamada, y su resultado es un temporal que no persiste.
@@ -621,7 +621,7 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
     }
     match e {
         Ex::Call(c) => {
-            if matches!(c.function.as_ref(), Ex::Identifier(n) if n == "super") {
+            if matches!(c.function.as_ref(), Ex::Identifier { name: n, .. } if n == "super") {
                 *found = true;
                 return;
             }
@@ -721,7 +721,7 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
 /// para `this` a secas, que es el receptor de `this.metodo(...)`.
 fn roots_at_this(e: &Expression) -> bool {
     match e {
-        Expression::Identifier(n) => n == "this",
+        Expression::Identifier { name: n, .. } => n == "this",
         Expression::DotCall(d) if d.arguments.is_empty() && !d.has_parens => {
             roots_at_this(&d.object)
         }

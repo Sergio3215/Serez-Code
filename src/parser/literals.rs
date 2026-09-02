@@ -201,7 +201,10 @@ impl Parser {
                 return self.parse_object_patch_from_ident();
             } else {
                 // Entry literal: { ident, value }
-                let key = Expression::Identifier(self.current_token.literal.clone());
+                let key = Expression::Identifier {
+                    name: self.current_token.literal.clone(),
+                    span: self.current_token.span,
+                };
                 return self.parse_entry_literal_from_key(key);
             }
         }

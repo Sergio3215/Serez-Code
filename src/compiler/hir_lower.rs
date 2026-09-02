@@ -501,7 +501,7 @@ impl HirLowerer {
             Expression::String(s) => HirExpr::LitStr(s.clone()),
             Expression::Null => HirExpr::Null,
 
-            Expression::Identifier(name) => {
+            Expression::Identifier { name, .. } => {
                 let ty = self.type_env.get(name).cloned().unwrap_or(SzType::Unknown);
                 HirExpr::Var(name.clone(), ty)
             }
@@ -554,7 +554,7 @@ impl HirLowerer {
 
             Expression::Call(call) => {
                 let name = match call.function.as_ref() {
-                    Expression::Identifier(n) => n.clone(),
+                    Expression::Identifier { name: n, .. } => n.clone(),
                     _ => {
                         self.unsupported_expr("calls through computed expressions");
                         "__invalid_call".to_string()
@@ -778,7 +778,10 @@ mod tests {
     }
 
     fn ident(name: &str) -> ast::Expression {
-        ast::Expression::Identifier(name.to_string())
+        ast::Expression::Identifier {
+            name: name.to_string(),
+            span: crate::span::Span::unknown(),
+        }
     }
 
     fn out(expr: ast::Expression) -> ast::Statement {

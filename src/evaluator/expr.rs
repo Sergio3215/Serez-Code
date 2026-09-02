@@ -128,7 +128,10 @@ impl super::Evaluator {
             return Ok(None);
         };
         let (dict_expr, key_expr) = (idx_expr.left.as_ref(), idx_expr.index.as_ref());
-        let Expression::Identifier(dict_name) = dict_expr else {
+        let Expression::Identifier {
+            name: dict_name, ..
+        } = dict_expr
+        else {
             return Ok(None);
         };
         let Some(dr) = self.lookup_var(dict_name.as_str()) else {
@@ -205,7 +208,7 @@ impl super::Evaluator {
             Expression::Boolean(b) => EvalResult::Value(self.alloc(ObjectData::Boolean(*b))),
             Expression::Null => EvalResult::Value(self.null_ref),
 
-            Expression::Identifier(name) => match self.lookup_var(name) {
+            Expression::Identifier { name, .. } => match self.lookup_var(name) {
                 Some(r) => EvalResult::Value(r),
                 None => {
                     let n = name.clone();
@@ -282,7 +285,7 @@ impl super::Evaluator {
 
             Expression::Call(call_expr) => {
                 // Built-in global functions (intercept before variable lookup)
-                if let Expression::Identifier(name) = call_expr.function.as_ref() {
+                if let Expression::Identifier { name, .. } = call_expr.function.as_ref() {
                     match name.as_str() {
                         "parseInt" => return self.eval_parse_int(&call_expr.arguments),
                         "parseDecimal" => return self.eval_parse_decimal(&call_expr.arguments),
@@ -328,7 +331,7 @@ impl super::Evaluator {
                 };
 
                 let call_name = match call_expr.function.as_ref() {
-                    Expression::Identifier(name) => name.clone(),
+                    Expression::Identifier { name, .. } => name.clone(),
                     _ => "<anonymous>".to_string(),
                 };
                 let call_line = call_expr.span.line;
@@ -348,7 +351,7 @@ impl super::Evaluator {
                 // still see the shadow, but `name(...)` falls back to the
                 // nearest binding that actually holds a function.
                 if !matches!(func_data, Some(ObjectData::Function { .. })) {
-                    if let Expression::Identifier(name) = call_expr.function.as_ref() {
+                    if let Expression::Identifier { name, .. } = call_expr.function.as_ref() {
                         if let Some(fref) = self.lookup_callable(name) {
                             func_data = self.resolve(fref).cloned();
                         }
@@ -887,7 +890,7 @@ impl super::Evaluator {
 
             Expression::DotCall(dot_call) => {
                 // super.method(args) — dispatch to parent class method
-                if let Expression::Identifier(ref name) = *dot_call.object {
+                if let Expression::Identifier { ref name, .. } = *dot_call.object {
                     if name == "super" {
                         return self.eval_super_method_call(dot_call);
                     }
@@ -1351,7 +1354,7 @@ impl super::Evaluator {
                 };
                 let left_data = self.resolve(left_ref).unwrap().clone();
                 let type_name = match infix_expr.right.as_ref() {
-                    Expression::Identifier(n) => n.as_str(),
+                    Expression::Identifier { name: n, .. } => n.as_str(),
                     _ => return EvalResult::Error,
                 };
                 let result = type_matches(type_name, &left_data);
@@ -1472,7 +1475,7 @@ impl super::Evaluator {
             }
 
             Expression::AddressOf(inner) => {
-                if let Expression::Identifier(name) = inner.as_ref() {
+                if let Expression::Identifier { name, .. } = inner.as_ref() {
                     if self.lookup_var(name).is_none() {
                         let message =
                             format!("Cannot take address of undeclared variable '{name}'");

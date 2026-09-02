@@ -36,7 +36,7 @@ use crate::token::TokenType;
 /// El evaluador vuelve a recorrer la misma forma para encontrar el slot.
 fn is_writable_chain(e: &Expression) -> bool {
     match e {
-        Expression::Identifier(_) => true,
+        Expression::Identifier { name: _, .. } => true,
         Expression::DotCall(d) if d.arguments.is_empty() && !d.has_parens => {
             is_writable_chain(&d.object)
         }
@@ -76,7 +76,10 @@ impl Parser {
             // obj.field = val  or  obj.field += val
             if let Expression::DotCall(ref dot) = expr {
                 if dot.arguments.is_empty() {
-                    if let Expression::Identifier(ref obj_name) = *dot.object {
+                    if let Expression::Identifier {
+                        name: ref obj_name, ..
+                    } = *dot.object
+                    {
                         let object = obj_name.clone();
                         let field = dot.method.clone();
                         let line = dot.span.line;
@@ -92,7 +95,10 @@ impl Parser {
                         let value = if let Some(op) = op_str {
                             Expression::Infix(InfixExpression {
                                 left: Box::new(Expression::DotCall(DotCallExpression {
-                                    object: Box::new(Expression::Identifier(object.clone())),
+                                    object: Box::new(Expression::Identifier {
+                                        name: object.clone(),
+                                        span: dot.span,
+                                    }),
                                     method: field.clone(),
                                     arguments: vec![],
                                     has_parens: false,
@@ -144,7 +150,10 @@ impl Parser {
 
             if let Expression::DotCall(ref dot) = expr {
                 if dot.arguments.is_empty() {
-                    if let Expression::Identifier(ref obj_name) = *dot.object {
+                    if let Expression::Identifier {
+                        name: ref obj_name, ..
+                    } = *dot.object
+                    {
                         let object = obj_name.clone();
                         let field = dot.method.clone();
                         let dline = dot.span.line;
@@ -155,7 +164,10 @@ impl Parser {
                         }
                         let value = Expression::Infix(InfixExpression {
                             left: Box::new(Expression::DotCall(DotCallExpression {
-                                object: Box::new(Expression::Identifier(object.clone())),
+                                object: Box::new(Expression::Identifier {
+                                    name: object.clone(),
+                                    span: dot.span,
+                                }),
                                 method: field.clone(),
                                 arguments: vec![],
                                 has_parens: false,
@@ -309,7 +321,7 @@ impl Parser {
             return None;
         }
         // Un solo salto sobre una variable ya lo cubre FieldAssign.
-        if matches!(*dot.object, Expression::Identifier(_)) {
+        if matches!(*dot.object, Expression::Identifier { name: _, .. }) {
             return None;
         }
 
@@ -404,7 +416,10 @@ impl Parser {
             self.next_token();
         }
         let value = Expression::Infix(InfixExpression {
-            left: Box::new(Expression::Identifier(name.clone())),
+            left: Box::new(Expression::Identifier {
+                name: name.clone(),
+                span: Span::point(line, column),
+            }),
             operator: op,
             right: Box::new(rhs),
             span: Span::point(line, column),

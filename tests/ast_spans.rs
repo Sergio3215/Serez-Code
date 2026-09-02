@@ -15,14 +15,21 @@
 //!   `native fn` each begin with the keyword that names them, so the extent is
 //!   the whole construct — `let x = 1 + 2;`, or a function including its body.
 //! - **Expressions are partial.** A call spans from its `(` and an infix
-//!   expression from its operator, *not* from the callee or the left operand,
-//!   because those are `Identifier`s and the like which carry no span until
-//!   M2.6. `foo(1, 2)` therefore yields `(1, 2)`.
+//!   expression from its operator, *not* from the callee or the left operand.
+//!   `foo(1, 2)` therefore yields `(1, 2)`.
 //!
-//! Both are real and correct; the second is narrower than it will eventually be.
-//! These tests assert what is true today rather than what is wanted later, so
-//! that when M2.6 widens the expression extents it has to update them
-//! deliberately rather than discovering the change afterwards.
+//! Until M2.6b the reason was that the callee had no span to reach back to.
+//! That is no longer true — an `Identifier` now carries one, and
+//! `an_identifier_spans_exactly_its_name` proves it. What remains is the
+//! widening itself: every construction site would have to take the left
+//! operand's span instead of the operator's token, which changes what a
+//! diagnostic points at and is therefore its own molecule (M2.6c) rather than a
+//! side effect of this one.
+//!
+//! Both forms are real and correct; the second is narrower than it will
+//! eventually be. These tests assert what is true today rather than what is
+//! wanted later, so that widening has to update them deliberately instead of
+//! being discovered afterwards.
 //!
 //! `line` and `column` are unaffected by any of this and must stay so — they
 //! are what `spec/errors.md` promises a caught `Error.span` reports.
@@ -70,8 +77,8 @@ fn a_call_spans_its_argument_list() {
     assert_eq!(
         slice(source, call.span),
         "(1, 2)",
-        "a call's extent runs from its own `(`; widening it to include the \
-         callee needs the callee to carry a span, which is M2.6"
+        "a call's extent runs from its own `(`. Since M2.6b the callee has a \
+         span to reach back to; widening to use it is M2.6c"
     );
     // The rendered position is unchanged by any of that: it is the `(`.
     assert_eq!((call.span.line, call.span.column), (1, 8));
@@ -294,6 +301,48 @@ fn an_else_if_wrapper_has_no_position_at_all() {
         !alternative.span.is_known(),
         "the synthetic else-if wrapper should carry no position, got {:?}",
         alternative.span
+    );
+}
+
+#[test]
+fn an_identifier_spans_exactly_its_name() {
+    // The most load-bearing span in the language: it is what an
+    // undefined-variable error, go-to-definition and rename would each point at.
+    // An identifier is the one node whose extent has no judgement in it — it is
+    // exactly the name, no more — so this is the sharpest available check that
+    // the offsets are right rather than merely plausible.
+    let source = "let alpha = 1;\nout alpha;\n";
+    let program = parse(source);
+    let Statement::Out(out) = &program.statements[1] else {
+        panic!("expected an out");
+    };
+    let Expression::Identifier { name, span } = &out.value else {
+        panic!("expected an identifier");
+    };
+    assert_eq!(name, "alpha");
+    assert_eq!(slice(source, *span), "alpha");
+    assert_eq!((span.line, span.column), (2, 5));
+}
+
+#[test]
+fn a_multibyte_identifier_spans_its_bytes_while_its_column_counts_characters() {
+    // Bytes and columns move by different amounts, and only a non-ASCII name can
+    // show it. `spec/lexical-grammar.md` makes the column rule normative.
+    let source = "let café = 1;\nout café;\n";
+    let program = parse(source);
+    let Statement::Out(out) = &program.statements[1] else {
+        panic!("expected an out");
+    };
+    let Expression::Identifier { name, span } = &out.value else {
+        panic!("expected an identifier");
+    };
+    assert_eq!(name, "café");
+    assert_eq!(slice(source, *span), "café");
+    assert_eq!(span.column, 5, "columns count scalar values");
+    assert_eq!(
+        span.end - span.start,
+        5,
+        "café is five bytes, four characters"
     );
 }
 

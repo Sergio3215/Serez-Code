@@ -288,7 +288,10 @@ impl Parser {
                 self.next_token(); // advance to variant name
                 let variant = self.current_token.literal.clone();
                 let expr = Expression::DotCall(DotCallExpression {
-                    object: Box::new(Expression::Identifier(name)),
+                    object: Box::new(Expression::Identifier {
+                        name,
+                        span: pattern_open,
+                    }),
                     method: variant,
                     arguments: vec![],
                     has_parens: false,

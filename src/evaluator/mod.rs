@@ -357,7 +357,7 @@ fn collect_idents_stmt(s: &crate::ast::Statement, out: &mut Vec<String>) {
 fn collect_idents_expr(e: &crate::ast::Expression, out: &mut Vec<String>) {
     use crate::ast::Expression as Ex;
     match e {
-        Ex::Identifier(n) => out.push(n.clone()),
+        Ex::Identifier { name: n, .. } => out.push(n.clone()),
         Ex::Prefix(_, inner) | Ex::Spread(inner) | Ex::AddressOf(inner) | Ex::Deref(inner) => {
             collect_idents_expr(inner, out)
         }
