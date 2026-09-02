@@ -18,9 +18,9 @@ Read before starting any milestone, in this order:
 | | |
 |---|---|
 | **Current milestone** | **M2 — AST + Spans Stable. IN PROGRESS.** |
-| Goals done in M2 | **M2.0** — span audit (§5.4 corrected, §5.21) |
+| Goals done in M2 | **M2.0** audit · **M2.1.1–M2.1.2** cost and consumer measurement |
 | Last completed milestone | **M1 — Parser Molecular** (M0 before it) |
-| Next molecule | **M2.1** — decide the `Span` contract before writing one: what it stores, what it renders, and how far coverage should reach. See §9B. |
+| Next molecule | **M2.1.3 — blocked on a decision.** The measurements say spans have no consumer today; §9B.2 sets out three options and recommends reordering M3 before M2. |
 | Branch | `improve` |
 | Baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
@@ -1117,13 +1117,76 @@ so far — M0 and M1 were measurement and relocation, where the right answer was
 discoverable from the code. This one is not: all three options are defensible,
 and the choice depends on what the LSP is meant to become.
 
+### 9B.1 What M2.1.1 and M2.1.2 measured — and why M2 is not what the charter assumed
+
+Two measurements, both of which say the same thing: **adding spans to AST nodes
+would, by itself, improve nothing, because nothing consumes AST spans.**
+
+**1. A runtime error takes its position from the call stack, not from the node
+that failed.** `evaluator/mod.rs:record_runtime_error` builds the span as
+`self.call_stack.last().map(|frame| …)`. All 1,029 `rt_err_kind` /
+`fatal_err_kind` sites go through it. Measured:
+
+```
+sz --eval 'try { let a = [1]; out a[99]; } catch (e) { out "span=" + e.span; }'
+  ->  span=null                     # the failure is on line 1; nothing is reported
+
+sz --eval 'fn int boom() { let a = [1]; return a[99]; }
+           try { out boom(); } catch (e) { out "span=" + e.span; }'
+  ->  span=2:15                     # line 2 col 15 is the CALL SITE, not the failure
+```
+
+So the position a user sees is *where the innermost function was called from*.
+An error outside any function has no position at all — which is the real reason
+`spec/errors.md` types `Error.span` as nullable.
+
+This also explains the 10% coverage. It is not an oversight: `CallExpression`,
+`DotCallExpression` and `InfixExpression` carry positions because **those are the
+nodes that create call frames**, and call frames are the only thing that carries
+a position into a runtime error. The current design is coherent, just coarse.
+
+**2. The LSP throws the AST away.** `grep 'program\.'` in `lsp/analysis.rs`
+returns nothing. It parses, takes `parser.take_errors()` for diagnostics, and
+discards the `Program`. Every symbol comes from `scan_symbols`, a hand-rolled
+token scanner tracking `depth: i32` and a `class_stack`; references and rename
+come from `occurrences`, which re-lexes and filters identifiers by name; import
+paths come from `str::find('"')` on raw lines.
+
+So the one consumer that actually wants ranges does not read the AST at all.
+
+**What follows.** The charter's plan — migrate literals, then identifiers, then
+expressions, then statements, then declarations — would add a field to 48 types
+and change the lexer, to serve no existing reader. Making those spans matter
+means changing *how a runtime error acquires its position*: from
+`call_stack.last()` to the failing node. That is 1,029 call sites in the
+evaluator, and it is **M3's charter** ("one diagnostic model per conceptual
+error", "zero silent failures"), not M2's.
+
+**This is a sequencing question, and it is the user's to answer.** The options
+are set out in §9B.2; M2.1.3 is where it gets decided rather than drifted into.
+
+### 9B.2 The decision M2.1.3 must record
+
+| Option | What it costs | What it buys |
+|---|---|---|
+| **A. Re-scope M2 small, then M3** | ~1 day. Introduce `Span`, replace the 5 inlined pairs, delete or populate the 2 dead fields, stop. | Removes the duplication and gives M3 a type to build on. Changes no diagnostic. |
+| **B. M3 before M2** | Reorders the roadmap. M3 fixes §5.17 (nine errors that reach nobody) and decides where a runtime error's position comes from; M2 then adds spans *to the nodes M3 proved it needs*. | Every span added has a consumer the day it lands. Fixes a user-visible defect first. |
+| **C. M2 as chartered** | 48 types, the lexer, 29 parser sites, and a larger AST node. | Maximum fidelity, no user-visible improvement until M3 lands anyway. |
+
+**Recommended: B, with A folded into it.** The evidence is that spans are not the
+bottleneck — the bottleneck is that diagnostics do not know where they happened
+and, for nine of them, do not exist at all. Doing M3 first means M2's work is
+sized by measured need instead of guessed at, and it fixes something a user can
+see. `Span` itself (option A's cheap part) can land first either way, since M3
+will want the type.
+
 ### M2.1 — molecules (planned)
 
 | Molecule | Action | Verification |
 |---|---|---|
-| **M2.1.1** | Measure the cost of each option: how many `Token` sites, parser sites and AST types each touches; what it does to `size_of` on the hot nodes | Numbers in this file; no code change |
-| **M2.1.2** | Measure what the LSP loses today by re-lexing for ranges, so the benefit side is evidence rather than assertion | Numbers in this file; no code change |
-| **M2.1.3** | Write the `Span` contract into `spec/` — what it stores, what renders, what stays nullable — and get the choice confirmed before implementing | A spec section; **stop for the decision** |
+| **M2.1.1** | Measure the cost surface of each option | **done** — 48 AST types, 56 `Token` construction sites, 29 parser position sites, 17 of them reading a token position directly |
+| **M2.1.2** | Measure what consumes AST spans today | **done** — §9B.1. Nothing does: runtime errors read the call stack, the LSP discards the `Program` |
+| **M2.1.3** | Record the decision §9B.2 sets out, then write the contract into `spec/` | **awaiting the decision** — the measurements are in; the choice is the user's |
 
 Only after M2.1.3 do M2.2+ (introduce the type, migrate node families, remove
 the two dead fields) become writable. Decomposing them now would presume the
