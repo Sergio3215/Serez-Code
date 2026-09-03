@@ -529,22 +529,80 @@ impl Server {
             v
         };
 
+        // Nested by container, to any depth. It used to nest one level and only
+        // under a class, which was all the token scan could support: everything
+        // else arrived with `container: None` and was emitted at the root,
+        // including a `fn` declared inside a lambda. DEC-M4-004 decided the
+        // outline shows real declarations with real nesting, and
+        // `semantic::declarations` now supplies the container for each one.
+        //
+        // Walked by **index**, not by value, and that is not a detail. A
+        // constructor is reported under its class's own name, so `Animal` is
+        // contained by `Animal`: matching parent to child by name alone makes
+        // that symbol its own child, forever. Comparing indices, and carrying the
+        // set already placed, makes the walk terminate on any input — including
+        // two declarations that share a name, which the language allows across
+        // scopes.
+        //
+        // Depth is deliberately *not* the test. A class's methods and fields are
+        // emitted at the same depth as the class — they are members, not a nested
+        // body — so a depth-based filter drops exactly the children the outline
+        // most needs.
+        fn children_of(
+            symbols: &[analysis::SymbolInfo],
+            parent: usize,
+            placed: &mut Vec<bool>,
+            to_symbol: &dyn Fn(&analysis::SymbolInfo, Vec<Value>) -> Value,
+        ) -> Vec<Value> {
+            let name = symbols[parent].name.clone();
+            let mine: Vec<usize> = symbols
+                .iter()
+                .enumerate()
+                .filter(|(i, c)| {
+                    *i != parent
+                        && !placed[*i]
+                        && c.kind != SymbolKind::Import
+                        && c.container.as_deref() == Some(name.as_str())
+                })
+                .map(|(i, _)| i)
+                .collect();
+            for i in &mine {
+                placed[*i] = true;
+            }
+            mine.into_iter()
+                .map(|i| to_symbol(&symbols[i], children_of(symbols, i, placed, to_symbol)))
+                .collect()
+        }
+
+        // A root is a symbol with no parent *in this file*. That is not the same
+        // as "no container": a declaration inside `test("…", () => { … })`
+        // written at the top of a file is contained by `test`, and `test` comes
+        // from the prepended framework rather than from the document. Treating
+        // an unresolvable container as "not a root" would **hide** the
+        // declaration entirely — the one direction the outline must never move
+        // in, and the one `semantic_divergence` has always asserted against.
+        //
+        // So an orphan is emitted at the root, which is the only place a tree can
+        // put it. `SymbolInfo::depth` still records that it is not top-level, and
+        // that is what the equivalence assertion compares on.
+        let names: std::collections::HashSet<&str> =
+            doc.symbols.iter().map(|s| s.name.as_str()).collect();
+        let is_root = |s: &analysis::SymbolInfo| match &s.container {
+            None => true,
+            Some(c) => !names.contains(c.as_str()),
+        };
+
+        let mut placed = vec![false; doc.symbols.len()];
         let mut out: Vec<Value> = Vec::new();
-        for s in &doc.symbols {
-            if s.container.is_some() || s.kind == SymbolKind::Import {
+        for (i, s) in doc.symbols.iter().enumerate() {
+            if s.kind == SymbolKind::Import || placed[i] || !is_root(s) {
                 continue;
             }
-            if s.kind == SymbolKind::Class {
-                let children: Vec<Value> = doc
-                    .symbols
-                    .iter()
-                    .filter(|m| m.container.as_deref() == Some(s.name.as_str()))
-                    .map(|m| to_symbol(m, Vec::new()))
-                    .collect();
-                out.push(to_symbol(s, children));
-            } else {
-                out.push(to_symbol(s, Vec::new()));
-            }
+            placed[i] = true;
+            out.push(to_symbol(
+                s,
+                children_of(&doc.symbols, i, &mut placed, &to_symbol),
+            ));
         }
         json!(out)
     }
@@ -1080,6 +1138,101 @@ mod tests {
         assert_eq!(class["kind"], 5);
         let children = class["children"].as_array().expect("children");
         assert!(children.iter().any(|c| c["name"] == "getNombre"));
+    }
+
+    #[test]
+    fn document_symbols_nest_a_declaration_under_the_function_that_encloses_it() {
+        // DEC-M4-004. The token scan reported this `isEven` with no container,
+        // so an editor listed it beside `suite` as though it were declared at
+        // the top of the file. §9F.2 measured that in 95 of 483 corpus files.
+        let mut server = Server::default();
+        open(
+            &mut server,
+            "fn void suite() {\n    test(\"mutual\", () => {\n        fn bool isEven(int n) { return true; }\n    });\n}\n",
+        );
+        let replies = send(
+            &mut server,
+            request(
+                7,
+                "textDocument/documentSymbol",
+                json!({ "textDocument": { "uri": URI } }),
+            ),
+        );
+        let symbols = replies[0]["result"].as_array().unwrap();
+        assert_eq!(symbols.len(), 1, "only `suite` is top-level: {symbols:?}");
+        let suite = &symbols[0];
+        assert_eq!(suite["name"], "suite");
+        let children = suite["children"].as_array().expect("children");
+        assert!(
+            children.iter().any(|c| c["name"] == "isEven"),
+            "the nested declaration is missing: {children:?}"
+        );
+    }
+
+    #[test]
+    fn a_declaration_with_no_parent_in_this_file_is_still_shown() {
+        // The other direction, and the one that matters more. Here `double` is
+        // contained by `test`, which comes from the prepended framework and is
+        // not declared in this document — so its container resolves to nothing.
+        //
+        // It must still appear. Hiding a declaration is the one move the outline
+        // may never make, and treating an unresolvable container as "not a root"
+        // would do exactly that.
+        let mut server = Server::default();
+        open(
+            &mut server,
+            "test(\"top level\", () => {\n    fn int double(int n) { return n * 2; }\n});\n",
+        );
+        let replies = send(
+            &mut server,
+            request(
+                8,
+                "textDocument/documentSymbol",
+                json!({ "textDocument": { "uri": URI } }),
+            ),
+        );
+        let symbols = replies[0]["result"].as_array().unwrap();
+        assert!(
+            symbols.iter().any(|s| s["name"] == "double"),
+            "an orphaned declaration was hidden: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn document_symbols_show_fields_constructors_and_enum_variants() {
+        // Kinds the token scan could not tell apart, and a constructor it
+        // reported under a name the class shares. All four come from the tree
+        // now, with the LSP kinds an editor draws icons from: 8 Field,
+        // 9 Constructor, 6 Method, 22 EnumMember.
+        let mut server = Server::default();
+        open(
+            &mut server,
+            "class Animal {\n    edad: int = 0;\n    public Animal(string n) { this.nombre = n; }\n    public string getNombre() { return this.nombre; }\n}\nenum Color { Red, Green }\n",
+        );
+        let replies = send(
+            &mut server,
+            request(
+                9,
+                "textDocument/documentSymbol",
+                json!({ "textDocument": { "uri": URI } }),
+            ),
+        );
+        let symbols = replies[0]["result"].as_array().unwrap();
+        let kind_of = |parent: &str, child: &str| -> Option<u64> {
+            symbols
+                .iter()
+                .find(|s| s["name"] == parent)?
+                .get("children")?
+                .as_array()?
+                .iter()
+                .find(|c| c["name"] == child)?
+                .get("kind")?
+                .as_u64()
+        };
+        assert_eq!(kind_of("Animal", "edad"), Some(8), "field");
+        assert_eq!(kind_of("Animal", "Animal"), Some(9), "constructor");
+        assert_eq!(kind_of("Animal", "getNombre"), Some(6), "method");
+        assert_eq!(kind_of("Color", "Red"), Some(22), "enum variant");
     }
 
     #[test]

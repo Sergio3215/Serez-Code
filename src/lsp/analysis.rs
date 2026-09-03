@@ -6,6 +6,7 @@
 // parse errors — which is the normal state while the user is typing.
 use crate::lexer::Lexer;
 use crate::parser::Parser;
+use crate::semantic;
 use crate::token::{Token, TokenType};
 use crate::type_checker::TypeChecker;
 
@@ -33,6 +34,11 @@ pub enum SymbolKind {
     Enum,
     Variable,
     Constant,
+    /// A class field. The language has had these all along; the editor enum did
+    /// not, because the token scan could not tell a field from a variable.
+    Field,
+    /// A variant of an enum, contained by it.
+    EnumMember,
     Import,
 }
 
@@ -48,6 +54,8 @@ impl SymbolKind {
             SymbolKind::Enum => 10,
             SymbolKind::Variable => 13,
             SymbolKind::Constant => 14,
+            SymbolKind::Field => 8,
+            SymbolKind::EnumMember => 22,
             SymbolKind::Import => 2, // Module
         }
     }
@@ -62,6 +70,8 @@ impl SymbolKind {
             SymbolKind::Enum => 13,
             SymbolKind::Variable => 6,
             SymbolKind::Constant => 21,
+            SymbolKind::Field => 5,
+            SymbolKind::EnumMember => 20,
             SymbolKind::Import => 9,
         }
     }
@@ -76,8 +86,17 @@ pub struct SymbolInfo {
     pub column: usize,
     /// Signature-like one-liner (source slice), for hover/documentSymbol.
     pub detail: String,
-    /// Enclosing class name, for methods/fields.
+    /// The name this declaration is inside: a class for a method or field, the
+    /// enclosing function for a nested `fn`, the callee for something declared
+    /// in a lambda passed to it, the binding for a literal assigned to one.
     pub container: Option<String>,
+    /// How deeply nested the declaration is; `0` at the top level.
+    ///
+    /// The fact a token scan cannot recover, and the reason the outline used to
+    /// disagree with the compiler in a fifth of the corpus (§9F.2). `.szx`
+    /// documents come from the token scan and report `0` throughout — see
+    /// [`analyze_szx`].
+    pub depth: usize,
 }
 
 pub struct Analysis {
@@ -160,12 +179,133 @@ pub fn analyze(text: &str) -> Analysis {
         });
     }
 
-    let symbols = scan_symbols(text, &lines);
+    // **DEC-M4-004, decided: option B.** The outline comes from the tree the
+    // compiler built, not from a second lex of the same text.
+    //
+    // `analyze` used to parse, type-check, and then throw the parse tree away —
+    // building the outline with `scan_symbols`, which re-lexed the source and
+    // could not see nesting. §9F.2 measured the cost: in **95 of 483 files** the
+    // outline showed a top-level symbol the tree does not have, always in that
+    // direction, because a `fn` inside a lambda was reported as though it were
+    // declared at the top of the file.
+    //
+    // `scan_symbols` stays for `.szx`, where the parser does not speak JSX and
+    // tolerating arbitrary broken regions is the whole point. That justification
+    // never transferred to `.sz`.
+    // One exception, and it is about a case DEC-M4-004 did not cover: a file the
+    // parser could not read.
+    //
+    // An AST-derived outline can only show what parsed, and while a user is
+    // typing the file is usually broken. `fn int suma(…) { … }` followed by
+    // `if (true {` and then `let z = 1;` recovers far enough to keep `suma` and
+    // loses `z` entirely — the token scan kept both. That is a real regression in
+    // an editor, on a different axis from the one the decision is about.
+    //
+    // So the tree is the source of truth whenever there *is* one, and the token
+    // scan is a fallback for when there is not. That is not the "second scanner
+    // reinterpreting the code independently" the decision removes: on a file that
+    // parses — every file in the corpus, and every file a user is not
+    // mid-keystroke in — it never runs. Whether the fallback should exist at all
+    // is registered as **DEC-M4-009** rather than settled here.
+    let symbols = if diagnostics.iter().any(|d| d.severity == 1) {
+        scan_symbols(text, &lines)
+    } else {
+        symbols_from_tree(&program, &lines)
+    };
     Analysis {
         lines,
         diagnostics,
         symbols,
     }
+}
+
+/// The editor's symbols, derived from the AST.
+///
+/// A straight mapping of `semantic::declarations` onto the editor's vocabulary.
+/// Two things are deliberately not carried across:
+///
+///   * **`import`.** `semantic` has no such kind — a path is not a name — and
+///     nothing consumed the `Import` entries the token scan produced: every
+///     reader of the symbol list filters them out, and imports are *followed*
+///     through `import_paths`, which reads the source separately.
+///   * **anything the tree does not have.** That is the point.
+fn symbols_from_tree(program: &crate::ast::Program, lines: &[String]) -> Vec<SymbolInfo> {
+    crate::semantic::declarations(program)
+        .into_iter()
+        .map(|s| SymbolInfo {
+            kind: match s.kind {
+                semantic::SymbolKind::Function | semantic::SymbolKind::NativeFunction => {
+                    SymbolKind::Function
+                }
+                semantic::SymbolKind::Class => SymbolKind::Class,
+                semantic::SymbolKind::Interface => SymbolKind::Interface,
+                semantic::SymbolKind::Enum => SymbolKind::Enum,
+                semantic::SymbolKind::EnumVariant => SymbolKind::EnumMember,
+                semantic::SymbolKind::Method => SymbolKind::Method,
+                semantic::SymbolKind::Constructor => SymbolKind::Constructor,
+                semantic::SymbolKind::Field => SymbolKind::Field,
+                semantic::SymbolKind::Variable => SymbolKind::Variable,
+                semantic::SymbolKind::Constant => SymbolKind::Constant,
+            },
+            detail: detail_at(lines, s.span.line),
+            line: s.span.line,
+            column: name_column(lines, s.span.line, &s.name).unwrap_or(s.span.column),
+            name: s.name,
+            container: s.container,
+            depth: s.depth,
+        })
+        .collect()
+}
+
+/// The column the declared name starts at, on the line the declaration starts on.
+///
+/// Go-to-definition should land on the name, not on the `fn` or `class` keyword
+/// in front of it. The AST cannot say where the name is: a declaration node
+/// carries one span, for itself, and giving each of them a `name_span` means
+/// changing three AST structs and moving a manifest row for every class,
+/// interface and enum in the corpus — recorded as §5.40 and out of proportion to
+/// one column.
+///
+/// So the span anchors the search and the line supplies the column: the first
+/// whole-word occurrence of the name on that line. `None` when it is not there —
+/// a declaration whose name is on a later line — and the caller keeps the
+/// declaration's own column, which is still inside the right construct.
+fn name_column(lines: &[String], line: usize, name: &str) -> Option<usize> {
+    let text = line.checked_sub(1).and_then(|i| lines.get(i))?;
+    let bytes = text.as_bytes();
+    let mut from = 0usize;
+    while let Some(hit) = text[from..].find(name) {
+        let start = from + hit;
+        let end = start + name.len();
+        let before_ok = start == 0 || !is_ident_char(bytes[start - 1] as char);
+        let after_ok = end >= bytes.len() || !is_ident_char(bytes[end] as char);
+        if before_ok && after_ok {
+            // 1-based, and counted in characters rather than bytes so a line with
+            // a non-ASCII prefix does not shift the caret.
+            return Some(text[..start].chars().count() + 1);
+        }
+        from = end;
+    }
+    None
+}
+
+/// The one-line signature an editor shows beside a symbol.
+///
+/// The AST carries no source text, so this is derived from the span — the line
+/// the declaration starts on, trimmed, with a trailing `{` dropped so a class or
+/// function reads as a signature rather than as the start of a block. Truncated,
+/// because a `documentSymbol` detail is a label and a 300-column line is not one.
+fn detail_at(lines: &[String], line: usize) -> String {
+    let Some(text) = line.checked_sub(1).and_then(|i| lines.get(i)) else {
+        return String::new();
+    };
+    let trimmed = text.trim().trim_end_matches('{').trim_end();
+    const MAX: usize = 120;
+    if trimmed.chars().count() <= MAX {
+        return trimmed.to_string();
+    }
+    let cut: String = trimmed.chars().take(MAX).collect();
+    format!("{cut}…")
 }
 
 // ── Symbol scanning ───────────────────────────────────────────────────────────
@@ -301,6 +441,8 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                 }
                 for nt in names {
                     symbols.push(SymbolInfo {
+                        // The token scan cannot see nesting; `.szx` is the only caller now.
+                        depth: 0,
                         name: nt.literal.clone(),
                         kind,
                         line: nt.span.line,
@@ -322,6 +464,8 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                             _ => SymbolKind::Enum,
                         };
                         symbols.push(SymbolInfo {
+                            // The token scan cannot see nesting; `.szx` is the only caller now.
+                            depth: 0,
                             name: nt.literal.clone(),
                             kind,
                             line: nt.span.line,
@@ -405,6 +549,8 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                 if let Some(nt) = tokens.get(i + 1) {
                     if nt.token_type == TokenType::String {
                         symbols.push(SymbolInfo {
+                            // The token scan cannot see nesting; `.szx` is the only caller now.
+                            depth: 0,
                             name: nt.literal.clone(),
                             kind: SymbolKind::Import,
                             line: nt.span.line,
@@ -469,6 +615,8 @@ fn push_callable(
         (close_tok.span.line, close_tok.span.column + 1),
     );
     symbols.push(SymbolInfo {
+        // The token scan cannot see nesting; `.szx` is the only caller now.
+        depth: 0,
         name: name_tok.literal.clone(),
         kind,
         line: name_tok.span.line,
@@ -688,7 +836,15 @@ fn int doble(int n) {
         assert_eq!(sym(&a.symbols, "y").kind, SymbolKind::Variable);
         assert_eq!(sym(&a.symbols, "Animal").kind, SymbolKind::Class);
         assert_eq!(sym(&a.symbols, "Color").kind, SymbolKind::Enum);
-        assert_eq!(sym(&a.symbols, "utils.sz").kind, SymbolKind::Import);
+        // `import "utils.sz"` no longer produces a symbol. DEC-M4-004 took the
+        // outline from the tree, and `semantic` has no `Import` kind on purpose:
+        // a path is not a name. Nothing consumed these — every reader of the
+        // list filtered them out — and imports are *followed* through
+        // `import_paths`, which reads the source separately and still does.
+        assert!(
+            !a.symbols.iter().any(|s| s.kind == SymbolKind::Import),
+            "a path is not a declaration"
+        );
 
         // second typed function (the named arrow form `int doble(int n) => {}`
         // is NOT valid serez — the parser now reports it; see t6 regression)
@@ -794,9 +950,15 @@ mod semantic_divergence {
     /// new module, and a second hand-rolled walk here would only prove the test
     /// agrees with itself.
     ///
-    /// Restricted to the four kinds `scan_symbols` also reports at the top
-    /// level, so a difference is a real disagreement rather than two tools
-    /// answering different questions.
+    /// Restricted to the kinds that map onto one editor kind each, so a
+    /// difference is a real disagreement rather than two tools answering
+    /// different questions.
+    ///
+    /// `NativeFunction` is in the list and was not: the filter was written when
+    /// the other side was a token scan that reported four kinds, and `native fn
+    /// string fetch(string url);` — six corpus files — became the whole
+    /// difference once both sides came from the tree. A `native fn` is a
+    /// declaration; the editor shows it as a function, and so does this.
     fn declared_by_the_tree(source: &str) -> BTreeSet<String> {
         let mut parser = Parser::new(Lexer::new(source.to_string()));
         let program = parser.parse_program();
@@ -806,6 +968,7 @@ mod semantic_divergence {
                 matches!(
                     s.kind,
                     crate::semantic::SymbolKind::Function
+                        | crate::semantic::SymbolKind::NativeFunction
                         | crate::semantic::SymbolKind::Class
                         | crate::semantic::SymbolKind::Interface
                         | crate::semantic::SymbolKind::Enum
@@ -821,7 +984,11 @@ mod semantic_divergence {
             .symbols
             .into_iter()
             .filter(|s| {
-                s.container.is_none()
+                // `depth == 0`, not `container.is_none()`. A declaration inside a
+                // lambda at the top of a file has no resolvable container and is
+                // still not top-level; depth is the fact that says so, and it is
+                // the fact the token scan could not recover.
+                s.depth == 0
                     && matches!(
                         s.kind,
                         SymbolKind::Function
@@ -881,20 +1048,32 @@ mod semantic_divergence {
             files.len()
         );
 
-        // Two directions, and they are not equally serious.
+        // Both directions are asserted now, where only one used to be.
         //
-        //   * `tree - scan` — the parse tree has a top-level declaration the
-        //     outline does not show. The editor would be **hiding** a symbol
-        //     that exists: go-to-definition fails on real code. Asserted.
+        //   * `tree - scan` — the outline hides a declaration that exists. It
+        //     was asserted before and stays asserted.
         //   * `scan - tree` — the outline shows a top-level symbol the tree does
-        //     not have. Measured and reported, not asserted, because the count
-        //     moves whenever a fixture is added.
+        //     not have. This was the 95-file measurement, *reported* because the
+        //     count moved whenever a fixture was added. It is 0 by construction
+        //     now, so it is an assertion: a file that over-reports means a second
+        //     derivation came back.
+        //
+        // A file the parser rejects is skipped. `analyze` falls back to the
+        // token scan there on purpose — see the note beside it — so comparing
+        // the two on a broken file would assert that the fallback does not exist.
         let mut hidden = Vec::new();
-        let mut over_reported = 0usize;
+        let mut over_reported: Vec<String> = Vec::new();
+        let mut compared = 0usize;
         for path in &files {
             let Ok(source) = std::fs::read_to_string(path) else {
                 continue;
             };
+            let analysis = analyze(&source);
+            if analysis.diagnostics.iter().any(|d| d.severity == 1) {
+                continue;
+            }
+            compared += 1;
+
             let tree = declared_by_the_tree(&source);
             let scan = declared_by_the_scan(&source);
             let name = path
@@ -907,27 +1086,35 @@ mod semantic_divergence {
             if !missing.is_empty() {
                 hidden.push(format!("  {name}: the outline omits {missing:?}"));
             }
-            if scan.difference(&tree).next().is_some() {
-                over_reported += 1;
+            let extra: Vec<_> = scan.difference(&tree).cloned().collect();
+            if !extra.is_empty() {
+                over_reported.push(format!("  {name}: the outline invents {extra:?}"));
             }
         }
 
-        // The number §9F.2 records, printed so a reader of the test output sees
-        // the size of the gap M4 is closing rather than only that it is green.
-        eprintln!(
-            "outline vs parse tree: {} of {} files over-report a top-level symbol",
-            over_reported,
+        assert!(
+            compared > 300,
+            "only {compared} of {} corpus files parsed cleanly enough to compare;              a collapsed comparison would pass this vacuously",
             files.len()
         );
 
         assert!(
             hidden.is_empty(),
-            "{} of {} corpus files: the editor's outline omits a top-level              declaration the parse tree has. That is a symbol the user cannot              jump to in code that compiles.
+            "{} of {compared} files: the outline omits a top-level declaration the              parse tree has.
 
 {}",
             hidden.len(),
-            files.len(),
             hidden.join("
+")
+        );
+
+        assert!(
+            over_reported.is_empty(),
+            "{} of {compared} files: the outline shows a top-level symbol the parse              tree does not have. This was 95 files before DEC-M4-004 and is 0 by              construction now, so a failure here means a second derivation for              `.sz` came back.
+
+{}",
+            over_reported.len(),
+            over_reported.join("
 ")
         );
     }
