@@ -17,7 +17,7 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Where to start** | **§0A — the final M0→M10 audit.** Every milestone's status, all 19 open decisions, what blocks what, and the order to answer them in. |
+| **Where to start** | **§0A — the M0→M10 audit.** Milestone statuses, every decision, what blocks what, and the order to answer them in. Written at the end of the autonomous run; the decision-resolution phase updates it as answers land. |
 | **Current milestone** | The autonomous run reached M10. Four COMPLETE, seven PARTIAL, none BLOCKED. |
 | Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, corpus-validated (§9F.3) · **M4.7.1–M4.7.2** the scope model and the measurement (§9F.6) · **audit** (§9G) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
@@ -29,12 +29,12 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **19 OPEN**, all in §7A with measured evidence and a marked recommendation. Only **four** block queued work: DEC-M4-001, -002, -004 and DEC-M6-001. See §0A.C |
+| **Open decisions** | **18 OPEN, 1 DECIDED.** All in §7A. **DEC-M4-001 is DECIDED** (2026-09-03, option A — a new fatal semantic phase), which unblocks M4.5.*. Three still block queued work: DEC-M4-002, -004, DEC-M6-001. See §0A.C |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — M10 closed PARTIAL (§9S); **final audit in §0A** |
+| Last state update | 2026-09-03 — **DEC-M4-001 DECIDED** (option A); §5.39 recorded |
 
 Milestone ledger:
 
@@ -73,7 +73,7 @@ to prevent.
 | **M1** Parser Molecular | **COMPLETE** | — |
 | **M2** AST + Spans Stable | **COMPLETE** | — |
 | **M3** Diagnostics Unified | **COMPLETE** | — |
-| **M4** Semantic Layer | **PARTIAL** | layer built and validated; **adoption** blocked by DEC-M4-001, -002, -004 |
+| **M4** Semantic Layer | **PARTIAL** | layer built and validated; DEC-M4-001 **decided**, M4.5.* now in progress; still blocked by DEC-M4-002, -004 |
 | **M5** Type System Stable | **COMPLETE** | — every consumer agrees; the 5 open decisions are about what the rules *should be*, not whether the implementation is coherent about them |
 | **M6** Runtime Molecular | **PARTIAL** | 48 fields → 38; **dispatch** still on `Evaluator`, blocked by DEC-M6-001 |
 | **M7** Semantics Frozen | **PARTIAL** | everything settled is specified; freezing the unsettled *is* deciding it — 6 decisions |
@@ -92,7 +92,7 @@ that actually gate a milestone.
 
 | ID | Question | Blocks | Evidence available | Recommendation |
 |---|---|---|---|---|
-| **DEC-M4-001** | Where the reserved-name check runs | **M4.5.\*** — the semantic phase | 1 corpus file affected; 2 manifest rows; fixes §5.32's cascade for free | **New fatal phase** |
+| ~~**DEC-M4-001**~~ | Where the reserved-name check runs | — | **DECIDED 2026-09-03: A.** See §7A for the rationale and §5.39 for the measurement that settled it | *resolved* |
 | **DEC-M4-002** | Is an unresolved free variable a diagnostic | M4.7.3+; the M7 scope entry | **0 of 486 corpus files rely on dynamic resolution**; a resolver found 6 real defects in `serez-ui` on its first run (§5.35) | **Advisory first**, never fatal without it |
 | **DEC-M4-003** | Reserved-name guard: 7 names or 22 | M4.6.1; ordered after -001 | breaking with **0 measured victims**, corpus and all 8 packages | **Extend to 22** |
 | **DEC-M4-004** | What the editor's outline shows | the LSP's migration onto `semantic` | 95 of 483 files over-report, 0 under-report | **All declarations, correctly nested** |
@@ -1334,6 +1334,44 @@ loader that neither `run` nor `evaluator` owns — which is an architectural cha
 with no forced answer. Recorded, and both cycles are now in `KNOWN_CYCLES` where a
 third one would fail the build.
 
+### 5.39 — three more semantic gaps, all silent — *semantic debt*, medium (measured 2026-09-03, presenting DEC-M4-001)
+
+Probed to answer one question: would a semantic phase have more than a single
+tenant, or would it be the speculative abstraction rule 9 forbids? Three gaps,
+none of which any phase currently reports:
+
+**A duplicate declaration is accepted silently, and the last one wins.**
+
+```serez
+class A { public A() { this.x = 1; } }
+class A { public A() { this.x = 2; } }
+out new A().x;                            // 2. No diagnostic, exit 0.
+```
+
+The same holds for `fn int f()` declared twice. Nothing reports the collision at
+any phase, so a program that accidentally defines a name twice silently gets the
+second definition — including across a file that grew past the point where a
+reader can see both.
+
+**An unknown parent class is caught only at instantiation.**
+
+```serez
+class Child : Missing { public Child() {} }
+out 1;                                    // 1. Runs clean, exit 0.
+```
+
+`tests/err_parent_missing.sz` reports `SZ4001` — but only because it calls
+`new MissingParentChild()`. A program that *declares* the class and never
+constructs it runs to completion. So `--check` cannot tell you that you inherit
+from something that does not exist, because the error does not exist until the
+object does.
+
+**Why this is recorded rather than fixed.** All three are candidate tenants of the
+semantic phase DEC-M4-001 created, and each is its own contract question: what a
+duplicate should do (reject? warn? keep last-wins and say so?) is not settled by
+deciding *where* validation lives. They are the evidence that the phase has real
+work, and they become their own decisions when someone gets to them.
+
 ---
 
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
@@ -1403,7 +1441,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 
 | ID | Subject | Status | Blocks |
 |---|---|---|---|
-| **DEC-M4-001** | Where the reserved-name check runs | **OPEN** | M4.5.* (the semantic phase); the landing site for DEC-M4-003 |
+| **DEC-M4-001** | Where the reserved-name check runs | **DECIDED** 2026-09-03 — **A, a new fatal semantic phase** | unblocked M4.5.*; DEC-M4-003's landing site |
 | **DEC-M4-002** | Whether an unresolved free variable is a diagnostic | **OPEN** | M4.7.3+ (resolver reporting); the M7 entry for scope semantics |
 | **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
 | **DEC-M4-004** | What the editor's outline should show | **OPEN** | the LSP's migration onto `semantic::declarations` |
@@ -1445,10 +1483,16 @@ and the class never enters the AST.
   * That fixture occupies **one row** of `diagnostic_render.manifest` (exit 1,
     222 bytes) and one of `parser_ast.manifest`. Those two rows are the entire
     measured blast radius of moving the check.
-  * The rejection currently emits **three diagnostics for one problem** (§5.32):
-    the real error plus two spurious `Unexpected token '}'` inventions, because
-    the class body is left unconsumed and re-parsed as top-level expressions.
-    The 222 bytes are large for that reason.
+  * The rejection emits **three diagnostics for one problem** (§5.32) *when the
+    class has a body*: the real error plus two spurious `Unexpected token '}'`
+    inventions, because `parse_class_declaration` returns `None` mid-declaration
+    and the unconsumed body is re-parsed as top-level expressions.
+    **Correction, 2026-09-03:** this record previously said the corpus fixture's
+    222 bytes were large "for that reason". They are not. `err_task_reserved_class.sz`
+    declares `class Task { }` with an **empty** body and emits exactly **one**
+    diagnostic; the 222 bytes are the caret rendering plus the abort line. The
+    cascade is real and the fixture does not exhibit it. Isolated by a positive
+    control: the identical file with an unguarded name parses cleanly.
 
 **Alternatives.**
 
@@ -1491,6 +1535,98 @@ it deliberately is the new public surface, not the risk.
 **Blocked by this decision:** M4.5.1 through M4.5.6 (§9F.5) in full, and the
 landing site for DEC-M4-003 — the name list should change once, in its final
 home, not twice.
+
+---
+
+## RESOLUTION — **DECIDED 2026-09-03: option A, a new fatal semantic phase.**
+
+Decided by Sergio, presented with the evidence above plus the additional
+measurements below.
+
+### Why A was chosen
+
+The property it buys is **static analysability**, and the argument is about what
+the pipeline can express rather than about tidiness.
+
+Serez had exactly two modes of rejection: **syntactic**, fatal, in the parser; and
+**type**, advisory, which by contract in `spec/types.md` does not reject anything.
+There was no third. So any rule about *meaning* that needs to reject a program had
+to disguise itself as a rule about *structure* — which is precisely what
+`is_reserved_name` did, and precisely why it produces invented errors: the parser
+was aborting a half-built structure in order to express something that is not
+about structure.
+
+Three consequences, each measurable:
+
+1. **Diagnostic predictability.** Three diagnostics become one for the
+   class-with-a-body case. One problem, one error.
+2. **Cohesion.** The parser is left with a single reason to change — the grammar.
+   `src/semantic.rs`, built in M4.2 with no consumers, acquires the first one M4
+   built it for.
+3. **Reach of `--check`.** Semantic gaps that are invisible before running become
+   reportable.
+
+### The measurement that settled it
+
+The presentation added evidence the original record did not have: **the phase
+would not have a single tenant.** Three further semantic gaps were probed on
+2026-09-03, all silent today:
+
+| Program | Today | Recorded as |
+|---|---|---|
+| `class A {}` declared twice | **accepted silently**, last wins | §5.39 |
+| `fn int f()` declared twice | **accepted silently**, last wins | §5.39 |
+| `class Child : Missing {}`, never instantiated | **runs clean**; fails only at `new`, with `SZ4001` | §5.39 |
+
+With the three already registered as decisions — DEC-M5-003 (unknown type name),
+DEC-M4-002 (free variables), DEC-M7-003 (`match` exhaustiveness) — the phase has
+**six** candidate tenants rather than one. That is what distinguishes a real
+boundary from the speculative abstraction rule 9 forbids, and it is the single
+strongest argument for A over B.
+
+### Alternatives rejected, and why
+
+  * **B — leave it in the parser.** Rejected not because it is wrong but because
+    it does not avoid the decision, it **defers and multiplies** it: each of the
+    five remaining candidates re-asks "where does this live?", and answering that
+    five times separately is how a language ends up with five answers. B also
+    leaves `DEC-M4-003` with no good landing site and §5.32 permanently.
+  * **C — move it to the type checker.** Not viable. `spec/types.md` makes checker
+    findings advisory, so `class Task {}` would begin to **run**. `BREAKING`, in
+    the worst direction — accepting programs currently rejected.
+  * **D — an advisory semantic phase.** Added during the presentation because it
+    was not in the original record and is defensible. Rejected for C's reason: it
+    makes `class Task {}` run, and it leaves the language still without any stage
+    able to reject on meaning, which is the gap A exists to close.
+
+### Classification and contract
+
+**BEHAVIORAL.** The set of accepted programs is **unchanged** — A moves *when* the
+error is reported, not *which* programs are rejected. What changes is stderr: a new
+phase label and a new diagnostic code. The exit code for an affected program stays
+`1`.
+
+`spec/compatibility.md` governs the stderr change and needs a note, because "0
+affected files in the corpus and 0 in the ecosystem" measures *internal* users
+only. Something external may parse `PARSER ERROR`.
+
+### What this unblocks
+
+  * **M4.5.1 – M4.5.6** in full (§9F.5).
+  * **DEC-M4-003** acquires its landing site, and is ordered strictly after M4.5.5
+    so the name list changes once, in its final home.
+  * **DEC-M5-003 option B** becomes available.
+  * **DEC-M4-002 option A** and **DEC-M7-003 option B** become *possible*; neither
+    becomes decided by this.
+
+### What it does not authorise
+
+The phase's **public surface** — the rendered label and the diagnostic code — is
+its own choice, hard to revert once released, and is **not** settled by this
+decision. It is M4.5.1, and it is registered separately as **DEC-M4-005**.
+
+M4.5.2 and M4.5.3 do not need it: a phase that reports nothing needs no label, so
+that work proceeds first.
 
 ---
 
