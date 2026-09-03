@@ -293,6 +293,140 @@ missing is someone choosing.
 
 ---
 
+## 0B. The approved-decisions cycle — reconnaissance, 2026-09-03
+
+Eleven decisions arrived answered. This section is the reconnaissance done before
+any of them was implemented: what the repository actually contains, what the
+answers cost against it, and the order the work has to happen in. It is written
+before the work rather than after it, so that a plan contradicted by the code is
+visible as a contradiction rather than quietly reshaped.
+
+### A. Two documents the instructions assume, which do not exist
+
+`docs/maturity/ROADMAP.md` and `docs/maturity/DECISIONS.md` were named as required
+reading. Neither exists, and neither ever has. `docs/maturity/ROADMAP_STATE.md` is
+the only file in that directory, and it carries both roles: the progress ledger
+(§0–§6, §9) and the decision register (§7A). `MATURITY_AUDIT.md` is the finding
+register. Recorded so the next reader does not go looking.
+
+### B. Two decisions where the option letter and the instruction text disagree
+
+The answers arrived as a letter plus a paragraph. For nine of the eleven the two
+agree. For two they do not, and the discrepancy is recorded here rather than
+resolved silently, because picking either one without saying so would be exactly
+the substitution the protocol forbids.
+
+| Decision | Letter given | What that letter is in §7A | What the instruction text describes | Implemented |
+|---|---|---|---|---|
+| **DEC-M6-001** | A | "Pass `&mut Evaluator` to service methods … the same coupling, written down" | *"interfaz/trait estrecha … los servicios deben recibir únicamente las capacidades que necesitan"* — and explicitly **not** a god object moved | **the text** (= §7A's option **B**) |
+| **DEC-M10-002** | B | "baseline them with `#[allow]` at each site" — 180 attributes in source | *"Formalizar Clippy mediante baseline … no ejecutar una limpieza masiva … identificación estable por lint/sitio"* | **the text** (= §7A's option **C**) |
+
+In both cases the paragraph is specific, self-consistent, and describes one
+option exactly; the letter names a different one. The paragraph is the decision —
+a letter is a label, and the text says what to build. Both are implemented to the
+text, and both are flagged here so the owner can correct the record if the letter
+was the intent.
+
+`DEC-M10-001` needed reconciling rather than correcting: the answer makes the
+canary a **blocking gate** (§7A's option B, a vendored hermetic snapshot), and a
+separate answer adds a **daily scheduled run**. §7A recommended C (scheduled
+only). The two are complementary, not alternatives, and the instructions say so:
+the schedule is additional coverage, not a replacement for the gate. Both are
+built; §9T records why the vendored gate and the live daily run answer different
+questions.
+
+### C. What the code actually contains, measured
+
+| Decision | Prior infrastructure that is reusable | State |
+|---|---|---|
+| DEC-M4-002 free variables | `semantic::scopes` — a complete lexical walker, validated over the corpus, **with no product consumer** | analysis done, reporting absent |
+| DEC-M4-004 LSP outline | `semantic::top_level` exists; `lsp::analysis` still calls `scan_symbols`, a second lex | both derivations present, the wrong one wired |
+| DEC-M6-001 service dispatch | `tools/runtime_diff.sh` — the differential harness the decision requires **already exists** | harness done, extraction absent |
+| Package hardening | `MAX_PACKAGE_ARCHIVE_BYTES` (64 MiB) already bounds the download | size bounded; atomicity, lockfile and integrity absent |
+| LLVM parity | `hir_lower` reports `SZ7001`/`SZ7002` for every unsupported form — the feature matrix is **derivable from the code** | lowering complete enough to measure; no matrix, no harness |
+| Performance budget | 17 benchmarks + two runners exist | benchmarks exist; no baseline, no budget |
+| DEC-M10-001 canary | `run_ecosystem.{sh,ps1}` exist and need eight sibling checkouts | runs locally; CI has none |
+| Generators | `yield_collector: Option<Vec<..>>` in `evaluator/expr.rs` | unbounded |
+| DEC-M9-001 reads | the three paths are named in the decision, not guessed | unbounded |
+| DEC-M10-002 clippy | §5.26's per-site comparison, done by hand at each milestone | discipline exists, gate absent |
+
+### D. What DEC-M4-002 costs, measured before implementing
+
+The register's number was 4 uses inside a function across 486 files. Re-run at
+this commit over 491 conclusively-analysed files: **30 unaccounted uses in 21
+files.** Every one was read, and they are not one population:
+
+| Group | Count | What happens under a fatal rule |
+|---|---|---|
+| `err_*` / `sec_*` fixtures written to hold an undefined name | 17 | already exit 1; the *phase* and *code* change, not the outcome |
+| `_`-prefixed scratch (`_cobol_poc.sz`, `_dbg_ai.sz`) | 5 | not globbed by either runner — no effect |
+| `unit_catchable_core.sz` | 3 | **breaks**: asserts undefined names are *catchable* `ReferenceError`s |
+| `unit_inheritance_errors.sz` | 4 | **breaks**: asserts a missing parent is a catchable `SZ4001` |
+| `unit_functions_adv.sz` | 1 | **a false positive in the resolver, not a program defect** — see below |
+
+**The last row is the one that changes the plan.** `unit_functions_adv.sz` declares
+two mutually recursive nested functions:
+
+```serez
+fn bool isEven(int n) { if (n == 0) { return true; }  return isOdd(n - 1); }
+fn bool isOdd(int n)  { if (n == 0) { return false; } return isEven(n - 1); }
+```
+
+This is legitimate, working, tested code. `semantic::scopes` reports `isOdd` as
+free because it models a nested `fn` as position-dependent — true for a *read* at
+the point of declaration, false for a *call inside a body that runs later*. The
+model conflates "used before declared textually" with "evaluated before declared",
+and its own header claims every ambiguity resolves toward "bound".
+
+So the resolver has to be corrected **before** its findings can be made fatal.
+That is a prerequisite molecule, not part of DEC-M4-002, and it is first in the
+order below. Shipping the fatal rule on today's model would reject a correct
+program — the one failure mode a checker must not have.
+
+The three fixtures that genuinely break are testing a behaviour the decision
+removes. They are rewritten to assert the new contract rather than deleted; the
+break is declared in `spec/compatibility.md`.
+
+### E. The order, derived from the code rather than assumed
+
+The instructions give a conceptual order. The real dependencies are narrower:
+most of these decisions do not touch each other at all, and the DAG has more
+parallelism than the sketch suggests. What genuinely constrains order:
+
+```
+  resolver correctness  ──> DEC-M4-002 (fatal free variables)
+                       └──> DEC-M4-004 (outline from the AST)
+
+  tools/runtime_diff.sh ──> DEC-M6-001 (narrow trait)      [harness already exists]
+
+  everything else       ──> independent
+
+  performance baseline  ──> last, so it measures the code this cycle ships
+```
+
+1. **resolver correctness** — the nested-`fn` false positive. Prerequisite.
+2. **DEC-M4-002** — free variables become a fatal semantic error.
+3. **DEC-M4-004** — `.sz` outline from the AST; the token scan stays for `.szx`.
+4. **DEC-M9-001** — one ceiling, three named call sites.
+5. **generators** — a host-set ceiling with a safe default.
+6. **DEC-M6-001** — the narrow trait, behind the existing differential harness.
+7. **package hardening** — atomic install, lockfile, integrity.
+8. **LLVM** — the feature matrix and the differential harness.
+9. **DEC-M10-002** — the clippy baseline gate.
+10. **DEC-M10-001 + the daily run** — the canary as a gate, and as a schedule.
+11. **performance budget** — baseline and budgets, warning-only, measured last.
+
+### F. One constraint the environment puts on step 8
+
+`cargo check --features llvm` **fails on this machine**: `llvm-sys` cannot find an
+LLVM 17 installation. The differential harness and the feature matrix can be built
+and the matrix can be *derived from `hir_lower`* without linking LLVM, but the
+differential itself cannot be executed here. It is written to skip, loudly, when
+the feature is off, and §9U records that its parity column is therefore
+**unverified on this machine** rather than green.
+
+---
+
 ## 1. M0 — Baseline Frozen
 
 ### 1.1 Definition of Done
