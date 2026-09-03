@@ -1043,7 +1043,37 @@ exists nowhere else in the suite.
 
 Found by M4.7.2, whose corpus walk reported `test` as an unaccounted name in
 exactly these three files after the framework composition was modelled correctly
-for the categories that do receive it. **Fixed separately** — see §5.37.
+for the categories that do receive it. **Fixed in §5.37**, with a guard.
+
+### 5.37 — §5.34 fixed, and a guard so it cannot recur
+
+The three fixtures were **renamed** rather than rewritten:
+`sec_crypto.sz` -> `unit_sec_crypto.sz`, `sec_crypto_ed25519.sz` ->
+`unit_sec_crypto_ed25519.sz`, `sec_tensor.sz` -> `unit_sec_tensor.sz`. The
+`unit_sec_*` category already exists for exactly this — framework-based safety
+tests — and both runners route it through the framework. The files' contents were
+not touched, so what now runs is what was written and never executed.
+
+**Nothing about the suite's shape moved.** Both runners report **499 passed / 0
+failed / 0 skipped**, and every per-category total is identical in both reports —
+`security` is still **104**. The rename moves three files between two globs that
+feed the same category, which is why the count is unchanged while the coverage is
+not: 23 assertions that never ran now run, and pass.
+
+Manifests: `parser_ast.manifest` re-keyed three rows with **identical hashes** —
+same content, new name. `diagnostic_render.manifest` **lost** three rows, which is
+the substantive part: those fixtures no longer produce a diagnostic, because they
+no longer fail. The three deleted rows read `1 / 46 / d97fdc04bee4b1a9` —
+identical exit, identical byte count, identical hash. The manifest had been
+recording the same "Variable not found: test" three times over, and that was
+legible to anyone who looked.
+
+**The guard.** `tests/diagnostic_render.rs::no_error_fixture_is_written_in_the_frameworks_style`
+asserts that no `err_*.sz` or `sec_*.sz` fixture contains a line beginning
+`test(`. The fix repairs three files; the guard covers every file added after
+today. It was verified to fail: a probe fixture in framework style was added, the
+test named it, and the probe was removed — the M1.0.2 method, because a net
+nobody has seen fail is not evidence.
 
 ### 5.35 — `serez-ui` calls `Int.parse`, and `Int` does not exist — *confirmed bug, ecosystem*, medium (found in M4.7.2)
 

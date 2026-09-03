@@ -234,8 +234,6 @@ tests/sec_bitwise_on_string.sz	767	0	30d2b069b766dfc8	cbf29ce484222325
 tests/sec_call_non_function.sz	685	0	611b59950473ed6a	cbf29ce484222325
 tests/sec_const_nested_reassign.sz	1161	0	324c38090434784a	cbf29ce484222325
 tests/sec_const_reassign.sz	558	0	72ea64dd857cea04	cbf29ce484222325
-tests/sec_crypto.sz	14879	0	f73bf5f91538cd4b	cbf29ce484222325
-tests/sec_crypto_ed25519.sz	22436	0	68470e482af21e37	cbf29ce484222325
 tests/sec_datetime_arith_overflow.sz	952	0	ad998d31a90f944f	cbf29ce484222325
 tests/sec_datetime_bad_args.sz	529	0	10dadd9238bbad0c	cbf29ce484222325
 tests/sec_datetime_epoch_overflow.sz	391	0	764d881298bacbfb	cbf29ce484222325
@@ -299,7 +297,6 @@ tests/sec_string_padding_limit.sz	1193	0	d91ae9f2c8e24d05	cbf29ce484222325
 tests/sec_string_repeat.sz	1363	0	f9259112352d2d01	cbf29ce484222325
 tests/sec_system_no_permission.sz	289	0	1f88df054c4c223c	cbf29ce484222325
 tests/sec_task_no_permission.sz	471	0	706800fb71e8bfeb	cbf29ce484222325
-tests/sec_tensor.sz	25907	0	c34dc56f608e55c2	cbf29ce484222325
 tests/sec_terminal_mouse_requires_unsafe.sz	408	0	9554299c1f26aa5e	cbf29ce484222325
 tests/sec_terminal_no_permission.sz	290	0	d345af44665dd275	cbf29ce484222325
 tests/sec_terminal_raw_requires_unsafe.sz	407	0	5d7698c8f0e88ef4	cbf29ce484222325
@@ -448,6 +445,8 @@ tests/unit_sec_attention_ops.sz	33377	0	a8dafd52f15bf57c	cbf29ce484222325
 tests/unit_sec_bitwise_safety.sz	22146	0	2e464e0be2e78628	cbf29ce484222325
 tests/unit_sec_boundary_arith.sz	15054	0	a12fa831134cb8d5	cbf29ce484222325
 tests/unit_sec_closures.sz	36032	0	628d2d384b26fc8b	cbf29ce484222325
+tests/unit_sec_crypto.sz	14879	0	f73bf5f91538cd4b	cbf29ce484222325
+tests/unit_sec_crypto_ed25519.sz	22436	0	68470e482af21e37	cbf29ce484222325
 tests/unit_sec_deep_inheritance.sz	43255	0	8c7075d9547013cf	cbf29ce484222325
 tests/unit_sec_error_isolation.sz	43908	0	112b227b95a80f2a	cbf29ce484222325
 tests/unit_sec_import.sz	5790	0	8e89bb96830f57f3	cbf29ce484222325
@@ -458,6 +457,7 @@ tests/unit_sec_parser_resilience.sz	48793	0	5c43ca68885b5dc8	cbf29ce484222325
 tests/unit_sec_pentest_bugs.sz	77053	0	50104adf82b6793d	cbf29ce484222325
 tests/unit_sec_resource_limits.sz	46746	0	72b059992e152aa9	cbf29ce484222325
 tests/unit_sec_special_chars.sz	38421	0	0f89fcd53cd5d3ad	cbf29ce484222325
+tests/unit_sec_tensor.sz	25907	0	c34dc56f608e55c2	cbf29ce484222325
 tests/unit_sec_type_confusion.sz	47597	0	010df87682aeba95	cbf29ce484222325
 tests/unit_sec_type_safety.sz	54648	0	8e07ee7f1b8972f2	cbf29ce484222325
 tests/unit_sec_websocket.sz	10206	0	f7b5e78b7b4269fa	cbf29ce484222325

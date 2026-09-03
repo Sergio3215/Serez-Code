@@ -257,3 +257,45 @@ fn indent(text: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// No error fixture may be written in the unit-test framework's style.
+///
+/// `err_*.sz` and `sec_*.sz` are run **standalone** — the conformance runner
+/// prepends `tests/framework.sz` only to `unit_*.sz` and `ai_*.sz`. So a fixture
+/// in either of these categories that calls `test(…)` dies on its first line with
+/// `Variable not found: test`, which satisfies the error-test contract — non-zero
+/// exit, a `❌` line — and passes without running a single one of its assertions.
+///
+/// That is not hypothetical. `sec_crypto.sz`, `sec_crypto_ed25519.sz` and
+/// `sec_tensor.sz` were all written this way, passed every run, and never
+/// executed their 23 assertions; `docs/maturity/ROADMAP_STATE.md` §5.34 has the
+/// evidence. The manifest beside this file even recorded all three with the same
+/// 46-byte stderr and the same hash, and nobody read it as the signal it was.
+///
+/// The three were renamed to `unit_sec_*`, which is the category for
+/// framework-based safety tests and which does receive the framework. This guard
+/// is the part that stops it recurring: the fix repairs three files, the guard
+/// covers every file added later.
+#[test]
+fn no_error_fixture_is_written_in_the_frameworks_style() {
+    let offenders: Vec<String> = fixtures()
+        .into_iter()
+        .filter_map(|(name, path)| {
+            let source = std::fs::read_to_string(&path).ok()?;
+            source
+                .lines()
+                .any(|l| l.trim_start().starts_with("test("))
+                .then_some(name)
+        })
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "{} error fixture(s) call test(…), which is only defined in \
+         tests/framework.sz — and the runner does not prepend it to err_*/sec_*:\n  {}\n\n\
+         Each of these passes by failing to find `test`, not by testing anything. \
+         Rename to unit_sec_*.sz (framework-based) or rewrite without the framework.",
+        offenders.len(),
+        offenders.join("\n  ")
+    );
+}

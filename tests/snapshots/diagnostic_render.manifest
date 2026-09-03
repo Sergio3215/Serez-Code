@@ -1,7 +1,7 @@
 # serez-diagnostic-render/1
 # stderr and exit code of every err_*.sz / sec_*.sz fixture.
 # name<TAB>exit<TAB>stderr-bytes<TAB>fnv1a64(stderr)
-# fixtures: 158
+# fixtures: 155
 err_arity.sz	1	205	52665bc115254ed6
 err_array_unknown_method.sz	1	59	1dc964c13a6629af
 err_bool_plus_int.sz	1	104	344fe7325b982d2a
@@ -82,8 +82,6 @@ sec_bitwise_on_string.sz	1	75	fb98c73000cfc256
 sec_call_non_function.sz	1	154	3198c2dff1e511d9
 sec_const_nested_reassign.sz	1	131	68e21b3b13a6e7fe
 sec_const_reassign.sz	1	47	11868c9c1bc04ac5
-sec_crypto.sz	1	46	d97fdc04bee4b1a9
-sec_crypto_ed25519.sz	1	46	d97fdc04bee4b1a9
 sec_datetime_arith_overflow.sz	1	89	0ffbf1960e138b7a
 sec_datetime_bad_args.sz	1	56	d5311404252c8d44
 sec_datetime_epoch_overflow.sz	1	101	23e4171477d50988
@@ -147,7 +145,6 @@ sec_string_padding_limit.sz	1	86	7ef5cf149f0d2eb3
 sec_string_repeat.sz	1	79	54a348d3459b1439
 sec_system_no_permission.sz	1	158	7412d185dda5929f
 sec_task_no_permission.sz	1	150	cc13e51589e73dbf
-sec_tensor.sz	1	46	d97fdc04bee4b1a9
 sec_terminal_mouse_requires_unsafe.sz	1	106	5f89a7812ff2ad7a
 sec_terminal_no_permission.sz	1	166	2db84fb95e07776d
 sec_terminal_raw_requires_unsafe.sz	1	99	642d86c1a9a3fded
