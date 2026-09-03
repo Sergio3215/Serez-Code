@@ -29,12 +29,12 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **18 OPEN, 2 DECIDED.** All in §7A. **DEC-M4-001** (a fatal semantic phase) and **DEC-M4-005** (`SZ8xxx` + `SEMANTIC`) are decided; M4.5.* is in progress. Three still block queued work: DEC-M4-002, -004, DEC-M6-001 |
+| **Open decisions** | **19 OPEN, 4 DECIDED.** All in §7A. Decided: **DEC-M4-001** (a fatal semantic phase), **DEC-M4-005** (`SZ8xxx` + `SEMANTIC`), **DEC-M7-002** (private keyed to the declaring class), **DEC-M7-006** (`fetch` gated behind an allowlist). Three new and open: **DEC-M4-006** (does the LSP report the semantic phase), **-007** (does the phase resolve through `import`), **-008** (may a class and an interface share a name). Three still block queued work: DEC-M4-002, -004, DEC-M6-001 |
 | Branch | `improve` |
-| HEAD | `9ca4d22` |
+| HEAD | `649ba49` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — **M4.5 complete** (§9F.8). The parser has no semantic rules left |
+| Last state update | 2026-09-03 — **a findings pass**: §5.2, §5.3, §5.6, §5.13, §5.14, §5.18, §5.38 and both of §5.39's first two gaps fixed; §5.16 answered with a written policy; §5.35 fixed in serez-ui. All four remaining §6 debts closed — property schemas, private access, `EvalResult`, `fetch` under lockdown. Two new findings (§5.41, §5.42) and three new decisions (DEC-M4-006/-007/-008) |
 
 Milestone ledger:
 
@@ -103,30 +103,33 @@ that actually gate a milestone.
 | **DEC-M5-005** | Does a class type accept a subclass | nothing | not measurable; the `is` half changes working programs **silently** | **Accept subclasses**, in a major, with `is` called out separately |
 | **DEC-M6-001** | How a service raises and allocates | **the rest of M6** | 16 dispatches, 12,000+ lines | **A narrow trait** — and a differential runtime harness *first* |
 | **DEC-M7-001** | `remove` on an empty array | nothing | `remove` in 12 files | **Add `tryRemove`, then make `remove` raise** |
-| **DEC-M7-002** | Subclass reaching an inherited private | nothing | unmeasured — wants the same resolver as DEC-M4-002 | **Key to the declaring class**, in a major, *after* measuring |
+| ~~**DEC-M7-002**~~ | Subclass reaching an inherited private | — | **DECIDED 2026-09-03: A.** Measured first — 27 private declarations in the corpus, 0 in the ecosystem, no file reaching a parent's private from a child | *resolved* |
 | **DEC-M7-003** | `match` with no matching arm | nothing | 107 matches, **50** without a catch-all; runtime error affects 0 today, static exhaustiveness affects all 50 | **Warn now, raise in a major**, never a hard static requirement |
 | **DEC-M7-004** | Structural container equality | nothing | 0 direct comparisons found, and the search is weak | **Structural for containers**, with DEC-M5-005, in one release |
 | **DEC-M7-005** | A pattern that fails to evaluate | nothing | not measurable by construction — it produces no signal | **Propagate the error**, and **before** DEC-M7-003 |
-| **DEC-M7-006** | `fetch` under lockdown | part of M9's `fetch` work | one conformance test pins the current behaviour; the external audit calls it SSRF | **Gate it, with an opt-in** |
+| ~~**DEC-M7-006**~~ | `fetch` under lockdown | — | **DECIDED 2026-09-03: C.** Gated by default, opened by an embedder-set allowlist, redirects validated per hop. DEC-M9-001 deliberately left open | *resolved* |
 | **DEC-M9-001** | Ceiling for three unbounded reads | the ceiling | not measured against real usage, and said so | **One fixed fatal ceiling** for all three |
 | **DEC-M10-001** | Ecosystem canary in CI | the canary's place in the release gate | 8 packages, 56 tests, 8/8 every run of M0–M10 | **Scheduled daily**, not per-commit |
 | **DEC-M10-002** | Clippy as a gate | nothing | per-site list moved **twice in eleven milestones**, both caught by hand | **Gate new sites** against a committed baseline |
 
 ### C. What blocks what
 
-Only **four** decisions gate a milestone:
+Only **three** decisions still gate a milestone:
 
 ```
-DEC-M4-001 ──> M4.5.*  (the semantic phase)
-     └────────> DEC-M4-003 must land after it, so the rule changes once
 DEC-M4-002 ──> M4.7.3+ (resolver reporting), and M7's scope entry
 DEC-M4-004 ──> the LSP's migration onto semantic::declarations
 DEC-M6-001 ──> the rest of M6 (namespace dispatch)
 ```
 
-The other fifteen change the language or the pipeline and block no queued work.
+DEC-M4-001 is decided and M4.5 closed. The other eighteen change the language or
+the pipeline and block no queued work.
 **M8 and M9 are blocked by nothing at all** — they are unfinished for want of
 hours, not answers.
+
+Of the three added on 2026-09-03, none blocks anything: DEC-M4-006 and -008 are
+pinned by tests so neither can drift, and DEC-M4-007 only bounds the reach of a
+rule that already works.
 
 ### D. Recommended order
 
@@ -170,16 +173,23 @@ together since they are one capability.
 
 ### E. What the run produced
 
-| | Before (`9ca4d22`) | After |
-|---|---|---|
-| Rust tests | 398 | **447** |
-| Serez conformance | 499 | **501**, identical in both runners |
-| Ecosystem | 8/8 | **8/8** |
-| Clippy sites (§5.26) | 181 | **180** |
-| `Evaluator` fields | 48 | **38** |
-| Spec documents | 30 | **32** |
-| Normative rules | 0 | **15**, all proved |
-| Registered decisions | 0 | **19** |
+| | Before (`9ca4d22`) | After the run | After the findings pass (`649ba49`) |
+|---|---|---|---|
+| Rust tests | 398 | **447** | **463** |
+| Serez conformance | 499 | **501**, identical in both runners | **508**, identical in both runners |
+| Ecosystem | 8/8 | **8/8** | **8/8** |
+| Clippy sites (§5.26) | 181 | **180** | **180** |
+| `Evaluator` fields | 48 | **38** | **38** |
+| Spec documents | 30 | **32** | **32** |
+| Normative rules | 0 | **15**, all proved | **15**, all proved |
+| Registered decisions | 0 | **19** | **22**, 4 decided |
+| Dependency cycles | 2 | **2**, both on record | **0** |
+| Frontend crate roots | 2 | **2** | **1** |
+
+The findings-pass column counts one thing downward on purpose: the Rust total is
+463 rather than 505 because §5.18 stopped compiling 42 tests twice. No test was
+lost, and that was verified by comparing the two lists by name rather than by
+trusting the count.
 
 **New test files, each closing a gap nothing else could see:** `type_agreement`
 (checker vs runtime), `frozen_semantics` (undecided behaviour), `scope_resolution`
@@ -190,6 +200,71 @@ together since they are one capability.
 removed, `export` no longer hides declarations from the checker, two diagnostics
 gained positions, and a child filling the stderr pipe now completes instead of
 hanging.
+
+### G. The findings pass — 2026-09-03, `9d91f3c` -> `649ba49`
+
+Thirteen commits closing findings the run had recorded and not fixed. Not a
+milestone: a pass over §5 and §6, taking the ones whose decision had been made.
+
+| Roadmap ID | Outcome | Commit |
+|---|---|---|
+| §5.2 v10.0.0 has no changelog heading | **FIXED** | `a1e23b3` |
+| §5.3 `src/test_run.rs` dead weight | **FIXED** | `c05fe71` |
+| §5.13 `has_errors()` hides a lexical error | **FIXED** | `e8ba7ee` |
+| §5.14 `tests/~tmp_test.sz` runner residue | **FIXED** | `8625195` |
+| §5.16 peer session in the working tree | **POLICY SET** | `866825c` |
+| §5.18 the frontend compiled twice | **FIXED** | `d0b31b3` |
+| §5.6 `run <-> szx` cycle | **FIXED** (with §5.38) | `7ec8fc9` |
+| §5.38 `evaluator -> szx -> run -> evaluator` | **FIXED** | `7ec8fc9` |
+| §6/M6 `EvalResult` mixes four things | **FIXED** | `5af868c` |
+| §5.39 duplicate declaration | **FIXED** | `0385afd`, `d20b64d` |
+| §5.39 unknown parent class | **FIXED** (top level; DEC-M4-007 bounds the rest) | `0385afd`, `d20b64d` |
+| §6/M5 property schemas | **FIXED** (runtime; the checker's half is its own work) | `89395b3` |
+| §6/M7 DEC-M7-002 private access | **DECIDED + FIXED** | `5f78f4e` |
+| §6/M7-M9 DEC-M7-006 `fetch` under lockdown | **DECIDED + FIXED** | `649ba49` |
+| §5.35 `serez-ui` calls `Int.parse` | **FIXED (external)** — 2 of 6 sites covered, 4 blocked by defects (3) and (4) | `3fb554d` in serez-ui |
+
+**Gates, start and end.**
+
+| | `9d91f3c` | `649ba49` |
+|---|---|---|
+| `cargo fmt --check` | clean | clean |
+| `cargo clippy --all-targets` | 180 sites | **180** |
+| `cargo test --all-targets` | 457 | **463** |
+| `run_tests.ps1` / `run_tests.sh` | 501 / 0 / 0 | **508 / 0 / 0**, identical |
+| ecosystem canary | 8/8 | **8/8** |
+| dependency cycles | 2 | **0** |
+
+**Three things this pass got wrong first, all caught by the suite rather than by
+care.** They are recorded because the pattern in §F is that a verification which
+agrees with its author is worth nothing, and here the verifications disagreed.
+
+  * The unresolvable-parent rule was written without a reach restriction and
+    reported `unit_inheritance_errors.sz`, where a lambda legitimately writes
+    `class A : B` before declaring `B`. A class is not a variable: it registers
+    globally when its declaration runs, so the forward reference recovers. The
+    rule now stops at the top level.
+  * The private-access fix searched only `StoredClass::methods`, leaving private
+    getters and setters keyed to the receiver's class — the exact members
+    `spec/classes.md`'s caveat had named. Found by reading the caveat back
+    against the diff.
+  * §5.13's own worked example turned out to be on the wrong side of the
+    boundary it described: `let s = "unterminated;` is not known at construction,
+    because two tokens of lookahead do not reach the fourth token.
+
+**Two pins fired and neither was edited to pass.** `frozen_semantics`'s DEC-M7-002
+pin and the conformance suite's `eval/lockdown: fetch is NOT gated` both existed
+to fail the day their behaviour moved. Each was replaced by an assertion of the
+decided rule, with the decision named in the commit — and `frozen_semantics`
+gained a `refuses` helper, because a file that could only assert "this program
+completes" had no way to state a rule that says "this one must not".
+
+**Where a positive control was added because the negative one went quiet.**
+`KNOWN_CYCLES` is empty now, so `the_only_cycles_are_the_ones_on_record` can no
+longer distinguish a clean graph from a broken search — which is precisely §5.38's
+own failure mode. `the_cycle_finder_finds_cycles` runs the detector over
+hand-built graphs: a mutual pair, a three-cycle, a four-cycle at `MAX_CYCLE`, and
+a diamond that is not a cycle.
 
 ### F. The pattern worth carrying forward
 
@@ -302,10 +377,12 @@ in this session, on the same host, from the repository root.
 | Clippy | `cargo clippy --all-targets` | PASS, 0 errors | **PASS**, 0 errors |
 | Clippy per-site list (§5.26) | the `--message-format short` pipeline | 181 lines | **181 lines — unchanged** |
 | Rust tests | `cargo test --all-targets` | 318 / 0 failed | **398 / 0 failed** |
-| Serez runner (PowerShell) | `.un_tests.ps1 -json <f>` | 490 / 0 / 0 | **499 / 0 / 0** |
+| Serez runner (PowerShell) | `.
+un_tests.ps1 -json <f>` | 490 / 0 / 0 | **499 / 0 / 0** |
 | Serez runner (bash) | `./run_tests.sh --json <f>` | 490 / 0 / 0 | **499 / 0 / 0** |
 | Runner parity | per-category, both reports | identical | **identical** |
-| Ecosystem canary | `.un_ecosystem.ps1 -SkipBuild` | 8 / 8, 56 tests | **8 / 8, 56 tests** |
+| Ecosystem canary | `.
+un_ecosystem.ps1 -SkipBuild` | 8 / 8, 56 tests | **8 / 8, 56 tests** |
 
 Seven gates plus the canary: **all green.**
 
@@ -590,7 +667,22 @@ landed after that. Corrected in M0:
 | `diagnostic_codes.rs` tests | 2 | 3 |
 | Largest-file table | stale figures | re-measured |
 
-### 5.2 `v10.0.0` is released but has no changelog heading — *documentation mismatch*, low
+### 5.2 `v10.0.0` is released but has no changelog heading — **FIXED 2026-09-03**, low
+
+> **Status: FIXED.** commit `a1e23b3` · tests: none needed (no source touched);
+> `grep` confirmed no runner, script or workflow reads the heading · 2026-09-03.
+>
+> `## [Unreleased] — maturity hardening` became `## [10.0.0] — 2026-08-31 —
+> maturity hardening`, and a new `## [Unreleased]` opened above it. The boundary
+> was measured, not remembered: `CHANGELOG.md` at `d8662c2` hashes to `3908649c`
+> and so did the working copy, and `git log d8662c2..HEAD -- CHANGELOG.md` was
+> empty, so the whole section was the release and it was renamed rather than
+> split. The new `[Unreleased]` carries only what a user can observe out of the
+> 61 commits since — 45 of them declare `CONTRACT: documentation only` / `no
+> observable behaviour` / `tests only`, and the four that survive that filter
+> each name their commit.
+>
+> The description below is the state before the fix.
 
 `Cargo.toml` says `10.0.0`, the tag `v10.0.0` exists on `origin` and points at
 HEAD (`d8662c2`, 0 commits after it). `CHANGELOG.md` still files all ~1,800 lines
@@ -599,7 +691,20 @@ version therefore has no section of its own. Recorded in the audit's Versioning
 row. **Not fixed** — closing a changelog section is a release decision, not a
 refactor.
 
-### 5.3 `src/test_run.rs` is tracked dead weight — *architectural debt*, low
+### 5.3 `src/test_run.rs` is tracked dead weight — **FIXED 2026-09-03**, low
+
+> **Status: FIXED.** commit `c05fe71` · tests: `cargo check --all-targets` clean,
+> `tests/architecture.rs` 3/3 including the `files.len() > 40` guard · 2026-09-03.
+>
+> Verified dead before deleting: no `mod test_run;` in `lib.rs`, `main.rs` or
+> `lsp_main.rs`; no `[[bin]]`, `[[test]]` or path entry in `Cargo.toml`; no
+> reference from any runner, workflow, tool or manifest. Three references to its
+> *existence* went with it — the tree listing in `DEVELOPMENT.md`, the
+> developer-tooling sentence in `spec/ecosystem.md`, and the comment in
+> `tests/architecture.rs` explaining why the `src/` walk skips an unreadable
+> file. The skip itself stays.
+>
+> The description below is the state before the fix.
 
 Two lines, UTF-16 encoded, unchanged since 2026-05-07. No `mod test_run;` exists
 in `lib.rs`, `main.rs` or `Cargo.toml`, so it is not compiled, not formatted, not
@@ -673,7 +778,18 @@ which is how §5.3 survived. It also makes the per-field `#[allow(dead_code)]`
 attributes in `ast.rs` decorative. Removing it is likely to surface real findings
 and should be treated as its own task with its own noise budget.
 
-### 5.6 The `run` ↔ `szx` module cycle — *architectural debt*, low (M10 input)
+### 5.6 The `run` ↔ `szx` module cycle — **FIXED 2026-09-03**, low (M10 input)
+
+> **Status: FIXED**, together with §5.38 and by the same change. commit
+> `7ec8fc9` · tests: `tests/architecture.rs` 5/5; `KNOWN_CYCLES` is empty and its
+> staleness check named both cycles the moment they were gone · 2026-09-03.
+>
+> `szx.rs` owned two jobs: translating a `.szx` file and *running* one. Only the
+> second reached `run`. `run_szx_file` moved to `run.rs` — which door a file
+> extension goes through is entry-point work — and `szx` kept the translation
+> half as `translate_szx_beside_source`. See §5.38 for the rest.
+>
+> The description below is the state before the fix.
 
 `run.rs:174` → `szx::run_szx_file`; `szx.rs:126` → `run::run_file`. Legal in
 Rust, but it is a genuine cycle in the dependency graph M10 has to certify.
@@ -743,14 +859,53 @@ behaviour is currently wrong — but a caller sorting or trusting the order has
 nothing to rely on. Pinned as observed by
 `lexical_diagnostics_arrive_after_syntactic_ones`; M3 has to decide it.
 
-### 5.13 `has_errors()` is false on a parser whose source is already broken — *hazard*, low
+### 5.13 `has_errors()` is false on a parser whose source is already broken — **FIXED 2026-09-03**, low
+
+> **Status: FIXED.** commit `e8ba7ee` · tests:
+> `a_parser_whose_source_is_already_broken_says_so_before_parsing`,
+> `a_parser_over_clean_source_still_reports_no_errors`,
+> `a_lexical_error_the_parser_has_not_reached_yet_is_not_yet_known` in
+> `tests/parser_facade.rs` · 2026-09-03.
+>
+> `has_errors()` reads the lexical queue as well as the flag. `take_errors()`
+> still returns only what has been flushed (§5.11) and the flush still groups
+> every SZ2xxx before every SZ1xxx (§5.12, decision D6); only the yes/no question
+> moved.
+>
+> **The entry's own example was on the wrong side of the boundary**, and the
+> tests now say where the boundary is. `let s = "unterminated;` is *not* known at
+> construction: two tokens of lookahead reach `let` and `s`, and the bad string is
+> the fourth token. `0x;` is, because the malformed token is the first one.
+> `has_errors()` answers "does the parser know of an error", not "does this source
+> contain one" — the second cannot be answered without lexing the whole file
+> eagerly.
+>
+> No observable behaviour for any program: all six product call sites read
+> `has_errors()` after `parse_program` has returned, where the flush has already
+> set the flag. What changes is the answer an early caller gets.
 
 `Parser::new` pulls two tokens, so a lexical failure on line 1 exists inside the
 parser before `parse_program` is called. It sits in a separate queue until the
 flush, so `has_errors()` answers `false` until then. No caller checks early.
 Pinned by `lexical_diagnostics_become_visible_only_once_parsing_has_run`.
 
-### 5.14 `tests/~tmp_test.sz` is committed runner residue — *test deficiency*, low
+### 5.14 `tests/~tmp_test.sz` is committed runner residue — **FIXED 2026-09-03**, low
+
+> **Status: FIXED.** commit `8625195` · tests: `tests/parser_snapshot.rs` 4/4
+> including `the_corpus_the_snapshot_walks_is_the_one_it_claims_to_walk`; both
+> Serez runners 501/0/0 · 2026-09-03.
+>
+> Coverage was checked before deletion and the answer is exact: concatenating
+> `framework.sz` with `unit_dict_advanced.sz` and diffing against the file yields
+> **one** difference, a blank line at line 34. Nothing to migrate, so no fixture
+> was created.
+>
+> `.gitignore` is the part that stops it recurring: it ignored
+> `tests/~unit_temp*.sz`, the exact name the runners write, which is why a scratch
+> file under a different name could be committed and twice "restored". It now
+> ignores `tests/~*.sz`. `git ls-files '*.sz'` and the snapshot corpus agree.
+>
+> The description below is the state before the fix.
 
 `framework.sz` with the body of what is now `unit_dict_advanced.sz` appended:
 a captured temp file from a 2026-06-19 run. No runner, script or document
@@ -771,7 +926,29 @@ three times (parse, `Debug`, drop) rather than twice. **No product behavior is
 involved** — the release binary parses both fixtures in every conformance run.
 Recorded so the next frontend test does not rediscover it.
 
-### 5.16 A peer session writes into this working tree — *working-tree hazard*, low
+### 5.16 A peer session writes into this working tree — **POLICY SET 2026-09-03**, low
+
+> **Status: ADDRESSED (policy, not code).** commit `866825c` · 2026-09-03.
+>
+> `DEVELOPMENT.md` §13 now states the flow — `improve -> integration -> main`,
+> with the version bump on promotion to `main` — and that **no auxiliary branches
+> or worktrees are created for automated sessions**. The reason given is this
+> finding: parallel writers into one tree make "what is the state of the
+> repository" unanswerable, and every milestone that treats a clean `git status`
+> as a precondition depends on being able to answer it.
+>
+> Deliberately a convention with no enforcement. A hook or wrapper blocking `git
+> worktree` would exist on one machine, enforce nothing elsewhere, and hide the
+> convention from the people who need to read it.
+>
+> One historical exception is named there so nobody tidies it away:
+> `.claude/worktrees/agent-ae7aff06bbe3f1d73`, branch
+> `worktree-agent-ae7aff06bbe3f1d73`, commit `6e62276`. It predates the rule,
+> holds work awaiting its own audit, and is not to be deleted, modified, merged,
+> cherry-picked or built on. `.claude/` is gitignored, which is exactly why the
+> fact of it needed writing down somewhere that is not.
+>
+> The `audit/` file described below is still present and still uncommitted.
 
 `audit/2026-09-01_14-52-03.md` appeared untracked, mid-session, at 14:52. It was
 written by a separate Claude Code session (`Auditoría de módulos y permisos
@@ -832,7 +1009,46 @@ The natural owner is **M3 (Diagnostics Unified)**, whose whole premise —
 violates. It may be worth fixing earlier as its own commit, since it is a
 user-visible defect rather than architectural debt.
 
-### 5.18 The frontend is compiled twice, from the same source — *architectural debt*, medium (M10 input)
+### 5.18 The frontend is compiled twice, from the same source — **FIXED 2026-09-03**, medium (M10 input)
+
+> **Status: FIXED.** commit `d0b31b3` · tests:
+> `architecture::the_lsp_binary_declares_no_modules_of_its_own` (a structural
+> gate) and the new `tests/lsp_shared_frontend.rs`, 5 tests, **a file that could
+> not have compiled before** because `lsp` was a private module of a binary crate
+> · 2026-09-03.
+>
+> **The two routes, demonstrated before anything moved.** `sz` reaches the
+> frontend through `serez_code::`. `sz-lsp` declared ten modules of its own, and
+> Cargo passes `--extern serez_code` to both binaries — so the library was
+> available and simply not used.
+>
+> **The size of it, measured.** `cargo test --bin sz-lsp` ran **73** tests and
+> `cargo test --lib` ran **223**; comparing the two lists by name, **42 were the
+> same tests** — `lexer::`, `render::`, `span::`, `diagnostic::`, `semantic::` —
+> compiled twice, run twice, over two builds of one file. Only 31 were the LSP's
+> own, and those were invisible to the library.
+>
+> **Differences, looked for and reported.** Behaviour: none, same files and same
+> flags. Reachability: real — every `pub`/`pub(crate)` in the frontend had to be
+> correct under two module roots at once, and `parser/mod.rs` carried three
+> `#[allow(unused_imports)]` because of it. All three are gone. Scope: the binary
+> compiled the frontend only, so it linked less; that reverses, below.
+>
+> **The shared API is `serez_code::lsp`** — the whole of `lsp/` promoted from
+> binary-private to a public library module. Nothing inside it changed: it already
+> referenced only `crate::lexer`, `parser`, `token`, `type_checker` and `semantic`.
+>
+> **No test was lost, verified by name.** Library 223 → 254 (exactly the 31 LSP
+> tests), `--bin sz-lsp` 73 → 0, 0 dropped and 0 renamed. The suite total falls
+> because 42 duplicates now run once.
+>
+> **One observable cost, declared.** `sz-lsp.exe` release grows 887,808 →
+> 1,579,008 bytes: it links a library containing the evaluator and host services
+> rather than a frontend-only crate. Nothing in it is reachable from
+> `lsp::server::run()`; removing it means splitting the library into frontend and
+> runtime crates, which is a workspace change and a different decision.
+>
+> The description below is the state before the fix.
 
 `src/lsp_main.rs` opens with its own `mod ast; mod lexer; mod lsp; mod parser;
 mod token; mod type_checker;`. The `sz-lsp` binary therefore does **not** depend
@@ -1246,7 +1462,47 @@ today. It was verified to fail: a probe fixture in framework style was added, th
 test named it, and the probe was removed — the M1.0.2 method, because a net
 nobody has seen fail is not evidence.
 
-### 5.35 — `serez-ui` calls `Int.parse`, and `Int` does not exist — *confirmed bug, ecosystem*, medium (found in M4.7.2)
+### 5.35 — `serez-ui` calls `Int.parse`, and `Int` does not exist — **FIXED (external) 2026-09-03**, medium (found in M4.7.2)
+
+> **Status: FIXED in serez-ui**, commit `3fb554d` in that repository, not in this
+> one · tests: `apps/layout_test.sz` goes from 0 assertions to 16; serez-ui 36/36;
+> ecosystem canary 8/8 · 2026-09-03.
+>
+> All six sites are `parseInt` now — the builtin the language has, and the right
+> one for the data: serez-ui's own stylesheets write unitless numbers (`gap: 8`),
+> which is exactly what it accepts.
+>
+> **Writing the coverage found three more defects, and together they say
+> `src/layout.sz` is dead code.** `computeLayout` has **no caller anywhere in
+> serez-ui**, which is why none of it was ever noticed:
+>
+> 1. the six `Int.parse` calls — fixed;
+> 2. `computeLayout` was the module's only entry and its helpers were private, so
+>    `export` removed them when the module finished loading and any caller got
+>    `SZ4001: Variable not found: measureNode`. Every one of serez-ui's other
+>    seventeen modules exports everything it declares — **0 private functions
+>    across all of them** — so this was the only module breaking the convention
+>    and the only one that did not work. Fixed the same way;
+> 3. `getLayoutStyle` returns an object literal, which the runtime refuses with
+>    `SZ4002: Object patch '{field: val}' is only valid in an assignment context`.
+>    **Not fixed**;
+> 4. `measureNode` reads `vnode.type` and `vnode.content`; `VNode` has `tag` and
+>    plain-string children. The module is written against a virtual-DOM shape the
+>    project no longer has. **Not fixed**.
+>
+> (3) and (4) are a rewrite against the current VNode rather than a fix, so they
+> are reported and left to the ecosystem owner. **Coverage is therefore 2 of the
+> 6 parse sites** — `parseSize`'s absolute and percentage paths, with a control
+> proving `auto`, `""` and `null` never reach a parse. The other four are named in
+> the test file with the defect that blocks each, so the gap is known rather than
+> invisible.
+>
+> **Seven vendored copies still carry `Int.parse`** — `serez-pack/dist/` ×2,
+> `Project Serez Code/*/packages/` ×4, `serez-strike/packages/` ×1. They are
+> installed copies and build output and refresh from the package rather than being
+> patched. §5.35 said the defect shipped three times; it is seven.
+>
+> The description below is the state before the fix.
 
 `serez-ui/src/layout.sz` calls `Int.parse(...)` at six sites (lines 65, 70, 85,
 96, 99 and one more), and `Int` is not a runtime namespace, not declared in the
@@ -1306,7 +1562,51 @@ next frontend test would not have to. It did anyway — a note in a roadmap does
 reach the person opening a new file, so the constant now carries the explanation
 at its definition site, where a reader of that file will meet it.
 
-### 5.38 — the evaluator depends on the entry point that drives it — *architectural debt*, medium (found in M10.1)
+### 5.38 — the evaluator depends on the entry point that drives it — **FIXED 2026-09-03**, medium (found in M10.1)
+
+> **Status: FIXED**, together with §5.6. commit `7ec8fc9` · tests:
+> `tests/architecture.rs` 5/5 with `KNOWN_CYCLES` empty, plus four new
+> `modules::` loader tests · 2026-09-03.
+>
+> **The edges, traced before anything moved:** `evaluator/stmt.rs:1609` called
+> `szx::translate_szx_to_string`; `szx.rs:126` called `run::run_file`;
+> `run.rs:152` constructs an `Evaluator`; `run.rs:220` dispatched `.szx` to
+> `szx::run_szx_file` (§5.6's other half).
+>
+> **The loader.** `crate::modules::load_source(&canonical)` answers one question —
+> what Serez source does this resolved module contain — with `.sz` read from disk
+> and `.szx` translated first. Owned by neither `run` nor `Evaluator`:
+>
+> ```text
+> run       -----\
+>                  ---> modules ---> szx
+> evaluator -----/
+> ```
+>
+> **Deliberately a function, not a `ModuleLoader` object.** There is no state for
+> one to hold: resolution is a function of its arguments, and the loaded-set
+> already lives in `LoadedModules` inside `ModuleContext`, saved and restored by
+> the evaluator as part of the import push/pop. A struct would be a namespace with
+> a `new()`, and the next thing it acquired would be the evaluator's arenas.
+>
+> **Entry-point dispatch** moved to `run.rs`; `szx` keeps
+> `translate_szx_beside_source`.
+>
+> **Preserved and checked, not assumed:** imports, `.sz`, `.szx`, both
+> `ImportError` texts (moved to `modules::LoadError` unchanged), cycle termination
+> and once-only caching, the translated file's name and position beside the
+> source, the "diagnostics refer to the translated form" note, cleanup on both
+> paths, every exit code. Live checks against the release binary for the paths no
+> suite covers: `sz hello.szx` runs and leaves no `.szx.sz` behind, a failing
+> `.szx` prints the note and exits 1, a missing `.szx` reports the same message as
+> before.
+>
+> **The cycle test now has nothing to find**, which is the failure mode §5.38 was
+> itself an instance of — so the detector got a positive control,
+> `the_cycle_finder_finds_cycles`, over hand-built graphs: a mutual pair, a
+> three-cycle, a four-cycle at `MAX_CYCLE`, and a diamond that is not a cycle.
+>
+> The description below is the state before the fix.
 
 `evaluator -> szx -> run -> evaluator`. A three-module cycle, and §3.1 names all
 three edges without naming the cycle they form.
@@ -1334,7 +1634,58 @@ loader that neither `run` nor `evaluator` owns — which is an architectural cha
 with no forced answer. Recorded, and both cycles are now in `KNOWN_CYCLES` where a
 third one would fail the build.
 
-### 5.39 — three more semantic gaps, all silent — *semantic debt*, medium (measured 2026-09-03, presenting DEC-M4-001)
+### 5.39 — three more semantic gaps, all silent — **TWO FIXED 2026-09-03**, medium (measured 2026-09-03, presenting DEC-M4-001)
+
+> **Status: duplicate declaration FIXED · unknown parent FIXED · the third gap
+> untouched.** commits `0385afd` (preparation) and `d20b64d` · tests: 12 new
+> cases in `semantic::validate`, three new conformance fixtures
+> (`err_duplicate_class`, `err_duplicate_fn`,
+> `err_parent_missing_uninstantiated`) · 2026-09-03.
+>
+> **Measured before implemented**, because both are breaking and
+> `compatibility.md`'s rule is that a breaking change ships in a minor only when
+> a sweep finds no affected code. Across **1,070** files — 515 corpus and 555
+> ecosystem, all eight packages:
+>
+> | | count |
+> |---|---|
+> | duplicate same-kind top-level declarations | **0** |
+> | cross-kind collisions (`class X` + `interface X`) | **0** |
+> | top-level `class X : Y`, `Y` unresolvable, no `import` in the file | **1** — `tests/err_parent_missing.sz`, the fixture documenting the defect, which already exited 1 |
+> | ecosystem `class X : Y` sites | **369**, every one in a file that imports, so every one stays silent |
+>
+> **A duplicate declaration** is a fatal `SZ8000` naming the first declaration's
+> line; the *second* is reported, because it is the edit that broke the program,
+> and every collision in a file is reported. Shadowing across scopes is untouched
+> (top level only, the reserved-name rule's reach), cross-kind is **DEC-M4-008**,
+> cross-file is a different rule with its own reporting, and no overload rule was
+> invented.
+>
+> **An unresolvable parent** is a fatal `SZ8000`. "Not declared in this file" is
+> not "does not exist", so it defers to `semantic::scopes`, whose stated bias is
+> that every ambiguity resolves toward *treat it as bound*: a file containing
+> `import` is never reported against, and builtin construction targets are bound.
+> An `import` that in fact fails to supply the parent is **not** caught —
+> **DEC-M4-007**, registered and pinned.
+>
+> **The first version of the parent rule was wrong and the suite caught it.**
+> Written without a reach restriction it reported `unit_inheritance_errors.sz`,
+> where a `test(…)` lambda writes `class InheritanceCycleA : InheritanceCycleB`
+> before declaring `InheritanceCycleB` six lines later and asserts "forward
+> reference can recover". `scopes` models position exactly inside a body — right
+> for a variable, wrong for a class, which registers globally when its
+> declaration executes. The rule stops at the top level, and
+> `a_forward_parent_reference_inside_a_body_is_not_reported` pins the case.
+>
+> **The third gap in this entry is untouched** and stays open.
+>
+> One `diagnostic_render` row moved: `err_parent_missing.sz`, from a runtime
+> `SZ4001` at construction to a fatal `SZ8000` at declaration, exit 1 either way.
+> `parser_ast` is purely additive. Specs travel with it: `errors.md` one rule →
+> three, `classes.md` states both with the table of what is and is not reported,
+> `compatibility.md` records the change with its sweep.
+>
+> The description below is the state before the fix.
 
 Probed to answer one question: would a semantic phase have more than a single
 tenant, or would it be the speculative abstraction rule 9 forbids? Three gaps,
@@ -1374,6 +1725,53 @@ work, and they become their own decisions when someone gets to them.
 
 ---
 
+### 5.41 — the semantic phase reaches `sz` and not `sz-lsp` — *tooling gap*, medium (found in §5.18, 2026-09-03)
+
+`sz` rejects `class Task { … }` with a fatal `SZ8000` and exit 1. The editor
+publishes nothing. Verified against both release binaries over real JSON-RPC, not
+only in process:
+
+```
+$ sz task.sz
+❌ SEMANTIC ERROR [SZ8000] [task.sz 1:1]: 'Task' is a reserved system namespace…
+$ sz-lsp   (didOpen with the same source)
+"diagnostics": []
+```
+
+`lsp::analysis::analyze` runs the lexer, the parser and the type checker. It does
+not run `semantic::validate`, because `9d91f3c` wired the phase into
+`run::run_source_detailed` and nothing else. So the two rules §5.39 just added —
+a duplicate declaration and an unresolvable parent — are also invisible in an
+editor, and the gap widens with every rule the phase acquires.
+
+**Pre-existing, and deliberately not fixed in §5.18**, whose contract was that
+consolidating the two builds changes no observable behaviour. Making the editor
+start reporting a fatal phase is a behaviour change with more than one defensible
+shape, so it is **DEC-M4-006**. Pinned by
+`the_semantic_phase_does_not_yet_reach_the_editor` in
+`tests/lsp_shared_frontend.rs`, with a positive control proving the rule really
+does fire in the same process through the same library — so the pin cannot pass
+because nothing was rejected.
+
+### 5.42 — seven vendored copies of `serez-ui/src/layout.sz` carry the fixed defect — *ecosystem hygiene*, low (found in §5.35, 2026-09-03)
+
+§5.35 said the `Int.parse` defect "ships three times in the measured tree". It is
+seven, and they are three different kinds of copy:
+
+| Location | Count | What it is |
+|---|---|---|
+| `serez-pack/dist/…/serez-ui/src/layout.sz` | 2 | build output |
+| `Project Serez Code/*/packages/serez-ui/src/layout.sz` | 4 | installed package copies |
+| `serez-strike/packages/serez-ui/src/layout.sz` | 1 | installed package copy |
+
+Not patched, deliberately: they refresh from the package rather than being edited,
+and editing a `dist/` artefact would make the next build silently undo it.
+Recorded so that "fixed in serez-ui" is not read as "gone from the tree". The
+copies matter only when something actually calls `computeLayout`, and §5.35's
+finding (2)–(4) is that nothing does.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of
@@ -1382,15 +1780,93 @@ what is still **open** there.
 | Item | Severity | Milestone that owns it |
 |---|---|---|
 | Free variables resolve dynamically; undocumented in README; `--check` does not flag them | **critical, open** | M4 / M7 — needs an explicit product decision under `spec/compatibility.md` |
-| Property schemas not enforced after construction (typed fields accept other types later) | high | M5 |
-| Private access compares against the runtime receiver class, so a subclass can reach a parent's private members | high | M7 |
-| `EvalResult` mixes values, control flow, throw and an untyped `Error` sentinel | medium | M6 |
-| `fetch` remains reachable under lockdown (deliberate, breaking to change) | high | M7 / M9 |
+| ~~Property schemas not enforced after construction~~ | ~~high~~ | **FIXED** 2026-09-03, `89395b3` — see below |
+| ~~Private access compares against the runtime receiver class~~ | ~~high~~ | **FIXED** 2026-09-03, `5f78f4e` — see below |
+| ~~`EvalResult` mixes values, control flow, throw and an untyped `Error` sentinel~~ | ~~medium~~ | **FIXED** 2026-09-03, `5af868c` — see below |
+| ~~`fetch` remains reachable under lockdown~~ | ~~high~~ | **FIXED** 2026-09-03, `649ba49` (DEC-M7-006) — see below |
 | Non-atomic package installation; no lockfile, integrity or signature policy | high | M9 |
 | LLVM backend parity unproven, feature-gated, absent from the CLI | high | M10 |
 | No benchmark regression budget in CI, no stored baseline | medium | M10 |
 | CI does not run the ecosystem canary | high | M10 |
 | Generators accumulate into an unbounded vector (ceiling measured, deliberately not added) | medium | M9 |
+
+### The four items closed on 2026-09-03
+
+Each was closed with a measurement first, because all four are breaking and
+`spec/compatibility.md`'s rule is that a breaking change ships in a minor only
+when a sweep of the official packages and the conformance suite finds no affected
+code, and the entry names the sweep and its result.
+
+**Property schemas** — `89395b3`. A declared field type is a constraint for the
+object's whole life, checked on every write from inside the class and outside it,
+through `evaluator::type_matches` — the same function every parameter, return
+type and `is` already uses, so nullable, `[T]`, `any` and enum variants behave at
+a field exactly as they do at a parameter. It is not a comparison of type names,
+and it deliberately does **not** make a declared class type accept a subclass,
+because that is DEC-M5-005 and still open. Inherited fields and interface fields
+are covered. Not constrained: a field with a default and no annotation, and a
+field created by assignment — DEC-M5-004 recommended option A, explicitly not C.
+DEC-M5-004 asked for the off-type-assignment count before implementing; running
+the suites against the enforcement answers it exactly: **2**, both of them the
+fixtures documenting the old behaviour.
+*Checker:* `type_checker` does not inspect `FieldAssign` and never did, so this is
+the runtime's rule alone — a gap in reach rather than a disagreement, recorded in
+three `tests/type_agreement.rs` rows and stated in `spec/types.md`. Closing it
+needs the checker to carry each class's field schema and would meet DEC-M5-005
+the moment it typed a class-valued variable, so it is its own work.
+
+**Private access** — `5f78f4e`, and DEC-M7-002 decided. `private` is private to
+the class that declares the member. The declaring class is the key in both
+directions: it is what the check compares against, and it is what
+`executing_class` becomes while the body runs — so a subclass reaching an
+inherited private is refused, and a `Base` method reaching `Base`'s own private
+through a `Derived` receiver still works. Getters and setters are covered too;
+they live in their own maps, and the first version of the fix missed them, which
+would have left half the decision unimplemented on exactly the members
+`spec/classes.md`'s caveat named. Sweep: **27** private declarations in the
+corpus, **0** in the ecosystem — the one match is a string literal in serez-ui's
+translator — and no file reaches a parent's private from a child. The message
+changed, because "cannot be called externally" is no longer what the rule
+refuses; `spec/compatibility.md`'s diagnostic-surface section records it.
+
+**`EvalResult`** — `5af868c`. `Result<ExecutionFlow, RuntimeFailure>`: `Ok` is the
+language doing something, `Err` is the runtime failing. No variant invented and
+none dropped; `Throw` stays on the flow side, because a `throw` is a program
+doing what programs may do. `RuntimeFailure` is a unit struct on purpose — the
+payload already lives on the evaluator as `last_error` with a generation counter,
+and a second copy would be a second source of truth. 1,608 sites rewritten by
+script with balanced-paren matching, compiler-checked, zero warnings.
+*The differential harness DEC-M6-001 asked for was built first* and committed as
+`tools/runtime_diff.sh`: exit code, stdout and stderr verbatim for **222**
+self-contained fixtures, captured before and after, `diff` empty.
+*What the type found:* seven `self.rt_err(...)` calls whose result was discarded,
+invisible under the old enum and `unused_must_use` under `Result`. All seven are
+legitimate — they raise for the recording side effect and carry the decision in a
+local flag — and now say `let _ =` so the intent is written down. No behaviour
+changed at any of them.
+*Not conflated:* DEC-M6-001 itself is untouched; namespace dispatch is still
+`impl Evaluator`.
+
+**`fetch` under lockdown** — `649ba49`, and DEC-M7-006 decided as option C.
+Blocked by default, opened only by an explicit allowlist that the **embedder**
+sets — `--allow-fetch`, `RunOpts::fetch_allowlist`, `Evaluator::allow_fetch_hosts`
+— and that a program cannot extend, for the same reason `use permissions { }`
+stops granting under lockdown. Hostname matching, case-insensitive and exact: no
+wildcards, no suffix matching, no port matching, and userinfo cannot disguise a
+host. A URL whose host cannot be read is refused rather than guessed at.
+*Redirects are checked at every hop*, which is the half that would have made the
+rest theatre: `ureq` follows redirects itself, so `allowed → 302 → forbidden`
+would have arrived with nothing asking. Under an allowlist the agent is built
+with `redirects(0)` and the hops are followed and validated one at a time, to the
+same ceiling of 5. Outside lockdown none of this is in the path — verified
+against the release binary that a cross-host redirect still follows.
+*The conformance test that pinned the old behaviour inverted by design*, in both
+runners, and became four. `tests/lockdown_fetch.rs` adds 14 more, seven against a
+real HTTP server, with a positive control for the redirect case so a `fetch` that
+simply always failed could not pass.
+*Not closed:* **DEC-M9-001**. The response-size ceiling and the unbounded
+`read_to_end` are separate problems and stay open; the only overlap taken here is
+the redirect chain, without which the allowlist is bypassable.
 
 Two milestones are **partially pre-empted** by work already landed, and their
 audits must account for it rather than redo it:
@@ -1446,6 +1922,9 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
 | **DEC-M4-004** | What the editor's outline should show | **OPEN** | the LSP's migration onto `semantic::declarations` |
 | **DEC-M4-005** | The semantic phase's code and label | **DECIDED** 2026-09-03 — **A, `SZ8xxx` + `SEMANTIC`** | unblocked M4.5.4–M4.5.6 |
+| **DEC-M4-006** | Whether the LSP reports the fatal semantic phase | **OPEN** | nothing; §5.41 is the finding |
+| **DEC-M4-007** | Whether the semantic phase resolves through `import` | **OPEN** | the other half of §5.39's parent rule |
+| **DEC-M4-008** | Whether a `class` and an `interface` may share a name | **OPEN** | nothing; 0 measured occurrences |
 | **DEC-M5-001** | Whether a nullable value at a non-nullable parameter is reported | **OPEN** | nothing — a question to answer, not a gate |
 | **DEC-M5-002** | Whether a numeric type widens at a parameter | **OPEN** | nothing |
 | **DEC-M5-003** | Whether an unknown type name is diagnosed | **OPEN** | nothing; option B depends on DEC-M4-001 |
@@ -1453,11 +1932,11 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M5-005** | Whether a declared class type accepts a subclass | **OPEN** | nothing |
 | **DEC-M6-001** | How a runtime service raises an error and allocates a value | **OPEN** | the rest of M6 — moving namespace dispatch off `Evaluator` |
 | **DEC-M7-001** | Whether `remove` on an empty array is an error | **OPEN** | nothing |
-| **DEC-M7-002** | Whether a subclass reaches an inherited private member | **OPEN** | nothing; wants a resolver to measure |
+| **DEC-M7-002** | Whether a subclass reaches an inherited private member | **DECIDED** 2026-09-03 — **A, keyed to the declaring class**; implemented in `5f78f4e` | — |
 | **DEC-M7-003** | Whether a `match` with no matching arm is an error | **OPEN** | nothing; interacts with DEC-M7-005 |
 | **DEC-M7-004** | Whether `==` compares containers structurally | **OPEN** | nothing; ships with DEC-M5-005 |
 | **DEC-M7-005** | What a `match` pattern that fails to evaluate does | **OPEN** | nothing; should precede DEC-M7-003 |
-| **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **OPEN** | part of M9's treatment of `fetch` |
+| **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **DECIDED** 2026-09-03 — **C, gated with an explicit allowlist**; implemented in `649ba49` | — (DEC-M9-001 remains open) |
 | **DEC-M9-001** | What ceiling an unbounded read has, and what happens at it | **OPEN** | the ceiling; three call sites share one policy |
 | **DEC-M10-001** | Whether CI runs the ecosystem canary | **OPEN** | the canary's place in the release pipeline |
 | **DEC-M10-002** | Whether clippy is a gate | **OPEN** | nothing; the manual comparison works |
@@ -2442,6 +2921,60 @@ that can break working code with no diagnostic.
 
 **Blocked by this decision:** nothing today. **Wants:** a resolver, per above.
 
+## RESOLUTION — **DECIDED 2026-09-03: option A, keyed to the declaring class.**
+
+Implemented in `5f78f4e`. `private` is private to the class that declares the
+member.
+
+| Access | Before | Now |
+|---|---|---|
+| a `Base` method uses `Base`'s private | allowed | allowed |
+| ...through a `Derived` receiver | allowed | **allowed** |
+| a `Derived` method uses `Base`'s private | allowed | **refused** |
+| another class | refused | refused |
+| outside any class | refused | refused |
+
+**Row two is what made this more than a one-line change.** Inheritance must not
+widen `private`, and it must not narrow it either: a subclass calling an
+accessible parent method that internally uses the private member keeps working,
+and that was never the thing being forbidden. So the declaring class is the key
+in both directions — the check compares against it, and `executing_class` is set
+to it while the body runs. Keying `executing_class` to the receiver's class, as
+before, would have refused a `Base` method its own private members whenever it
+was reached through a `Derived`.
+
+**The measurement this entry recorded itself as lacking:** **27** `private`
+declarations across the 515-file corpus and **0** across all eight ecosystem
+packages — the single ecosystem match is a string literal in serez-ui's
+translator. Five corpus files declare a private member *and* a subclass; none
+reaches a parent's private from the child.
+
+**Getters and setters were the trap.** They live in `StoredClass::getters` /
+`setters`, not `methods`, so an owner lookup that searched only `methods` fell
+back to the receiver's class and left half the decision unimplemented — on
+exactly the members `spec/classes.md`'s caveat named ("method/getter/setter").
+`declaring_class_of` picks the map from the member's own `is_getter` /
+`is_setter`.
+
+**The pin did its job.** `frozen_semantics::a_subclass_reaches_an_inherited_private_method`
+existed to fail the day this moved, and it failed. It is replaced, not deleted,
+by `private_is_keyed_to_the_declaring_class_and_not_the_receiver`, which asserts
+both halves; the file gained a `refuses` helper, because a suite that could only
+assert "this program completes" had no way to state a rule that says "this one
+must not".
+
+**Message text changed**, and that is recorded in `spec/compatibility.md`'s
+diagnostic-surface section: `Method 'm' is private and cannot be called
+externally` becomes `Method 'm' is private to 'Base' and cannot be called from
+here`. The old wording is now false — an access from inside the hierarchy but
+outside the declaring class is refused, and it is not external. Code, kind,
+catchability and exit code are unchanged.
+
+**Tests:** `err_private_inherited.sz`, which prints the permitted access before
+making the refused one so it fails in either direction; three existing fixtures
+regenerated for the wording; four `runtime_outcome.rs` assertions updated to name
+the class rather than a wording that no longer describes the rule.
+
 ---
 
 ### DEC-M7-003 — Should a `match` with no matching arm be an error?
@@ -2636,6 +3169,56 @@ recorded with its evidence rather than folded into M9's hardening pass.
 **Blocked by this decision:** M9's treatment of `fetch`, in part — the size
 ceiling is independent and can proceed either way.
 
+## RESOLUTION — **DECIDED 2026-09-03: option C, gated with an explicit allowlist.**
+
+Implemented in `649ba49`. Under lockdown `fetch` is refused with fatal
+`PermissionError` (`SZ6001`) before any request leaves the process, and
+`try/catch` cannot consume it — a security refusal a program can turn into
+control flow is advice.
+
+**The allowlist belongs to the embedder**, which is what makes it a gate. There
+is deliberately no way for a running program to add to it, for the same reason
+`use permissions { }` stops granting under lockdown: a list untrusted source can
+extend is not a list. Three surfaces, all outside the program — `--allow-fetch`,
+`RunOpts::fetch_allowlist`, `Evaluator::allow_fetch_hosts`.
+
+**Matching is hostname, case-insensitive and exact.** No wildcards, no suffix
+matching, no port matching: each is a policy question, and inventing an answer to
+one inside a security gate is how a gate acquires a hole. Userinfo cannot
+disguise a host — `http://allowed.test@evil.test/` is `evil.test` — and a URL
+whose host cannot be read is refused rather than guessed at.
+
+**Redirects are checked at every hop**, and this is the half that would have made
+the rest theatre. `ureq` follows redirects itself, so gating only the URL the
+program wrote would let `allowed.example → 302 → forbidden.internal` arrive with
+nothing asking. Under an allowlist the agent is built with `redirects(0)` and the
+hops are followed and validated one at a time, to ureq's own ceiling of 5. A
+`Location` this runtime will not resolve — protocol-relative, path-relative, a
+different scheme — is refused rather than followed.
+
+**Outside lockdown none of this is in the path.** `allows_fetch` is always true
+there, so `sz file.sz` goes straight to the original transport with ureq's own
+redirect handling; verified against the release binary that a cross-host redirect
+still follows.
+
+**The pinned test inverted by design**, in both runners, and became four:
+gated with no list, still gated for a host not on the list, an allowed host
+reaching the builtin, and the refusal surviving `try/catch`. None needs the
+network. `tests/lockdown_fetch.rs` adds 14 more, seven of them against a real
+HTTP server that plays `localhost` and `127.0.0.1` as two names for one socket —
+with a positive control (allowing *both* names lets the same redirect complete)
+so a `fetch` that simply always failed could not pass, and a same-host relative
+redirect asserted to still work so the gate is not over-blocking.
+
+**Ecosystem sweep is vacuous, and says so:** no official package runs under
+lockdown, so 8/8 is not evidence here. Breaking for `--eval` and the playground;
+not for `sz file.sz`.
+
+**DEC-M9-001 is deliberately NOT closed.** The response-size ceiling, the
+unbounded `read_to_end` and M9's wider hardening remain separate and open. The
+only overlap taken here is the redirect chain, which is not a size question and
+without which the allowlist is bypassable.
+
 ---
 
 ### DEC-M9-001 — What ceiling should an unbounded read have, and what happens at it?
@@ -2793,6 +3376,138 @@ transition M10 is about — and §5.26's snapshot command is already written dow
 
 **Blocked by this decision:** nothing; the manual comparison works and is
 documented.
+
+---
+
+### DEC-M4-006 — Should the LSP report the fatal semantic phase?
+
+**Problem.** `sz` rejects `class Task { … }` with a fatal `SZ8000` and exit 1.
+`sz-lsp` publishes nothing. `lsp::analysis::analyze` runs the lexer, the parser
+and the type checker, and not `semantic::validate` — `9d91f3c` wired the phase
+into `run::run_source_detailed` and nothing else.
+
+**Current behaviour.** As above, verified against both release binaries over real
+JSON-RPC. §5.41 has the measurement. It widens with every rule the phase gains:
+§5.39's duplicate-declaration and unresolvable-parent rules are invisible in an
+editor too.
+
+**Measured evidence.** Every program the semantic phase rejects — today the
+reserved-name rule plus §5.39's two — is a program the editor stays silent about.
+Not a sample: the phase has no LSP consumer at all.
+
+**Alternatives.** A: **run the phase in `analyze` and publish its findings** as
+severity 1, alongside parser and checker diagnostics. B: run it and *also* skip
+the type checker when it reports, mirroring `run.rs`, so the editor shows what
+the compiler shows and nothing that would be noise. C: leave it, and say in
+`spec/` that the editor reports syntax and types only.
+
+**Trade-offs.** A is the smallest change and makes the editor agree with the
+compiler about which programs are rejected. B is more faithful — `run.rs` skips
+the checker precisely so a rejected program does not reach a stage whose findings
+may be ignored — but an editor that silently drops type diagnostics when a
+semantic one appears is a different UX question. C is honest and permanently
+weaker.
+
+**Architectural impact.** None: `semantic::validate` is in the library and
+`analyze` already holds the parsed program. **Semantic impact.** None — the
+editor reports, it does not run. **Compatibility.** Editor-only; no program's
+behaviour changes. **Impact by area.** LSP: `analysis::analyze` and its tests.
+Specs: `errors.md`'s phase table. Runtime: none.
+
+**Recommendation — a recommendation, not a decision.** **B**, because the
+editor's job is to show what the compiler will do, and `run.rs` already decided
+that a semantically-rejected program's type findings are noise. Note the
+interaction with DEC-M4-004, which owns what the outline shows: this one is about
+diagnostics and they can be decided independently.
+
+**Blocked by this decision:** nothing. Pinned by
+`the_semantic_phase_does_not_yet_reach_the_editor`.
+
+---
+
+### DEC-M4-007 — Should the semantic phase resolve through `import`?
+
+**Problem.** §5.39's unresolvable-parent rule reports nothing for a file that
+contains any `import`, because the phase resolves one file at a time and an
+imported module may legitimately declare the parent. So `import "./real"; class
+Child : NeverDeclared {}` is not caught, even when the import supplies nothing of
+the sort.
+
+**Current behaviour.** Conservative and silent, following
+`semantic::scopes`'s own stated bias — every ambiguity resolves toward *treat it
+as bound*, and a file with imports is `is_conclusive() == false`.
+
+**Measured evidence.** **369** of the ecosystem's `class X : Y` sites are in files
+that import, so the suppression is doing almost all the work there; in the
+515-file corpus it costs nothing, because 58 of 59 top-level parents resolve
+locally.
+
+**Alternatives.** A: **resolve imports at check time** — `modules::resolve` +
+`load_source` + parse, transitively, collecting each module's top-level
+declarations. B: **leave it**, and document that the rule is per file. C: resolve
+only when the file's imports are all local `.sz` paths, refusing to judge when a
+URL import or a `.szx` translation is involved.
+
+**Trade-offs.** A is the only option that catches the case, and it makes the
+semantic phase read the filesystem — during `--check`, on every run, transitively
+— and forces an answer for `--eval` **lockdown**, where `import` is refused at run
+time and reading modules at check time would be a capability leak. It also needs
+a cycle guard and a cost budget. B keeps the phase cheap, pure and lockdown-safe,
+and leaves a real class of defect uncaught. C is A's cost with a narrower reach.
+
+**Architectural impact.** A gives `semantic` a dependency on `modules` and, for
+`.szx`, on spawning the translator — from a phase that is currently a pure
+function of one AST. **Semantic impact.** A rejects more programs.
+**Compatibility.** A is breaking for programs whose imports do not in fact supply
+a declared parent. **Impact by area.** Runtime: none. Specs: `classes.md`'s table
+of what is and is not reported. Tests:
+`an_import_that_does_not_supply_the_parent_is_still_not_reported` inverts under A.
+
+**Recommendation — a recommendation, not a decision.** **B for now**, and A only
+with an explicit answer for lockdown and a measured cost. The phase being a pure
+function of one tree is worth more than the marginal reach, and the uncaught case
+still fails at instantiation the way it always did.
+
+**Blocked by this decision:** the reach of §5.39's parent rule, and nothing else.
+
+---
+
+### DEC-M4-008 — Should a `class` and an `interface` share a name?
+
+**Problem.** §5.39's duplicate rule is per *kind*: two classes collide, two
+interfaces collide, a class and an interface do not. They live in separate
+registries and both declarations are accepted.
+
+**Current behaviour.** Both are accepted, and `new Name(...)` consults the
+**interface** regardless of which was declared last, so the class becomes
+unreachable. `spec/classes.md` already documents this under "A class and an
+interface cannot share a name" as a hazard.
+
+**Measured evidence.** **0** cross-kind collisions across 1,070 corpus and
+ecosystem files. Nothing depends on the answer in either direction.
+
+**Alternatives.** A: **make it an error**, folding it into the duplicate rule. B:
+**keep it**, and keep documenting the shadowing hazard. C: keep it but **warn**,
+which needs the advisory channel DEC-M5-003 is about.
+
+**Trade-offs.** A is what the reader of `class Shape` / `interface Shape` almost
+certainly wants, and it is free today. But the two are genuinely different
+namespaces at run time, and making them one is a statement about the language's
+name model rather than a bug fix — the same statement DEC-M4-003 is about for
+namespaces, and it should probably be made once for both.
+
+**Architectural impact.** None; the check is already there and keyed on
+`DeclKind`. **Semantic impact.** A rejects programs. **Compatibility.** Breaking
+in principle, with 0 measured victims. **Impact by area.** Specs:
+`classes.md`'s existing hazard paragraph becomes a rule. Tests:
+`two_kinds_of_declaration_sharing_a_name_are_not_reported` inverts under A.
+
+**Recommendation — a recommendation, not a decision.** **A**, decided together
+with DEC-M4-003, so the language answers "what shares a namespace with what" once
+rather than twice.
+
+**Blocked by this decision:** nothing. Pinned by
+`two_kinds_of_declaration_sharing_a_name_are_not_reported`.
 
 ---
 

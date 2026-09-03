@@ -664,3 +664,66 @@ A core change is releasable only when:
    deprecation;
 6. the release workflow consumes those same results rather than rebuilding from an
    unverified tag alone.
+
+---
+
+## Findings closed on 2026-09-03
+
+Four items this register carried as open are closed. `docs/maturity/ROADMAP_STATE.md`
+§6 has the full account of each, including what was deliberately left out; this is
+the register-facing summary, and the register is where a reader should notice that
+a finding stopped being open.
+
+Each was closed with a measurement first, because all four are breaking and
+`spec/compatibility.md`'s rule is that a breaking change ships in a minor only
+when a sweep of the official packages and the conformance suite finds no affected
+code, and the entry names the sweep and its result.
+
+| Finding | Severity | Commit | What the sweep found |
+|---|---|---|---|
+| Property schemas not enforced after construction | high | `89395b3` | **2** off-type field assignments in 1,070 corpus and ecosystem files, both of them the fixtures documenting the old behaviour. No official package declares a typed field. |
+| Private access keyed to the runtime receiver class | high | `5f78f4e` | **27** private declarations in the corpus, **0** in the ecosystem; no file reaches a parent's private from a subclass. |
+| `EvalResult` mixes values, control flow, throw and an untyped `Error` sentinel | medium | `5af868c` | **222** self-contained fixtures compared byte for byte before and after, via the new `tools/runtime_diff.sh`; the diff is empty. |
+| `fetch` remains reachable under lockdown | high | `649ba49` | No official package runs under lockdown, so the 8/8 canary is **not** evidence here, and the entry says so rather than presenting it as reassurance. |
+
+Three things in that table are worth carrying forward as method rather than as
+results.
+
+**A differential harness before the change, not after it.** DEC-M6-001 called a
+behaviour-preserving rewrite at that scale "the highest-risk work in the roadmap"
+and asked for the harness first. It was built first, it is committed as
+`tools/runtime_diff.sh` rather than thrown away, and it is what makes "1,608 call
+sites rewritten, nothing moved" a measurement instead of a claim.
+
+**The type surfaced a question and the question was answered rather than absorbed.**
+Splitting `EvalResult` into `Result<ExecutionFlow, RuntimeFailure>` made seven
+discarded `rt_err(...)` results into `unused_must_use` warnings. All seven turned
+out to be legitimate — they raise for the recording side effect and carry the
+control decision in a local flag — and they now say `let _ =` so the intent is
+written down. No behaviour changed at any of them.
+
+**A fix that is half-applied is worse than a fix that is refused.** The first
+version of the private-access change searched only `StoredClass::methods`, so it
+left private *getters and setters* keyed to the receiver's class — exactly the
+members `spec/classes.md`'s caveat named. It was found by reading the caveat back
+against the diff, not by a failing test, and the tests for it were written
+afterwards.
+
+Two findings in the closed set had a pinned test that existed to fail the day the
+behaviour moved — `frozen_semantics`'s DEC-M7-002 pin and the conformance suite's
+`eval/lockdown: fetch is NOT gated`. Both fired. Neither was edited to pass:
+each was replaced by an assertion of the decided rule, with the decision named in
+the commit, which is the whole reason those pins were written.
+
+### Still open in this register, unchanged
+
+The critical entry — free variables resolving dynamically, undocumented, and
+`--check` not flagging them — is untouched and still needs the explicit product
+decision under `spec/compatibility.md` that DEC-M4-002 describes. So are the
+package-installation, LLVM-parity, benchmark-budget, CI-canary and unbounded-
+generator entries.
+
+**DEC-M9-001 is deliberately not closed** by the `fetch` work. The
+response-size ceiling and the unbounded `read_to_end` are separate problems; the
+only overlap taken was the redirect chain, without which the allowlist would be
+bypassable.
