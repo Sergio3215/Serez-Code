@@ -1,7 +1,7 @@
 # serez-parser-snapshot/1
 # Parser output for every .sz file under tests, benchmarks, std, apps.
 # path<TAB>tree-bytes<TAB>diagnostics<TAB>fnv1a64(tree)<TAB>fnv1a64(diagnostics)
-# files: 501
+# files: 504
 apps/01_task_manager.sz	62318	0	a3f338cdf17155ce	cbf29ce484222325
 apps/02_statistics.sz	67295	0	fc1fbbf98d0d7329	cbf29ce484222325
 apps/03_text_analyzer.sz	53830	0	2c9ae7ec03fdc6ba	cbf29ce484222325
@@ -146,6 +146,8 @@ tests/err_dec_parse_invalid.sz	371	0	347a84713f5bc735	cbf29ce484222325
 tests/err_dec_pow_frac.sz	368	0	c00e2619dae27fa8	cbf29ce484222325
 tests/err_dict_key.sz	802	0	d51dbdd94ec0a5bf	cbf29ce484222325
 tests/err_div_zero.sz	369	0	54a744cf87a9b943	cbf29ce484222325
+tests/err_duplicate_class.sz	1697	0	dfb3889bd2e7fa7b	cbf29ce484222325
+tests/err_duplicate_fn.sz	1408	0	6039cc72f9b3673e	cbf29ce484222325
 tests/err_enum_string_concat.sz	1438	0	e62ede5ecd6a645c	cbf29ce484222325
 tests/err_extra_iface_field.sz	869	0	d919958706406a21	cbf29ce484222325
 tests/err_field_non_instance.sz	430	0	d0cecd03d96ef007	cbf29ce484222325
@@ -167,6 +169,7 @@ tests/err_modulo_zero.sz	369	0	4d198a579ea435f5	cbf29ce484222325
 tests/err_not_function.sz	410	0	0372ad980ba2a346	cbf29ce484222325
 tests/err_overflow.sz	588	0	23bcacd821ba0d65	cbf29ce484222325
 tests/err_parent_missing.sz	421	0	bf71fd86a1d6d8c9	cbf29ce484222325
+tests/err_parent_missing_uninstantiated.sz	663	0	268555fa2c507cef	cbf29ce484222325
 tests/err_parse_class_member_visibility.sz	26	2	884d3c60e861b329	c171125d37ec1235
 tests/err_parse_depth_chain.sz	26	1	884d3c60e861b329	1b99270d282d87fd
 tests/err_parse_depth_nesting.sz	26	1	884d3c60e861b329	06a105a636c617a6

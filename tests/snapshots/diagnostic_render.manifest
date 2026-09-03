@@ -1,7 +1,7 @@
 # serez-diagnostic-render/1
 # stderr and exit code of every err_*.sz / sec_*.sz fixture.
 # name<TAB>exit<TAB>stderr-bytes<TAB>fnv1a64(stderr)
-# fixtures: 156
+# fixtures: 159
 err_arity.sz	1	205	52665bc115254ed6
 err_array_unknown_method.sz	1	59	1dc964c13a6629af
 err_bool_plus_int.sz	1	104	344fe7325b982d2a
@@ -16,6 +16,8 @@ err_dec_parse_invalid.sz	1	63	47c86ef58c3e0985
 err_dec_pow_frac.sz	1	82	cd26f13cc9f98de8
 err_dict_key.sz	1	71	30677236da83b09a
 err_div_zero.sz	1	38	0ad5d56144de09b9
+err_duplicate_class.sz	1	213	88cac9bf76f3c8e8
+err_duplicate_fn.sz	1	220	8fcfe574288d2668
 err_enum_string_concat.sz	1	111	f6030f4e3428c7b2
 err_extra_iface_field.sz	1	68	f1be3492c04be81a
 err_field_non_instance.sz	1	67	95559f361b4674cb
@@ -36,7 +38,8 @@ err_member_missing.sz	1	82	959537faf7c0cf75
 err_modulo_zero.sz	1	37	028585868077dfc1
 err_not_function.sz	1	107	33663496dd4f6caf
 err_overflow.sz	1	38	2fd5a7e7fb3dece7
-err_parent_missing.sz	1	98	b9e3221613e4c805
+err_parent_missing.sz	1	263	2bbb7abaccacee48
+err_parent_missing_uninstantiated.sz	1	313	9ad43fc99d31d1d0
 err_parse_class_member_visibility.sz	1	349	6b92d63be9f6ad66
 err_parse_depth_chain.sz	1	2460	b961b57bda1b5946
 err_parse_depth_nesting.sz	1	1953	350271f23456d7d6

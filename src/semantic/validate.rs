@@ -55,7 +55,9 @@
 
 use crate::ast::{Program, Statement};
 use crate::diagnostic::{Diagnostic, Phase};
+use crate::semantic::scopes::{self, UseKind};
 use crate::span::Span;
+use std::collections::HashMap;
 
 /// Generic semantic diagnostic: a meaning-level rejection not yet given a
 /// narrower code.
@@ -91,10 +93,41 @@ fn reserved(name: &str) -> bool {
 /// is the distinction from `TypeChecker`, whose findings are advisory.
 pub fn validate(program: &Program) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
+    let mut declared: HashMap<(DeclKind, String), Span> = HashMap::new();
     for statement in &program.statements {
-        check_statement(statement, &mut findings);
+        check_statement(statement, &mut declared, &mut findings);
     }
+    check_inheritance(program, &mut findings);
+    findings.sort_by_key(|d| (d.span.line, d.span.column));
     findings
+}
+
+/// The four top-level declaration forms, kept apart so the duplicate rule is
+/// per-kind.
+///
+/// Per-kind, not per-name, because a `class` and an `interface` of the same name
+/// live in two different registries at run time and both resolve. Whether *that*
+/// should be an error is a language question nobody has answered, and it is
+/// registered as **DEC-M4-008** rather than settled here. Measured first: 0
+/// cross-kind collisions across 1,070 corpus and ecosystem files, so nothing
+/// depends on the answer today in either direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum DeclKind {
+    Class,
+    Interface,
+    Enum,
+    Function,
+}
+
+impl DeclKind {
+    fn noun(self) -> &'static str {
+        match self {
+            DeclKind::Class => "class",
+            DeclKind::Interface => "interface",
+            DeclKind::Enum => "enum",
+            DeclKind::Function => "function",
+        }
+    }
 }
 
 /// Walks the top level, looking through `export`.
@@ -104,17 +137,191 @@ pub fn validate(program: &Program) -> Vec<Diagnostic> {
 /// could reach was reachable from here. Nesting is deliberately not extended to
 /// — that would change *which* programs are rejected, and DEC-M4-001 moved the
 /// rule without changing its reach.
-fn check_statement(statement: &Statement, findings: &mut Vec<Diagnostic>) {
+fn check_statement(
+    statement: &Statement,
+    declared: &mut HashMap<(DeclKind, String), Span>,
+    findings: &mut Vec<Diagnostic>,
+) {
     match statement {
-        Statement::Export(inner) => check_statement(inner, findings),
+        Statement::Export(inner) => check_statement(inner, declared, findings),
         Statement::ClassDeclaration(c) => {
-            reject_if_reserved(&c.name, "a class name", c.span, findings)
+            reject_if_reserved(&c.name, "a class name", c.span, findings);
+            reject_if_duplicate(DeclKind::Class, &c.name, c.span, declared, findings);
         }
         Statement::InterfaceDeclaration(i) => {
-            reject_if_reserved(&i.name, "an interface name", i.span, findings)
+            reject_if_reserved(&i.name, "an interface name", i.span, findings);
+            reject_if_duplicate(DeclKind::Interface, &i.name, i.span, declared, findings);
         }
         Statement::EnumDeclaration(e) => {
-            reject_if_reserved(&e.name, "an enum name", e.span, findings)
+            reject_if_reserved(&e.name, "an enum name", e.span, findings);
+            reject_if_duplicate(DeclKind::Enum, &e.name, e.span, declared, findings);
+        }
+        Statement::FunctionDeclaration(f) => {
+            reject_if_duplicate(DeclKind::Function, &f.name, f.span, declared, findings);
+        }
+        _ => {}
+    }
+}
+
+/// A name declared twice in the same scope, by the same kind of declaration.
+///
+/// **§5.39.** `class A { … } class A { … }` was accepted with the second
+/// silently replacing the first, and the same held for `fn`. Nothing reported
+/// the collision at any phase, so a file that grew past the point where a reader
+/// can see both definitions quietly got the second one.
+///
+/// Decided: a duplicate in the same scope is a fatal semantic error. What the
+/// rule does **not** do is equally part of the contract:
+///
+///   * **Shadowing across scopes is untouched.** This walks the top level only —
+///     the same reach the reserved-name rule has — so a class declared inside a
+///     function body and another at the top level do not collide. Most of the
+///     corpus fixtures that declare classes do so inside `test(…)` lambdas and
+///     depend on that.
+///   * **Cross-kind is not covered** — DEC-M4-008, above.
+///   * **Cross-file is not covered.** A module whose `import` redeclares a name
+///     the importer holds already warns at run time, and `spec/modules.md`
+///     records that as its own hazard. Two files are not one scope.
+///   * **No overload rule is invented.** Serez has no overloading; two `fn`s of
+///     one name are a collision, not a signature set, and nothing here looks at
+///     parameters.
+///
+/// The *second* declaration is reported and the message names the first one's
+/// line, because the second is the edit that broke the program.
+fn reject_if_duplicate(
+    kind: DeclKind,
+    name: &str,
+    span: Span,
+    declared: &mut HashMap<(DeclKind, String), Span>,
+    findings: &mut Vec<Diagnostic>,
+) {
+    let key = (kind, name.to_string());
+    match declared.get(&key) {
+        Some(first) => findings.push(Diagnostic::frontend(
+            SZ_SEMANTIC_ERROR,
+            Phase::Semantic,
+            span,
+            format!(
+                "{} '{}' is already declared in this scope, at line {}",
+                kind.noun(),
+                name,
+                first.line
+            ),
+        )),
+        None => {
+            declared.insert(key, span);
+        }
+    }
+}
+
+/// A class whose declared parent cannot be resolved.
+///
+/// **§5.39.** `class Child : Missing { … }` ran to completion as long as nobody
+/// constructed it: the parent was looked up in `class_registry` when an instance
+/// was built, so `--check` could not tell you that you inherit from something
+/// that does not exist. Decided: inheritance resolves in the semantic phase, and
+/// an unresolvable parent is fatal.
+///
+/// # "Not declared in this file" is not "does not exist"
+///
+/// That distinction is the whole difficulty, and it is why this defers to
+/// [`crate::semantic::scopes`] instead of scanning the top level itself. That
+/// module walks the complete lexical structure of a program and reports which
+/// uses no scope accounts for, under a bias stated in its own header: every
+/// ambiguity resolves toward *treat it as bound*. Two of its rules matter here.
+///
+///   * **A file containing `import` is not conclusive.** Its names may
+///     legitimately come from another module, and this phase sees one file at a
+///     time. `ScopeReport::is_conclusive` says so, and nothing is reported for
+///     such a file. Measured: **369** of the ecosystem's `class X : Y` sites are
+///     in files that import, and every one of them stays silent.
+///   * **Position does not matter at the top level.** A parent declared further
+///     down the file resolves, matching the runtime, where a class registers into
+///     one global registry and a forward reference works once the declaration has
+///     run.
+///
+/// # Top-level classes only, and that is not laziness
+///
+/// The rule applies to classes declared at the top level, the same reach the
+/// reserved-name rule has. It was written without that restriction first, and
+/// `tests/unit_inheritance_errors.sz` rejected it:
+///
+/// ```serez
+/// test("indirect inheritance cycle is rejected", () => {
+///     class InheritanceCycleA : InheritanceCycleB {}     // line 15
+///     ...
+///     class InheritanceCycleB { public int read() { return 7; } }   // line 21
+///     assert(new InheritanceCycleA().read() == 7, "forward reference can recover");
+/// });
+/// ```
+///
+/// Inside a body, `scopes` models position exactly — a name used before its own
+/// declaration is not bound — because that is what a *variable* does. A class is
+/// not a variable: it registers globally when its declaration executes, so the
+/// forward reference on line 15 resolves by the time anything constructs it, and
+/// the fixture asserts precisely that. Position-independence is a property this
+/// module can only rely on at the top level, so that is where the rule stops.
+///
+/// So this catches what §5.39 measured — a file declaring an impossible parent
+/// and importing nothing — and deliberately does not catch a parent a real
+/// `import` fails to supply. Proving *that* means resolving and parsing modules
+/// during the semantic phase, which reads the filesystem at check time and would
+/// have to answer what happens under `--eval` lockdown. That is **DEC-M4-007**,
+/// registered rather than taken.
+///
+/// # What this is not
+///
+/// Not DEC-M4-002. `scopes` reports free `Read`, `Write`, `Call` and `Type` uses
+/// as well, and none of them is reported here — whether an unresolved *variable*
+/// is a diagnostic is still open. This reports exactly one kind,
+/// [`UseKind::Parent`], at one reach, which is what the owner decided.
+fn check_inheritance(program: &Program, findings: &mut Vec<Diagnostic>) {
+    let mut inherits: Vec<(&str, Span)> = Vec::new();
+    for statement in &program.statements {
+        collect_top_level_parent(statement, &mut inherits);
+    }
+    if inherits.is_empty() {
+        return;
+    }
+
+    let report = scopes::analyze(program);
+    if !report.is_conclusive() {
+        return;
+    }
+
+    for (parent, span) in inherits {
+        // Matched by span as well as name: `scopes` records a parent use at the
+        // *class declaration's* span, so this pairs each top-level declaration
+        // with its own finding and ignores the same name used inside a body.
+        let unresolved = report.free.iter().any(|use_site| {
+            use_site.kind == UseKind::Parent && use_site.name == parent && use_site.span == span
+        });
+        if !unresolved {
+            continue;
+        }
+        findings.push(Diagnostic::frontend(
+            SZ_SEMANTIC_ERROR,
+            Phase::Semantic,
+            span,
+            format!(
+                "parent class '{parent}' is not declared, and this file imports \
+                 nothing that could declare it"
+            ),
+        ));
+    }
+}
+
+/// Each top-level `class X : Y`, as `(Y, the declaration's span)`.
+///
+/// Looks through `export`, the way every other rule here does, and does not
+/// descend: see the reach note on [`check_inheritance`].
+fn collect_top_level_parent<'a>(statement: &'a Statement, out: &mut Vec<(&'a str, Span)>) {
+    match statement {
+        Statement::Export(inner) => collect_top_level_parent(inner, out),
+        Statement::ClassDeclaration(c) => {
+            if let Some(parent) = &c.parent {
+                out.push((parent.as_str(), c.span));
+            }
         }
         _ => {}
     }
@@ -188,6 +395,246 @@ mod tests {
         for name in ["Math", "File", "Socket", "Crypto", "JSON", "OS", "Tensor"] {
             assert!(!reserved(name), "{name} is not guarded today");
         }
+    }
+
+    // ── §5.39: a duplicate declaration ────────────────────────────────────
+
+    #[test]
+    fn a_class_or_function_declared_twice_in_one_scope_is_rejected() {
+        for (source, noun) in [
+            (
+                "class A { public A() { this.x = 1; } }\nclass A { public A() { this.x = 2; } }\n",
+                "class",
+            ),
+            (
+                "fn int f() { return 1; }\nfn int f() { return 2; }\n",
+                "function",
+            ),
+            (
+                "interface I { a: int; }\ninterface I { b: int; }\n",
+                "interface",
+            ),
+            ("enum E { A }\nenum E { B }\n", "enum"),
+        ] {
+            let findings = validate(&program(source));
+            assert_eq!(findings.len(), 1, "one finding for {source:?}");
+            assert_eq!(findings[0].code, SZ_SEMANTIC_ERROR);
+            assert_eq!(findings[0].phase, Phase::Semantic);
+            assert!(
+                findings[0].message.contains(noun),
+                "the message should name the kind: {}",
+                findings[0].message
+            );
+            // The *second* declaration is reported — it is the edit that broke
+            // the program — and the message points back at the first.
+            assert_eq!(findings[0].span.line, 2, "{source:?}");
+            assert!(
+                findings[0].message.contains("at line 1"),
+                "the message should name the first declaration: {}",
+                findings[0].message
+            );
+        }
+    }
+
+    #[test]
+    fn a_third_declaration_is_reported_too() {
+        // Reported once per redeclaration, not once per name: someone fixing
+        // this needs to see every collision, not the first.
+        let findings = validate(&program(
+            "fn int f() { return 1; }\nfn int f() { return 2; }\nfn int f() { return 3; }\n",
+        ));
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].span.line, 2);
+        assert_eq!(findings[1].span.line, 3);
+    }
+
+    #[test]
+    fn an_export_does_not_hide_a_duplicate() {
+        // `export` wraps the declaration, and the reserved-name rule already
+        // looks through it. So must this one, or `export class A` next to
+        // `class A` would slip past.
+        let findings = validate(&program(
+            "export class A { public A() {} }\nclass A { public A() {} }\n",
+        ));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].span.line, 2);
+    }
+
+    #[test]
+    fn shadowing_between_different_scopes_is_still_legal() {
+        // The rule is "same scope", and it walks the top level only. A class
+        // declared inside a function body does not collide with one outside it,
+        // and most of the corpus depends on that: the unit fixtures declare
+        // their classes inside `test(…)` lambdas.
+        let findings = validate(&program(
+            "class A { public A() {} }\n\
+             fn void scope() { class A { public A() {} } }\n",
+        ));
+        assert!(
+            findings.is_empty(),
+            "shadowing across scopes was rejected: {:?}",
+            findings.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn two_kinds_of_declaration_sharing_a_name_are_not_reported() {
+        // DEC-M4-008. A `class` and an `interface` of one name are two
+        // registries at run time and both resolve; whether that should be an
+        // error is undecided, and 0 of 1,070 corpus and ecosystem files do it.
+        // Pinned so the answer is given rather than drifted into.
+        let findings = validate(&program(
+            "class Shape { public Shape() {} }\ninterface Shape { sides: int; }\n",
+        ));
+        assert!(
+            findings.is_empty(),
+            "cross-kind collision is DEC-M4-008 and must stay unreported until \
+             it is decided: {:?}",
+            findings.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn declaring_each_name_once_reports_nothing() {
+        // The positive control. Without it, a rule that reported every
+        // declaration would pass every test above.
+        assert!(
+            validate(&program(
+                "class A { public A() {} }\n\
+                 class B { public B() {} }\n\
+                 fn int f() { return 1; }\n\
+                 fn int g() { return 2; }\n\
+                 interface I { a: int; }\n\
+                 enum E { X }\n",
+            ))
+            .is_empty()
+        );
+    }
+
+    // ── §5.39: an unresolvable parent class ───────────────────────────────
+
+    #[test]
+    fn a_parent_that_does_not_exist_is_rejected_without_being_instantiated() {
+        // The finding itself: this program used to run to completion and exit 0,
+        // because the parent was only looked up when an instance was built.
+        let findings = validate(&program(
+            "class Child : Missing { public Child() {} }\nout 1;\n",
+        ));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, SZ_SEMANTIC_ERROR);
+        assert!(
+            findings[0].message.contains("Missing"),
+            "{}",
+            findings[0].message
+        );
+        assert_eq!(findings[0].span.line, 1);
+    }
+
+    #[test]
+    fn a_local_parent_resolves_in_either_order() {
+        // Position-independent, matching the runtime: a forward reference to a
+        // class declared further down the file works.
+        for source in [
+            "class Base { public Base() {} }\nclass Child : Base { public Child() { super(); } }\n",
+            "class Child : Base { public Child() { super(); } }\nclass Base { public Base() {} }\n",
+        ] {
+            assert!(
+                validate(&program(source)).is_empty(),
+                "a local parent was rejected: {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_that_imports_reports_no_missing_parent() {
+        // "Not declared in this file" is not "does not exist". A file with an
+        // `import` cannot be judged one file at a time, so nothing is reported —
+        // 369 of the ecosystem's `class X : Y` sites are exactly this shape.
+        assert!(
+            validate(&program(
+                "import \"serez-ui\";\nclass App : Window { public App() { super(); } }\n",
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_import_that_does_not_supply_the_parent_is_still_not_reported() {
+        // DEC-M4-007, pinned. Proving that a real import fails to supply a name
+        // means resolving and parsing modules during the semantic phase — which
+        // reads the filesystem at check time and has to answer what happens
+        // under `--eval` lockdown. Registered, not taken.
+        //
+        // If this ever starts failing, the decision was answered: delete the pin
+        // and say so, do not weaken the rule to make it pass again.
+        assert!(
+            validate(&program(
+                "import \"./nowhere\";\nclass Child : NeverDeclared { public Child() {} }\n",
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_parent_declared_inside_an_enclosing_scope_resolves() {
+        // Nesting is modelled rather than flattened: `Base` is visible where
+        // `Child` is written, so this is not a missing parent.
+        assert!(
+            validate(&program(
+                "fn void build() {\n\
+                 \x20   class Base { public Base() {} }\n\
+                 \x20   class Child : Base { public Child() { super(); } }\n\
+                 }\n",
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_forward_parent_reference_inside_a_body_is_not_reported() {
+        // The false positive the first version of this rule produced, and the
+        // reason it applies to top-level classes only.
+        //
+        // `tests/unit_inheritance_errors.sz` caught it: inside a `test(…)`
+        // lambda, `class InheritanceCycleA : InheritanceCycleB {}` is written
+        // *before* `class InheritanceCycleB` a few lines down, and the fixture
+        // asserts "forward reference can recover" — because a class registers
+        // into one global registry when its declaration executes, so by the time
+        // anything constructs the child, the parent is there.
+        //
+        // `semantic::scopes` models position exactly inside a body, which is
+        // right for a variable and wrong for a class. Rather than teach it a
+        // second rule, the inheritance check stops at the top level, where
+        // position-independence is something it can actually rely on.
+        assert!(
+            validate(&program(
+                "fn void build() {\n\
+                 \x20   class Child : Base { public Child() { super(); } }\n\
+                 \x20   class Base { public Base() {} }\n\
+                 }\n",
+            ))
+            .is_empty(),
+            "a forward parent reference inside a body was rejected; \
+             unit_inheritance_errors.sz depends on it working"
+        );
+    }
+
+    #[test]
+    fn a_builtin_class_is_a_valid_parent() {
+        // `Error`, `Set` and `Tensor` are constructed by the runtime without a
+        // user declaration. Rejecting them would break working programs.
+        assert!(
+            validate(&program(
+                "class AppError : Error { public AppError() { super(); } }\n",
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_class_with_no_parent_is_never_reported() {
+        // The positive control for the inheritance rule.
+        assert!(validate(&program("class Plain { public Plain() {} }\n")).is_empty());
     }
 
     #[test]

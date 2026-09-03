@@ -40,6 +40,75 @@ error and abandoned the half-parsed declaration — so a class with a body produ
 two invented `Unexpected token '}'` errors alongside the real one. It now runs
 after parsing, against a complete declaration, and reports once.
 
+### A name may not be declared twice in one scope
+
+Two `class`, two `interface`, two `enum` or two `fn` declarations of the same
+name at the same scope are a **fatal** `SZ8000` from the semantic phase.
+
+```serez
+// runtime-error-example: the semantic phase rejects the second declaration
+class Shape { public Shape() { this.sides = 1; } }
+class Shape { public Shape() { this.sides = 2; } }
+```
+
+The **second** declaration is reported and the message names the first one's
+line. Every collision in a file is reported, not only the first.
+
+Until 10.0.0 the second declaration silently replaced the first and the program
+ran with the later definition, which is a hazard in a file long enough that a
+reader cannot see both. Serez has no overloading, so two `fn` declarations of one
+name are a collision rather than a signature set; nothing inspects parameters.
+
+**The rule is per scope and per kind.** Shadowing between different scopes is
+unaffected — a class declared inside a function body does not collide with one
+outside it. A `class` and an `interface` of the same name are *not* reported;
+that is the separate hazard described immediately below, and changing it is a
+language decision that has not been taken.
+
+**Two files are not one scope.** A module whose `import` redeclares a name the
+importing file holds is a different rule with its own reporting; see
+`modules.md`.
+
+### An unresolvable parent class is rejected before the program runs
+
+A class declaring a parent that cannot be resolved is a **fatal** `SZ8000` from
+the semantic phase.
+
+```serez
+// runtime-error-example: the semantic phase rejects the declaration
+class Child : Missing { public Child() { } }
+out 1;
+```
+
+Until 10.0.0 this program printed `1` and exited `0`. The parent was resolved
+when an instance was built, so a class that was never constructed was never
+checked, and `--check` could not tell you that you inherited from something that
+does not exist. Constructing one has always been a catchable `ReferenceError`
+(`SZ4001`), and still is when the declaration itself cannot be judged.
+
+**"Not declared in this file" is not "does not exist", and the rule respects
+that.** It reports only what it can prove:
+
+| Case | Reported |
+| --- | --- |
+| Parent declared anywhere at the top level, before or after the child | no |
+| Parent declared in an enclosing scope | no |
+| A built-in construction target — `Error`, `Set`, `Tensor` | no |
+| **The file contains any `import`** | **no**, for any parent |
+| Parent declared nowhere, in a file that imports nothing | **yes** |
+
+A file with an `import` is never reported against, because the phase resolves one
+file at a time and an imported module may legitimately declare the parent. An
+`import` that in fact fails to supply the name is therefore *not* caught: proving
+that requires resolving and parsing modules during the semantic phase, which
+would read the filesystem at check time and has consequences under `--eval`
+lockdown. That is recorded as an open decision rather than taken.
+
+**The rule applies to classes declared at the top level.** Inside a body, a class
+may legitimately be written before the parent it names — the class registry is
+global and a forward reference resolves once the later declaration has run — so
+the phase does not judge those.
+
 ### A class and an interface cannot share a name
 
 They live in separate registries, so both declarations are accepted — and

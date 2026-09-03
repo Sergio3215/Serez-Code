@@ -63,12 +63,20 @@ It runs only on a program the parser accepted, because validating a broken tree
 reports consequences of the syntax error rather than problems of its own. Its
 findings print after every parser diagnostic.
 
-**One rule today.** A `class`, `interface` or `enum` may not be named after a
-reserved runtime namespace; see `classes.md`. The phase exists rather than the
-rule living in the parser because a rule about meaning that has to masquerade as
-a rule about syntax reports badly: the parser abandons a half-built declaration,
-and the unconsumed body is then re-parsed as expressions, producing invented
-errors alongside the real one.
+**Three rules today**, all documented in `classes.md`:
+
+1. A `class`, `interface` or `enum` may not be named after a reserved runtime
+   namespace.
+2. A `class`, `interface`, `enum` or `fn` may not be declared twice in one scope.
+3. A class may not declare a parent that cannot be resolved.
+
+The phase exists rather than the first rule living in the parser because a rule
+about meaning that has to masquerade as a rule about syntax reports badly: the
+parser abandons a half-built declaration, and the unconsumed body is then
+re-parsed as expressions, producing invented errors alongside the real one.
+
+Findings are reported in source order, and all of them are reported — a file
+with two collisions names both, so one fix does not reveal the next.
 
 The experimental compiler currently uses `SZ7001` for unsupported statements
 and `SZ7002` for unsupported expressions. Lowering is atomic: if either code is

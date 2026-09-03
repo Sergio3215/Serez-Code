@@ -1,0 +1,8 @@
+// §5.39: the same function declared twice in one scope.
+//
+// The `fn` half of the duplicate-declaration finding. This used to print 2.
+// Serez has no overloading, so two `fn`s of one name are a collision rather
+// than a signature set, and nothing here inspects parameters.
+fn int duplicated() { return 1; }
+fn int duplicated() { return 2; }
+out duplicated();

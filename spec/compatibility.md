@@ -52,6 +52,16 @@ useless:
   release — but only after a sweep of every official package found zero
   occurrences of the affected form, which the changelog entry records by name.
 
+- **Unreleased** made two previously-accepted programs fatal: a name declared
+  twice in one scope, and a class declaring a parent that cannot be resolved.
+  Both were silent before — the duplicate ran with the later definition, and the
+  unresolvable parent ran to completion as long as nothing constructed it. The
+  sweep the `9.4.0` rule requires was run first and is recorded in the changelog:
+  **0** duplicate declarations and **0** unresolvable top-level parents across
+  1,070 corpus and ecosystem files, the single exception being
+  `tests/err_parent_missing.sz`, the fixture that documents the defect and
+  already exited `1`. See `classes.md`.
+
 The rule in force is therefore narrower than "breaking changes need a major",
 and it is the rule the `9.4.0` entry demonstrates:
 

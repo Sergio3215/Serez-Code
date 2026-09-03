@@ -1,0 +1,12 @@
+// §5.39: the same class declared twice in one scope.
+//
+// This used to run and print 2 — the second declaration replaced the first
+// silently, so a file that grew past the point where a reader can see both
+// definitions quietly got the later one.
+class DuplicateShape {
+    public DuplicateShape() { this.sides = 1; }
+}
+class DuplicateShape {
+    public DuplicateShape() { this.sides = 2; }
+}
+out new DuplicateShape().sides;

@@ -1,0 +1,12 @@
+// §5.39: a class that inherits from something that does not exist is rejected
+// even though nothing ever constructs it.
+//
+// Before the semantic phase gained this rule, this program printed 1 and exited
+// 0: the parent was resolved in `class_registry` when an instance was built, so
+// `--check` could not tell you that the hierarchy was impossible. The companion
+// fixture `err_parent_missing.sz` is the same defect *with* a construction, and
+// it used to be the only way to see it.
+class UninstantiatedMissingChild : UninstantiatedMissingParent {
+    public UninstantiatedMissingChild() {}
+}
+out 1;
