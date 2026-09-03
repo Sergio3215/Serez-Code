@@ -17,11 +17,12 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M4 — Semantic Layer Established. BLOCKED.** Three items remain and each one needs a product decision — §9F.4 (a), (b), (c). |
+| **Current milestone** | **M4 — Semantic Layer Established. PARTIAL.** The layer exists and is validated; three items are held by open decisions **DEC-M4-001/002/003** (§7A). Work independent of them continues. |
 | Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, delivered and corpus-validated (§9F.3) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
 | Last completed milestone | **M3 — Diagnostics Unified** (M0, M1, M2 before it) |
-| **Next molecule** | **None is authorized.** M4's three remaining items each need a product decision — §9F.4. The blast radius of (a) and (c) is now **measured**, and §9F.5 gives the molecule-by-molecule plan each answer unlocks. First authorized molecule after a decision: **M4.5.1** if (a) is a new phase. |
+| **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
+| **Open decisions** | **DEC-M4-001**, **DEC-M4-002**, **DEC-M4-003** — all OPEN, all in §7A with evidence and a marked recommendation |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
@@ -36,7 +37,7 @@ Milestone ledger:
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
 | M2 — AST + Spans Stable | **COMPLETE** (2026-09-02) — all 28 `Expression` variants and 39 of 40 structs carry a span |
 | M3 — Diagnostics Unified | **COMPLETE** (2026-09-02) — 5 diagnostic types -> 1, 4 rendered formats -> 1 renderer, §5.17 fixed |
-| M4 — Semantic Layer Established | **BLOCKED** — symbols delivered (§9F.2-9F.3); resolver, static scopes and moving `is_reserved_name` all need a product decision (§9F.4) |
+| M4 — Semantic Layer Established | **PARTIAL** — the layer is established and corpus-validated (§9F.2-9F.3); adoption is held by DEC-M4-001/002/003 |
 | M5 — Type System Stable | NOT STARTED |
 | M6 — Runtime Molecular | NOT STARTED (partially pre-empted; see §6) |
 | M7 — Semantics Frozen | NOT STARTED |
@@ -996,6 +997,232 @@ audits must account for it rather than redo it:
 
 Nothing here was chosen by the project owner; these are the working assumptions
 M0 proposes. D1–D4 are open to reversal.
+
+---
+
+## 7A. Pending decisions register
+
+A **pending decision** is a choice with several defensible answers whose
+consequences differ — architecture, language design, semantics, compatibility,
+public behaviour, syntax, or security policy. This roadmap does not take them.
+It records them so they can be taken deliberately, later, against the evidence.
+
+**The operating rule.** A pending decision may leave a molecule, a goal or a
+whole milestone `PARTIAL` or `BLOCKED`. It must not stop work that does not
+depend on it. Where the current behaviour can be preserved while independent work
+continues, it is preserved. **No provisional implementation may quietly turn a
+recommendation into a decision** — if the work cannot proceed without choosing,
+it is blocked and says so.
+
+Every entry carries a stable identifier (`DEC-<milestone>-<nnn>`) that never
+changes and is never reused, and the same fields: problem · current behaviour ·
+measured evidence · alternatives · trade-offs · architectural impact · semantic
+impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
+**recommendation, marked as a recommendation** · exactly what it blocks.
+
+| ID | Subject | Status | Blocks |
+|---|---|---|---|
+| **DEC-M4-001** | Where the reserved-name check runs | **OPEN** | M4.5.* (the semantic phase); the landing site for DEC-M4-003 |
+| **DEC-M4-002** | Whether an unresolved free variable is a diagnostic | **OPEN** | M4.7.3+ (resolver reporting); the M7 entry for scope semantics |
+| **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
+
+---
+
+### DEC-M4-001 — Where does the reserved-name check run?
+
+**Problem.** The parser performs exactly one semantic validation. M4's charter is
+to move semantic work out of the parser, and there is no behaviour-preserving
+route for this particular move: every available destination changes something
+observable.
+
+**Current behaviour.** `Parser::is_reserved_name` (`src/parser/classes.rs:55`)
+rejects 7 names at three sites — `parse_class_declaration:80`,
+`parse_interface_declaration:337`, `parse_enum_declaration:449`. The error is
+**fatal at parse time** and abandons the declaration: the function returns `None`
+and the class never enters the AST.
+
+**Measured evidence.**
+
+  * Exactly **one** file in the 491-file tracked corpus is rejected by this
+    guard: `tests/err_task_reserved_class.sz`, the fixture that asserts it.
+  * That fixture occupies **one row** of `diagnostic_render.manifest` (exit 1,
+    222 bytes) and one of `parser_ast.manifest`. Those two rows are the entire
+    measured blast radius of moving the check.
+  * The rejection currently emits **three diagnostics for one problem** (§5.32):
+    the real error plus two spurious `Unexpected token '}'` inventions, because
+    the class body is left unconsumed and re-parsed as top-level expressions.
+    The 222 bytes are large for that reason.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **New fatal phase** between parser and type checker | Class parses normally; one error against a complete node; §5.32 disappears. New public surface: a phase label in rendered output, a diagnostic code range, a position in the D6 order |
+| B | **Leave it in the parser** | Nothing observable changes. The parser keeps its only semantic rule; M4's charter is not met for this item; §5.32 stays |
+| C | **Move it to the type checker** | **Not viable.** `spec/types.md` makes checker findings advisory, so `class Task {}` would begin to *run*. Breaks a documented contract |
+
+**Trade-offs.** A is the only option that satisfies the charter, and also the only
+one that costs public surface. B is free and leaves the milestone honestly
+incomplete. C is listed to be ruled out explicitly rather than rediscovered.
+
+**Architectural impact.** A introduces the pipeline's first post-parse fatal
+stage — the slot every later semantic validation would use, which is why the
+choice matters beyond this one check. B leaves the pipeline as it is.
+
+**Semantic impact.** Under A, *when* the error is reported moves; *which*
+programs are rejected does not. The set of accepted programs is identical under A
+and B. Only C changes it, by making the error non-fatal.
+
+**Compatibility.** A is not breaking for program acceptance. It **is** a visible
+change to diagnostic output, which `spec/compatibility.md` governs.
+
+**Impact by area.**
+
+| Area | Under A |
+|---|---|
+| Tests | 2 manifest rows on 1 fixture; both improve (3 diagnostics → 1) |
+| Specs | New phase documented in `spec/errors.md`; the reserved-name rule stated in `spec/classes.md`, which does not mention it today |
+| LSP | Must surface the new phase's diagnostics; it already consumes codes |
+| Runtime | None — the phase runs before evaluation |
+| Ecosystem | None measured; 0 of 8 packages declare a colliding name |
+
+**Recommendation — this is a recommendation, not a decision.** Option **A**. It
+is the only choice that meets the charter, the measured cost is two rows on the
+guard's own fixture, and it deletes §5.32 as a side effect. The reason to decide
+it deliberately is the new public surface, not the risk.
+
+**Blocked by this decision:** M4.5.1 through M4.5.6 (§9F.5) in full, and the
+landing site for DEC-M4-003 — the name list should change once, in its final
+home, not twice.
+
+---
+
+### DEC-M4-002 — Should an unresolved free variable be a diagnostic?
+
+**Problem.** Serez has no static name resolution. `name -> declaration` is
+answered once, at run time. A function body may read a name it does not declare
+and pick up whatever the *caller's* scope happens to hold.
+
+**Current behaviour.** `ScopeStack::lookup` (`src/scope.rs:135`) resolves
+dynamically at evaluation time. `--check` cannot flag an unresolved name because
+nothing resolves names before running. `MATURITY_AUDIT.md` records this as
+**critical, open**, undocumented in the README, and needing an explicit product
+decision under `spec/compatibility.md`.
+
+**Measured evidence.** See §5.33 — measured by M4.7.2 once the scope model of
+M4.7.1 existed. Producing that number required a model handling closures, `this`,
+class bodies, `for`-in bindings, `catch` bindings, destructuring and generators;
+a half-correct model yields a *confident wrong number*, which is worse input than
+none. Building and measuring commit to nothing, so both were **independent of
+this decision** and were done.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | Unresolved name is a **fatal** diagnostic | Strongest guarantee; rejects programs that run today; largest break |
+| B | Unresolved name is an **advisory** diagnostic | `--check` reports; exit code unmoved; no program stops working |
+| C | **Keep dynamic resolution**, document it as intentional | No break; the hazard becomes a declared contract and moves to M7 |
+
+**Trade-offs.** B is the only option that informs users without breaking any of
+them, and it can precede A in a later major. C is honest but permanently accepts
+a footgun that `--check` exists to catch.
+
+**Architectural impact.** A and B both require a real resolver — the substance of
+M4's charter. C means the semantic layer is established but never adopted for
+resolution.
+
+**Semantic impact.** A changes which programs run. B and C do not.
+
+**Compatibility.** A is breaking and needs a major plus a `spec/compatibility.md`
+entry. B changes stderr only. C changes nothing but requires a spec statement.
+
+**Impact by area.**
+
+| Area | Under A or B |
+|---|---|
+| Tests | See §5.33 for the measured corpus exposure |
+| Specs | `spec/scopes.md` and `spec/compatibility.md` both need the rule stated |
+| LSP | Gains real go-to-definition and unresolved-name reporting — the largest user-visible win |
+| Runtime | Unchanged under B; under A the resolver must agree with `ScopeStack` exactly, or the checker and the runtime disagree about the same program |
+| Ecosystem | See §5.33 |
+
+**Recommendation — this is a recommendation, not a decision.** **B first.**
+Advisory reporting delivers the diagnostic value with no break, and makes A's
+cost visible in real usage before anyone pays it. A belongs to a major, if at
+all, and only once B has been shipped long enough to show what it finds.
+
+**Blocked by this decision:** M4.7.3 and everything downstream — resolver
+reporting, `--check` behaviour, and the M7 entry for scope semantics. **Not
+blocked, and done:** M4.7.1 and M4.7.2.
+
+---
+
+### DEC-M4-003 — Should the reserved-name guard cover all 22 namespaces?
+
+**Problem.** The guard covers 7 of 22 runtime namespaces. Membership looks
+accidental, and the 15 unguarded names produce a real collision.
+
+**Current behaviour.** Guarded: `Task`, `Time`, `DateTime`, `System`, `Gui`,
+`Dec`, `Media`. Unguarded: `Autodiff`, `Binary`, `Crypto`, `Env`, `File`, `GPU`,
+`JSON`, `Math`, `Memory`, `OS`, `Random`, `Regex`, `Socket`, `Tensor`,
+`Terminal`. The generated table the LSP uses (`lsp/builtins_gen.rs`, produced
+from the evaluator) lists all 22 — so the parser and the editor already disagree
+about what a namespace is.
+
+**Measured evidence.**
+
+  * §5.31, **run**: a program declaring `class Math`, calling `new Math(42)`, and
+    calling `Math.floor(3.7)` prints `42` then `3` and **exits 0**. Two unrelated
+    things of the same name coexist, told apart only by the shape of the call
+    site.
+  * Collisions across every tracked `.sz`/`.szx` in the corpus (including `std/`,
+    `apps/`, `benchmarks/`) and every source file in all **8 official ecosystem
+    packages**: **1** — `tests/err_task_reserved_class.sz`, on a name already
+    among the 7. **Zero in the ecosystem.**
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **Extend to 22** | Closes §5.31. Breaking under SemVer, **0 measured victims**. 15 names become illegal for `class`/`interface`/`enum` |
+| B | **Leave at 7** | No break. §5.31 stays; the rule stays arbitrary; parser and LSP stay disagreed |
+| C | **Remove the guard** | Breaking in the other direction: the 7 currently-rejected names begin to compile with a silent collision. Makes §5.31 the rule rather than the exception |
+
+**Trade-offs.** A's break is real but has no measured victim *in code reachable
+from this machine* — third-party code is not covered by that measurement, and
+that limit is the substance of the decision. B is free and leaves a footgun the
+language cannot detect for the user. C is coherent only if collisions are
+declared acceptable, which contradicts having a guard at all.
+
+**Architectural impact.** Under A the list should be **generated from the same
+source as `lsp/builtins_gen.rs`** rather than hand-written, so the parser and the
+editor cannot drift apart again. That is the durable part of A; the 15 extra
+names are the visible part.
+
+**Semantic impact.** A and C both change which programs are accepted. B does not.
+
+**Compatibility.** A and C are breaking and need a major plus a
+`spec/compatibility.md` entry. Note the guard covers only `class`, `interface`
+and `enum`; variables and functions may already take these names, which this
+decision does **not** settle — recorded here so it is not mistaken for settled.
+
+**Impact by area.**
+
+| Area | Under A |
+|---|---|
+| Tests | 15 new rejection fixtures; existing `err_task_reserved_class` unaffected |
+| Specs | `spec/classes.md` must state the rule, which it does not today |
+| LSP | Converges with the parser instead of diverging from it |
+| Runtime | None |
+| Ecosystem | 0 of 8 packages affected, measured |
+
+**Recommendation — this is a recommendation, not a decision.** Option **A**, in
+the same release as DEC-M4-001 option A, so the rule and its location change
+once. If third-party adoption is wider than this machine can see, B is the
+defensible hold — and that is the question the recommendation cannot answer.
+
+**Blocked by this decision:** M4.6.1, ordered after DEC-M4-001.
 
 ---
 
@@ -2932,8 +3159,31 @@ constrains M1–M2 work:
 - Never make a test green by editing it, unless you can show the contract it
   asserted was wrong.
 - If a gate fails, stop. Do not start another molecule.
-- Do not start M(n+1) because M(n) looks close enough. Each milestone needs
-  implementation, tests, documentation, self-audit and full gates.
+- Do not mark a milestone COMPLETE because it looks close enough. Each milestone
+  needs implementation, tests, documentation, self-audit and full gates. A
+  milestone whose Definition of Done is genuinely unmet is **PARTIAL**, and the
+  audit says which part and why. `PARTIAL` is an honest outcome; a false
+  `COMPLETE` is not.
+- **Autonomy, as of 2026-09-02.** Milestones proceed without per-milestone
+  authorization, through M10. Work does not stop at a milestone boundary; it
+  stops only for the reasons listed below.
+- **A decision is registered, never taken to unblock yourself.** When a choice
+  has several defensible answers with different consequences — architecture,
+  language design, semantics, compatibility, public behaviour, syntax, security
+  policy — give it a `DEC-<milestone>-<nnn>` identifier and write it into §7A
+  with the full field set. Then preserve the current behaviour and continue with
+  everything that does not depend on it. **Never ship a provisional
+  implementation that silently converts a recommendation into a decision.**
+- **Do not fake independence.** If a later milestone genuinely needs an open
+  decision to be correct, mark exactly that part blocked and continue with the
+  rest. Skipping a real dependency to reach a green tick is the one failure this
+  protocol exists to prevent.
+- **Stop only when:** no independent work remains; a gate is red and fixing it
+  needs a product decision; there is serious risk of data corruption, security
+  compromise, information loss or destructive behaviour; the repository can no
+  longer be held at a green checkpoint; or an architectural dependency makes
+  continuing technically invalid. An ordinary architectural decision is **not** a
+  reason to stop — register it and continue.
 - Update this file at every milestone boundary, and update §0 whenever the
   "next authorized molecule" changes. **Make §0 the last step of the milestone
   audit, not a separate chore** — it drifted three milestones behind its own
