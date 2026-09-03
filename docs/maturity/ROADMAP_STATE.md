@@ -3246,7 +3246,7 @@ practice. Exposing `lsp` from the library would let it move to `tests/`, but the
 LSP binary carries `#![allow(dead_code)]`, so compiling it into the library would
 move the clippy baseline. Not worth it for a test's address.
 
-### §5.29 — the type checker cannot see through `export` — **confirmed bug**, medium (found in M4.4)
+### §5.29 — the type checker cannot see through `export` — **FIXED in M5.3**, see §9H.3 (found in M4.4)
 
 `TypeChecker::check` has three passes. **Pass 3 unwraps `Statement::Export`
 (`type_checker.rs:226`); passes 1 and 2 do not.** So the body of an exported
@@ -3284,6 +3284,12 @@ findings it does not report today — the exit code cannot move, since
 **Assigned to M5**, whose charter is exactly this: *"Reglas de tipos coherentes,
 normativas y consistentes entre checker/runtime/tooling."* A checker that
 disagrees with the runtime about the same program is the milestone's subject.
+
+> **Fixed in M5.3** (§9H.3). Passes 1 and 2 now unwrap through `export` via one
+> helper. `tests/type_agreement.rs` pins both symptoms — the exported function and
+> the exported `let` — against a control case that is identical but for the
+> keyword, which is what makes the gap a defect rather than the checker's
+> documented partiality. No manifest row moved, as this section predicted.
 
 **Corpus exposure is small**: 3 of 483 files use `export`, and none combine it
 with a type error, which is why no manifest row would move today and why no test
@@ -3588,6 +3594,24 @@ for a program that succeeds.** `diagnostic_render.manifest` covers `err_*` and
 `TYPE ERROR` printed over a correct program is invisible to every existing gate,
 which is precisely why these three survived. `tests/type_agreement.rs` is now the
 gate that sees them.
+
+### 9H.3 — M5.3: the checker sees through `export` (§5.29 fixed)
+
+`TypeChecker::check` has three passes. Pass 3 unwrapped `Statement::Export`;
+passes 1 and 2 did not. So an exported function never entered `self.functions`
+and an exported `let` never entered `self.var_types` — the declaration was
+invisible to every check that needs to look one up, while its *body* was checked
+normally.
+
+Both passes now unwrap through `export`, via one helper that says why. The
+inconsistency was inside a single function, `spec/types.md` never mentions
+`export`, and `semantic::declarations` had unwrapped it correctly since M4.2 —
+which is how the discrepancy surfaced.
+
+**This makes the checker report findings it did not report before**, which is a
+change to stderr. The exit code cannot move: `spec/types.md` makes type findings
+advisory. Corpus exposure was measured in M4 at 3 of 483 files using `export`,
+none combining it with a type error, and the manifests confirm it: no row moved.
 
 ---
 

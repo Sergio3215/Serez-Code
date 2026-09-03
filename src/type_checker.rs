@@ -77,14 +77,14 @@ impl<'a> TypeChecker<'a> {
 
         // Pass 1: collect all function declarations
         for stmt in stmts {
-            if let Statement::FunctionDeclaration(f) = stmt {
+            if let Statement::FunctionDeclaration(f) = unwrap_export(stmt) {
                 self.functions.insert(f.name.clone(), f.function.clone());
             }
         }
 
         // Pass 2: infer types for top-level let bindings
         for stmt in stmts {
-            if let Statement::Let(l) = stmt {
+            if let Statement::Let(l) = unwrap_export(stmt) {
                 if let Some(t) = self.infer_type(&l.value) {
                     self.var_types.insert(l.name.clone(), t);
                 }
@@ -413,6 +413,26 @@ impl<'a> TypeChecker<'a> {
 /// value — a class instance's name, an enum variant's enum, a `DateField`
 /// behaving as an `int` — have no name-level counterpart. `infer_type` never
 /// produces those names either, so the two never actually meet on them.
+/// Look through `export` to the declaration it wraps.
+///
+/// `export` changes a declaration's visibility to other modules and nothing
+/// about what it declares, and `spec/types.md` never mentions it. Passes 1 and 2
+/// used to match on `Statement` directly, so an exported function never entered
+/// `self.functions` and an exported `let` never entered `self.var_types` — while
+/// pass 3, which already unwrapped, checked their *bodies* normally. The result
+/// was that `f("hello")` against `fn int f(int a)` was caught statically, and the
+/// same program with `export` in front of it only at run time.
+///
+/// A loop rather than one unwrap: nothing in the grammar produces nested
+/// `export`, and a `while` costs nothing to be right if that ever changes.
+fn unwrap_export(statement: &Statement) -> &Statement {
+    let mut current = statement;
+    while let Statement::Export(inner) = current {
+        current = inner;
+    }
+    current
+}
+
 fn types_compatible(expected: &str, actual: &str) -> bool {
     if expected == actual || expected == "any" {
         return true;

@@ -114,6 +114,41 @@ fn cases() -> Vec<Case> {
             ),
             checker_must_catch: false,
         },
+        // §5.29. The same program without `export` is caught statically; with it,
+        // passes 1 and 2 of `TypeChecker::check` never see the declaration, so it
+        // is caught only at run time. `spec/types.md` never mentions `export`, so
+        // nothing documents a difference — an oversight inside one function, and
+        // therefore an assertion rather than a report.
+        Case {
+            name: "an_exported_function_is_checked_like_any_other",
+            rule: "spec/types.md — nothing makes `export` change what is checked",
+            source: concat!(
+                "export fn int f(int a) { return a; }\n",
+                "out f(\"hello\");\n"
+            ),
+            checker_must_catch: true,
+        },
+        // The control for the case above: identical but for the keyword. It is
+        // what makes the claim "the checker handles this shape" a measurement
+        // rather than an assumption.
+        Case {
+            name: "a_plain_function_is_checked",
+            rule: "spec/types.md — a declared type matches by the table and nothing else",
+            source: concat!("fn int f(int a) { return a; }\n", "out f(\"hello\");\n"),
+            checker_must_catch: true,
+        },
+        // Same cause, second symptom: an exported `let` never enters `var_types`,
+        // so a call using it infers nothing and is unchecked.
+        Case {
+            name: "an_exported_let_gets_a_type_like_any_other",
+            rule: "spec/types.md — the checker infers the type of a top-level `let`",
+            source: concat!(
+                "export let s = \"x\";\n",
+                "fn int f(int a) { return a; }\n",
+                "out f(s);\n"
+            ),
+            checker_must_catch: true,
+        },
         // Rules the checker is right about. They belong here so that the rows
         // above cannot be satisfied by simply switching the checker off.
         Case {
