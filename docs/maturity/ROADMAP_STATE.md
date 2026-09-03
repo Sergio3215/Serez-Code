@@ -1216,6 +1216,12 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M5-004** | Whether a declared field type is a constraint or a default | **OPEN** | nothing |
 | **DEC-M5-005** | Whether a declared class type accepts a subclass | **OPEN** | nothing |
 | **DEC-M6-001** | How a runtime service raises an error and allocates a value | **OPEN** | the rest of M6 — moving namespace dispatch off `Evaluator` |
+| **DEC-M7-001** | Whether `remove` on an empty array is an error | **OPEN** | nothing |
+| **DEC-M7-002** | Whether a subclass reaches an inherited private member | **OPEN** | nothing; wants a resolver to measure |
+| **DEC-M7-003** | Whether a `match` with no matching arm is an error | **OPEN** | nothing; interacts with DEC-M7-005 |
+| **DEC-M7-004** | Whether `==` compares containers structurally | **OPEN** | nothing; ships with DEC-M5-005 |
+| **DEC-M7-005** | What a `match` pattern that fails to evaluate does | **OPEN** | nothing; should precede DEC-M7-003 |
+| **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **OPEN** | part of M9's treatment of `fetch` |
 
 ---
 
@@ -1869,6 +1875,293 @@ value or a changed error is the highest-risk work in the whole roadmap.
 **Blocked by this decision:** the rest of M6 — moving namespace dispatch off
 `Evaluator`. **Not blocked:** everything M6.1–M6.4 did, which is why the milestone
 is PARTIAL rather than stopped.
+
+---
+
+### DEC-M7-001 — Should `remove` on an empty array be an error?
+
+**Problem.** `remove` on an empty array returns `null`. Every other out-of-range
+index on an array raises `IndexOutOfBounds`. One method disagrees with the rest of
+the container surface about what an impossible index means.
+
+**Current behaviour.** As above. `spec/arrays.md` "Known inconsistency" documents
+it, and says aligning it "would be a breaking change with no migration path for
+callers that rely on the null, so it is recorded here rather than fixed silently".
+
+**Measured evidence.** `remove` appears in **12** tracked corpus files. How many
+call it on a possibly-empty array is not mechanically decidable and was not
+guessed at.
+
+**Alternatives.** A: **raise `IndexOutOfBounds`**, matching every other index
+operation — breaking, and silent for anyone who tests the result for null. B:
+**keep the null** and state it as intentional rather than as an inconsistency.
+C: **add a separate `tryRemove`** returning null, and make `remove` raise — no
+break, at the cost of two methods for one operation.
+
+**Trade-offs.** A's danger is its silence: code doing `if (a.remove(0) == null)`
+does not stop compiling, it starts throwing. B is free and keeps a rule nobody can
+derive. C is the compatible path and adds surface.
+
+**Architectural impact.** None; one method body.
+**Semantic impact.** A and C change which programs run. **Compatibility.** A is
+breaking, C additive. **Impact by area.** Tests: fixtures asserting the null would
+invert under A. Specs: `spec/arrays.md` loses its "Known inconsistency" section.
+Runtime: one method. LSP, ecosystem: none.
+
+**Recommendation — a recommendation, not a decision.** **C**, then **A** in the
+following major. It is the only path that gives callers a migration, and
+`spec/compatibility.md` exists to stage exactly this.
+
+**Blocked by this decision:** nothing.
+
+---
+
+### DEC-M7-002 — Should a subclass reach an inherited private member?
+
+**Problem.** Privacy is keyed to the **receiver's runtime class**, not to the
+member's declaring class. A subclass method can therefore call an inherited
+private method, while the same call from outside is refused.
+
+**Current behaviour.** Probed against 10.0.0:
+
+```serez
+public class Base    { public Base() { this.secret = 42; }
+                       private int hidden() { return this.secret; } }
+public class Derived : Base { public Derived() { super(); }
+                              public int reach() { return this.hidden(); } }
+out new Derived().reach();     // 42, exit 0
+```
+
+`spec/classes.md` records it under caveats — "recorded below rather than silently
+described as stronger than the implementation" — and `MATURITY_AUDIT.md` carries
+it as **high, open**, assigned to M7.
+
+**Measured evidence.** Not measured, and the reason is worth stating: the pattern
+is only visible by resolving each `this.m()` inside a subclass against the
+declaring class of `m`, which needs the class hierarchy *and* member visibility —
+the semantic layer M4 built but has not been given a consumer for. **This is a
+concrete second use for DEC-M4-002's resolver**, and it is recorded as such rather
+than estimated.
+
+**Alternatives.** A: **key privacy to the declaring class** — a subclass can no
+longer reach an inherited private. Breaking, and silent: working code starts
+raising. B: **keep it** and rename the guarantee in the docs, since what the
+language enforces is "not reachable from outside the hierarchy", not "private".
+C: **add `protected`** and leave `private` as it is — additive, and makes the
+existing behaviour the honest meaning of a different keyword.
+
+**Trade-offs.** A is what "private" means in every language that has it, and is
+the most likely to break real code silently. B costs nothing and permanently
+weakens a word users already understand. C adds a keyword to a language that does
+not have one.
+
+**Architectural impact.** A needs the member's declaring class at the call site;
+the evaluator has the hierarchy, so this is reachable without new infrastructure.
+**Semantic impact.** A and C change which programs run. **Compatibility.** A is
+breaking and silent — the worst combination, and it needs the staging in
+`spec/compatibility.md`. **Impact by area.** Specs: `spec/classes.md` caveats.
+Runtime: the privacy check. Tests: unknown until measured. Ecosystem: unmeasured.
+
+**Recommendation — a recommendation, not a decision.** **A**, in a major, **after
+the measurement** — and the measurement should be the first thing built on M4's
+resolver, because it is the same walk. Shipping A blind is the one option here
+that can break working code with no diagnostic.
+
+**Blocked by this decision:** nothing today. **Wants:** a resolver, per above.
+
+---
+
+### DEC-M7-003 — Should a `match` with no matching arm be an error?
+
+**Problem.** There is no exhaustiveness check, and no arm matching yields `null`
+silently. `spec/control-flow.md` states it and calls it "a hazard, not a design
+statement", noting that the `null` "is indistinguishable from an arm that
+legitimately returned null".
+
+**Current behaviour.** `let r = match 99 { 1 => "one", 2 => "two" };` sets `r` to
+`null`, prints nothing, exits 0. Probed.
+
+**Measured evidence.** **107** `match` expressions in the tracked corpus; **50**
+of them have neither a wildcard `_` nor a binding arm. All 499 tests pass, so
+none of the 50 currently falls through — but each is a site where a value outside
+the listed arms would produce a silent `null`.
+
+The two options below have very different exposure, and conflating them is how
+this decision gets taken by accident:
+
+| Option | What it affects |
+|---|---|
+| A runtime error when no arm matches | only programs where an arm actually fails to match — **0 in the corpus today** |
+| A static exhaustiveness requirement | all **50** sites without a catch-all, whether or not they can fall through |
+
+**Alternatives.** A: **raise at run time** when no arm matches. B: **require
+exhaustiveness statically** — needs the checker to know an enum's full variant
+set, which `semantic::declarations` already collects. C: **keep the null** and
+state it as intentional. D: **warn**, advisory, on a `match` with no catch-all.
+
+**Trade-offs.** A's corpus exposure is zero and its real exposure is every program
+that relies on the null as a default — a use the spec explicitly says exists. B is
+the strongest guarantee and touches 50 sites in this repository alone. D is free
+and is the one option that produces information before anyone commits.
+
+**Architectural impact.** B gives the checker a second dependency on the semantic
+layer, alongside DEC-M5-003's option A. **Semantic impact.** A and B change which
+programs run. **Compatibility.** A and B are breaking. **Impact by area.** Tests:
+50 sites under B, none under A. Specs: `spec/control-flow.md`. LSP: B is a
+genuinely useful squiggle. Ecosystem: unmeasured for B.
+
+**Recommendation — a recommendation, not a decision.** **D now, A in a major, B
+never as a hard error** — enum exhaustiveness is worth a warning, and a language
+where `match` is an expression over arbitrary values cannot require it in general.
+Note that A is much less useful while **DEC-M7-005** stands: a misspelled pattern
+silently becomes a non-match, so A would raise at a `match` whose real defect is
+one arm above.
+
+**Blocked by this decision:** nothing. **Interacts with:** DEC-M7-005.
+
+---
+
+### DEC-M7-004 — Should `==` compare containers structurally?
+
+**Problem.** `==` compares scalars by value and containers by identity, and
+assignment copies — so **no two array values are ever equal, including an array
+and its own copy**. `spec/values.md` calls it "a documented inconsistency, not a
+design statement".
+
+**Current behaviour.** `[1, 2] == [1, 2]` is `false`. Probed. Set membership and
+`indexOf` do *not* use `==`; they use a fingerprint that compares scalars by value
+and never matches a compound — so the language already has two different notions
+of sameness, and neither is structural equality of containers.
+
+**Measured evidence.** **Zero** direct `[…] == […]` comparisons in the tracked
+corpus. That number is weak evidence and is labelled as such: the pattern that
+matters is `a == b` where both are arrays, which a text search cannot see.
+
+**Alternatives.** A: **structural equality** for arrays and dicts. B: **keep
+identity** and say so as a decision. C: **structural for containers, identity for
+class instances** — matching most languages that separate value and reference
+types.
+
+**Trade-offs.** A is what nearly every user expects and is breaking in the
+direction that turns `false` into `true` — which flips branches silently, the same
+hazard DEC-M5-005 carries for `is`. B is free and keeps a rule that surprises
+everyone once. C is the most defensible and the most to specify.
+
+**Architectural impact.** Structural comparison needs a depth bound, which
+`MAX_VALUE_DEPTH` already provides for `extract` — so the ceiling exists and the
+answer for exceeding it would have to be chosen. **Semantic impact.** A and C
+change what working programs compute. **Compatibility.** Breaking and **silent**.
+**Impact by area.** Runtime: the comparison path plus a cycle/depth rule. Specs:
+`spec/values.md`, `spec/operators.md`, `spec/sets.md`. Tests: unknown.
+
+**Recommendation — a recommendation, not a decision.** **C**, in a major, and only
+alongside DEC-M5-005 — both change what `==`-shaped questions answer for compound
+values, and shipping them in different releases means users learn the same lesson
+twice. This is the highest-risk decision in the register precisely because
+nothing fails loudly when it lands.
+
+**Blocked by this decision:** nothing.
+
+---
+
+### DEC-M7-005 — What should a `match` pattern that fails to evaluate do?
+
+**Problem.** `evaluator/expr.rs:1592` discards **any** error raised while
+evaluating a literal pattern and reports "did not match" to the `match`:
+
+```rust
+let lit_ref = match self.eval_expression(lit_expr) {
+    EvalResult::Value(v) => v,
+    _ => return false,          // every failure becomes "did not match"
+};
+```
+
+An undefined name, a bad member access, a thrown exception — all become a silent
+fall-through to the next arm. §5.24 has the reproduction: a pattern naming a
+non-existent enum falls through to `_` with no error, no warning and exit 0.
+
+**Current behaviour.** As above, and it is **not** in any spec: `spec/control-flow.md`
+documents the exhaustiveness hazard and not this one. Undocumented and
+undecided is the worst of the four states a behaviour can be in.
+
+**Measured evidence.** Not measurable by construction — the whole defect is that
+it produces no signal. Its interaction with DEC-M7-003 is the real exposure: a
+typo in a pattern falls to `_`, and if there is no `_`, to `null`. **Two silent
+failures compose into a third.**
+
+**Alternatives.** A: **propagate the error** — a pattern that cannot be evaluated
+raises. B: **keep the fall-through** and document it. C: **propagate for
+resolution failures** (undefined name, bad member) and keep the fall-through for
+thrown exceptions, on the grounds that a `throw` inside a pattern might be
+intentional.
+
+**Trade-offs.** A is the M3 position — "zero silent failures" — applied here, and
+it is breaking for any program with an unreachable pattern that currently costs
+nothing. B leaves a typo undetectable. C is a rule with two halves and needs a
+reason a user can remember.
+
+**Architectural impact.** Small: one `_ => return false` becomes a propagation.
+**Semantic impact.** A and C change which programs run. **Compatibility.**
+Breaking, but only for programs whose patterns are already broken. **Impact by
+area.** Runtime: `expr.rs:1592`. Specs: `spec/control-flow.md` gains a rule it does
+not have. M3: this is a surviving instance of the "zero silent failures" goal.
+
+**Recommendation — a recommendation, not a decision.** **A**, and **before**
+DEC-M7-003, not after. A `match` that raises when nothing matches is far less
+useful while a misspelled arm silently is not the thing that matched. This is also
+the cheapest decision in the register to implement and the one whose current
+behaviour is hardest to defend: nothing anywhere documents it, and no user could
+discover it except by losing an afternoon.
+
+**Blocked by this decision:** nothing. **Should precede:** DEC-M7-003.
+
+---
+
+### DEC-M7-006 — Should `fetch` be reachable under lockdown?
+
+**Problem.** Lockdown exists to close the paths the permission manifest cannot,
+for source that arrived from somewhere else — `--eval`, the playground. It closes
+File, `import`, URL import and Autodiff's weight files. It does **not** close
+`fetch`, so untrusted source can still make outbound HTTP requests.
+
+**Current behaviour.** Deliberate and tested: `eval/lockdown: fetch is NOT gated`
+is a conformance test, so the behaviour is pinned in both runners.
+`MATURITY_AUDIT.md` records it as **high, open**, assigned to M7/M9, and the
+external audit in `audit/` raises the same path as an SSRF and unbounded-memory
+concern independently.
+
+**Measured evidence.** One conformance test asserts the current behaviour, in
+both runners. The audit report records that `fetch` reads the whole response with
+`read_to_end` and no ceiling, so the exposure is not only *where* it can reach but
+*how much* it can pull.
+
+**Alternatives.** A: **gate `fetch` under lockdown**, like every other host reach.
+B: **keep it open** and document the boundary precisely — lockdown covers the
+filesystem, not the network. C: **gate it and add an explicit opt-in**, so a
+playground can choose.
+
+**Trade-offs.** B is the current state and its problem is that "lockdown" reads as
+a sandbox while leaving the network open. A is the least surprising and removes a
+capability an embedder may be relying on. C is the honest version of A.
+
+**Architectural impact.** Small — one gate. It sits alongside the response-size
+ceiling the audit recommends, which is **M9's** work and should not be conflated
+with this one.
+
+**Semantic impact.** A and C change which programs run under `--eval`.
+**Compatibility.** Breaking for `--eval` and the playground; not for
+`sz file.sz`. **Impact by area.** Tests: the pinned lockdown test inverts by
+design under A or C. Specs: `spec/security.md` and `run::RunOpts::sandboxed`.
+Runtime: one gate. Ecosystem: none — packages run outside lockdown.
+
+**Recommendation — a recommendation, not a decision.** **C**. A capability
+described as untrusted-source mode that leaves outbound HTTP open is a name doing
+more work than the code, and an opt-in keeps the playground working. **This is the
+one decision in the register with a security consequence**, which is why it is
+recorded with its evidence rather than folded into M9's hardening pass.
+
+**Blocked by this decision:** M9's treatment of `fetch`, in part — the size
+ceiling is independent and can proceed either way.
 
 ---
 
@@ -4268,6 +4561,93 @@ still needs `&mut Evaluator` for `alloc`, `rt_err_kind` and `null_ref`, so the
 services own their state and a little of their logic, not their dispatch. Moving
 that is a much larger change than M6 has done here, and calling it done would be
 the false COMPLETE §12 warns about.
+
+## 9L. M7 - Semantics Frozen
+
+Charter: *"El comportamiento observable importante existe porque fue decidido, no
+porque la implementacion casualmente lo hace."*
+
+### 9L.0 The audit: the specs already decline to decide, in writing
+
+M7's premise is that observable behaviour may be accidental. Searching `spec/` for
+the language it uses when it is *not* making a design statement turns up the
+complete list, and the specs are better than the premise assumed - every one of
+these is documented, and documented **as undecided**:
+
+| Where | Behaviour | The spec's own words |
+|---|---|---|
+| `spec/arrays.md` | `remove` on an empty array returns null | "Known inconsistency" |
+| `spec/classes.md` | a subclass reaches an inherited private member | "recorded below rather than silently described as stronger than the implementation" |
+| `spec/control-flow.md` | no exhaustiveness; no matching arm yields null | "recorded here as a hazard, not as a design statement" |
+| `spec/operators.md`, `spec/values.md` | `==` compares containers by identity | "a documented inconsistency, not a design statement" |
+| `spec/types.md` | no subtyping, no numeric widening | "recorded as an inconsistency, not defended" |
+
+So M7 is not a discovery milestone. **The work was already done honestly; what is
+missing is the decision.** That reframing is the audit's main result, and it is
+the same shape M5 found: good documentation, absent decisions.
+
+**The rest of the charter's list is specified and settled**, checked against
+`spec/`: generator semantics (`control-flow.md`, `functions.md`, `limits.md`),
+overflow (`operators.md`, `limits.md`, `errors.md`), module cycles
+(`modules.md`), task cancellation (`tasks.md`), process semantics
+(`processes.md`), filesystem and platform differences (`files.md`,
+`processes.md`, `limits.md`), null (`values.md`, `types.md`).
+
+**One gap the sweep found: handle/free has no specification at all.** There is no
+`spec/memory.md`. Probed, the behaviour is *good* - a freed handle's id is never
+reissued, and use-after-free is refused and catchable - and it is deliberate,
+since `handles.rs` states the never-reissued rule. It is simply written nowhere a
+user can read. **Classified as an M8 documentation item, not an M7 decision**,
+because nothing about it needs deciding.
+
+### 9L.1 - M7.1: six decisions registered
+
+**DEC-M7-001** through **DEC-M7-006**, each with the field set §7A requires. Two
+carry measurements taken here:
+
+  * **DEC-M7-003** - **107** `match` expressions in the corpus, **50** with
+    neither a wildcard nor a binding arm. The two ways to close this have very
+    different exposure, and separating them is the point: a *runtime* error when
+    no arm matches would affect **0** corpus sites today, while a *static*
+    exhaustiveness requirement would touch all **50**. Conflating them is how the
+    decision gets taken by accident.
+  * **DEC-M7-001** - `remove` appears in **12** files; how many can be called on
+    an empty array is not mechanically decidable and was not guessed at.
+
+**DEC-M7-005 has no measurement, by construction:** the defect is that a pattern
+which fails to evaluate produces no signal at all. Its real exposure is its
+interaction with DEC-M7-003 - a typo falls to `_`, and with no `_`, to `null`.
+**Two silent failures compose into a third**, which is why the recommendation puts
+DEC-M7-005 first.
+
+### 9L.2 - M7.2: `tests/frozen_semantics.rs`, so nothing moves before it is decided
+
+The independent work M7 *can* do without deciding anything: pin the current
+behaviour, so that when a decision lands, the diff shows it.
+
+Every one of these is unpinned today in the way that matters. **The conformance
+suite asserts what a program prints, and each of these is either silent or
+produces a value no passing test looks at.** A refactor could flip any of them and
+all 499 conformance tests would still pass. That is not hypothetical - it is the
+same structural gap M5 found for checker findings on succeeding programs, and it
+is why both needed a purpose-built net rather than more fixtures.
+
+Seven pins: the five open M7 decisions, the numeric-equality triple that ties
+DEC-M7-004 to DEC-M5-002, and the memory-handle safety property that has no spec.
+
+They assert through the **language's own `assert`** rather than captured output,
+because `out` writes with `println!` and there is no capture hook. A failed
+assertion raises, the outcome stops being `ProgramOutcome::Value`, and the test
+fails - which also makes each fixture a readable statement of what is pinned, in
+Serez, rather than a claim only an evaluator author can check.
+
+Verified load-bearing before being trusted: one pin was perturbed, the harness
+failed and named the decision it belongs to, and the perturbation was reverted.
+The failure message says *do not edit this test to match* and points at §7A,
+because the failure mode this file exists to prevent is a decision being taken by
+someone making a red test green.
+
+---
 
 ## 9K. M6 MILESTONE AUDIT
 
