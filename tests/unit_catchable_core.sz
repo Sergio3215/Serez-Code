@@ -2,17 +2,19 @@
 // (ReferenceError/TypeError) con unwinding sano. Stack overflow sigue fatal
 // (ver sec_stack_overflow).
 
-test("variable inexistente es capturable con ReferenceError", () => {
-    let kind = "none";
-    try { let x = estaVariableNoExiste; } catch (e) { kind = e.kind; }
-    assert(kind == "ReferenceError", "esperaba ReferenceError, dio: " + kind);
-});
+// Dos tests vivian aca — "variable inexistente es capturable" y "asignar a no
+// declarada es capturable" — y los dos afirmaban que un nombre sin declarar es
+// un ReferenceError CAPTURABLE en tiempo de ejecucion.
+//
+// DEC-M4-002 elimino ese comportamiento: un nombre que no resuelve lexicamente
+// es ahora un error semantico FATAL (SZ8000), asi que el programa no llega a
+// ejecutarse y no hay nada que capturar. El contrato nuevo se verifica en
+// tests/err_undeclared.sz, err_undeclared_assign.sz, err_undeclared_class.sz y
+// sec_undeclared_*.sz, y en semantic::validate.
+//
+// No se borraron sin reemplazo: se movieron al lugar donde la regla vive ahora.
+// Lo que sigue capturable es todo lo demas de este archivo.
 
-test("asignar a no declarada es capturable con ReferenceError", () => {
-    let kind = "none";
-    try { variableJamasDeclarada = 5; } catch (e) { kind = e.kind; }
-    assert(kind == "ReferenceError", "esperaba ReferenceError, dio: " + kind);
-});
 
 test("validaciones de new son ReferenceError/TypeError capturables", () => {
     interface CatchIface { value: int; other: int; }
@@ -23,9 +25,9 @@ test("validaciones de new son ReferenceError/TypeError capturables", () => {
     class CatchNoConstructor {}
 
     let caught = 0;
-    try { new CatchMissing(); } catch (e) {
-        if (e.code == "SZ4001" && e.kind == "ReferenceError") { caught++; }
-    }
+    // `new CatchMissing()` estaba aca y comprobaba un SZ4001 capturable por
+    // construir una clase inexistente. DEC-M4-002 lo volvio un SZ8000 fatal:
+    // el nombre no resuelve, y el programa no corre. Ver err_undeclared_class.sz.
     try { new CatchIface(1); } catch (e) {
         if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
     }
@@ -50,7 +52,7 @@ test("validaciones de new son ReferenceError/TypeError capturables", () => {
     try { new CatchNoConstructor(1); } catch (e) {
         if (e.code == "SZ4002" && e.kind == "TypeError") { caught++; }
     }
-    assert(caught == 9, "las nueve validaciones de construccion deben capturarse");
+    assert(caught == 8, "las ocho validaciones de construccion deben capturarse");
 });
 
 test("llamar a un no-funcion es capturable con TypeError", () => {

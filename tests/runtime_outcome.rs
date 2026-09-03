@@ -1800,15 +1800,22 @@ fn array_validation_precedes_arguments_and_failed_sort_is_atomic() {
 }
 
 #[test]
-fn free_variables_in_a_function_resolve_dynamically() {
-    // Serez resolves a free variable by walking the whole scope stack, and a
-    // call pushes its frame onto that same stack rather than starting a fresh
-    // one. A callee therefore sees the *caller's* locals: this is dynamic
-    // scoping, not lexical, and it is not documented anywhere.
+fn the_evaluator_still_resolves_dynamically_when_driven_without_the_semantic_phase() {
+    // **DEC-M4-002 did not change this, and that is the point of keeping the
+    // test.** A name that does not resolve lexically is now a fatal `SZ8000`
+    // from the semantic phase, so through `sz` the behaviour below is
+    // unreachable — `spec/scopes.md` states the rule.
     //
-    // This test pins the behavior rather than endorsing it. Changing it is a
-    // language-level decision recorded in MATURITY_AUDIT.md and spec/scopes.md;
-    // the point of pinning it is that the change cannot then happen by accident.
+    // The *evaluator* is unchanged: `ScopeStack::lookup` still walks the frame
+    // stack and a call still pushes onto it. `evaluate` here drives the
+    // evaluator directly, without `run::run_source_detailed`, so it still sees
+    // the old resolution — which is exactly what an embedder using `Evaluator`
+    // without the phase would see.
+    //
+    // Keeping it pinned is what makes "the rule changed reachability, not the
+    // evaluation model" a checked claim rather than an assertion in a commit
+    // message. If this ever starts failing, the evaluator moved too, and that is
+    // a different and much larger change than the one that was approved.
     let src = r#"
         fn string callee() { return secret; }
         fn string first()  { let secret = "from-first";  return callee(); }

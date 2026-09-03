@@ -6,49 +6,67 @@ Every rule here was derived by probing the running implementation. One of them �
 the first — is a property nothing in the documentation mentions and that a
 reader would very likely assume the other way round.
 
-## Free variables in a function resolve dynamically
+## A name must resolve lexically
 
-A call pushes its frame onto the same scope stack the caller is using, and
-lookup walks every frame from innermost to outermost. A function therefore sees
-the locals of whoever called it:
+A name is valid only if lexical structure accounts for it. It must come from:
+
+- a **parameter** of the enclosing function or method;
+- a declaration in the **same scope**;
+- a declaration in an **enclosing lexical scope**, including through a closure;
+- a **top-level** declaration of the file, which is visible everywhere in it,
+  before or after the point of use;
+- a **builtin** — `parseInt`, `assert`, `this`, `super` — or a runtime namespace.
+
+A name that none of those accounts for is a **fatal** `SZ8000` from the semantic
+phase (`errors.md`). The program does not run and `sz` exits `1`.
 
 ```serez
-fn string callee() { return secret; }
-
-fn string first()  { let secret = "from-first";  return callee(); }
-fn string second() { let secret = "from-second"; return callee(); }
-
-first();   // "from-first"
-second();  // "from-second"
+// runtime-error-example: the semantic phase rejects the program
+fn int leaky() { return secret; }
+fn int caller() { let secret = 42; return leaky(); }
+out caller();
 ```
 
-`callee` has no `secret` of its own and none is declared at the top level. It
-resolves to whichever caller is on the stack. This is **dynamic scoping**.
+### There is no dynamic resolution
 
-With the name bound nowhere on the stack it is still an error — `ReferenceError`
-/ `SZ4001` — so this is dynamic resolution, not an implicit global.
+Until 10.0.0 the program above **printed 42**. A call pushes its frame onto the
+same scope stack the caller is using and lookup walked every frame, so a function
+saw the locals of whoever called it — and the same function was valid or invalid
+depending on the caller:
 
-### What this costs
+```serez
+// runtime-error-example: rejected now; this is what it used to print
+fn string callee() { return secret; }
+fn string first()  { let secret = "from-first";  return callee(); }
+fn string second() { let secret = "from-second"; return callee(); }
+first();   // was "from-first"
+second();  // was "from-second"
+```
 
-- A misspelled variable inside a function does not reliably fail. It fails only
-  when no frame anywhere up the call stack happens to bind that name.
-- Renaming a local in one function can silently change what a different
-  function reads.
-- Whether a call is correct depends on who calls it, so a function cannot be
-  understood from its own text.
-- `sz --check` does not flag free variables at all, so nothing catches it
-  before the program runs.
+Both are now rejected before anything runs.
 
-### Status
+### What this does not change
 
-This is recorded, pinned by `free_variables_in_a_function_resolve_dynamically`
-in `tests/runtime_outcome.rs`, and **not** changed here. Making resolution
-lexical means giving a call its own scope stack and giving functions an
-explicit captured environment — a change to the core evaluation model, not a
-local fix, and one that could change the behavior of any program in the
-ecosystem that relies on it, deliberately or not. It needs the process in
-`compatibility.md` and a decision that is not the implementer's to make alone.
-The pin exists so the change cannot happen by accident in either direction.
+**The evaluator.** `ScopeStack::lookup` still walks the frame stack, and a call
+still pushes onto it. The rule is enforced by the semantic phase, which runs
+before evaluation and refuses to evaluate a program it rejects — so a program
+that passes behaves exactly as it did. Nothing in the evaluation model moved, and
+an embedder driving `Evaluator` directly, without the phase, gets the old
+behaviour.
+
+### Where the rule does not look
+
+A file containing any `import` is **not** analysed for names. A name may
+legitimately come from another module, and the phase sees one file at a time;
+`serez-ui` calls across files inside its package without importing, and every one
+of those files is reached through an entry point that imports. See
+`classes.md` for the same rule applied to an unresolvable parent class.
+
+The analysis also resolves every remaining ambiguity toward "declared", so it
+under-reports rather than over-reports. One case is known and deliberate: a
+nested function whose body names a sibling declared further down is accepted,
+because a lexical walk cannot tell a legitimate mutual recursion from a call made
+too early. That program still fails at run time with `SZ4001`, exactly as before.
 
 ## Closures are lexical
 

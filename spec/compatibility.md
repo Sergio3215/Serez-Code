@@ -52,6 +52,18 @@ useless:
   release — but only after a sweep of every official package found zero
   occurrences of the affected form, which the changelog entry records by name.
 
+- **Unreleased** made a name that does not resolve lexically a fatal `SZ8000`.
+  Dynamic resolution through the caller's scope is gone: a function reading a
+  name it does not declare is rejected before the program runs, where it used to
+  pick up whatever the caller happened to hold. Also breaking for the three
+  shapes that used to be *catchable* `ReferenceError`s — reading an undeclared
+  name, assigning to one, and `new` on an undeclared class — which are now
+  refused before evaluation and cannot be caught. The sweep: 29 unaccounted uses
+  across the 491-file conclusive corpus, of which 17 are fixtures that already
+  exited 1, five are `_`-prefixed scratch neither runner globs, and seven were
+  tests asserting the catchability this removes. Ecosystem 8/8 — a file with any
+  `import` is not analysed, and every cross-file reference in an official package
+  is reached through one. See `scopes.md`.
 - **Unreleased** closed `fetch` under lockdown. `sz --eval` and any embedder
   using `RunOpts::sandboxed()` now refuse an outbound request with fatal
   `PermissionError` (`SZ6001`) unless the host is on an explicit allowlist, and

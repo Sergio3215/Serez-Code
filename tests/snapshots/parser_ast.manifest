@@ -339,7 +339,7 @@ tests/unit_bitwise_ops.sz	42799	0	5aa3730469ca07d1	cbf29ce484222325
 tests/unit_bug_b64_b74.sz	67856	0	c2ad3b2fb0b98f2b	cbf29ce484222325
 tests/unit_bug_b75_b76.sz	16701	0	010a43a84f94bcdb	cbf29ce484222325
 tests/unit_bug_fixes.sz	58637	0	23d46f9b6ce5b0c5	cbf29ce484222325
-tests/unit_catchable_core.sz	68136	0	505cb9beb7ee978f	cbf29ce484222325
+tests/unit_catchable_core.sz	61105	0	75e498662d77e755	cbf29ce484222325
 tests/unit_catchable_io.sz	35972	0	e5c7547303ac121f	cbf29ce484222325
 tests/unit_class_arch.sz	77845	0	acfec106ba17beea	cbf29ce484222325
 tests/unit_class_fields.sz	12711	0	d462cba36b162fbf	cbf29ce484222325

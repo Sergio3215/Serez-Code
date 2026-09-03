@@ -6,7 +6,7 @@ err_arity.sz	1	205	52665bc115254ed6
 err_array_unknown_method.sz	1	59	1dc964c13a6629af
 err_bool_plus_int.sz	1	104	344fe7325b982d2a
 err_bounds.sz	1	55	ab24d2b71ac71075
-err_call_undefined.sz	1	50	235c9865cce0c720
+err_call_undefined.sz	1	205	20b13943e7e2a26d
 err_datetime_invalid.sz	1	82	8e64986ab9d9dbc9
 err_dec_div_zero.sz	1	54	71a6f4bdb8af57d1
 err_dec_mix_f64.sz	1	134	9f65d8a2191c6615
@@ -21,7 +21,7 @@ err_duplicate_fn.sz	1	220	8fcfe574288d2668
 err_enum_string_concat.sz	1	111	f6030f4e3428c7b2
 err_extra_iface_field.sz	1	68	f1be3492c04be81a
 err_field_non_instance.sz	1	67	95559f361b4674cb
-err_for_scope_leak.sz	1	43	b0903c9e2e65e544
+err_for_scope_leak.sz	1	187	3dc21cab9dddd4ef
 err_foreach_dict.sz	1	63	cc0791c86f97e8ea
 err_foreach_nonarray.sz	1	63	cc0791c86f97e8ea
 err_gui_drawrect_no_window.sz	1	50	3d0af9071417f0dd
@@ -75,9 +75,9 @@ err_throw_nested_arg.sz	1	36	dda3944987dddb0f
 err_throw_out_stmt.sz	1	45	b8e9f26de577d691
 err_type_param.sz	1	171	fdb132eb551ee135
 err_typed_push.sz	1	59	0def5ce1daa2b0ab
-err_undeclared.sz	1	43	2e946f9de4c26c9b
-err_undeclared_assign.sz	1	44	775c83ca23018461
-err_undeclared_class.sz	1	59	630a69be5b4dfe6f
+err_undeclared.sz	1	183	c75589fc644fee82
+err_undeclared_assign.sz	1	207	3435f3e3c5d7097c
+err_undeclared_class.sz	1	240	150b7b9474991a55
 sec_abstract_instantiate.sz	1	65	5c7e2a0cd21c7544
 sec_array_oob.sz	1	55	ab24d2b71ac71075
 sec_attention_ops.sz	1	103	4a5ab79a8fc78051
@@ -158,7 +158,7 @@ sec_time_no_permission.sz	1	150	785b6f2d0ea4c46f
 sec_type_violation.sz	1	172	f89436f417dad744
 sec_typed_array_push.sz	1	59	0def5ce1daa2b0ab
 sec_typed_dict_miss_key.sz	1	71	30677236da83b09a
-sec_undeclared_assign.sz	1	57	46ed2858a77da4df
-sec_undeclared_class.sz	1	63	25a20fd315d4c279
-sec_undeclared_read.sz	1	56	4f17143940e72131
+sec_undeclared_assign.sz	1	234	8bd8277c090cf17d
+sec_undeclared_class.sz	1	256	ca718580b74457f0
+sec_undeclared_read.sz	1	214	36227fecbf6c7ae5
 sec_websocket.sz	1	60	c3267258495d60cc

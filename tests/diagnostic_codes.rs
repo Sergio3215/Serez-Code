@@ -46,7 +46,15 @@ const CASES: &[(&str, &str, &str)] = &[
         "class Task { }",
     ),
     ("SZ4000", "integer overflow", "out 9223372036854775807 + 1;"),
-    ("SZ4001", "an unknown name", "out nope;"),
+    // Was `out nope;` until DEC-M4-002 made an unresolvable name a fatal
+    // `SZ8000` from the semantic phase. `SZ4001` is still the runtime's
+    // reference error and still reachable — a member that does not exist is
+    // resolved against a value, which no static scope walk can do.
+    (
+        "SZ4001",
+        "a member that does not exist on the receiver",
+        "out [1].notARealMethod();",
+    ),
     ("SZ4002", "a type mismatch", "out true + 1;"),
     ("SZ4003", "an index out of bounds", "let a = [1]; out a[9];"),
     ("SZ4004", "division by zero", "out 1 / 0;"),

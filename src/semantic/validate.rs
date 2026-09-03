@@ -36,22 +36,34 @@
 //! # What it is not
 //!
 //! Not a type checker: it answers questions with yes-or-no answers that do not
-//! need inference. Not a resolver — whether an unresolved name is a diagnostic is
-//! **DEC-M4-002** and is still open. Not a place to move checks that are genuinely
-//! syntactic; the parser rejecting `let = 3` stays where it is.
+//! need inference. Not a place to move checks that are genuinely syntactic; the
+//! parser rejecting `let = 3` stays where it is.
 //!
-//! # Candidate rules
+//! # The rules it holds
 //!
-//! §5.39 measured three gaps this phase could close, all silent today: a duplicate
-//! `class` or `fn` is accepted with the last one winning, and a class inheriting
-//! from something that does not exist runs clean until someone instantiates it.
-//! Together with DEC-M5-003 (unknown type name), DEC-M4-002 (free variables) and
-//! DEC-M7-003 (`match` exhaustiveness), that is six candidate tenants — which is
-//! what makes this a boundary rather than a wrapper around one rule.
+//! | Rule | Decision |
+//! |---|---|
+//! | A reserved runtime namespace as a `class`/`interface`/`enum` name | DEC-M4-001 |
+//! | A name declared twice in one scope | §5.39 |
+//! | A class parent that resolves nowhere | §5.39 |
+//! | **A name that resolves nowhere** | **DEC-M4-002** |
 //!
-//! **None of them is implemented here yet, and none may be added without its own
-//! decision.** What a duplicate declaration *should* do is a contract question
-//! that deciding where validation lives did not answer.
+//! # DEC-M4-002 changed reachability, not the evaluator
+//!
+//! Worth being exact about, because it is easy to read the rule as a change to
+//! how Serez resolves names. It is not. `ScopeStack::lookup` still walks the
+//! frame stack, a call still pushes onto it, and an evaluator driven directly —
+//! as `tests/runtime_outcome.rs` drives it — still resolves a free name from the
+//! caller's frame.
+//!
+//! What changed is which programs reach the evaluator. `run::run_source_detailed`
+//! runs this phase first and refuses to evaluate a program it rejects, so through
+//! `sz` the dynamic path is unreachable. A program that passes this phase behaves
+//! exactly as it did.
+//!
+//! That is the smallest implementation that delivers the decision, and it is the
+//! reason the change carries no risk to the runtime: nothing in the evaluation
+//! model moved.
 
 use crate::ast::{Program, Statement};
 use crate::diagnostic::{Diagnostic, Phase};
@@ -97,7 +109,13 @@ pub fn validate(program: &Program) -> Vec<Diagnostic> {
     for statement in &program.statements {
         check_statement(statement, &mut declared, &mut findings);
     }
-    check_inheritance(program, &mut findings);
+
+    // One lexical walk, shared. Both name rules ask `semantic::scopes` the same
+    // question and the walk is the expensive part of this phase.
+    let scopes = scopes::analyze(program);
+    check_inheritance(program, &scopes, &mut findings);
+    check_names(&scopes, &mut findings);
+
     findings.sort_by_key(|d| (d.span.line, d.span.column));
     findings
 }
@@ -275,17 +293,16 @@ fn reject_if_duplicate(
 /// as well, and none of them is reported here — whether an unresolved *variable*
 /// is a diagnostic is still open. This reports exactly one kind,
 /// [`UseKind::Parent`], at one reach, which is what the owner decided.
-fn check_inheritance(program: &Program, findings: &mut Vec<Diagnostic>) {
+fn check_inheritance(
+    program: &Program,
+    report: &scopes::ScopeReport,
+    findings: &mut Vec<Diagnostic>,
+) {
     let mut inherits: Vec<(&str, Span)> = Vec::new();
     for statement in &program.statements {
         collect_top_level_parent(statement, &mut inherits);
     }
-    if inherits.is_empty() {
-        return;
-    }
-
-    let report = scopes::analyze(program);
-    if !report.is_conclusive() {
+    if inherits.is_empty() || !report.is_conclusive() {
         return;
     }
 
@@ -307,6 +324,74 @@ fn check_inheritance(program: &Program, findings: &mut Vec<Diagnostic>) {
                 "parent class '{parent}' is not declared, and this file imports \
                  nothing that could declare it"
             ),
+        ));
+    }
+}
+
+/// A name no enclosing lexical scope accounts for.
+///
+/// **DEC-M4-002, decided: a name is valid only if it resolves lexically.**
+///
+/// Serez used to answer `name -> declaration` once, at run time.
+/// `ScopeStack::lookup` walks a frame stack that a *call* pushes onto, so a
+/// function body reading a name it does not declare picked up whatever the
+/// **caller** happened to hold — and the same function was valid or invalid
+/// depending on who called it. `MATURITY_AUDIT.md` carried that as its one
+/// **critical** entry. There is no dynamic resolution any more: a name must come
+/// from a parameter, its own scope, an enclosing lexical scope, or the file's
+/// top level.
+///
+/// # What this reports, and what it leaves to others
+///
+/// Every free use except [`UseKind::Parent`]. A class's declared parent is
+/// [`check_inheritance`]'s rule: it has its own message, and — more importantly —
+/// its own *reach*. Position-independence is something this phase can only rely
+/// on at the top level, and a class declared inside a body may legitimately name
+/// a parent declared further down the same body. Reporting `Parent` here as well
+/// would both duplicate the finding and reintroduce that false positive.
+///
+/// # Where it does not look
+///
+/// A file containing any `import` is not judged at all — `ScopeReport::is_conclusive`.
+/// A name may legitimately come from another module, and this phase sees one file
+/// at a time. That is the same rule `check_inheritance` follows and the same one
+/// DEC-M4-007 is about, and it is what makes the rule safe for the ecosystem:
+/// `serez-ui` calls across files inside its package without importing, and every
+/// one of those files is reached through an entry point that imports.
+///
+/// # The one direction this is deliberately wrong in
+///
+/// `semantic::scopes` resolves every ambiguity toward "bound", so this
+/// under-reports rather than over-reports. For a fatal rule that is the only
+/// acceptable asymmetry: a missed name is caught by the runtime exactly as
+/// before, an invented one rejects a program that works.
+fn check_names(report: &scopes::ScopeReport, findings: &mut Vec<Diagnostic>) {
+    if !report.is_conclusive() {
+        return;
+    }
+    for use_site in &report.free {
+        if use_site.kind == UseKind::Parent {
+            continue;
+        }
+        let name = &use_site.name;
+        let message = match use_site.kind {
+            UseKind::Write => format!(
+                "cannot assign to '{name}': it is not declared in this scope or any \
+                 enclosing one"
+            ),
+            UseKind::Type => format!(
+                "class or interface '{name}' is not declared in this scope or any \
+                 enclosing one"
+            ),
+            // `Read` and `Call` read the same to a user, and splitting the
+            // wording would imply a distinction the rule does not make.
+            _ => format!("'{name}' is not declared in this scope or any enclosing one"),
+        };
+        findings.push(Diagnostic::frontend(
+            SZ_SEMANTIC_ERROR,
+            Phase::Semantic,
+            use_site.span,
+            message,
         ));
     }
 }
@@ -508,6 +593,125 @@ mod tests {
                  enum E { X }\n",
             ))
             .is_empty()
+        );
+    }
+
+    // ── DEC-M4-002: a name that does not resolve lexically ────────────────
+
+    #[test]
+    fn a_name_that_resolves_nowhere_is_rejected() {
+        for (source, fragment) in [
+            ("out nope;\n", "'nope'"),
+            ("fn void f() { out ghost; }\nf();\n", "'ghost'"),
+            ("ghost = 1;\n", "cannot assign to 'ghost'"),
+            ("out new Phantom();\n", "class or interface 'Phantom'"),
+        ] {
+            let findings = validate(&program(source));
+            assert_eq!(findings.len(), 1, "one finding for {source:?}");
+            assert_eq!(findings[0].code, SZ_SEMANTIC_ERROR);
+            assert_eq!(findings[0].phase, Phase::Semantic);
+            assert!(
+                findings[0].message.contains(fragment),
+                "expected {fragment:?} in {:?}",
+                findings[0].message
+            );
+        }
+    }
+
+    #[test]
+    fn every_way_a_name_can_be_declared_still_resolves() {
+        // The positive control, and it is the whole rule read backwards: a name
+        // is valid if it comes from a parameter, its own scope, an enclosing
+        // lexical scope, or the top level. One case each, plus the builtins.
+        for source in [
+            // a parameter
+            "fn int f(int n) { return n; }\nout f(1);\n",
+            // its own scope
+            "fn int f() { let x = 1; return x; }\nout f();\n",
+            // an enclosing lexical scope, through a closure
+            "fn int f() { let x = 1; let g = () => x; return g(); }\nout f();\n",
+            // the top level, used before it is written
+            "fn int a() { return b(); }\nfn int b() { return 1; }\nout a();\n",
+            // a class field through `this`
+            "class C { public C() { this.v = 1; } public int read() { return this.v; } }\n\
+             out new C().read();\n",
+            // a loop binding, a catch binding and a for-in binding
+            "for (let i = 0; i < 2; i = i + 1) { out i; }\n",
+            "try { out 1; } catch (e) { out e; }\n",
+            "let xs = [1];\nfor (let x in xs) { out x; }\n",
+            // builtins and runtime namespaces
+            "out parseInt(\"1\");\nout Math.floor(1.5);\n",
+        ] {
+            let findings = validate(&program(source));
+            assert!(
+                findings.is_empty(),
+                "a legitimate program was rejected: {source:?} -> {:?}",
+                findings.iter().map(|d| &d.message).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_resolution_through_the_callers_scope_is_gone() {
+        // The behaviour DEC-M4-002 removes, and the reason it was critical: this
+        // program printed 42 because `leaky` picked up `secret` from whoever
+        // called it, so the same function was valid or invalid depending on the
+        // caller.
+        let findings = validate(&program(
+            "fn int leaky() { return secret; }\n\
+             fn int caller() { let secret = 42; return leaky(); }\n\
+             out caller();\n",
+        ));
+        assert_eq!(findings.len(), 1);
+        assert!(
+            findings[0].message.contains("'secret'"),
+            "{:?}",
+            findings[0]
+        );
+    }
+
+    #[test]
+    fn a_file_that_imports_is_not_judged_on_names() {
+        // The rule that keeps the ecosystem working. `serez-ui` calls across
+        // files inside its package without importing, and every such file is
+        // reached through an entry point that does import — so a file with any
+        // `import` is not analysed at all.
+        assert!(
+            validate(&program(
+                "import \"serez-ui\";\nout somethingFromTheModule();\n"
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_mutually_recursive_pair_of_nested_functions_is_accepted() {
+        // The false positive that had to be fixed in `semantic::scopes` before
+        // this rule could be fatal. `tests/unit_functions_adv.sz` runs it.
+        assert!(
+            validate(&program(
+                "fn void outer() {\n\
+                 \x20   fn bool isEven(int n) { if (n == 0) { return true; } return isOdd(n - 1); }\n\
+                 \x20   fn bool isOdd(int n) { if (n == 0) { return false; } return isEven(n - 1); }\n\
+                 \x20   out isEven(4);\n\
+                 }\n\
+                 outer();\n",
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_parent_is_reported_once_and_by_the_inheritance_rule() {
+        // Both rules read the same `free` list, so a parent could be reported
+        // twice. It is not: `check_names` skips `UseKind::Parent`, and the
+        // message is the inheritance rule's.
+        let findings = validate(&program("class Child : Missing { public Child() {} }\n"));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(
+            findings[0].message.contains("parent class 'Missing'"),
+            "{:?}",
+            findings[0].message
         );
     }
 
