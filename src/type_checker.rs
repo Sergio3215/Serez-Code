@@ -145,7 +145,11 @@ impl<'a> TypeChecker<'a> {
                 if let Some(expected) = expected_return {
                     if let Some(actual) = self.infer_type(&ret.return_value) {
                         if !types_compatible(expected, &actual) {
-                            self.type_error(0, 0, format!(
+                            // `ret.span`, not `0, 0`. A position of 0 renders as
+                            // no position at all in the CLI and as the start of
+                            // the file in the editor, which points a user at
+                            // line 1 for a mistake anywhere in the program.
+                            self.type_error(ret.span.line, ret.span.column, format!(
                                 "Function declares return '{}' but 'return' expression has type '{}'.",
                                 expected, actual
                             ));
@@ -299,9 +303,15 @@ impl<'a> TypeChecker<'a> {
                 None => continue,
             };
             if !types_compatible(element_type, &actual) {
+                // The literal's own span. Pointing at the *offending element*
+                // would be better still, and is not done here because it needs
+                // an `Expression::span()` accessor that `ast.rs` does not have —
+                // M2 gave all 28 variants a span field but no way to ask for one
+                // generically. That accessor is worth adding on its own terms,
+                // not as a side effect of a diagnostic fix.
                 self.type_error(
-                    0,
-                    0,
+                    arr.span.line,
+                    arr.span.column,
                     format!(
                         "Array declared as [{}] but contains element of type '{}'.",
                         element_type, actual

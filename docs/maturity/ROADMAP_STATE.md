@@ -3613,6 +3613,44 @@ change to stderr. The exit code cannot move: `spec/types.md` makes type findings
 advisory. Corpus exposure was measured in M4 at 3 of 483 files using `export`,
 none combining it with a type error, and the manifests confirm it: no row moved.
 
+### 9H.4 — M5.4: the tooling leg, and two diagnostics that pointed nowhere
+
+The charter's third consumer is tooling, and it turns out to be satisfied
+**structurally rather than by coincidence**: `lsp/analysis.rs:151` constructs the
+same `TypeChecker` the CLI does and maps its findings to LSP diagnostics with
+`severity: 2`. There is no second implementation to keep in step, so M5.2's and
+M5.3's fixes reached the editor with no further work. Worth recording as a
+positive finding — §9F.0 found the opposite shape for symbols, where the LSP
+re-derives everything.
+
+**But the LSP inherits the checker's positions, and two of the four checks had
+none.** `type_error(0, 0, …)` was used for the return-type mismatch and the
+array-literal element mismatch. A position of `0` is the checker's "unknown", and
+it is not merely untidy:
+
+  * the CLI's renderer drops the `[line L:C]` bracket entirely;
+  * `lsp/analysis.rs` documents `0` as "mapped to the start of the file", so an
+    **editor underlines line 1** for a mistake anywhere in the program.
+
+Both now carry the span of the node they are about — `ret.span` and `arr.span`.
+M2 gave every AST node a span for exactly this, and §5.10 recorded at the time
+that nothing consumed them; the checker is now among the first that does.
+
+**Measured impact: none on the corpus.** No tracked file produces either
+diagnostic — the whole corpus emits 3 `SZ3000` findings and all three already
+carried a call span — so no manifest row moves. The improvement is entirely for
+code not in the repository, which is the same shape as M5.2.
+
+`every_finding_the_checker_emits_points_somewhere` asserts the property for all
+four checks rather than the two that were broken, so a fifth check cannot be
+added without one.
+
+**Left undone, deliberately:** the array-literal diagnostic points at the literal
+rather than at the offending *element*, which would be better. Doing that needs an
+`Expression::span()` accessor, and `ast.rs` has none — M2 gave all 28 variants a
+span field but no generic way to ask for one. That accessor is worth adding on its
+own terms, and is recorded here rather than smuggled into a diagnostic fix.
+
 ---
 
 ## 9G. M4 MILESTONE AUDIT

@@ -264,3 +264,61 @@ fn the_checker_and_the_runtime_agree_about_the_same_program() {
         false_positives.join("\n\n")
     );
 }
+
+/// Every finding the checker emits carries a position.
+///
+/// A finding with `line == 0` is not merely untidy: the CLI renders it with no
+/// `[line L:C]` bracket at all, and `lsp/analysis.rs` maps it to the **start of
+/// the file**, so an editor underlines line 1 for a mistake anywhere in the
+/// program. Two of the checker's four checks used to do this — the return-type
+/// mismatch and the array-literal element mismatch — while the other two carried
+/// the call's span.
+///
+/// M2 gave every AST node a span precisely so a diagnostic could point at one.
+/// This asserts that the checker uses them.
+#[test]
+fn every_finding_the_checker_emits_points_somewhere() {
+    let sources = [
+        (
+            "return type mismatch",
+            "fn int f() { return \"s\"; }\nout f();\n",
+        ),
+        (
+            "array literal element mismatch",
+            "let a [int] = [1, \"two\"];\nout a;\n",
+        ),
+        (
+            "argument type mismatch",
+            "fn int f(int a) { return a; }\nlet s = \"x\";\nout f(s);\n",
+        ),
+        (
+            "arity mismatch",
+            "fn int add(int a, int b) { return a + b; }\nout add(1);\n",
+        ),
+    ];
+
+    let mut positionless = Vec::new();
+    for (label, source) in sources {
+        let program = parse(source);
+        let mut checker = TypeChecker::new(&program);
+        checker.check();
+        let findings = checker.take_errors();
+        assert!(
+            !findings.is_empty(),
+            "{label}: the fixture must produce a finding, or it proves nothing"
+        );
+        for finding in findings {
+            if finding.span.line == 0 {
+                positionless.push(format!("  {label}: {}", finding.message));
+            }
+        }
+    }
+
+    assert!(
+        positionless.is_empty(),
+        "{} checker finding(s) carry no position. The CLI drops the bracket and \
+         the editor underlines line 1:\n{}",
+        positionless.len(),
+        positionless.join("\n")
+    );
+}
