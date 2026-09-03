@@ -29,12 +29,12 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **19 OPEN, 4 DECIDED.** All in §7A. Decided: **DEC-M4-001** (a fatal semantic phase), **DEC-M4-005** (`SZ8xxx` + `SEMANTIC`), **DEC-M7-002** (private keyed to the declaring class), **DEC-M7-006** (`fetch` gated behind an allowlist). Three new and open: **DEC-M4-006** (does the LSP report the semantic phase), **-007** (does the phase resolve through `import`), **-008** (may a class and an interface share a name). Three still block queued work: DEC-M4-002, -004, DEC-M6-001 |
+| **Open decisions** | **14 OPEN, 10 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009** |
 | Branch | `improve` |
-| HEAD | `649ba49` |
+| HEAD | `2d4302f` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — **a findings pass**: §5.2, §5.3, §5.6, §5.13, §5.14, §5.18, §5.38 and both of §5.39's first two gaps fixed; §5.16 answered with a written policy; §5.35 fixed in serez-ui. All four remaining §6 debts closed — property schemas, private access, `EvalResult`, `fetch` under lockdown. Two new findings (§5.41, §5.42) and three new decisions (DEC-M4-006/-007/-008) |
+| Last state update | 2026-09-03 — **the approved-decisions cycle** (§0B, §0A.H). Eleven answers implemented across ten commits: lexical name resolution, the LSP outline from the tree, a narrow service trait, one read ceiling, a generator ceiling, atomic/locked/verified package installs, the LLVM feature matrix, the clippy baseline gate, the canary as a pinned gate plus a daily run, and advisory phase timings. `MATURITY_AUDIT.md`'s **critical** entry is closed |
 
 Milestone ledger:
 
@@ -44,13 +44,13 @@ Milestone ledger:
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
 | M2 — AST + Spans Stable | **COMPLETE** (2026-09-02) — all 28 `Expression` variants and 39 of 40 structs carry a span |
 | M3 — Diagnostics Unified | **COMPLETE** (2026-09-02) — 5 diagnostic types -> 1, 4 rendered formats -> 1 renderer, §5.17 fixed |
-| M4 — Semantic Layer Established | **PARTIAL** — M4.5 complete (§9F.8): the semantic phase exists and the parser's only semantic rule moved into it. Still held by DEC-M4-002 (resolver) and DEC-M4-004 (LSP) |
+| M4 — Semantic Layer Established | **PARTIAL** — DEC-M4-002 and -004 are decided *and implemented*, so neither blocks anything now. **M4.6.1 is still open**: DEC-M4-003 has not been answered, and the reserved-name guard still covers 7 of 22 namespaces |
 | M5 — Type System Stable | **COMPLETE** (2026-09-03, §9I) — 4 checker/runtime divergences fixed, §5.29 closed, 5 decisions registered |
-| M6 — Runtime Molecular | **PARTIAL** (2026-09-03, §9K) — `Evaluator` 48 fields -> 38; dispatch still on the evaluator, held by DEC-M6-001 |
+| M6 — Runtime Molecular | **PARTIAL** (2026-09-03, §9K) — `Evaluator` 48 fields -> 38; DEC-M6-001 decided and `ValueSink` built, with **1 of 16** namespaces across it. The charter asks for dispatch off the evaluator, and 15 namespaces are still on it |
 | M7 — Semantics Frozen | **PARTIAL** (2026-09-03, §9M) — everything settled is specified; 6 decisions open and pinned |
 | M8 — Conformance Complete | **PARTIAL** (2026-09-03, §9O) — scheme + checker complete and enforced; 1 area of 30 covered |
-| M9 — Robustness & Security Hardened | **PARTIAL** (2026-09-03, §9Q) — frontend property-tested; runtime not; `OS.spawn` deadlock fixed |
-| M10 — Stable Language Platform | **PARTIAL** (2026-09-03, §9S) — DAG enforced and a cycle found (§5.38); release gates are DEC-M10-001/-002 |
+| M9 — Robustness & Security Hardened | **PARTIAL** (2026-09-03, §9Q) — three unbounded reads and generator accumulation now have ceilings, and package installation is atomic, locked and verified. **The runtime is still not property-tested**, which is what the DoD asks and what M9.2 only did for the frontend |
+| M10 — Stable Language Platform | **PARTIAL** (2026-09-03, §9S) — the DAG is enforced and acyclic, and every release gate now exists: clippy baseline, the canary as a blocking gate plus a daily run, advisory phase timings. **LLVM parity is measured but unverified** — 12 of 27 features reach the backend and none has demonstrated parity, so the backend stays experimental and absent from the CLI |
 
 ---
 
@@ -73,13 +73,13 @@ to prevent.
 | **M1** Parser Molecular | **COMPLETE** | — |
 | **M2** AST + Spans Stable | **COMPLETE** | — |
 | **M3** Diagnostics Unified | **COMPLETE** | — |
-| **M4** Semantic Layer | **PARTIAL** | layer built and validated; DEC-M4-001 **decided**, M4.5.* now in progress; still blocked by DEC-M4-002, -004 |
+| **M4** Semantic Layer | **PARTIAL** | the layer is built, validated and **adopted** — it rejects programs, and the LSP reads it. M4.6.1 remains, waiting on DEC-M4-003 |
 | **M5** Type System Stable | **COMPLETE** | — every consumer agrees; the 5 open decisions are about what the rules *should be*, not whether the implementation is coherent about them |
-| **M6** Runtime Molecular | **PARTIAL** | 48 fields → 38; **dispatch** still on `Evaluator`, blocked by DEC-M6-001 |
+| **M6** Runtime Molecular | **PARTIAL** | 48 fields → 38; the boundary exists and 1 of 16 dispatches is across it. Not blocked any more — 15 namespaces of work |
 | **M7** Semantics Frozen | **PARTIAL** | everything settled is specified; freezing the unsettled *is* deciding it — 6 decisions |
 | **M8** Conformance Complete | **PARTIAL** | machinery complete and enforced; **1 area of 30** carries identifiers. Blocked by nothing — this one closes with work |
-| **M9** Robustness & Security | **PARTIAL** | frontend property-tested; **runtime, package and JSON boundaries** are not. Blocked by nothing |
-| **M10** Stable Platform | **PARTIAL** | DAG enforced; release-gate questions are DEC-M10-001/-002, and the LLVM backend is unproven |
+| **M9** Robustness & Security | **PARTIAL** | resource ceilings and package installation are done; the **runtime and JSON boundaries** are still not property-tested. Blocked by nothing |
+| **M10** Stable Platform | **PARTIAL** | DAG enforced and acyclic; every release gate exists. The LLVM backend is now *measured* rather than merely unproven — and 15 of 27 features do not reach it |
 
 **Four COMPLETE, seven PARTIAL, none BLOCKED.** Nothing is stopped: every PARTIAL
 either waits on an answer or waits on work, and both are named.
@@ -114,22 +114,18 @@ that actually gate a milestone.
 
 ### C. What blocks what
 
-Only **three** decisions still gate a milestone:
+**Nothing.** The three that gated a milestone — DEC-M4-002, -004 and DEC-M6-001 —
+were answered and implemented on 2026-09-03, so every remaining decision changes
+the language or the pipeline and blocks no queued work.
 
-```
-DEC-M4-002 ──> M4.7.3+ (resolver reporting), and M7's scope entry
-DEC-M4-004 ──> the LSP's migration onto semantic::declarations
-DEC-M6-001 ──> the rest of M6 (namespace dispatch)
-```
+That is a change in kind rather than in degree. For eleven milestones this
+section existed to say which work could not start; it now says that what remains
+is work rather than answers.
 
-DEC-M4-001 is decided and M4.5 closed. The other eighteen change the language or
-the pipeline and block no queued work.
-**M8 and M9 are blocked by nothing at all** — they are unfinished for want of
-hours, not answers.
-
-Of the three added on 2026-09-03, none blocks anything: DEC-M4-006 and -008 are
-pinned by tests so neither can drift, and DEC-M4-007 only bounds the reach of a
-rule that already works.
+The four decisions added while implementing the others — DEC-M4-006, -007, -008,
+-009 — block nothing either. Each is pinned by a test, so none can be drifted
+into: the pin fails the day the behaviour moves, which forces the decision to be
+taken rather than absorbed.
 
 ### D. Recommended order
 
@@ -265,6 +261,100 @@ longer distinguish a clean graph from a broken search — which is precisely §5
 own failure mode. `the_cycle_finder_finds_cycles` runs the detector over
 hand-built graphs: a mutual pair, a three-cycle, a four-cycle at `MAX_CYCLE`, and
 a diamond that is not a cycle.
+
+### H. The approved-decisions cycle — 2026-09-03, `6bec7eb` -> `2d4302f`
+
+Eleven answers arrived already decided. §0B is the reconnaissance written before
+any of them was implemented; this is what came of it.
+
+| Decision | Outcome | Commit |
+|---|---|---|
+| *(prerequisite)* nested-`fn` resolution | **FIXED** — a false positive that would have rejected working code | `7b98d63` |
+| **DEC-M4-002** free variables | **A, fatal** | `1513b43` |
+| **DEC-M4-004** the editor's outline | **B, all declarations correctly nested** | `ec3cd81` |
+| **DEC-M9-001** unbounded reads | **A, one 64 MiB fatal ceiling, three sites** | `41e8d5a` |
+| generator accumulation | host-set ceiling, default 1,000,000 | `2df302c` |
+| **DEC-M6-001** service dispatch | a narrow trait, first service across | `5707779` |
+| **DEC-M10-002** clippy | a per-lint/file baseline gate | `1d61f5d` |
+| **DEC-M10-001** + daily canary | a pinned blocking gate *and* a daily unpinned run | `1d61f5d` |
+| package installation | atomic, lockfile, integrity | `d87a134` |
+| LLVM | a measured feature matrix; parity claimed nowhere | `cac34a4` |
+| performance | phase baseline and budgets, advisory | `2d4302f` |
+
+**Gates, start and end.**
+
+| | `8b8bbeb` | `2d4302f` |
+|---|---|---|
+| `cargo fmt --check` | clean | clean |
+| clippy | 180 sites, ungated | **180 sites, gated** at `current <= baseline` |
+| `cargo test --all-targets` | 463 | **517** |
+| both Serez runners | 508 / 0 / 0 | **508 / 0 / 0**, identical per category |
+| ecosystem canary | 8/8, local only | **8/8, a blocking CI gate** |
+| dependency cycles | 0 | **0** |
+
+#### No milestone became COMPLETE, and that is the finding
+
+Six decisions were answered and every one of them was implemented, which for
+three milestones removed the *only* thing the ledger said was blocking them. None
+of the three is finished, because a decision was never the whole Definition of
+Done:
+
+  * **M4** — DEC-M4-002 and -004 are implemented, and the semantic layer is now
+    *adopted* rather than merely built: it rejects programs and the LSP reads it.
+    **M4.6.1 is still open**, waiting on DEC-M4-003, and the reserved-name guard
+    still covers 7 of 22 namespaces.
+  * **M6** — the boundary exists and `Binary` is across it. **1 of 16**
+    namespaces. The charter asks for dispatch off the evaluator; 15 remain, and
+    they are now work rather than a blocked question.
+  * **M10** — every release gate exists, and LLVM is *measured* instead of
+    unproven. 12 of 27 features reach the backend and **none has demonstrated
+    parity**, so it stays experimental.
+
+**M9** gained resource ceilings and package hardening and is still PARTIAL for
+the reason it already was: the runtime is not property-tested. **M8** was not
+touched.
+
+#### What the work found that the decisions did not anticipate
+
+Four things, each recorded as its own `DEC-*` rather than decided in passing, and
+each pinned by a test so it cannot be drifted into.
+
+**A prerequisite the decision did not mention.** DEC-M4-002 could not be
+implemented as written. `semantic::scopes` modelled a nested `fn` as
+position-dependent, so two mutually recursive nested functions — legitimate,
+working, and in `unit_functions_adv.sz` — were reported as unresolvable. Making
+that fatal would have rejected a correct program, which is the one failure mode a
+checker must not have. Measured against the release binary first: mutual
+recursion works, a forward *call* does not, and a lexical walk cannot tell the
+second from the third case. The model now resolves toward "bound", which is the
+only acceptable side to be wrong on for a fatal rule.
+
+**A case DEC-M4-004 did not cover.** An AST-derived outline can only show what
+parsed, and while a user is typing the file usually does not. The token scan is
+kept as a fallback for exactly that, and **DEC-M4-009** asks whether it should
+be.
+
+**The letters and the text disagreed twice**, recorded in §0B.B rather than
+resolved silently: DEC-M6-001's letter names "pass `&mut Evaluator`" while its
+text asks for a narrow trait, and DEC-M10-002's letter names 180 `#[allow]`
+attributes while its text forbids a mass cleanup. Both were implemented to the
+text.
+
+**Two gates caught mistakes in the work that followed them**, which is the only
+way to know a gate works:
+
+  * `tests/architecture.rs` refused
+    `evaluator -> package_manager -> package_install -> evaluator`, introduced by
+    reusing SHA-256 from the evaluator. The fix was to move the hash **down**
+    into a leaf, not to add a line to `KNOWN_CYCLES`.
+  * the clippy baseline, committed one commit earlier, failed on a
+    `print_literal` in the LLVM matrix before it could be committed.
+
+And one measurement justified a decision that would otherwise have read as
+caution: the first run of the phase-timing harness found `semantic.validate`
+varying by **2.73×** between the fastest and slowest of seven consecutive runs on
+an idle machine. "Warning first, gate later" is not a hedge — it is what that
+number requires.
 
 ### F. The pattern worth carrying forward
 
@@ -2052,28 +2142,29 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | ID | Subject | Status | Blocks |
 |---|---|---|---|
 | **DEC-M4-001** | Where the reserved-name check runs | **DECIDED** 2026-09-03 — **A, a new fatal semantic phase** | unblocked M4.5.*; DEC-M4-003's landing site |
-| **DEC-M4-002** | Whether an unresolved free variable is a diagnostic | **OPEN** | M4.7.3+ (resolver reporting); the M7 entry for scope semantics |
+| **DEC-M4-002** | Whether an unresolved free variable is a diagnostic | **DECIDED** 2026-09-03 — **A, fatal**; implemented in `1513b43` | — |
 | **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
-| **DEC-M4-004** | What the editor's outline should show | **OPEN** | the LSP's migration onto `semantic::declarations` |
+| **DEC-M4-004** | What the editor's outline should show | **DECIDED** 2026-09-03 — **B, all declarations correctly nested**; implemented in `ec3cd81` | — |
 | **DEC-M4-005** | The semantic phase's code and label | **DECIDED** 2026-09-03 — **A, `SZ8xxx` + `SEMANTIC`** | unblocked M4.5.4–M4.5.6 |
 | **DEC-M4-006** | Whether the LSP reports the fatal semantic phase | **OPEN** | nothing; §5.41 is the finding |
 | **DEC-M4-007** | Whether the semantic phase resolves through `import` | **OPEN** | the other half of §5.39's parent rule |
 | **DEC-M4-008** | Whether a `class` and an `interface` may share a name | **OPEN** | nothing; 0 measured occurrences |
+| **DEC-M4-009** | Whether the `.sz` outline falls back to a token scan on a file that does not parse | **OPEN** | nothing; the fallback preserves today's behaviour |
 | **DEC-M5-001** | Whether a nullable value at a non-nullable parameter is reported | **OPEN** | nothing — a question to answer, not a gate |
 | **DEC-M5-002** | Whether a numeric type widens at a parameter | **OPEN** | nothing |
 | **DEC-M5-003** | Whether an unknown type name is diagnosed | **OPEN** | nothing; option B depends on DEC-M4-001 |
 | **DEC-M5-004** | Whether a declared field type is a constraint or a default | **OPEN** | nothing |
 | **DEC-M5-005** | Whether a declared class type accepts a subclass | **OPEN** | nothing |
-| **DEC-M6-001** | How a runtime service raises an error and allocates a value | **OPEN** | the rest of M6 — moving namespace dispatch off `Evaluator` |
+| **DEC-M6-001** | How a runtime service raises an error and allocates a value | **DECIDED** 2026-09-03 — **a narrow trait** (§7A's B; the letter given was A — see §0B.B); `ValueSink` and the first service in `5707779` | the remaining 15 namespaces, now mechanical |
 | **DEC-M7-001** | Whether `remove` on an empty array is an error | **OPEN** | nothing |
 | **DEC-M7-002** | Whether a subclass reaches an inherited private member | **DECIDED** 2026-09-03 — **A, keyed to the declaring class**; implemented in `5f78f4e` | — |
 | **DEC-M7-003** | Whether a `match` with no matching arm is an error | **OPEN** | nothing; interacts with DEC-M7-005 |
 | **DEC-M7-004** | Whether `==` compares containers structurally | **OPEN** | nothing; ships with DEC-M5-005 |
 | **DEC-M7-005** | What a `match` pattern that fails to evaluate does | **OPEN** | nothing; should precede DEC-M7-003 |
 | **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **DECIDED** 2026-09-03 — **C, gated with an explicit allowlist**; implemented in `649ba49` | — (DEC-M9-001 remains open) |
-| **DEC-M9-001** | What ceiling an unbounded read has, and what happens at it | **OPEN** | the ceiling; three call sites share one policy |
-| **DEC-M10-001** | Whether CI runs the ecosystem canary | **OPEN** | the canary's place in the release pipeline |
-| **DEC-M10-002** | Whether clippy is a gate | **OPEN** | nothing; the manual comparison works |
+| **DEC-M9-001** | What ceiling an unbounded read has, and what happens at it | **DECIDED** 2026-09-03 — **A, 64 MiB fatal**; implemented in `41e8d5a` | — |
+| **DEC-M10-001** | Whether CI runs the ecosystem canary | **DECIDED** 2026-09-03 — **a pinned blocking gate, plus a daily unpinned run**; implemented in `1d61f5d` | — |
+| **DEC-M10-002** | Whether clippy is a gate | **DECIDED** 2026-09-03 — **a per-lint/file baseline** (§7A's C; the letter given was B — see §0B.B); implemented in `1d61f5d` | — |
 
 ---
 
@@ -3642,6 +3733,46 @@ rather than twice.
 
 **Blocked by this decision:** nothing. Pinned by
 `two_kinds_of_declaration_sharing_a_name_are_not_reported`.
+
+---
+
+### DEC-M4-009 — Should the outline fall back to a token scan when the file does not parse?
+
+**Problem.** DEC-M4-004 made the `.sz` outline come from the parse tree, which can
+only show what parsed. While a user is typing, the file usually does not.
+
+**Current behaviour.** The tree is the source of truth whenever there is one, and
+`scan_symbols` — kept for `.szx` — is used when the parser reported an error. On a
+file that parses, which is every corpus file and every file a user is not
+mid-keystroke in, it never runs.
+
+**Measured evidence.** `fn int suma(…) { … }` followed by `if (true {` and then
+`let z = 1;` recovers far enough to keep `suma` in the tree and loses `z`
+entirely; the token scan keeps both. `lsp::analysis::tests::symbols_survive_parse_errors`
+is that program, and it has been in the suite since before M4.
+
+**Alternatives.** A: **keep the fallback**, as now — nothing is lost, and the
+tree is authoritative whenever it exists. B: **remove it**, so the outline is
+always the tree and a broken file has a shrinking outline until it parses again.
+C: **improve parser recovery** so the tree keeps more of a broken file, which
+would narrow the gap for both.
+
+**Trade-offs.** A keeps two derivations in the file, which is what DEC-M4-004
+set out to remove — though only on input where the first has nothing to say. B is
+the clean end state and takes something away from users on the input where an
+outline is most useful. C is the real answer and is a parser project.
+
+**Architectural impact.** A leaves `scan_symbols` reachable from `.sz`. **Semantic
+impact.** None; this is tooling. **Compatibility.** Editor behaviour only.
+**Impact by area.** LSP only.
+
+**Recommendation — a recommendation, not a decision.** **A** until C is done. The
+guarantee DEC-M4-004 asked for — that a `.sz` outline agrees with the compiler —
+holds for every file that compiles, and `semantic_divergence` asserts it over 466
+of them. Extending that to files that do not compile is a promise the tree cannot
+keep.
+
+**Blocked by this decision:** nothing. Pinned by `symbols_survive_parse_errors`.
 
 ---
 

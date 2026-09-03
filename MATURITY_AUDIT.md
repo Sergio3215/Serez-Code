@@ -715,13 +715,46 @@ behaviour moved — `frozen_semantics`'s DEC-M7-002 pin and the conformance suit
 each was replaced by an assertion of the decided rule, with the decision named in
 the commit, which is the whole reason those pins were written.
 
+## Findings closed on 2026-09-03 — the approved-decisions cycle
+
+Six more, including the register's one **critical** entry. `docs/maturity/ROADMAP_STATE.md`
+§0A.H has the full account and §0B the reconnaissance written before the work.
+
+| Finding | Severity | Commit | What closed it |
+|---|---|---|---|
+| Free variables resolve dynamically; `--check` does not flag them | **critical** | `1513b43` | A name must resolve lexically or the program does not run. The evaluator is unchanged — what moved is which programs reach it. |
+| Non-atomic package installation; no lockfile, integrity | high | `d87a134` | Staged install committed by rename; `serez.lock`; the staged tree verified before the commit. The **signature** half stays open. |
+| Generators accumulate into an unbounded vector | medium | `2df302c` | A host-set ceiling, default 1,000,000 — about 160 MB by this document's own measurement, and 10,000× the largest generator in the suite. |
+| CI does not run the ecosystem canary | high | `1d61f5d` | A blocking gate at pinned commits, plus a daily unpinned run. Neither replaces the other. |
+| No benchmark regression budget in CI, no stored baseline | medium | `2d4302f` | A committed phase baseline with advisory budgets, and the spread recorded on every run. |
+| LLVM backend parity unproven | high | `cac34a4` | **Partly.** Now *measured*: 12 of 27 features reach the backend. Parity is still unverified, and the matrix says so on every row. |
+
+Two method notes worth more than the results.
+
+**A decision could not be implemented as written, and measuring said so first.**
+DEC-M4-002 makes an unresolvable name fatal. On the resolver as it stood, that
+would have rejected two mutually recursive nested functions — legitimate code,
+already in the suite — because the model treated a nested `fn`'s body as
+evaluated where it is written. Three shapes were probed against the release
+binary before anything changed, and the model now resolves ambiguity toward
+"bound": for a fatal rule, a missed error is caught by the runtime as before, an
+invented one rejects a program that works.
+
+**Two gates caught mistakes in the work that followed them.**
+`tests/architecture.rs` refused a dependency cycle introduced by reusing SHA-256
+from the evaluator — the fix was to move the hash into a leaf, not to record the
+cycle — and the clippy baseline, one commit old, failed on a warning in the next
+commit's own test file. A gate nobody has seen fail is not known to work.
+
 ### Still open in this register, unchanged
 
-The critical entry — free variables resolving dynamically, undocumented, and
-`--check` not flagging them — is untouched and still needs the explicit product
-decision under `spec/compatibility.md` that DEC-M4-002 describes. So are the
-package-installation, LLVM-parity, benchmark-budget, CI-canary and unbounded-
-generator entries.
+Every entry above is now closed or reduced. What remains in this register:
+
+- **LLVM parity**, partly — the matrix exists, the verification does not;
+- **publisher signature / trust policy** for packages, which the lockfile
+  deliberately does not anticipate;
+- **runtime property testing** — M9.2 covered the frontend only;
+- **conformance coverage** — 1 area of 30 carries normative identifiers.
 
 **DEC-M9-001 is deliberately not closed** by the `fetch` work. The
 response-size ceiling and the unbounded `read_to_end` are separate problems; the
