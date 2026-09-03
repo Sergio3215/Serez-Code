@@ -144,6 +144,23 @@ impl super::Evaluator {
                     _ => return Err(RuntimeFailure),
                 };
                 if self.yield_collector.is_some() {
+                    // The ceiling is checked *before* the push, so the collector
+                    // never holds more than the limit and the message can name
+                    // the limit rather than the size it reached.
+                    let limit = self.generator_yield_limit;
+                    if self
+                        .yield_collector
+                        .as_ref()
+                        .is_some_and(|c| c.len() >= limit)
+                    {
+                        return self.fatal_err_kind(
+                            "ResourceError",
+                            format!(
+                                "generator yielded more than {limit} values; \
+                                 `fn*` collects eagerly (see spec/limits.md)"
+                            ),
+                        );
+                    }
                     let owned = self.extract(val_ref);
                     self.yield_collector.as_mut().unwrap().push(owned);
                     Ok(ExecutionFlow::Value(self.null_ref))

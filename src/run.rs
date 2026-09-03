@@ -45,6 +45,12 @@ pub struct RunOpts {
     /// redirect hop is matched against the same list. See
     /// `permissions::SecurityPolicy::allows_fetch`.
     pub fetch_allowlist: Vec<String>,
+    /// How many values one generator call may accumulate. `None` uses
+    /// [`crate::evaluator::DEFAULT_GENERATOR_YIELD_LIMIT`].
+    ///
+    /// A host setting, like `fetch_allowlist`: a running program has no way to
+    /// raise it.
+    pub generator_yield_limit: Option<usize>,
 }
 
 impl Default for RunOpts {
@@ -55,6 +61,7 @@ impl Default for RunOpts {
             lockdown: false,
             check_only: false,
             fetch_allowlist: Vec::new(),
+            generator_yield_limit: None,
         }
     }
 }
@@ -166,6 +173,9 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
     evaluator.set_permissions(opts.permissions);
     evaluator.set_lockdown(opts.lockdown);
     evaluator.allow_fetch_hosts(&opts.fetch_allowlist);
+    if let Some(limit) = opts.generator_yield_limit {
+        evaluator.set_generator_yield_limit(limit);
+    }
     if let Some(ref path) = opts.current_file {
         evaluator.set_current_file(path);
     }
@@ -278,6 +288,7 @@ pub fn run_file(file_path: &str, is_check: bool) -> i32 {
             // Not consulted: `lockdown` is off for a file the user handed us, so
             // `fetch` is unrestricted here exactly as it always was.
             fetch_allowlist: Vec::new(),
+            generator_yield_limit: None,
         },
     )
     .exit_code

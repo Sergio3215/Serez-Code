@@ -74,6 +74,7 @@ measurement made here.
 | `fetch` response body | 64 MiB | Fatal `ResourceError` (`SZ6002`). |
 | HTTP `import` module text | 64 MiB | Fatal `ResourceError` (`SZ6002`), before the module is cached to disk. |
 | `OS.spawn` child stderr | 64 MiB | Fatal `ResourceError` (`SZ6002`), raised when `OS.tick` harvests the job. |
+| Values one generator call accumulates | 1,000,000 (host-configurable) | Fatal `ResourceError` (`SZ6002`). |
 | WebSocket frame payload | 16 MiB | Frame rejected. |
 | Concurrent Task workers, per runtime | 32 | New worker creation is fatal `SZ6002`. |
 | Task argument, reply or stored worker error | 1 MiB | Larger messages become `SZ6002`; worker error text is bounded before retention. |
@@ -188,21 +189,18 @@ These are known gaps, not guarantees:
   language has no by-design guard against it. Serez does not run a garbage
   collector, so memory is reclaimed by scope and arena lifetime rather than by
   collection.
-- **What a generator accumulates.** `fn*` is not lazy: calling one runs the body
+- **A generator's laziness.** `fn*` still is not lazy: calling one runs the body
   to completion and returns an ordinary array of everything it yielded
-  (`control-flow.md`). The collector is an unbounded vector, so an unbounded
-  generator never returns and grows until the host runs out of memory. Measured
-  on the current build: 100,000 yielded integers cost 20 MB, 400,000 cost 71 MB
-  and 1,600,000 cost 254 MB — linear, about 160 bytes per value, against about
-  107 bytes for the same count pushed onto a plain array. Extrapolating, ten
-  million values is roughly 1.6 GB. A ceiling was considered and deliberately
-  not added: no official package uses `fn*` at all and the largest generator in
-  the conformance suite yields 100 values, so a limit would have been invisible
-  to every program that exists while still being able to break one that does
-  not. What happens at exhaustion was not measured; the project's one
-  precedent for an allocation that cannot be satisfied is the `sz-lsp` case
-  fixed earlier in this cycle, which aborted the process with an allocator
-  message and no diagnostic.
+  (`control-flow.md`). What *is* limited now is how much it may accumulate — see
+  the ceiling above, added in 10.0.0 — so an unbounded generator stops with a
+  fatal `ResourceError` instead of growing until the host runs out of memory. The
+  measurement that shaped the number: about 160 bytes per value, linear —
+  100,000 yielded integers cost 20 MB, 400,000 cost 71 MB and 1,600,000 cost
+  254 MB. One million is therefore roughly 160 MB, in the same range as the
+  256 MiB ceilings above, and ten thousand times the largest generator in the
+  conformance suite. The host may set a different one; a running program cannot.
+  A lazy or streaming redesign remains a separate architectural change, and this
+  ceiling does not prejudge it.
 - **Wall-clock time.** There is no execution timeout or Task cancellation. A
   `while (true)`—including inside a worker—runs until the process is stopped.
 - **File and socket count.** Open handles are bounded by the host, not by the

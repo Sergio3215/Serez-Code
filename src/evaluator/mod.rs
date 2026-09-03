@@ -92,6 +92,31 @@ pub(crate) fn read_bounded(reader: impl std::io::Read) -> Result<Vec<u8>, String
     Ok(buf)
 }
 
+/// How many values one generator call may accumulate before it is stopped.
+///
+/// `fn*` is not lazy: calling one runs the body to completion and returns an
+/// ordinary array of everything it yielded (`spec/control-flow.md`). The
+/// collector was an unbounded vector, so an unbounded generator never returned
+/// and grew until the host ran out of memory. `spec/limits.md` measured the
+/// shape — about 160 bytes per value, linear — and recorded that a ceiling had
+/// been considered and deliberately not added.
+///
+/// It is added now, and this is the **default**, not the rule: the host sets the
+/// rule through [`Evaluator::set_generator_yield_limit`] or
+/// `run::RunOpts::generator_yield_limit`. A running Serez program cannot raise
+/// its own — there is no language-level API for it, which is the whole point of
+/// the limit.
+///
+/// One million values is roughly 160 MB, in the same range as the 256 MiB
+/// ceilings on `File.read` and `Memory.alloc`, and **ten thousand times** the
+/// largest generator in the conformance suite, which yields 100. It is chosen to
+/// be invisible to every program that exists while still bounding one that runs
+/// away.
+///
+/// This is deliberately **not** a lazy/streaming redesign of generators. That is
+/// a separate architectural change and this ceiling does not prejudge it.
+pub const DEFAULT_GENERATOR_YIELD_LIMIT: usize = 1_000_000;
+
 pub(crate) const MAX_CALL_DEPTH: usize = 512;
 
 /// How deeply a *value* may nest before `extract` refuses to copy it.
@@ -348,6 +373,9 @@ pub struct Evaluator {
     // Collects yielded values while executing a generator function body.
     // None = not inside a generator; Some(vec) = collecting yields.
     yield_collector: Option<Vec<OwnedValue>>,
+    /// The ceiling on [`Self::yield_collector`]. Host-set; see
+    /// [`DEFAULT_GENERATOR_YIELD_LIMIT`].
+    generator_yield_limit: usize,
     // Connections and listeners, in one id space; see handles.rs.
     sockets: crate::handles::SocketTable,
     // GPU buffers (CPU-backed flat f64 data), by the handle a program holds.
@@ -628,6 +656,7 @@ impl Evaluator {
             native_fns: HashSet::new(),
             modules: crate::modules::ModuleContext::default(),
             yield_collector: None,
+            generator_yield_limit: DEFAULT_GENERATOR_YIELD_LIMIT,
             sockets: crate::handles::SocketTable::new(),
             gpu: crate::handles::HandleRegistry::new(),
             memory: crate::handles::HandleRegistry::new(),
@@ -951,6 +980,15 @@ impl Evaluator {
 
     pub fn is_lockdown(&self) -> bool {
         self.security.lockdown
+    }
+
+    /// Set how many values one generator call may accumulate.
+    ///
+    /// For the **host**. There is deliberately no way for a running program to
+    /// call this: a limit the guarded party can raise is not a limit. See
+    /// [`DEFAULT_GENERATOR_YIELD_LIMIT`] for where the default comes from.
+    pub fn set_generator_yield_limit(&mut self, limit: usize) {
+        self.generator_yield_limit = limit;
     }
 
     /// Refuse `what` when the source is untrusted, as a catchable `PermissionError`.
