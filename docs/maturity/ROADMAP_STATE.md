@@ -29,12 +29,12 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **18 OPEN, 1 DECIDED.** All in §7A. **DEC-M4-001 is DECIDED** (2026-09-03, option A — a new fatal semantic phase), which unblocks M4.5.*. Three still block queued work: DEC-M4-002, -004, DEC-M6-001. See §0A.C |
+| **Open decisions** | **18 OPEN, 2 DECIDED.** All in §7A. **DEC-M4-001** (a fatal semantic phase) and **DEC-M4-005** (`SZ8xxx` + `SEMANTIC`) are decided; M4.5.* is in progress. Three still block queued work: DEC-M4-002, -004, DEC-M6-001 |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — **DEC-M4-001 DECIDED** (option A); §5.39 recorded |
+| Last state update | 2026-09-03 — **DEC-M4-005 DECIDED** (option A, `SZ8xxx` + `SEMANTIC`); M4.5.2–M4.5.3 landed |
 
 Milestone ledger:
 
@@ -1445,6 +1445,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M4-002** | Whether an unresolved free variable is a diagnostic | **OPEN** | M4.7.3+ (resolver reporting); the M7 entry for scope semantics |
 | **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
 | **DEC-M4-004** | What the editor's outline should show | **OPEN** | the LSP's migration onto `semantic::declarations` |
+| **DEC-M4-005** | The semantic phase's code and label | **DECIDED** 2026-09-03 — **A, `SZ8xxx` + `SEMANTIC`** | unblocked M4.5.4–M4.5.6 |
 | **DEC-M5-001** | Whether a nullable value at a non-nullable parameter is reported | **OPEN** | nothing — a question to answer, not a gate |
 | **DEC-M5-002** | Whether a numeric type widens at a parameter | **OPEN** | nothing |
 | **DEC-M5-003** | Whether an unknown type name is diagnosed | **OPEN** | nothing; option B depends on DEC-M4-001 |
@@ -1853,6 +1854,142 @@ informed one.
 which is M4's last unblocked-in-principle goal. **Not blocked:** nothing else —
 `semantic::declarations` and `semantic::scopes` are complete and validated
 without it.
+
+---
+
+### DEC-M4-005 — What code and label does a semantic error carry?
+
+**Problem.** The phase DEC-M4-001 created will print something. Two blanks have
+to be filled:
+
+```
+❌ ??????? ERROR [SZ????] [file 2:7]: 'Task' is a reserved system namespace…
+```
+
+Both are public API. `spec/errors.md` states it directly: *"A code is a promise of
+stability."* Once released, changing either is a breaking change with its own
+deprecation process.
+
+**Current behaviour.** Four phases produce diagnostics, each with a word and a
+range: `LEXER`/`SZ1xxx`, `PARSER`/`SZ2xxx`, `TYPE`/`SZ3xxx`, the runtime with no
+word at all and `SZ4xxx`–`SZ6xxx`, and `COMPILER`/`SZ7xxx`. `SZ8xxx`, `SZ9xxx` and
+`SZ0xxx` are unused.
+
+The line that decides this: **`spec/errors.md:45`** documents `SZ3000` as
+*"Semantic or type diagnostic. **Advisory:** … `sz file.sz` reports these and
+**still runs**."*
+
+So the range is already *named* "semantic", and its one documented code carries an
+explicit promise that the program keeps running.
+
+**Measured evidence.**
+
+  * 21 codes exist across `SZ1`–`SZ7`; `SZ8`, `SZ9`, `SZ0` are free.
+  * The runtime range **already** mixes fatal and recoverable
+    (`spec/errors.md` §"Recoverable and fatal runtime errors"), so
+    "one fatality per range" is **not** a rule the language currently keeps. That
+    weakens the tidiest argument for a new range and is recorded rather than
+    omitted.
+  * `src/lsp/analysis.rs:146,159` sets severity by **which producer it asked**
+    (`1` for the parser, `2` for the checker) and never reads
+    `Diagnostic::severity`. Every alternative requires touching it.
+  * **No external consumer keys on codes:** `vscode-serez/` contains no `SZ`
+    string at all. In-repo, only tests do.
+  * `spec/cli.md` lists "a lexer or parser diagnostic" among the causes of exit
+    `1`; every alternative but C needs "semantic" added.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **`SZ8xxx` + `SEMANTIC`** | Range, phase and fatality align. `SZ3xxx` keeps its advisory promise intact. Costs a table row and a new word, and leaves `SZ3xxx`'s "semantic or type" name needing correction to "type" |
+| B | **`SZ3001` + `SEMANTIC`** | Uses the range already called semantic. The range then mixes advisory and fatal — the property a caller cares about most — and needs a sub-rule where it has none today |
+| C | **Reuse `PARSER`/`SZ2000`** | Zero new surface. Also makes the phase invisible and mislabels its findings: duplicate declarations and missing parents would all report as syntax errors |
+| D | **`SZ8xxx`, no label** | One fewer piece of surface. Inconsistent with the other three frontend phases, and drops the cheapest useful fact in the line — which stage failed |
+
+**Trade-offs.** The real tension is B against A. B is not wrong on the letter —
+the advisory promise is written per *code*, not per range — but `spec/errors.md`
+spent a sentence making sure nobody reads `SZ3000` as fatal, and putting a fatal
+code beside it invites exactly that misreading. C is the minimum-cost option and
+was rejected on diagnostic quality rather than on cost.
+
+**Architectural impact.** None on the pipeline; DEC-M4-001 already settled that.
+This decides only what the phase looks like from outside.
+
+**Semantic impact.** None. Nothing about which programs run changes.
+
+**Compatibility.** `ADDITIVE` to the code space; `BEHAVIORAL` for the affected
+program's stderr.
+
+**Impact by area.** Tests: manifest rows for the one affected fixture, at M4.5.4.
+Specs: `spec/errors.md` gains a range row and needs `SZ3xxx` renamed to "type";
+`spec/cli.md`'s exit-code sentence; `spec/compatibility.md` gets the behavioural
+note. LSP: a new block in `analyze` with `severity: 1`. Runtime: none.
+
+**Recommendation — a recommendation, not a decision.** **A.** The property it buys
+is a consumer's ability to classify without reading prose: a free range carries no
+prior promise to contradict, while `SZ3000`'s first documented fact is that the
+program keeps running.
+
+---
+
+## RESOLUTION — **DECIDED 2026-09-03: option A, `SZ8xxx` with the label `SEMANTIC`.**
+
+Decided by Sergio.
+
+### Why A
+
+Not because ranges should be homogeneous — they are not, and the runtime range
+proves it. The argument is narrower and stronger: **`SZ3000` carries a written
+promise that the program still runs**, and that promise is the first thing anyone
+learns about `SZ3xxx`. B leaves it technically intact and practically
+unrecognisable; a tool filtering `SZ3` as warnings would start swallowing fatal
+errors. A free range has no prior promise to contradict.
+
+C was rejected on diagnostic quality, not cost. The phase's future tenants —
+duplicate declarations, a missing parent class, an unknown type name (§5.39) — are
+none of them syntax errors, and labelling them `PARSER ERROR` sends a user looking
+for a typo where the problem is meaning. Improving that diagnostic is why
+DEC-M4-001 chose a phase at all.
+
+### The specific code, and why it is `SZ8000`
+
+Within the chosen range, the number follows the convention `spec/errors.md`
+already documents:
+
+> *"Individual messages move from a generic code to a narrower one only once a
+> test pins what the narrower code means. Until then the generic code is the
+> honest answer."*
+
+`SZ2000` and `SZ3000` are the generic codes of their ranges. **`SZ8000` is the
+generic semantic diagnostic**, and the reserved-name rule uses it. Narrower
+`SZ8001`+ codes get allocated when a test pins what each means — not in advance.
+
+### Alternatives rejected
+
+  * **B** — `SZ3001` in the existing range. Mixes advisory and fatal in the range
+    whose documented headline is "still runs".
+  * **C** — reuse `PARSER`/`SZ2000`. Makes the phase invisible and mislabels every
+    future tenant.
+  * **D** — new range, no label. Drops the cheapest useful fact in the line.
+
+### Classification
+
+`ADDITIVE` to the code space. `BEHAVIORAL` for the one affected program's stderr.
+No semantic change.
+
+### What this unblocks
+
+**M4.5.4** — moving `is_reserved_name` into the phase, which is the first real
+diagnostic it emits and could not be written without this. Then **M4.5.5** (delete
+the parser's path) and **M4.5.6** (specs). **DEC-M4-003** lands after M4.5.5.
+
+### Known follow-up this creates
+
+`spec/errors.md` describes `SZ3xxx` as *"Semantic or type diagnostic"*. With fatal
+semantics in `SZ8xxx`, that row is misleading and is corrected to "type" in
+M4.5.6. Recorded here so the correction reads as a consequence of this decision
+rather than as an unrelated edit.
 
 ---
 
