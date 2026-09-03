@@ -314,9 +314,70 @@ impl Walker {
 
     // ── statements ────────────────────────────────────────────────────────────
 
+    /// Walk a statement sequence, deferring nested function **bodies** to the end
+    /// of it.
+    ///
+    /// # Why the bodies are deferred
+    ///
+    /// A `fn` declaration binds its name where the statement executes, and that
+    /// part is modelled in place — a name used at statement level before its own
+    /// declaration is genuinely `SZ4001`. But a function *body* does not run
+    /// there. It runs whenever the function is called, by which time every
+    /// declaration in the enclosing block may have executed.
+    ///
+    /// Walking the body in place conflated the two and produced a **false
+    /// positive** on mutually recursive nested functions, which are legitimate,
+    /// working Serez. Measured against the 10.0.0 binary:
+    ///
+    /// ```text
+    /// fn void outer() {
+    ///     fn int a(int n) { if (n == 0) { return 1; } return b(n - 1); }
+    ///     fn int b(int n) { if (n == 0) { return 2; } return a(n - 1); }
+    ///     out a(3);                                   // prints 2, exit 0
+    /// }
+    /// ```
+    ///
+    /// # The case this deliberately stops reporting
+    ///
+    /// A lexical walker cannot separate the program above from this one, which
+    /// fails at run time with `SZ4001` because the call happens before `b`'s
+    /// declaration:
+    ///
+    /// ```text
+    /// fn void outer() {
+    ///     fn int a() { return b(); }
+    ///     out a();                                    // SZ4001
+    ///     fn int b() { return 1; }
+    /// }
+    /// ```
+    ///
+    /// Telling them apart needs flow analysis, not scope analysis. So this takes
+    /// the direction the module header commits to — *every ambiguity resolves
+    /// toward "bound"* — and stops reporting the second. That is a false
+    /// negative, and it is the only acceptable side to be wrong on now that
+    /// `semantic::validate` makes these findings **fatal**: missing a real error
+    /// leaves the runtime to catch it exactly as before, while inventing one
+    /// rejects a correct program.
     fn statements(&mut self, statements: &[Statement]) {
+        let mut deferred: Vec<&FunctionDeclaration> = Vec::new();
         for statement in statements {
-            self.statement(statement);
+            // `export fn` is the same declaration with a wrapper.
+            let effective = match statement {
+                Statement::Export(inner) => inner.as_ref(),
+                other => other,
+            };
+            match effective {
+                Statement::FunctionDeclaration(f) => {
+                    self.bind(&f.name);
+                    deferred.push(f);
+                }
+                _ => self.statement(statement),
+            }
+        }
+        for f in deferred {
+            self.enclosing.push(f.name.clone());
+            self.function_body(&f.function.parameters, &f.function.body, false);
+            self.enclosing.pop();
         }
     }
 
@@ -355,8 +416,11 @@ impl Walker {
             }
 
             Statement::FunctionDeclaration(f) => {
-                // Bound from here onward, not block-wide: a nested `fn` used
-                // before its declaration is SZ4001, probed against 10.0.0.
+                // Unreachable in practice: `statements` intercepts every
+                // declaration in a sequence so it can defer the body, and a
+                // declaration only ever appears in one. Kept correct rather than
+                // `unreachable!()` so a future caller that walks a lone statement
+                // gets the in-place behaviour instead of a panic.
                 self.bind(&f.name);
                 self.enclosing.push(f.name.clone());
                 self.function_body(&f.function.parameters, &f.function.body, false);
@@ -682,6 +746,47 @@ mod tests {
     fn a_top_level_declaration_is_visible_before_it_is_written() {
         // Matches the runtime: a forward call resolves.
         assert!(free_names("fn int a() { return b(); } fn int b() { return 1; }").is_empty());
+    }
+
+    #[test]
+    fn mutually_recursive_nested_functions_are_bound() {
+        // The false positive that had to go before `semantic::validate` could
+        // make these findings fatal. Legitimate, working Serez —
+        // `tests/unit_functions_adv.sz` runs exactly this and asserts the
+        // results — and the old model reported `isOdd` free because it walked
+        // `isEven`'s body at the point of declaration.
+        assert!(
+            free_names(
+                "fn void outer() {
+                     fn bool isEven(int n) { if (n == 0) { return true; } return isOdd(n - 1); }
+                     fn bool isOdd(int n) { if (n == 0) { return false; } return isEven(n - 1); }
+                     out isEven(4);
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_nested_function_still_has_to_be_declared_somewhere() {
+        // The positive control. Deferring bodies must not mean a body can reach
+        // anything at all — a name declared in no enclosing scope is still free.
+        assert_eq!(
+            free_names("fn void outer() { fn int a() { return nowhere(); } out a(); }"),
+            vec!["nowhere".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_nested_function_called_before_its_declaration_is_still_free() {
+        // The other control, and the one that proves the fix did not simply
+        // switch the check off: the *call site* is still position-dependent,
+        // because it is a statement and statements run in order. Probed against
+        // 10.0.0 — this is `SZ4001: Variable not found: later`.
+        assert_eq!(
+            free_names("fn void outer() { out later(); fn int later() { return 1; } }"),
+            vec!["later".to_string()]
+        );
     }
 
     #[test]
