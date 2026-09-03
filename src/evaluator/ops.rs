@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use super::ExecutionFlow;
 use super::{
     CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
     obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
@@ -37,14 +38,16 @@ impl super::Evaluator {
         match op {
             "-" => match right {
                 ObjectData::Integer(i) => match i.checked_neg() {
-                    Some(v) => EvalResult::Value(self.alloc(ObjectData::Integer(v))),
+                    Some(v) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(v)))),
                     None => self.rt_err_kind(
                         "Overflow",
                         "Integer overflow in negation (i64::MIN has no positive counterpart)",
                     ),
                 },
-                ObjectData::Decimal(d) => EvalResult::Value(self.alloc(ObjectData::Decimal(-d))),
-                ObjectData::Dec(d) => EvalResult::Value(self.alloc(ObjectData::Dec(-d))),
+                ObjectData::Decimal(d) => {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(-d))))
+                }
+                ObjectData::Dec(d) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dec(-d)))),
                 ObjectData::Instance { ref class_name, .. } => {
                     let cn = class_name.clone();
                     if self.find_method(&cn, "op_neg").is_some() {
@@ -70,7 +73,7 @@ impl super::Evaluator {
             // una decisión explícita del autor de la clase y tiene prioridad sobre
             // la regla general (donde una instancia es truthy → `!inst` es false).
             "!" => match right {
-                ObjectData::Boolean(b) => EvalResult::Value(self.bool_ref(!b)),
+                ObjectData::Boolean(b) => Ok(ExecutionFlow::Value(self.bool_ref(!b))),
                 ObjectData::Instance { ref class_name, .. }
                     if self.find_method(class_name, "op_not").is_some() =>
                 {
@@ -79,11 +82,13 @@ impl super::Evaluator {
                 }
                 ref other => {
                     let t = self.is_truthy(other);
-                    EvalResult::Value(self.bool_ref(!t))
+                    Ok(ExecutionFlow::Value(self.bool_ref(!t)))
                 }
             },
             "~" => match right {
-                ObjectData::Integer(i) => EvalResult::Value(self.alloc(ObjectData::Integer(!i))),
+                ObjectData::Integer(i) => {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(!i))))
+                }
                 _ => self.rt_err_kind("TypeError", "Prefix '~' only applies to integers"),
             },
             _ => self.rt_err_kind("TypeError", format!("Unknown prefix operator: {op}")),
@@ -104,12 +109,12 @@ impl super::Evaluator {
     ) -> EvalResult {
         use rust_decimal::prelude::*;
         match op {
-            "<" => return EvalResult::Value(self.bool_ref(l < r)),
-            ">" => return EvalResult::Value(self.bool_ref(l > r)),
-            "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
-            ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
-            "==" => return EvalResult::Value(self.bool_ref(l == r)),
-            "!=" => return EvalResult::Value(self.bool_ref(l != r)),
+            "<" => return Ok(ExecutionFlow::Value(self.bool_ref(l < r))),
+            ">" => return Ok(ExecutionFlow::Value(self.bool_ref(l > r))),
+            "<=" => return Ok(ExecutionFlow::Value(self.bool_ref(l <= r))),
+            ">=" => return Ok(ExecutionFlow::Value(self.bool_ref(l >= r))),
+            "==" => return Ok(ExecutionFlow::Value(self.bool_ref(l == r))),
+            "!=" => return Ok(ExecutionFlow::Value(self.bool_ref(l != r))),
             _ => {}
         }
         let result = match op {
@@ -173,7 +178,7 @@ impl super::Evaluator {
             }
         };
         match result {
-            Some(v) => EvalResult::Value(self.alloc(ObjectData::Dec(v))),
+            Some(v) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dec(v)))),
             None => self.rt_err_kind("Overflow", format!("Decimal overflow - [{line}:{column}]")),
         }
     }
@@ -195,12 +200,12 @@ impl super::Evaluator {
         {
             let (a, b) = (*a, *b);
             match op {
-                "<" => return EvalResult::Value(self.bool_ref(a < b)),
-                ">" => return EvalResult::Value(self.bool_ref(a > b)),
-                "<=" => return EvalResult::Value(self.bool_ref(a <= b)),
-                ">=" => return EvalResult::Value(self.bool_ref(a >= b)),
-                "==" => return EvalResult::Value(self.bool_ref(a == b)),
-                "!=" => return EvalResult::Value(self.bool_ref(a != b)),
+                "<" => return Ok(ExecutionFlow::Value(self.bool_ref(a < b))),
+                ">" => return Ok(ExecutionFlow::Value(self.bool_ref(a > b))),
+                "<=" => return Ok(ExecutionFlow::Value(self.bool_ref(a <= b))),
+                ">=" => return Ok(ExecutionFlow::Value(self.bool_ref(a >= b))),
+                "==" => return Ok(ExecutionFlow::Value(self.bool_ref(a == b))),
+                "!=" => return Ok(ExecutionFlow::Value(self.bool_ref(a != b))),
                 _ => {
                     return self.rt_err_kind(
                         "TypeError",
@@ -235,16 +240,16 @@ impl super::Evaluator {
                         );
                     }
                 };
-                return EvalResult::Value(self.alloc(ObjectData::Str(s)));
+                return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))));
             }
             return match op {
                 "==" => {
                     let eq = matches!(left, ObjectData::Null) && matches!(right, ObjectData::Null);
-                    EvalResult::Value(self.bool_ref(eq))
+                    Ok(ExecutionFlow::Value(self.bool_ref(eq)))
                 }
                 "!=" => {
                     let eq = matches!(left, ObjectData::Null) && matches!(right, ObjectData::Null);
-                    EvalResult::Value(self.bool_ref(!eq))
+                    Ok(ExecutionFlow::Value(self.bool_ref(!eq)))
                 }
                 _ => self.rt_err_kind(
                     "TypeError",
@@ -257,12 +262,12 @@ impl super::Evaluator {
         match (left, right) {
             (ObjectData::Integer(l), ObjectData::Integer(r)) => {
                 match op {
-                    "<" => return EvalResult::Value(self.bool_ref(l < r)),
-                    ">" => return EvalResult::Value(self.bool_ref(l > r)),
-                    "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
-                    ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
-                    "==" => return EvalResult::Value(self.bool_ref(l == r)),
-                    "!=" => return EvalResult::Value(self.bool_ref(l != r)),
+                    "<" => return Ok(ExecutionFlow::Value(self.bool_ref(l < r))),
+                    ">" => return Ok(ExecutionFlow::Value(self.bool_ref(l > r))),
+                    "<=" => return Ok(ExecutionFlow::Value(self.bool_ref(l <= r))),
+                    ">=" => return Ok(ExecutionFlow::Value(self.bool_ref(l >= r))),
+                    "==" => return Ok(ExecutionFlow::Value(self.bool_ref(l == r))),
+                    "!=" => return Ok(ExecutionFlow::Value(self.bool_ref(l != r))),
                     _ => {}
                 }
                 let result = match op {
@@ -303,9 +308,9 @@ impl super::Evaluator {
                     }
                     "**" => {
                         if r < 0 {
-                            return EvalResult::Value(
+                            return Ok(ExecutionFlow::Value(
                                 self.alloc(ObjectData::Decimal((l as f64).powf(r as f64))),
-                            );
+                            ));
                         } else if r > u32::MAX as i64 {
                             match l {
                                 0 => 0,
@@ -374,7 +379,7 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", format!("Unknown operator: {op}"));
                     }
                 };
-                EvalResult::Value(self.int_ref(result))
+                Ok(ExecutionFlow::Value(self.int_ref(result)))
             }
             // Exact base-10 `dec`. `int` mixes in (it is exact); f64 `decimal`
             // is NEVER mixed implicitly — that would re-contaminate exactness.
@@ -395,18 +400,18 @@ impl super::Evaluator {
                 )
             }
             (ObjectData::Str(s), ObjectData::Dec(d)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
-                "+" => EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, d)))),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
+                "+" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{}", s, d))))),
                 _ => self.rt_err_kind(
                     "TypeError",
                     format!("Operator '{op}' not supported between String and dec"),
                 ),
             },
             (ObjectData::Dec(d), ObjectData::Str(s)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
-                "+" => EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", d, s)))),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
+                "+" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{}", d, s))))),
                 _ => self.rt_err_kind(
                     "TypeError",
                     format!("Operator '{op}' not supported between dec and String"),
@@ -415,12 +420,12 @@ impl super::Evaluator {
             // Decimal arithmetic (decimal op decimal, int op decimal, decimal op int)
             (ObjectData::Decimal(l), ObjectData::Decimal(r)) => {
                 match op {
-                    "<" => return EvalResult::Value(self.bool_ref(l < r)),
-                    ">" => return EvalResult::Value(self.bool_ref(l > r)),
-                    "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
-                    ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
-                    "==" => return EvalResult::Value(self.bool_ref(l == r)),
-                    "!=" => return EvalResult::Value(self.bool_ref(l != r)),
+                    "<" => return Ok(ExecutionFlow::Value(self.bool_ref(l < r))),
+                    ">" => return Ok(ExecutionFlow::Value(self.bool_ref(l > r))),
+                    "<=" => return Ok(ExecutionFlow::Value(self.bool_ref(l <= r))),
+                    ">=" => return Ok(ExecutionFlow::Value(self.bool_ref(l >= r))),
+                    "==" => return Ok(ExecutionFlow::Value(self.bool_ref(l == r))),
+                    "!=" => return Ok(ExecutionFlow::Value(self.bool_ref(l != r))),
                     _ => {}
                 }
                 let result = match op {
@@ -445,17 +450,17 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", format!("Unknown operator: {op}"));
                     }
                 };
-                EvalResult::Value(self.alloc(result))
+                Ok(ExecutionFlow::Value(self.alloc(result)))
             }
             (ObjectData::Integer(l), ObjectData::Decimal(r)) => {
                 let l = l as f64;
                 match op {
-                    "<" => return EvalResult::Value(self.bool_ref(l < r)),
-                    ">" => return EvalResult::Value(self.bool_ref(l > r)),
-                    "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
-                    ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
-                    "==" => return EvalResult::Value(self.bool_ref(l == r)),
-                    "!=" => return EvalResult::Value(self.bool_ref(l != r)),
+                    "<" => return Ok(ExecutionFlow::Value(self.bool_ref(l < r))),
+                    ">" => return Ok(ExecutionFlow::Value(self.bool_ref(l > r))),
+                    "<=" => return Ok(ExecutionFlow::Value(self.bool_ref(l <= r))),
+                    ">=" => return Ok(ExecutionFlow::Value(self.bool_ref(l >= r))),
+                    "==" => return Ok(ExecutionFlow::Value(self.bool_ref(l == r))),
+                    "!=" => return Ok(ExecutionFlow::Value(self.bool_ref(l != r))),
                     _ => {}
                 }
                 let result = match op {
@@ -480,17 +485,17 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", format!("Operator '{op}' not supported here"));
                     }
                 };
-                EvalResult::Value(self.alloc(result))
+                Ok(ExecutionFlow::Value(self.alloc(result)))
             }
             (ObjectData::Decimal(l), ObjectData::Integer(r)) => {
                 let r = r as f64;
                 match op {
-                    "<" => return EvalResult::Value(self.bool_ref(l < r)),
-                    ">" => return EvalResult::Value(self.bool_ref(l > r)),
-                    "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
-                    ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
-                    "==" => return EvalResult::Value(self.bool_ref(l == r)),
-                    "!=" => return EvalResult::Value(self.bool_ref(l != r)),
+                    "<" => return Ok(ExecutionFlow::Value(self.bool_ref(l < r))),
+                    ">" => return Ok(ExecutionFlow::Value(self.bool_ref(l > r))),
+                    "<=" => return Ok(ExecutionFlow::Value(self.bool_ref(l <= r))),
+                    ">=" => return Ok(ExecutionFlow::Value(self.bool_ref(l >= r))),
+                    "==" => return Ok(ExecutionFlow::Value(self.bool_ref(l == r))),
+                    "!=" => return Ok(ExecutionFlow::Value(self.bool_ref(l != r))),
                     _ => {}
                 }
                 let result = match op {
@@ -515,17 +520,17 @@ impl super::Evaluator {
                             .rt_err_kind("TypeError", format!("Operator '{op}' not supported here"));
                     }
                 };
-                EvalResult::Value(self.alloc(result))
+                Ok(ExecutionFlow::Value(self.alloc(result)))
             }
 
             (ObjectData::Str(l), ObjectData::Str(r)) => match op {
-                "==" => return EvalResult::Value(self.bool_ref(l == r)),
-                "!=" => return EvalResult::Value(self.bool_ref(l != r)),
-                "<" => return EvalResult::Value(self.bool_ref(l < r)),
-                ">" => return EvalResult::Value(self.bool_ref(l > r)),
-                "<=" => return EvalResult::Value(self.bool_ref(l <= r)),
-                ">=" => return EvalResult::Value(self.bool_ref(l >= r)),
-                "+" => return EvalResult::Value(self.alloc(ObjectData::Str(l + &r))),
+                "==" => return Ok(ExecutionFlow::Value(self.bool_ref(l == r))),
+                "!=" => return Ok(ExecutionFlow::Value(self.bool_ref(l != r))),
+                "<" => return Ok(ExecutionFlow::Value(self.bool_ref(l < r))),
+                ">" => return Ok(ExecutionFlow::Value(self.bool_ref(l > r))),
+                "<=" => return Ok(ExecutionFlow::Value(self.bool_ref(l <= r))),
+                ">=" => return Ok(ExecutionFlow::Value(self.bool_ref(l >= r))),
+                "+" => return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(l + &r)))),
                 _ => {
                     return self.rt_err_kind(
                         "TypeError",
@@ -534,10 +539,10 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::Str(s), ObjectData::Integer(n)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
                 "+" => {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, n))));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{}", s, n)))));
                 }
                 "*" => {
                     if n < 0 {
@@ -554,7 +559,7 @@ impl super::Evaluator {
                             ),
                         );
                     }
-                    return EvalResult::Value(self.alloc(ObjectData::Str(s.repeat(n as usize))));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s.repeat(n as usize)))));
                 }
                 _ => {
                     return self.rt_err_kind(
@@ -564,10 +569,10 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::Integer(n), ObjectData::Str(s)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
                 "+" => {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", n, s))));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{}", n, s)))));
                 }
                 _ => {
                     return self.rt_err_kind(
@@ -577,14 +582,14 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::Str(s), ObjectData::Decimal(d)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
                 "+" => {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!(
                         "{}{}",
                         s,
                         format_decimal(d)
-                    ))));
+                    )))));
                 }
                 _ => {
                     return self.rt_err_kind(
@@ -594,14 +599,14 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::Decimal(d), ObjectData::Str(s)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
                 "+" => {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!(
                         "{}{}",
                         format_decimal(d),
                         s
-                    ))));
+                    )))));
                 }
                 _ => {
                     return self.rt_err_kind(
@@ -611,10 +616,10 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::Str(s), ObjectData::Boolean(b)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
                 "+" => {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", s, b))));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{}", s, b)))));
                 }
                 _ => {
                     return self.rt_err_kind(
@@ -624,10 +629,10 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::Boolean(b), ObjectData::Str(s)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
                 "+" => {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}{}", b, s))));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{}", b, s)))));
                 }
                 _ => {
                     return self.rt_err_kind(
@@ -637,9 +642,9 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::Str(s), ObjectData::Null) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
-                "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("{}null", s)))),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
+                "+" => return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}null", s))))),
                 _ => {
                     return self.rt_err_kind(
                         "TypeError",
@@ -648,9 +653,9 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::Null, ObjectData::Str(s)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
-                "+" => return EvalResult::Value(self.alloc(ObjectData::Str(format!("null{}", s)))),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
+                "+" => return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("null{}", s))))),
                 _ => {
                     return self.rt_err_kind(
                         "TypeError",
@@ -661,14 +666,14 @@ impl super::Evaluator {
             // String concatenation with a DateTime renders its ISO 8601 form,
             // matching how int/decimal/bool concatenate.
             (ObjectData::Str(s), ObjectData::DateTime { epoch_ms, utc }) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
                 "+" => {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!(
                         "{}{}",
                         s,
                         crate::region::format_datetime(epoch_ms, utc)
-                    ))));
+                    )))));
                 }
                 _ => {
                     return self.rt_err_kind(
@@ -678,14 +683,14 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::DateTime { epoch_ms, utc }, ObjectData::Str(s)) => match op {
-                "==" => return EvalResult::Value(self.false_ref),
-                "!=" => return EvalResult::Value(self.true_ref),
+                "==" => return Ok(ExecutionFlow::Value(self.false_ref)),
+                "!=" => return Ok(ExecutionFlow::Value(self.true_ref)),
                 "+" => {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!(
                         "{}{}",
                         crate::region::format_datetime(epoch_ms, utc),
                         s
-                    ))));
+                    )))));
                 }
                 _ => {
                     return self.rt_err_kind(
@@ -695,8 +700,8 @@ impl super::Evaluator {
                 }
             },
             (ObjectData::Boolean(l), ObjectData::Boolean(r)) => match op {
-                "==" => return EvalResult::Value(self.bool_ref(l == r)),
-                "!=" => return EvalResult::Value(self.bool_ref(l != r)),
+                "==" => return Ok(ExecutionFlow::Value(self.bool_ref(l == r))),
+                "!=" => return Ok(ExecutionFlow::Value(self.bool_ref(l != r))),
                 _ => {
                     return self.rt_err_kind(
                         "TypeError",
@@ -719,8 +724,8 @@ impl super::Evaluator {
             ) => {
                 let eq = en1 == en2 && v1 == v2;
                 match op {
-                    "==" => return EvalResult::Value(self.bool_ref(eq)),
-                    "!=" => return EvalResult::Value(self.bool_ref(!eq)),
+                    "==" => return Ok(ExecutionFlow::Value(self.bool_ref(eq))),
+                    "!=" => return Ok(ExecutionFlow::Value(self.bool_ref(!eq))),
                     _ => {
                         return self.rt_err_kind(
                             "TypeError",
@@ -760,11 +765,11 @@ impl super::Evaluator {
                             line,
                             column,
                         ) {
-                            EvalResult::Value(r) => {
+                            Ok(ExecutionFlow::Value(r)) => {
                                 let rs = self.display(r);
-                                EvalResult::Value(
+                                Ok(ExecutionFlow::Value(
                                     self.alloc(ObjectData::Str(format!("{}{}", prefix, rs))),
-                                )
+                                ))
                             }
                             other => other,
                         };
@@ -781,11 +786,11 @@ impl super::Evaluator {
                             line,
                             column,
                         ) {
-                            EvalResult::Value(r) => {
+                            Ok(ExecutionFlow::Value(r)) => {
                                 let ls = self.display(r);
-                                EvalResult::Value(
+                                Ok(ExecutionFlow::Value(
                                     self.alloc(ObjectData::Str(format!("{}{}", ls, suffix))),
-                                )
+                                ))
                             }
                             other => other,
                         };
@@ -826,29 +831,29 @@ impl super::Evaluator {
                     if let (ObjectData::Str(s), ObjectData::Instance { class_name, fields }) =
                         (&left, &right)
                     {
-                        return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                        return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!(
                             "{}{}",
                             s,
                             instance_concat_str(class_name, fields)
-                        ))));
+                        )))));
                     }
                     if let (ObjectData::Instance { class_name, fields }, ObjectData::Str(s)) =
                         (&left, &right)
                     {
-                        return EvalResult::Value(self.alloc(ObjectData::Str(format!(
+                        return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!(
                             "{}{}",
                             instance_concat_str(class_name, fields),
                             s
-                        ))));
+                        )))));
                     }
                 }
 
                 // Cross-type equality: different types are never equal
                 if op == "==" {
-                    return EvalResult::Value(self.false_ref);
+                    return Ok(ExecutionFlow::Value(self.false_ref));
                 }
                 if op == "!=" {
-                    return EvalResult::Value(self.true_ref);
+                    return Ok(ExecutionFlow::Value(self.true_ref));
                 }
                 self.rt_err_kind(
                     "TypeError",

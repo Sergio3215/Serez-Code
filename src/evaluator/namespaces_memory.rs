@@ -1,4 +1,5 @@
 use super::EvalResult;
+use super::{ExecutionFlow, RuntimeFailure};
 use crate::ast;
 use crate::region::ObjectData;
 
@@ -15,7 +16,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Memory.sizeof(type) requires 1 argument");
                 }
                 let type_name = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => match self.resolve(r).cloned() {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
                         _ => {
                             return self.rt_err_kind(
@@ -24,8 +25,8 @@ impl super::Evaluator {
                             );
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let size: i64 = match type_name.as_str() {
                     "bool" => 1,
@@ -51,7 +52,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                EvalResult::Value(self.alloc(ObjectData::Integer(size)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(size))))
             }
 
             // Memory.alloc(n) → int — allocate n bytes, return an opaque handle
@@ -78,7 +79,7 @@ impl super::Evaluator {
                     );
                 }
                 let id = self.memory.insert(vec![0u8; n]);
-                EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
             }
 
             // Memory.free(handle) — deallocate a raw allocation
@@ -100,7 +101,7 @@ impl super::Evaluator {
                         format!("Memory.free() — no allocation with handle {}", id),
                     );
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             // Memory.size(handle) → int — size in bytes of an existing allocation
@@ -114,9 +115,9 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 match self.memory.get(id) {
-                    Some(buf) => {
-                        EvalResult::Value(self.alloc(ObjectData::Integer(buf.len() as i64)))
-                    }
+                    Some(buf) => Ok(ExecutionFlow::Value(
+                        self.alloc(ObjectData::Integer(buf.len() as i64)),
+                    )),
                     None => self.rt_err_kind(
                         "MemoryError",
                         format!("Memory.size() — no allocation with handle {}", id),
@@ -144,15 +145,15 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let type_name = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(r) => match self.resolve(r).cloned() {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
                         _ => {
                             return self
                                 .rt_err_kind("TypeError", "Memory.read() type must be a string");
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let buf = match self.memory.get(id) {
                     Some(b) => b.clone(),
@@ -175,7 +176,9 @@ impl super::Evaluator {
                                 ),
                             );
                         }
-                        EvalResult::Value(self.alloc(ObjectData::Integer(buf[offset] as i64)))
+                        Ok(ExecutionFlow::Value(
+                            self.alloc(ObjectData::Integer(buf[offset] as i64)),
+                        ))
                     }
                     "int16" | "uint16" => {
                         if offset + 2 > buf.len() {
@@ -189,7 +192,9 @@ impl super::Evaluator {
                             );
                         }
                         let v = i16::from_le_bytes([buf[offset], buf[offset + 1]]);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(v as i64)))
+                        Ok(ExecutionFlow::Value(
+                            self.alloc(ObjectData::Integer(v as i64)),
+                        ))
                     }
                     "int32" | "uint32" => {
                         if offset + 4 > buf.len() {
@@ -208,7 +213,9 @@ impl super::Evaluator {
                             buf[offset + 2],
                             buf[offset + 3],
                         ]);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(v as i64)))
+                        Ok(ExecutionFlow::Value(
+                            self.alloc(ObjectData::Integer(v as i64)),
+                        ))
                     }
                     "int64" | "int" | "uint64" => {
                         if offset + 8 > buf.len() {
@@ -223,7 +230,7 @@ impl super::Evaluator {
                         }
                         let bytes: [u8; 8] = buf[offset..offset + 8].try_into().unwrap();
                         let v = i64::from_le_bytes(bytes);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(v)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(v))))
                     }
                     "float32" => {
                         if offset + 4 > buf.len() {
@@ -242,9 +249,9 @@ impl super::Evaluator {
                             buf[offset + 2],
                             buf[offset + 3],
                         ]);
-                        EvalResult::Value(
+                        Ok(ExecutionFlow::Value(
                             self.alloc(ObjectData::Decimal(f32::from_bits(bits) as f64)),
-                        )
+                        ))
                     }
                     "float64" | "decimal" => {
                         if offset + 8 > buf.len() {
@@ -259,7 +266,7 @@ impl super::Evaluator {
                         }
                         let bytes: [u8; 8] = buf[offset..offset + 8].try_into().unwrap();
                         let v = f64::from_le_bytes(bytes);
-                        EvalResult::Value(self.alloc(ObjectData::Decimal(v)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(v))))
                     }
                     other => self.rt_err_kind(
                         "MemoryError",
@@ -288,20 +295,20 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let type_name = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(r) => match self.resolve(r).cloned() {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
                         _ => {
                             return self
                                 .rt_err_kind("TypeError", "Memory.write() type must be a string");
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let val_ref = match self.eval_expression(&dot_call.arguments[3]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let val_data = match self.resolve(val_ref).cloned() {
                     Some(d) => d,
@@ -322,7 +329,7 @@ impl super::Evaluator {
                 if let Err(msg) = write_result {
                     return self.rt_err_kind("MemoryError", format!("Memory.write() — {}", msg));
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             // Memory.copy(src, dst, n) — copy n bytes from src allocation to dst allocation
@@ -382,7 +389,7 @@ impl super::Evaluator {
                 if let Some(dst) = self.memory.get_mut(dst_id) {
                     dst[..n].copy_from_slice(&src_bytes);
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             // Memory.fill(handle, value) — fill entire allocation with a byte value
@@ -401,7 +408,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let byte_val = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => match self.resolve(r).cloned() {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                         Some(ObjectData::Integer(n)) => {
                             if n < 0 || n > 255 {
                                 return self.rt_err_kind(
@@ -418,8 +425,8 @@ impl super::Evaluator {
                             );
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 match self.memory.get_mut(id) {
                     Some(buf) => {
@@ -432,7 +439,7 @@ impl super::Evaluator {
                         );
                     }
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             // Memory.offsetOf(class_name, field_name) → int — simulated word-aligned field offset
@@ -444,7 +451,7 @@ impl super::Evaluator {
                     );
                 }
                 let class_name = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => match self.resolve(r).cloned() {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
                         _ => {
                             return self.rt_err_kind(
@@ -453,11 +460,11 @@ impl super::Evaluator {
                             );
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let field_name = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => match self.resolve(r).cloned() {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                         Some(ObjectData::Str(s)) => s,
                         _ => {
                             return self.rt_err_kind(
@@ -466,8 +473,8 @@ impl super::Evaluator {
                             );
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let class = match self.class_registry.get(&class_name).cloned() {
                     Some(c) => c,
@@ -481,9 +488,9 @@ impl super::Evaluator {
                 // Compute word-aligned offset for the named field
                 let field_idx = class.fields.iter().position(|f| f.name == field_name);
                 match field_idx {
-                    Some(idx) => {
-                        EvalResult::Value(self.alloc(ObjectData::Integer((idx * 8) as i64)))
-                    }
+                    Some(idx) => Ok(ExecutionFlow::Value(
+                        self.alloc(ObjectData::Integer((idx * 8) as i64)),
+                    )),
                     None => self.rt_err_kind(
                         "MemoryError",
                         format!(
@@ -505,18 +512,18 @@ impl super::Evaluator {
 
     fn eval_memory_id(&mut self, expr: &ast::Expression) -> Result<i64, EvalResult> {
         match self.eval_expression(expr) {
-            EvalResult::Value(r) => match self.resolve(r).cloned() {
+            Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                 Some(ObjectData::Integer(n)) => Ok(n),
                 _ => Err(self.rt_err_kind("TypeError", "Memory handle must be an integer")),
             },
-            EvalResult::Throw(v) => Err(EvalResult::Throw(v)),
+            Ok(ExecutionFlow::Throw(v)) => Err(Ok(ExecutionFlow::Throw(v))),
             other => Err(other),
         }
     }
 
     fn eval_memory_usize(&mut self, expr: &ast::Expression) -> Result<usize, EvalResult> {
         match self.eval_expression(expr) {
-            EvalResult::Value(r) => match self.resolve(r).cloned() {
+            Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                 Some(ObjectData::Integer(n)) if n >= 0 => Ok(n as usize),
                 Some(ObjectData::Integer(n)) => Err(self.rt_err_kind(
                     "RangeError",
@@ -524,7 +531,7 @@ impl super::Evaluator {
                 )),
                 _ => Err(self.rt_err_kind("TypeError", "Memory size/offset must be an integer")),
             },
-            EvalResult::Throw(v) => Err(EvalResult::Throw(v)),
+            Ok(ExecutionFlow::Throw(v)) => Err(Ok(ExecutionFlow::Throw(v))),
             other => Err(other),
         }
     }

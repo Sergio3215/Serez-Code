@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use super::ExecutionFlow;
 use super::{
     CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
     obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
@@ -28,21 +29,23 @@ impl super::Evaluator {
                     format!("String.{}() requires 0 arguments", dot_call.method),
                 )
             }
-            "length" => {
-                EvalResult::Value(self.alloc(ObjectData::Integer(s.chars().count() as i64)))
-            }
+            "length" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Integer(s.chars().count() as i64)),
+            )),
 
-            "toString" => EvalResult::Value(self.alloc(ObjectData::Str(s))),
+            "toString" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s)))),
 
-            "trim" => EvalResult::Value(self.alloc(ObjectData::Str(s.trim().to_string()))),
+            "trim" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Str(s.trim().to_string())),
+            )),
 
-            "toUpperCase" | "upper" => {
-                EvalResult::Value(self.alloc(ObjectData::Str(s.to_uppercase())))
-            }
+            "toUpperCase" | "upper" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Str(s.to_uppercase())),
+            )),
 
-            "toLowerCase" | "lower" => {
-                EvalResult::Value(self.alloc(ObjectData::Str(s.to_lowercase())))
-            }
+            "toLowerCase" | "lower" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Str(s.to_lowercase())),
+            )),
 
             "startsWith" => {
                 if dot_call.arguments.len() != 1 {
@@ -53,7 +56,9 @@ impl super::Evaluator {
                         Ok(value) => value,
                         Err(error) => return error,
                     };
-                EvalResult::Value(self.alloc(ObjectData::Boolean(s.starts_with(&prefix[..]))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Boolean(s.starts_with(&prefix[..]))),
+                ))
             }
 
             "endsWith" => {
@@ -65,7 +70,9 @@ impl super::Evaluator {
                         Ok(value) => value,
                         Err(error) => return error,
                     };
-                EvalResult::Value(self.alloc(ObjectData::Boolean(s.ends_with(&suffix[..]))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Boolean(s.ends_with(&suffix[..]))),
+                ))
             }
 
             "indexOf" => {
@@ -99,7 +106,7 @@ impl super::Evaluator {
                     }
                     found
                 };
-                EvalResult::Value(self.alloc(ObjectData::Integer(idx)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(idx))))
             }
 
             "charAt" => {
@@ -118,7 +125,7 @@ impl super::Evaluator {
                 } else {
                     chars[idx as usize].to_string()
                 };
-                EvalResult::Value(self.alloc(ObjectData::Str(result)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(result))))
             }
 
             "includes" | "contains" => {
@@ -136,7 +143,9 @@ impl super::Evaluator {
                     Ok(value) => value,
                     Err(error) => return error,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Boolean(s.contains(&sub[..]))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Boolean(s.contains(&sub[..]))),
+                ))
             }
 
             "replace" => {
@@ -153,9 +162,11 @@ impl super::Evaluator {
                     Err(error) => return error,
                 };
                 if from.is_empty() {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(s.clone())));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s.clone()))));
                 }
-                EvalResult::Value(self.alloc(ObjectData::Str(s.replacen(&from[..], &to, 1))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Str(s.replacen(&from[..], &to, 1))),
+                ))
             }
 
             "replaceAll" => {
@@ -175,9 +186,11 @@ impl super::Evaluator {
                     Err(error) => return error,
                 };
                 if from.is_empty() {
-                    return EvalResult::Value(self.alloc(ObjectData::Str(s.clone())));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s.clone()))));
                 }
-                EvalResult::Value(self.alloc(ObjectData::Str(s.replace(&from[..], &to))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Str(s.replace(&from[..], &to))),
+                ))
             }
 
             "split" => {
@@ -197,10 +210,10 @@ impl super::Evaluator {
                         .map(|p| OwnedValue::Str(p.to_string()))
                         .collect()
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: parts,
-                }))
+                })))
             }
 
             "substring" => {
@@ -229,7 +242,7 @@ impl super::Evaluator {
                 let end = end.max(0).min(len) as usize;
                 let start = start.min(end);
                 let result: String = chars[start..end].iter().collect();
-                EvalResult::Value(self.alloc(ObjectData::Str(result)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(result))))
             }
 
             "padStart" => {
@@ -264,7 +277,7 @@ impl super::Evaluator {
                     " ".to_string()
                 };
                 match self.build_padded_string(&s, target_len, &pad_str, true) {
-                    Ok(result) => EvalResult::Value(self.alloc(ObjectData::Str(result))),
+                    Ok(result) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(result)))),
                     Err(error) => error,
                 }
             }
@@ -299,7 +312,7 @@ impl super::Evaluator {
                     " ".to_string()
                 };
                 match self.build_padded_string(&s, target_len, &pad_str, false) {
-                    Ok(result) => EvalResult::Value(self.alloc(ObjectData::Str(result))),
+                    Ok(result) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(result)))),
                     Err(error) => error,
                 }
             }
@@ -341,16 +354,16 @@ impl super::Evaluator {
                 }) as usize;
                 let end = end.max(start);
                 let sliced: String = chars[start..end].iter().collect();
-                EvalResult::Value(self.alloc(ObjectData::Str(sliced)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(sliced))))
             }
 
-            "trimStart" | "trimLeft" => {
-                EvalResult::Value(self.alloc(ObjectData::Str(s.trim_start().to_string())))
-            }
+            "trimStart" | "trimLeft" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Str(s.trim_start().to_string())),
+            )),
 
-            "trimEnd" | "trimRight" => {
-                EvalResult::Value(self.alloc(ObjectData::Str(s.trim_end().to_string())))
-            }
+            "trimEnd" | "trimRight" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Str(s.trim_end().to_string())),
+            )),
 
             _ => self.rt_err_kind(
                 "ReferenceError",
@@ -368,7 +381,7 @@ impl super::Evaluator {
         parameter: &str,
     ) -> Result<String, EvalResult> {
         let value = match self.eval_expression(expr) {
-            EvalResult::Value(value) => value,
+            Ok(ExecutionFlow::Value(value)) => value,
             other => return Err(other),
         };
         match self.resolve(value).cloned() {
@@ -387,7 +400,7 @@ impl super::Evaluator {
         parameter: &str,
     ) -> Result<i64, EvalResult> {
         let value = match self.eval_expression(expr) {
-            EvalResult::Value(value) => value,
+            Ok(ExecutionFlow::Value(value)) => value,
             other => return Err(other),
         };
         match self.resolve(value) {

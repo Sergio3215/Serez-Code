@@ -1,3 +1,4 @@
+use super::ExecutionFlow;
 // Socket namespace — raw TCP client/server over std::net
 // Socket.connect(host, port) → int  (socket id)
 // Socket.send(id, data)      → int  (bytes written)
@@ -32,7 +33,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let port_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let port: u16 = match self.resolve(port_ref) {
@@ -46,7 +47,7 @@ impl super::Evaluator {
                 match std::net::TcpStream::connect(&addr) {
                     Ok(stream) => {
                         let id = self.sockets.add_connection(stream);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
                     }
                     Err(e) => self.rt_err_kind("SocketError", format!("Socket.connect: {}", e)),
                 }
@@ -76,7 +77,9 @@ impl super::Evaluator {
                     }
                 };
                 match result {
-                    Ok(n) => EvalResult::Value(self.alloc(ObjectData::Integer(n as i64))),
+                    Ok(n) => Ok(ExecutionFlow::Value(
+                        self.alloc(ObjectData::Integer(n as i64)),
+                    )),
                     Err(e) => self.rt_err_kind("SocketError", format!("Socket.send: {}", e)),
                 }
             }
@@ -93,7 +96,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let max_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let max_bytes: usize = match self.resolve(max_ref) {
@@ -118,7 +121,7 @@ impl super::Evaluator {
                     }
                 };
                 match result {
-                    Ok(s) => EvalResult::Value(self.alloc(ObjectData::Str(s))),
+                    Ok(s) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s)))),
                     Err(e) => self.rt_err_kind("SocketError", format!("Socket.recv: {}", e)),
                 }
             }
@@ -134,7 +137,7 @@ impl super::Evaluator {
                 // Closing an id that was never issued is a documented no-op,
                 // unlike send/recv/accept, which are errors on an unknown id.
                 self.sockets.close(id);
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "listen" => {
@@ -143,7 +146,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Socket.listen(port) requires 1 argument");
                 }
                 let port_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let port: u16 = match self.resolve(port_ref) {
@@ -157,7 +160,7 @@ impl super::Evaluator {
                 match std::net::TcpListener::bind(&addr) {
                     Ok(listener) => {
                         let id = self.sockets.add_listener(listener);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
                     }
                     Err(e) => self.rt_err_kind("SocketError", format!("Socket.listen: {}", e)),
                 }
@@ -189,7 +192,9 @@ impl super::Evaluator {
                 match accept_result {
                     Ok((stream, _addr)) => {
                         let new_id = self.sockets.add_connection(stream);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(new_id)))
+                        Ok(ExecutionFlow::Value(
+                            self.alloc(ObjectData::Integer(new_id)),
+                        ))
                     }
                     Err(e) => self.rt_err_kind("SocketError", format!("Socket.accept: {}", e)),
                 }
@@ -211,11 +216,11 @@ impl super::Evaluator {
                 };
                 match self.sockets.connection_mut(id) {
                     Some(stream) => match ws_recv_frame(stream) {
-                        Ok(Some(msg)) => EvalResult::Value(self.alloc(ObjectData::Str(msg))),
-                        Ok(None) => EvalResult::Value(self.null_ref),
+                        Ok(Some(msg)) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(msg)))),
+                        Ok(None) => Ok(ExecutionFlow::Value(self.null_ref)),
                         Err(e) => {
                             eprintln!("❌ ERROR: Socket.recvWsFrame: {}", e);
-                            EvalResult::Value(self.null_ref)
+                            Ok(ExecutionFlow::Value(self.null_ref))
                         }
                     },
                     None => self.rt_err_kind(
@@ -244,7 +249,7 @@ impl super::Evaluator {
                 };
                 match self.sockets.connection_mut(id) {
                     Some(stream) => match ws_send_frame(stream, &data) {
-                        Ok(()) => EvalResult::Value(self.null_ref),
+                        Ok(()) => Ok(ExecutionFlow::Value(self.null_ref)),
                         Err(e) => {
                             self.rt_err_kind("SocketError", format!("Socket.sendWsFrame: {}", e))
                         }
@@ -265,8 +270,8 @@ impl super::Evaluator {
 
     fn eval_socket_id(&mut self, expr: &ast::Expression, ctx: &str) -> Result<i64, EvalResult> {
         let r = match self.eval_expression(expr) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
             other => return Err(other),
         };
         match self.resolve(r) {

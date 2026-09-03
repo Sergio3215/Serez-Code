@@ -1,3 +1,4 @@
+use super::ExecutionFlow;
 // Binary namespace — byte-array utilities for binary data manipulation
 //
 // All operations work on Serez integer arrays (values 0-255 = bytes).
@@ -53,10 +54,10 @@ impl super::Evaluator {
                         }
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: bytes,
-                }))
+                })))
             }
 
             "toHex" => {
@@ -65,7 +66,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Binary.toHex(bytes) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let elems = match self.resolve(arr_ref) {
@@ -89,7 +90,7 @@ impl super::Evaluator {
                         }
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Str(hex)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(hex))))
             }
 
             "fromUtf8" => {
@@ -105,10 +106,10 @@ impl super::Evaluator {
                     .iter()
                     .map(|&b| OwnedValue::Integer(b as i64))
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: owned,
-                }))
+                })))
             }
 
             "toUtf8" => {
@@ -117,7 +118,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Binary.toUtf8(bytes) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let elems = match self.resolve(arr_ref) {
@@ -137,7 +138,7 @@ impl super::Evaluator {
                 match bytes {
                     Ok(bs) => {
                         let s = String::from_utf8_lossy(&bs).into_owned();
-                        EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
                     }
                     Err(_) => self
                         .rt_err_kind("TypeError", "Binary.toUtf8: all elements must be integers"),
@@ -179,7 +180,7 @@ impl super::Evaluator {
                         .rt_err_kind("BinaryError", "Binary.unpackInt32Le: need at least 4 bytes");
                 }
                 let n = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as i64;
-                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             "unpackInt32Be" => {
@@ -199,7 +200,7 @@ impl super::Evaluator {
                         .rt_err_kind("BinaryError", "Binary.unpackInt32Be: need at least 4 bytes");
                 }
                 let n = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as i64;
-                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             "packInt64Le" => {
@@ -229,7 +230,7 @@ impl super::Evaluator {
                 }
                 let arr: [u8; 8] = bytes[..8].try_into().unwrap();
                 let n = i64::from_le_bytes(arr);
-                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             "concat" => {
@@ -238,11 +239,11 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Binary.concat(a, b) requires 2 arguments");
                 }
                 let a_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let b_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let a_elems = match self.resolve(a_ref) {
@@ -265,10 +266,10 @@ impl super::Evaluator {
                 };
                 let mut combined = a_elems;
                 combined.extend(b_elems);
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: combined,
-                }))
+                })))
             }
 
             _ => self.rt_err_kind(
@@ -285,10 +286,10 @@ impl super::Evaluator {
             .iter()
             .map(|&b| OwnedValue::Integer(b as i64))
             .collect();
-        EvalResult::Value(self.alloc(ObjectData::Array {
+        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
             element_type: Some("int".to_string()),
             elements: owned,
-        }))
+        })))
     }
 
     fn require_one_int(&mut self, args: &[ast::Expression], ctx: &str) -> Result<i64, EvalResult> {
@@ -300,8 +301,8 @@ impl super::Evaluator {
             ));
         }
         let r = match self.eval_expression(&args[0]) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
             other => return Err(other),
         };
         match self.resolve(r) {
@@ -312,8 +313,8 @@ impl super::Evaluator {
 
     fn eval_to_bytes(&mut self, expr: &ast::Expression, ctx: &str) -> Result<Vec<u8>, EvalResult> {
         let r = match self.eval_expression(expr) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
             other => return Err(other),
         };
         let elems = match self.resolve(r) {

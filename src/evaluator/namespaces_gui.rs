@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use super::{ExecutionFlow, RuntimeFailure};
 // namespaces_gui.rs — `Gui` namespace: backend nativo de ventana de píxeles.
 //
 // Backend: winit (ventana + input + IME, cross-platform) + softbuffer (presentar un
@@ -3327,7 +3328,7 @@ impl super::Evaluator {
                     (g.win_w.max(1), g.win_h.max(1))
                 };
                 self.gui.state = Some(GuiState::new(ww, wh));
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             // ── Multi-ventana ────────────────────────────────────────────────
@@ -3435,7 +3436,9 @@ impl super::Evaluator {
                         scene_dirty: true,
                     },
                 );
-                EvalResult::Value(self.alloc(ObjectData::Integer(id as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(id as i64)),
+                ))
             }
 
             // Gui.selectWindow(id): el dibujo y el input pasan a esa ventana
@@ -3457,7 +3460,7 @@ impl super::Evaluator {
                 match self.gui.state.as_mut() {
                     Some(st) => {
                         if st.switch_to(id) {
-                            EvalResult::Value(self.null_ref)
+                            Ok(ExecutionFlow::Value(self.null_ref))
                         } else {
                             self.rt_err_kind(
                                 "GuiError",
@@ -3476,7 +3479,7 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.current_win as i64)
                     .unwrap_or(0);
-                EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
             }
 
             // Gui.closeWindow(id): cierra una ventana extra (id ≥ 1). Si era la
@@ -3515,7 +3518,7 @@ impl super::Evaluator {
                 host.cv.notify_all();
                 drop(g);
                 host.wake_main();
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             // ── Modo retenido (scene graph) ──────────────────────────────────
@@ -3685,7 +3688,7 @@ impl super::Evaluator {
                     Some((kind, x, y, color)) => {
                         let st = self.gui.state.as_mut().unwrap();
                         let id = st.scene_add(kind, x, y, color);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
                     }
                     None => self.rt_err_kind(
                         "TypeError",
@@ -3773,7 +3776,7 @@ impl super::Evaluator {
                 };
                 let st = self.gui.state.as_mut().unwrap();
                 let id = st.scene_add(kind, vals[0] as i32, vals[1] as i32, color);
-                EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
             }
 
             "nodePolygon" | "nodePolyline" => {
@@ -3830,7 +3833,7 @@ impl super::Evaluator {
                 match self.gui.state.as_mut() {
                     Some(st) => {
                         let id = st.scene_add(kind, 0, 0, color);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
                     }
                     None => {
                         self.rt_err_kind("GuiError", &format!("Gui.{}: no window open", method))
@@ -3841,7 +3844,7 @@ impl super::Evaluator {
             "nodeClipPop" => match self.gui.state.as_mut() {
                 Some(st) => {
                     let id = st.scene_add(SceneNodeKind::ClipPop, 0, 0, 0);
-                    EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
                 }
                 None => self.rt_err_kind("GuiError", "Gui.nodeClipPop: no window open"),
             },
@@ -4019,7 +4022,7 @@ impl super::Evaluator {
                     );
                 }
                 st.scene_dirty = true;
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             // Transform afín por nodo: rot en grados, escala en milésimas (1000 = 1.0),
@@ -4070,7 +4073,7 @@ impl super::Evaluator {
                     ));
                 }
                 st.scene_dirty = true;
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "nodeDelete" => {
@@ -4096,11 +4099,11 @@ impl super::Evaluator {
                     }
                     None => false,
                 };
-                EvalResult::Value(if existed {
+                Ok(ExecutionFlow::Value(if existed {
                     self.true_ref
                 } else {
                     self.false_ref
-                })
+                }))
             }
 
             "sceneClear" => {
@@ -4108,7 +4111,7 @@ impl super::Evaluator {
                     st.scene.clear();
                     st.scene_dirty = true;
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "nodeCount" => {
@@ -4118,7 +4121,7 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.scene.len() as i64)
                     .unwrap_or(0);
-                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             // Gui.renderScene(bgColor): redibuja la escena SOLO si está sucia (o
@@ -4161,11 +4164,11 @@ impl super::Evaluator {
                     let id = st.current_win;
                     st.present_extra(&host, id);
                 }
-                EvalResult::Value(if redrew {
+                Ok(ExecutionFlow::Value(if redrew {
                     self.true_ref
                 } else {
                     self.false_ref
-                })
+                }))
             }
 
             "isOpen" => {
@@ -4187,7 +4190,11 @@ impl super::Evaluator {
                         })
                         .unwrap_or(false),
                 };
-                EvalResult::Value(if open { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if open {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
 
             "size" => {
@@ -4197,10 +4204,10 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| (s.win_w as i64, s.win_h as i64))
                     .unwrap_or((0, 0));
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
-                }))
+                })))
             }
 
             "present" => {
@@ -4218,7 +4225,7 @@ impl super::Evaluator {
                             let id = st.current_win;
                             st.present_extra(&host, id);
                         }
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.present: no window open"),
                 }
@@ -4251,7 +4258,7 @@ impl super::Evaluator {
                         }
                         st.clip = (0, 0, st.width as i32, st.height as i32);
                         st.clip_stack.clear();
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind(
                         "GuiError",
@@ -4263,12 +4270,12 @@ impl super::Evaluator {
             "fillRect" => {
                 let (x, y, w, h, color) = match self.gui_rect_args(dot_call) {
                     Some(v) => v,
-                    None => return EvalResult::Error,
+                    None => return Err(RuntimeFailure),
                 };
                 match self.gui.state.as_mut() {
                     Some(st) => {
                         st.fill_rect(x as i32, y as i32, w as i32, h as i32, color);
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.fillRect: no window open"),
                 }
@@ -4307,7 +4314,7 @@ impl super::Evaluator {
                         let g = ((color >> 8) & 0xff) as u8;
                         let b = (color & 0xff) as u8;
                         st.blend_rect(x, y, w, h, r, g, b, alpha);
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.fillRectAlpha: no window open"),
                 }
@@ -4332,7 +4339,7 @@ impl super::Evaluator {
                 match self.gui.state.as_mut() {
                     Some(st) => {
                         st.put(x, y, color);
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.setPixel: no window open"),
                 }
@@ -4365,7 +4372,7 @@ impl super::Evaluator {
                 match self.gui.state.as_mut() {
                     Some(st) => {
                         st.draw_line(x0, y0, x1, y1, color);
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.drawLine: no window open"),
                 }
@@ -4438,7 +4445,7 @@ impl super::Evaluator {
                     (style.clamp(0, 15)) as u8,
                     spacing as i32,
                 );
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "measureText" => {
@@ -4464,10 +4471,10 @@ impl super::Evaluator {
                     _ => text.chars().count() as i64 * 8 * scale,
                 };
                 let h = 8 * scale;
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
-                }))
+                })))
             }
 
             // Como measureText pero el 2º arg es el tamaño EN PÍXELES (font-size real),
@@ -4493,10 +4500,10 @@ impl super::Evaluator {
                     Some(f) if f.current != 0 => f.measure(&text, px as i32),
                     _ => text.chars().count() as i64 * px,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(px)],
-                }))
+                })))
             }
 
             // ── Motor de primitivos (Fase 0/1) ──────────────────────────────────
@@ -4526,7 +4533,9 @@ impl super::Evaluator {
                     }
                 }
                 let handle = self.gui.stylesheets.insert(sheet);
-                EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(handle)),
+                ))
             }
 
             // Parsea markup SVG (o lee un archivo .svg) → handle rasterizable con el
@@ -4560,7 +4569,9 @@ impl super::Evaluator {
                 match svg::parse(&markup) {
                     Some(p) => {
                         let handle = self.gui.svgs.insert(p);
-                        EvalResult::Value(self.alloc(ObjectData::Integer(handle)))
+                        Ok(ExecutionFlow::Value(
+                            self.alloc(ObjectData::Integer(handle)),
+                        ))
                     }
                     None => self.rt_err_kind(
                         "GuiError",
@@ -4579,7 +4590,7 @@ impl super::Evaluator {
                     );
                 }
                 let root_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 // `root` was the one argument here with no type check, and the
@@ -4687,10 +4698,10 @@ impl super::Evaluator {
                         ],
                     });
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: arr,
-                }))
+                })))
             }
 
             "loadFont" => {
@@ -4707,7 +4718,7 @@ impl super::Evaluator {
                     self.gui.fonts = Some(GuiFonts::new());
                 }
                 match self.gui.fonts.as_mut().unwrap().load_font_file(&path) {
-                    Some(family) => EvalResult::Value(self.alloc(ObjectData::Str(family))),
+                    Some(family) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(family)))),
                     None => self.rt_err_kind(
                         "GuiError",
                         format!("Gui.loadFont: could not load font file '{}'", path),
@@ -4733,12 +4744,16 @@ impl super::Evaluator {
                         || name.eq_ignore_ascii_case("default")
                         || name.eq_ignore_ascii_case("monospace")
                     {
-                        return EvalResult::Value(self.true_ref);
+                        return Ok(ExecutionFlow::Value(self.true_ref));
                     }
                     self.gui.fonts = Some(GuiFonts::new());
                 }
                 let ok = self.gui.fonts.as_mut().unwrap().set_family(&name);
-                EvalResult::Value(if ok { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if ok {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
 
             "font" => {
@@ -4748,7 +4763,7 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|f| f.families[f.current as usize].clone())
                     .unwrap_or_default();
-                EvalResult::Value(self.alloc(ObjectData::Str(name)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(name))))
             }
 
             "fillRoundRect" => {
@@ -4779,7 +4794,7 @@ impl super::Evaluator {
                             vals[4] as i32,
                             color,
                         );
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.fillRoundRect: no window open"),
                 }
@@ -4794,7 +4809,7 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.open_time.elapsed().as_millis() as i64)
                     .unwrap_or(0);
-                EvalResult::Value(self.int_ref(ms))
+                Ok(ExecutionFlow::Value(self.int_ref(ms)))
             }
 
             "drawRect" => {
@@ -4824,7 +4839,7 @@ impl super::Evaluator {
                             vals[3] as i32,
                             color,
                         );
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.drawRect: no window open"),
                 }
@@ -4851,7 +4866,7 @@ impl super::Evaluator {
                 match self.gui.state.as_mut() {
                     Some(st) => {
                         st.fill_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color);
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.fillCircle: no window open"),
                 }
@@ -4879,7 +4894,7 @@ impl super::Evaluator {
                 match self.gui.state.as_mut() {
                     Some(st) => {
                         st.draw_circle(vals[0] as i32, vals[1] as i32, vals[2] as i32, color);
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.drawCircle: no window open"),
                 }
@@ -4914,7 +4929,7 @@ impl super::Evaluator {
                             vals[4] as i32,
                             color,
                         );
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.drawLineThick: no window open"),
                 }
@@ -4963,7 +4978,7 @@ impl super::Evaluator {
                             );
                             i += 2;
                         }
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.drawPolyline: no window open"),
                 }
@@ -5001,7 +5016,7 @@ impl super::Evaluator {
                 match self.gui.state.as_mut() {
                     Some(st) => {
                         st.fill_polygon(&verts, color);
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.fillPolygon: no window open"),
                 }
@@ -5025,7 +5040,7 @@ impl super::Evaluator {
                     let mut g = host.inner.lock().unwrap();
                     g.cmds.push_back(GuiCmd::SetImePosition(x, y));
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "mouse" => {
@@ -5035,10 +5050,10 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| (s.input.mouse_x as i64, s.input.mouse_y as i64))
                     .unwrap_or((0, 0));
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(mx), OwnedValue::Integer(my)],
-                }))
+                })))
             }
 
             "mouseDown" => {
@@ -5048,7 +5063,11 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.mouse_l)
                     .unwrap_or(false);
-                EvalResult::Value(if down { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if down {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
 
             "mouseRightDown" => {
@@ -5058,7 +5077,11 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.mouse_r)
                     .unwrap_or(false);
-                EvalResult::Value(if down { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if down {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
 
             "mouseMiddleDown" => {
@@ -5068,7 +5091,11 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.mouse_m)
                     .unwrap_or(false);
-                EvalResult::Value(if down { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if down {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
 
             "mousePressed" => {
@@ -5078,11 +5105,11 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.mouse_pressed)
                     .unwrap_or(false);
-                EvalResult::Value(if pressed {
+                Ok(ExecutionFlow::Value(if pressed {
                     self.true_ref
                 } else {
                     self.false_ref
-                })
+                }))
             }
 
             "scroll" => {
@@ -5092,10 +5119,10 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| (s.input.scroll_x, s.input.scroll_y))
                     .unwrap_or((0, 0));
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(dx), OwnedValue::Integer(dy)],
-                }))
+                })))
             }
 
             "keyDown" => {
@@ -5118,7 +5145,11 @@ impl super::Evaluator {
                     },
                     None => false,
                 };
-                EvalResult::Value(if down { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if down {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
 
             "keysPressed" => {
@@ -5156,7 +5187,7 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.chars_typed.clone())
                     .unwrap_or_default();
-                EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
             }
 
             "focused" => {
@@ -5166,7 +5197,11 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.focused)
                     .unwrap_or(true);
-                EvalResult::Value(if v { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if v {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
             "mouseInWindow" => {
                 let v = self
@@ -5175,7 +5210,11 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.mouse_in)
                     .unwrap_or(false);
-                EvalResult::Value(if v { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if v {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
             "mouseBackDown" => {
                 let v = self
@@ -5184,7 +5223,11 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.mouse_back)
                     .unwrap_or(false);
-                EvalResult::Value(if v { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if v {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
             "mouseForwardDown" => {
                 let v = self
@@ -5193,7 +5236,11 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.mouse_fwd)
                     .unwrap_or(false);
-                EvalResult::Value(if v { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if v {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
             // Archivos soltados sobre la ventana este frame (rutas). Requiere permiso File para leerlos.
             "droppedFiles" => {
@@ -5213,7 +5260,7 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.ime_preedit.clone())
                     .unwrap_or_default();
-                EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
             }
             // Archivos arrastrados SOBRE la ventana (antes de soltar) — para resaltar zonas de drop.
             "hoveredFiles" => {
@@ -5240,10 +5287,10 @@ impl super::Evaluator {
                     elems.push(OwnedValue::Integer(x as i64));
                     elems.push(OwnedValue::Integer(y as i64));
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: elems,
-                }))
+                })))
             }
             // Delta de pinch/zoom acumulado este frame (decimal; 0 si no hubo gesto).
             "pinchDelta" => {
@@ -5253,7 +5300,7 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.input.pinch_delta)
                     .unwrap_or(0.0);
-                EvalResult::Value(self.alloc(ObjectData::Decimal(d)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(d))))
             }
             // Posición outer de la ventana en píxeles físicos: [x, y]. Para centrar /
             // recordar dónde estaba la ventana, o posicionar relativo a un monitor.
@@ -5265,10 +5312,10 @@ impl super::Evaluator {
                     .map(|s| (s.win_x, s.win_y))
                     .unwrap_or((0, 0));
                 let elems = vec![OwnedValue::Integer(x as i64), OwnedValue::Integer(y as i64)];
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: elems,
-                }))
+                })))
             }
             // Monitores conectados: array de dicts {x, y, width, height, scale, name}
             // (posición + resolución en píxeles físicos). Para multi-monitor y centrado.
@@ -5309,10 +5356,10 @@ impl super::Evaluator {
                         ],
                     });
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("dict".to_string()),
                     elements: elems,
-                }))
+                })))
             }
 
             "clipboardGet" => {
@@ -5328,7 +5375,7 @@ impl super::Evaluator {
                     }
                     None => String::new(),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Str(text)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(text))))
             }
 
             "clipboardSet" => {
@@ -5349,7 +5396,7 @@ impl super::Evaluator {
                         let _ = c.set_text(text);
                     }
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
             // Lee una imagen del portapapeles (RGBA) y la registra como handle (como loadImage).
             // Devuelve 0 si el portapapeles no contiene una imagen.
@@ -5382,12 +5429,12 @@ impl super::Evaluator {
                                 let id = st.next_image;
                                 st.next_image += 1;
                                 st.images.insert(id, ImageData { w, h, px });
-                                EvalResult::Value(self.int_ref(id))
+                                Ok(ExecutionFlow::Value(self.int_ref(id)))
                             }
-                            None => EvalResult::Value(self.int_ref(0)),
+                            None => Ok(ExecutionFlow::Value(self.int_ref(0))),
                         }
                     }
-                    None => EvalResult::Value(self.int_ref(0)),
+                    None => Ok(ExecutionFlow::Value(self.int_ref(0))),
                 }
             }
             // Copia una imagen (por handle, como devuelve loadImage/loadImageBytes) al portapapeles.
@@ -5437,7 +5484,7 @@ impl super::Evaluator {
                                 });
                             }
                         }
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => {
                         self.rt_err_kind("GuiError", "Gui.clipboardSetImage: invalid image handle")
@@ -5474,7 +5521,7 @@ impl super::Evaluator {
                         let id = st.next_image;
                         st.next_image += 1;
                         st.images.insert(id, ImageData { w, h, px });
-                        EvalResult::Value(self.int_ref(id))
+                        Ok(ExecutionFlow::Value(self.int_ref(id)))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.loadImage: no window open"),
                 }
@@ -5489,8 +5536,8 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Gui.loadImageBytes(bytes) requires 1 argument");
                 }
                 let r = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
                     other => return other,
                 };
                 let elems = match self.resolve(r) {
@@ -5531,7 +5578,7 @@ impl super::Evaluator {
                         let id = st.next_image;
                         st.next_image += 1;
                         st.images.insert(id, ImageData { w, h, px });
-                        EvalResult::Value(self.int_ref(id))
+                        Ok(ExecutionFlow::Value(self.int_ref(id)))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.loadImageBytes: no window open"),
                 }
@@ -5572,7 +5619,7 @@ impl super::Evaluator {
                                 0,
                             );
                         }
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.drawImage: no window open"),
                 }
@@ -5612,7 +5659,7 @@ impl super::Evaluator {
                             c2,
                             vertical,
                         );
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.fillGradient: no window open"),
                 }
@@ -5643,7 +5690,7 @@ impl super::Evaluator {
                             vals[3] as i32,
                             vals[4] as i32,
                         );
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     None => self.rt_err_kind("GuiError", "Gui.blur: no window open"),
                 }
@@ -5656,7 +5703,7 @@ impl super::Evaluator {
                     .as_ref()
                     .map(|s| s.scale_factor)
                     .unwrap_or(1.0);
-                EvalResult::Value(self.alloc(ObjectData::Decimal(sf)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(sf))))
             }
 
             "textAdvances" => {
@@ -5688,10 +5735,10 @@ impl super::Evaluator {
                     }
                 };
                 let elements: Vec<OwnedValue> = xs.into_iter().map(OwnedValue::Integer).collect();
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements,
-                }))
+                })))
             }
 
             "setMinSize" | "setResizable" | "setFullscreen" | "maximize" | "setPosition"
@@ -5710,7 +5757,7 @@ impl super::Evaluator {
                         .push_back(GuiCmd::DragWindow);
                     host.cv.notify_all();
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
             // Ícono de la ventana desde un archivo de imagen ("" = quitar).
             "setWindowIcon" => {
@@ -5744,7 +5791,7 @@ impl super::Evaluator {
                     host.inner.lock().unwrap().cmds.push_back(cmd);
                     host.cv.notify_all();
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
             // Cursor del mouse desde un archivo de imagen, con punto caliente (hotspot).
             // Gui.setCursorImage(path, hotspotX, hotspotY); "" = restaurar el cursor por defecto.
@@ -5798,7 +5845,7 @@ impl super::Evaluator {
                     host.inner.lock().unwrap().cmds.push_back(cmd);
                     host.cv.notify_all();
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "openFileDialog" | "saveFileDialog" => {
@@ -5825,7 +5872,7 @@ impl super::Evaluator {
                         s.input_epoch == base && s.window_open && !s.should_close
                     });
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "imageSize" => {
@@ -5847,10 +5894,10 @@ impl super::Evaluator {
                     .and_then(|s| s.images.get(&hnd))
                     .map(|im| (im.w as i64, im.h as i64))
                     .unwrap_or((0, 0));
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: vec![OwnedValue::Integer(w), OwnedValue::Integer(h)],
-                }))
+                })))
             }
 
             "pushClip" => {
@@ -5879,7 +5926,7 @@ impl super::Evaluator {
                     let ny1 = (y + h).min(cy1);
                     st.clip = (nx0, ny0, nx1.max(nx0), ny1.max(ny0));
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "popClip" => {
@@ -5890,7 +5937,7 @@ impl super::Evaluator {
                         st.clip = (0, 0, st.width as i32, st.height as i32);
                     }
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "setTitle" => {
@@ -5906,7 +5953,7 @@ impl super::Evaluator {
                     g.cmds.push_back(GuiCmd::SetTitle(t));
                     h.cv.notify_all();
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "setCursor" => {
@@ -5924,7 +5971,7 @@ impl super::Evaluator {
                     g.cmds.push_back(GuiCmd::SetCursor(name));
                     h.cv.notify_all();
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "close" => {
@@ -5934,7 +5981,7 @@ impl super::Evaluator {
                     h.cv.notify_all();
                 }
                 self.gui.state = None;
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             _ => self.rt_err_kind(
@@ -5990,7 +6037,7 @@ impl super::Evaluator {
 
     pub(super) fn gui_int_arg(&mut self, expr: &ast::Expression) -> Option<i64> {
         match self.eval_expression(expr) {
-            EvalResult::Value(v) => match self.resolve(v).cloned() {
+            Ok(ExecutionFlow::Value(v)) => match self.resolve(v).cloned() {
                 Some(ObjectData::Integer(n)) => Some(n),
                 _ => None,
             },
@@ -6000,7 +6047,7 @@ impl super::Evaluator {
 
     pub(super) fn gui_str_arg(&mut self, expr: &ast::Expression) -> Option<String> {
         match self.eval_expression(expr) {
-            EvalResult::Value(v) => match self.resolve(v).cloned() {
+            Ok(ExecutionFlow::Value(v)) => match self.resolve(v).cloned() {
                 Some(ObjectData::Str(s)) => Some(s),
                 _ => None,
             },
@@ -6012,7 +6059,7 @@ impl super::Evaluator {
     /// [x0,y0,x1,y1,…] para polilíneas/polígonos).
     fn gui_int_vec_arg(&mut self, expr: &ast::Expression) -> Option<Vec<i64>> {
         match self.eval_expression(expr) {
-            EvalResult::Value(v) => match self.resolve(v) {
+            Ok(ExecutionFlow::Value(v)) => match self.resolve(v) {
                 Some(ObjectData::Array { elements, .. }) => {
                     let mut out = Vec::with_capacity(elements.len());
                     for e in elements {
@@ -6034,10 +6081,10 @@ impl super::Evaluator {
         for n in names {
             elems.push(OwnedValue::Str(n));
         }
-        EvalResult::Value(self.alloc(ObjectData::Array {
+        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
             element_type: Some("string".to_string()),
             elements: elems,
-        }))
+        })))
     }
 
     fn gui_rect_args(
@@ -6070,7 +6117,7 @@ impl super::Evaluator {
 
     fn gui_bool_arg(&mut self, expr: &ast::Expression) -> Option<bool> {
         match self.eval_expression(expr) {
-            EvalResult::Value(v) => match self.resolve(v).cloned() {
+            Ok(ExecutionFlow::Value(v)) => match self.resolve(v).cloned() {
                 Some(ObjectData::Boolean(b)) => Some(b),
                 _ => None,
             },
@@ -6082,7 +6129,7 @@ impl super::Evaluator {
     /// (para las condiciones reactivas del CSS: media queries / estado).
     fn gui_read_ctx(&mut self, expr: &ast::Expression) -> Vec<(String, String)> {
         let v = match self.eval_expression(expr) {
-            EvalResult::Value(v) => v,
+            Ok(ExecutionFlow::Value(v)) => v,
             _ => return Vec::new(),
         };
         match self.resolve(v) {
@@ -6184,7 +6231,7 @@ impl super::Evaluator {
                     "minimize" => GuiCmd::SetMinimized(b),
                     "requestAttention" => GuiCmd::RequestAttention(b),
                     "setCursorVisible" => GuiCmd::SetCursorVisible(b),
-                    _ => return EvalResult::Error,
+                    _ => return Err(RuntimeFailure),
                 }
             }
         };
@@ -6192,7 +6239,7 @@ impl super::Evaluator {
             host.inner.lock().unwrap().cmds.push_back(cmd);
             host.cv.notify_all();
         }
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     /// Diálogo de archivo nativo. open: (filterName, extsCsv) ; save: (filterName,
@@ -6259,6 +6306,8 @@ impl super::Evaluator {
             }
             g.dialog_result.take()
         };
-        EvalResult::Value(self.alloc(ObjectData::Str(result.unwrap_or_default())))
+        Ok(ExecutionFlow::Value(
+            self.alloc(ObjectData::Str(result.unwrap_or_default())),
+        ))
     }
 }

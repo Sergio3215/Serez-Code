@@ -1,3 +1,4 @@
+use super::ExecutionFlow;
 // DateTime namespace — immutable calendar date/time built on `chrono`.
 //
 // Design (see project-datetime-plan):
@@ -256,10 +257,10 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "DateTime.now() requires 0 arguments");
                 }
                 let epoch_ms = to_epoch(Local::now().naive_local());
-                EvalResult::Value(self.alloc(ObjectData::DateTime {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::DateTime {
                     epoch_ms,
                     utc: false,
-                }))
+                })))
             }
             "utcNow" => {
                 if let Some(error) = self.require_permission("DateTime.utcNow", "Time") {
@@ -269,10 +270,10 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "DateTime.utcNow() requires 0 arguments");
                 }
                 let epoch_ms = Utc::now().timestamp_millis();
-                EvalResult::Value(self.alloc(ObjectData::DateTime {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::DateTime {
                     epoch_ms,
                     utc: true,
-                }))
+                })))
             }
             "from" => {
                 // DateTime.from(year, month, day, [hour, minute, second, ms])
@@ -307,10 +308,10 @@ impl super::Evaluator {
                 match built {
                     Some(ndt) => {
                         let epoch_ms = to_epoch(ndt);
-                        EvalResult::Value(self.alloc(ObjectData::DateTime {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::DateTime {
                             epoch_ms,
                             utc: false,
-                        }))
+                        })))
                     }
                     None => self.rt_err_kind(
                         "RangeError",
@@ -341,10 +342,10 @@ impl super::Evaluator {
                         ),
                     );
                 }
-                EvalResult::Value(self.alloc(ObjectData::DateTime {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::DateTime {
                     epoch_ms: nums[0],
                     utc: true,
-                }))
+                })))
             }
             other => self.rt_err_kind(
                 "ReferenceError",
@@ -364,7 +365,7 @@ impl super::Evaluator {
         let mut out = Vec::with_capacity(dot_call.arguments.len());
         for arg in &dot_call.arguments {
             let r = match self.eval_expression(arg) {
-                EvalResult::Value(r) => r,
+                Ok(ExecutionFlow::Value(r)) => r,
                 other => return Err(other),
             };
             match self.resolve(r) {
@@ -404,12 +405,12 @@ impl super::Evaluator {
                 );
             }
             let value = field_value(epoch_ms, f);
-            return EvalResult::Value(self.alloc(ObjectData::DateField {
+            return Ok(ExecutionFlow::Value(self.alloc(ObjectData::DateField {
                 epoch_ms,
                 utc,
                 field: f,
                 value,
-            }));
+            })));
         }
 
         let ndt = parts(epoch_ms);
@@ -424,23 +425,25 @@ impl super::Evaluator {
                     format!("DateTime.{} requires 0 arguments", dot_call.method),
                 )
             }
-            "weekday" => EvalResult::Value(self.alloc(ObjectData::Integer(
+            "weekday" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(
                 ndt.weekday().number_from_monday() as i64,
-            ))),
-            "dayOfYear" => EvalResult::Value(self.alloc(ObjectData::Integer(ndt.ordinal() as i64))),
-            "daysInMonth" => EvalResult::Value(self.alloc(ObjectData::Integer(days_in_month(
-                ndt.year(),
-                ndt.month(),
-            )
-                as i64))),
-            "isLeapYear" => EvalResult::Value(self.alloc(ObjectData::Boolean(is_leap(ndt.year())))),
-            "isUtc" => EvalResult::Value(self.alloc(ObjectData::Boolean(utc))),
-            "timestamp" | "toEpoch" | "epochMillis" => {
-                EvalResult::Value(self.alloc(ObjectData::Integer(epoch_ms)))
-            }
+            )))),
+            "dayOfYear" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Integer(ndt.ordinal() as i64)),
+            )),
+            "daysInMonth" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(
+                days_in_month(ndt.year(), ndt.month()) as i64,
+            )))),
+            "isLeapYear" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Boolean(is_leap(ndt.year()))),
+            )),
+            "isUtc" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(utc)))),
+            "timestamp" | "toEpoch" | "epochMillis" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Integer(epoch_ms)),
+            )),
             "toString" | "iso" => {
                 let s = crate::region::format_datetime(epoch_ms, utc);
-                EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
             }
             "format" => {
                 if dot_call.arguments.len() != 1 {
@@ -450,7 +453,7 @@ impl super::Evaluator {
                     );
                 }
                 let r = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let pat = match self.resolve(r) {
@@ -462,7 +465,9 @@ impl super::Evaluator {
                         );
                     }
                 };
-                EvalResult::Value(self.alloc(ObjectData::Str(format_pattern(epoch_ms, &pat))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Str(format_pattern(epoch_ms, &pat))),
+                ))
             }
             other => self.rt_err_kind(
                 "ReferenceError",
@@ -509,17 +514,19 @@ impl super::Evaluator {
                         );
                     }
                 };
-                EvalResult::Value(self.alloc(ObjectData::DateTime {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::DateTime {
                     epoch_ms: new_epoch,
                     utc,
-                }))
+                })))
             }
             "value" | "toInt" | "toString" if !dot_call.arguments.is_empty() => self.rt_err_kind(
                 "TypeError",
                 format!("DateField.{} requires 0 arguments", dot_call.method),
             ),
-            "value" | "toInt" => EvalResult::Value(self.alloc(ObjectData::Integer(value))),
-            "toString" => EvalResult::Value(self.alloc(ObjectData::Str(format!("{}", value)))),
+            "value" | "toInt" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(value)))),
+            "toString" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Str(format!("{}", value))),
+            )),
             other => self.rt_err_kind(
                 "ReferenceError",
                 format!(

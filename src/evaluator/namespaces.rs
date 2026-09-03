@@ -3,6 +3,7 @@ use super::{
     CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_pretty_owned,
     json_stringify_owned, obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
 };
+use super::{ExecutionFlow, RuntimeFailure};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
@@ -17,20 +18,24 @@ impl super::Evaluator {
                 if let Some(error) = self.reject_arguments(dot_call, "Math") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Decimal(std::f64::consts::PI)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(std::f64::consts::PI)),
+                ))
             }
             "E" => {
                 if let Some(error) = self.reject_arguments(dot_call, "Math") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Decimal(std::f64::consts::E)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(std::f64::consts::E)),
+                ))
             }
             "random" => {
                 if let Some(error) = self.reject_arguments(dot_call, "Math") {
                     return error;
                 }
                 let val = self.lcg_next_f64();
-                EvalResult::Value(self.alloc(ObjectData::Decimal(val)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(val))))
             }
             "clamp" => {
                 if dot_call.arguments.len() != 3 {
@@ -38,19 +43,19 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Math.clamp(x, min, max) requires 3 arguments");
                 }
                 let x = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let mn = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let mx = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 match (
                     self.resolve(x).cloned(),
@@ -61,19 +66,23 @@ impl super::Evaluator {
                         Some(ObjectData::Integer(xv)),
                         Some(ObjectData::Integer(mnv)),
                         Some(ObjectData::Integer(mxv)),
-                    ) => EvalResult::Value(self.alloc(ObjectData::Integer(xv.max(mnv).min(mxv)))),
+                    ) => Ok(ExecutionFlow::Value(
+                        self.alloc(ObjectData::Integer(xv.max(mnv).min(mxv))),
+                    )),
                     (
                         Some(ObjectData::Decimal(xv)),
                         Some(ObjectData::Decimal(mnv)),
                         Some(ObjectData::Decimal(mxv)),
-                    ) => EvalResult::Value(self.alloc(ObjectData::Decimal(xv.max(mnv).min(mxv)))),
+                    ) => Ok(ExecutionFlow::Value(
+                        self.alloc(ObjectData::Decimal(xv.max(mnv).min(mxv))),
+                    )),
                     (
                         Some(ObjectData::Integer(xv)),
                         Some(ObjectData::Integer(mnv)),
                         Some(ObjectData::Decimal(mxv)),
-                    ) => EvalResult::Value(
-                        self.alloc(ObjectData::Decimal((xv as f64).max(mnv as f64).min(mxv))),
-                    ),
+                    ) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(
+                        (xv as f64).max(mnv as f64).min(mxv),
+                    )))),
                     _ => self.rt_err_kind("TypeError", "Math.clamp requires numeric arguments"),
                 }
             }
@@ -82,9 +91,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Math.sign(x) requires 1 argument");
                 }
                 let xr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 match self.resolve(xr).cloned() {
                     Some(ObjectData::Integer(v)) => {
@@ -95,7 +104,7 @@ impl super::Evaluator {
                         } else {
                             0
                         };
-                        EvalResult::Value(self.alloc(ObjectData::Integer(s)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(s))))
                     }
                     Some(ObjectData::Decimal(v)) => {
                         let s = if v > 0.0 {
@@ -105,7 +114,7 @@ impl super::Evaluator {
                         } else {
                             0
                         };
-                        EvalResult::Value(self.alloc(ObjectData::Integer(s)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(s))))
                     }
                     _ => self.rt_err_kind("TypeError", "Math.sign requires a numeric argument"),
                 }
@@ -145,9 +154,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "File.exists(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -156,16 +165,18 @@ impl super::Evaluator {
                     }
                 };
                 let exists = std::path::Path::new(&path).exists();
-                EvalResult::Value(self.alloc(ObjectData::Boolean(exists)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Boolean(exists)),
+                ))
             }
             "read" => {
                 if dot_call.arguments.len() != 1 {
                     return self.rt_err_kind("TypeError", "File.read(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -189,7 +200,7 @@ impl super::Evaluator {
                     _ => {}
                 }
                 match std::fs::read_to_string(&path) {
-                    Ok(content) => EvalResult::Value(self.alloc(ObjectData::Str(content))),
+                    Ok(content) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(content)))),
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("File error reading '{}': {}", path, e))
                     }
@@ -203,14 +214,14 @@ impl super::Evaluator {
                     );
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let cr = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -218,7 +229,7 @@ impl super::Evaluator {
                 };
                 let content = self.display(cr);
                 match std::fs::write(&path, &content) {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("File error writing '{}': {}", path, e))
                     }
@@ -229,9 +240,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "File.create(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -248,7 +259,7 @@ impl super::Evaluator {
                         );
                     }
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
             "read_asBinary" => {
                 if dot_call.arguments.len() != 1 {
@@ -256,9 +267,9 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "File.read_asBinary(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -290,10 +301,10 @@ impl super::Evaluator {
                             .iter()
                             .map(|&b| OwnedValue::Integer(b as i64))
                             .collect();
-                        EvalResult::Value(self.alloc(ObjectData::Array {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                             element_type: Some("int".to_string()),
                             elements: owned,
-                        }))
+                        })))
                     }
                     Err(e) => self.rt_err_kind(
                         "IOError",
@@ -309,14 +320,14 @@ impl super::Evaluator {
                     );
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let br = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -347,7 +358,7 @@ impl super::Evaluator {
                     }
                 }
                 match std::fs::write(&path, &buf) {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => self.rt_err_kind(
                         "IOError",
                         format!("File error writing binary '{}': {}", path, e),
@@ -359,9 +370,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "File.listDir(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -379,10 +390,10 @@ impl super::Evaluator {
                                 OwnedValue::Str(name)
                             })
                             .collect();
-                        EvalResult::Value(self.alloc(ObjectData::Array {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                             element_type: Some("string".to_string()),
                             elements: owned,
-                        }))
+                        })))
                     }
                     Err(e) => self
                         .rt_err_kind("IOError", format!("File.listDir '{}' failed: {}", path, e)),
@@ -393,9 +404,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "File.mkdir(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -412,7 +423,7 @@ impl super::Evaluator {
                     );
                 }
                 match std::fs::create_dir_all(&path) {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("File.mkdir '{}' failed: {}", path, e))
                     }
@@ -423,9 +434,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "File.stat(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -446,14 +457,14 @@ impl super::Evaluator {
                             .map(|d| d.as_millis() as i64)
                             .unwrap_or(-1);
                         use crate::region::OwnedValue;
-                        EvalResult::Value(self.alloc(ObjectData::Instance {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Instance {
                             class_name: "FileStat".to_string(),
                             fields: vec![
                                 ("size".to_string(), OwnedValue::Integer(size)),
                                 ("modified".to_string(), OwnedValue::Integer(modified)),
                                 ("isDir".to_string(), OwnedValue::Boolean(is_dir)),
                             ],
-                        }))
+                        })))
                     }
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("File.stat '{}' failed: {}", path, e))
@@ -470,9 +481,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "File.delete(path) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let path = match self.resolve(pr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -487,7 +498,7 @@ impl super::Evaluator {
                     std::fs::remove_file(p)
                 };
                 match result {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("File.delete '{}' failed: {}", path, e))
                     }
@@ -504,14 +515,14 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "File.rename(from, to) requires 2 arguments");
                 }
                 let fr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let tr = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let from = match self.resolve(fr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -527,7 +538,7 @@ impl super::Evaluator {
                     }
                 };
                 match std::fs::rename(&from, &to) {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => self.rt_err_kind(
                         "IOError",
                         format!("File.rename '{}' → '{}' failed: {}", from, to, e),
@@ -551,29 +562,29 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "JSON.stringify(value) requires 1 argument");
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let owned = self.extract(vr);
                 let json = json_stringify_owned(&owned);
-                EvalResult::Value(self.alloc(ObjectData::Str(json)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(json))))
             }
             "parse" => {
                 if dot_call.arguments.len() != 1 {
                     return self.rt_err_kind("TypeError", "JSON.parse(string) requires 1 argument");
                 }
                 let sr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let s = match self.resolve(sr).cloned() {
                     Some(ObjectData::Str(s)) => s,
                     _ => return self.rt_err_kind("TypeError", "JSON.parse requires a string"),
                 };
                 match json_parse(&s) {
-                    Ok(owned) => EvalResult::Value(self.plant_global(owned)),
+                    Ok(owned) => Ok(ExecutionFlow::Value(self.plant_global(owned))),
                     Err(e) => self.rt_err_kind("JsonError", format!("JSON.parse error: {}", e)),
                 }
             }
@@ -585,17 +596,17 @@ impl super::Evaluator {
                     );
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let owned = self.extract(vr);
                 // Optional second arg: spaces per level (default 2).
                 let indent = if dot_call.arguments.len() == 2 {
                     let ir = match self.eval_expression(&dot_call.arguments[1]) {
-                        EvalResult::Value(r) => r,
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                        Ok(ExecutionFlow::Value(r)) => r,
+                        Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                        _ => return Err(RuntimeFailure),
                     };
                     match self.resolve(ir) {
                         Some(ObjectData::Integer(n)) if *n >= 0 => *n as usize,
@@ -617,7 +628,7 @@ impl super::Evaluator {
                     owned
                 };
                 let json = json_pretty_owned(&target, indent);
-                EvalResult::Value(self.alloc(ObjectData::Str(json)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(json))))
             }
             _ => {
                 let m = dot_call.method.clone();

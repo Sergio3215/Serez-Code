@@ -1,3 +1,4 @@
+use super::ExecutionFlow;
 // Regex namespace — a small, dependency-free regular-expression engine.
 //
 // Pure Rust (no external crate), to keep the ecosystem self-contained. It is a
@@ -694,10 +695,10 @@ impl super::Evaluator {
         match method {
             "test" => {
                 let hit = search(&prog, &text, 0).is_some();
-                EvalResult::Value(self.alloc(ObjectData::Boolean(hit)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(hit))))
             }
             "match" => match search(&prog, &text, 0) {
-                None => EvalResult::Value(self.null_ref),
+                None => Ok(ExecutionFlow::Value(self.null_ref)),
                 Some((_, _, saves)) => {
                     let mut elems: Vec<OwnedValue> = Vec::new();
                     for g in 0..=prog.ngroups {
@@ -706,10 +707,10 @@ impl super::Evaluator {
                             _ => elems.push(OwnedValue::Null),
                         }
                     }
-                    EvalResult::Value(self.alloc(ObjectData::Array {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                         element_type: None,
                         elements: elems,
-                    }))
+                    })))
                 }
             },
             "findAll" => {
@@ -727,10 +728,10 @@ impl super::Evaluator {
                         }
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: out,
-                }))
+                })))
             }
             "split" => {
                 let mut out: Vec<OwnedValue> = Vec::new();
@@ -755,10 +756,10 @@ impl super::Evaluator {
                     }
                 }
                 out.push(OwnedValue::Str(slice(&text, last, text.len())));
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: out,
-                }))
+                })))
             }
             "replace" => {
                 let repl =
@@ -801,7 +802,7 @@ impl super::Evaluator {
                     }
                 }
                 result.push_str(&slice(&text, last, text.len()));
-                EvalResult::Value(self.alloc(ObjectData::Str(result)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(result))))
             }
             _ => self.rt_err_kind(
                 "ReferenceError",

@@ -3,6 +3,7 @@ use super::{
     CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
     obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
 };
+use super::{ExecutionFlow, RuntimeFailure};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
@@ -17,7 +18,7 @@ impl super::Evaluator {
     /// value: a user `throw` stays a `Throw` and a nested runtime failure keeps
     /// its own structured payload. Only a well-formed value of the wrong type
     /// becomes a fresh, contextual `TypeError`. Collapsing either case into a
-    /// bare `EvalResult::Error` is what used to make `f(boom())` lose the
+    /// bare `Err(RuntimeFailure)` is what used to make `f(boom())` lose the
     /// exception the program actually raised.
     pub(super) fn eval_str_arg(
         &mut self,
@@ -26,7 +27,7 @@ impl super::Evaluator {
         parameter: &str,
     ) -> Result<String, EvalResult> {
         let value = match self.eval_expression(expr) {
-            EvalResult::Value(value) => value,
+            Ok(ExecutionFlow::Value(value)) => value,
             other => return Err(other),
         };
         match self.resolve(value).cloned() {
@@ -47,7 +48,7 @@ impl super::Evaluator {
         parameter: &str,
     ) -> Result<i64, EvalResult> {
         let value = match self.eval_expression(expr) {
-            EvalResult::Value(value) => value,
+            Ok(ExecutionFlow::Value(value)) => value,
             other => return Err(other),
         };
         match self.resolve(value).cloned() {
@@ -63,23 +64,23 @@ impl super::Evaluator {
 
     pub(super) fn eval_switch(&mut self, sw: &ast::SwitchStatement) -> EvalResult {
         let val_ref = match self.eval_expression(&sw.value) {
-            EvalResult::Value(v) => v,
+            Ok(ExecutionFlow::Value(v)) => v,
             other => return other,
         };
         let val_data = match self.resolve(val_ref).cloned() {
             Some(d) => d,
-            None => return EvalResult::Error,
+            None => return Err(RuntimeFailure),
         };
 
         for case in &sw.cases {
             for case_expr in &case.values {
                 let case_ref = match self.eval_expression(case_expr) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let case_data = match self.resolve(case_ref).cloned() {
                     Some(d) => d,
-                    None => return EvalResult::Error,
+                    None => return Err(RuntimeFailure),
                 };
                 if self.values_equal(&val_data, &case_data) {
                     return self.eval_block(&case.body);
@@ -91,7 +92,7 @@ impl super::Evaluator {
             return self.eval_block(default_block);
         }
 
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     pub(super) fn values_equal(&self, a: &ObjectData, b: &ObjectData) -> bool {
@@ -166,7 +167,7 @@ impl super::Evaluator {
         // non-catchable (namespace permission denials and migrated resource
         // limits), plus legacy failures without a payload, stay fatal and abort.
         let body_result = match body_result {
-            EvalResult::Error
+            Err(RuntimeFailure)
                 if has_catch
                     && self
                         .last_error
@@ -175,7 +176,7 @@ impl super::Evaluator {
             {
                 let error = match self.last_error.take() {
                     Some(pending) => pending.error,
-                    None => return EvalResult::Error,
+                    None => return Err(RuntimeFailure),
                 };
                 // `spec/errors.md` types this as `"line:column"` **or null**, and the
                 // null case is precisely "there was no frame to point at".
@@ -234,13 +235,13 @@ impl super::Evaluator {
                         ),
                     ],
                 });
-                EvalResult::Throw(err_ref)
+                Ok(ExecutionFlow::Throw(err_ref))
             }
             other => other,
         };
 
         let result_after_catch = match body_result {
-            EvalResult::Throw(thrown_ref) => {
+            Ok(ExecutionFlow::Throw(thrown_ref)) => {
                 if let Some(ref catch_block) = try_stmt.catch_body {
                     self.scopes.push();
                     if let Some(ref var_name) = try_stmt.catch_var {
@@ -258,32 +259,32 @@ impl super::Evaluator {
                     let mut catch_continue_label: Option<String> = None;
                     for s in &catch_block.statements {
                         match self.eval_statement(s) {
-                            EvalResult::Value(v) => catch_val = v,
-                            EvalResult::Return(v) => {
+                            Ok(ExecutionFlow::Value(v)) => catch_val = v,
+                            Ok(ExecutionFlow::Return(v)) => {
                                 catch_return = Some(v);
                                 break;
                             }
-                            EvalResult::Throw(v) => {
+                            Ok(ExecutionFlow::Throw(v)) => {
                                 catch_throw = Some(v);
                                 break;
                             }
-                            EvalResult::Error => {
+                            Err(RuntimeFailure) => {
                                 catch_error = true;
                                 break;
                             }
-                            EvalResult::Break => {
+                            Ok(ExecutionFlow::Break) => {
                                 catch_break = true;
                                 break;
                             }
-                            EvalResult::Continue => {
+                            Ok(ExecutionFlow::Continue) => {
                                 catch_continue = true;
                                 break;
                             }
-                            EvalResult::BreakLabel(l) => {
+                            Ok(ExecutionFlow::BreakLabel(l)) => {
                                 catch_break_label = Some(l);
                                 break;
                             }
-                            EvalResult::ContinueLabel(l) => {
+                            Ok(ExecutionFlow::ContinueLabel(l)) => {
                                 catch_continue_label = Some(l);
                                 break;
                             }
@@ -294,24 +295,24 @@ impl super::Evaluator {
                     let owned = self.extract(primary);
                     self.scopes.pop();
                     if catch_error {
-                        EvalResult::Error
+                        Err(RuntimeFailure)
                     } else if catch_break {
-                        EvalResult::Break
+                        Ok(ExecutionFlow::Break)
                     } else if catch_continue {
-                        EvalResult::Continue
+                        Ok(ExecutionFlow::Continue)
                     } else if let Some(l) = catch_break_label {
-                        EvalResult::BreakLabel(l)
+                        Ok(ExecutionFlow::BreakLabel(l))
                     } else if let Some(l) = catch_continue_label {
-                        EvalResult::ContinueLabel(l)
+                        Ok(ExecutionFlow::ContinueLabel(l))
                     } else if catch_return.is_some() {
-                        EvalResult::Return(self.plant(owned))
+                        Ok(ExecutionFlow::Return(self.plant(owned)))
                     } else if catch_throw.is_some() {
-                        EvalResult::Throw(self.plant(owned))
+                        Ok(ExecutionFlow::Throw(self.plant(owned)))
                     } else {
-                        EvalResult::Value(self.plant(owned))
+                        Ok(ExecutionFlow::Value(self.plant(owned)))
                     }
                 } else {
-                    EvalResult::Throw(thrown_ref) // no catch — re-throw after finally
+                    Ok(ExecutionFlow::Throw(thrown_ref)) // no catch — re-throw after finally
                 }
             }
             other => other,
@@ -320,9 +321,9 @@ impl super::Evaluator {
         // finally always runs — throw/return/error from it override the try/catch result
         if let Some(ref finally_block) = try_stmt.finally_body {
             match self.eval_block(finally_block) {
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                EvalResult::Return(v) => return EvalResult::Return(v),
-                EvalResult::Error => return EvalResult::Error,
+                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                Ok(ExecutionFlow::Return(v)) => return Ok(ExecutionFlow::Return(v)),
+                Err(RuntimeFailure) => return Err(RuntimeFailure),
                 _ => {} // Value / Break / Continue — preserve result_after_catch
             }
         }

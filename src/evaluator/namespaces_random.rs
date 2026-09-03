@@ -1,3 +1,4 @@
+use super::ExecutionFlow;
 // Random namespace
 //
 // Random.seed(n)                          → null      (set LCG seed)
@@ -26,13 +27,13 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Random.seed(n) requires 1 argument");
                 }
                 let r = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 match self.resolve(r).cloned() {
                     Some(ObjectData::Integer(n)) => {
                         self.lcg_state = n as u64;
-                        EvalResult::Value(self.null_ref)
+                        Ok(ExecutionFlow::Value(self.null_ref))
                     }
                     _ => self.rt_err_kind("TypeError", "Random.seed requires an integer"),
                 }
@@ -43,7 +44,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Random.decimal() takes no arguments");
                 }
                 let v = self.lcg_next_f64();
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(v))))
             }
 
             "int" => {
@@ -52,11 +53,11 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Random.int(min, max) requires 2 arguments");
                 }
                 let r0 = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let r1 = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 match (self.resolve(r0).cloned(), self.resolve(r1).cloned()) {
@@ -72,7 +73,7 @@ impl super::Evaluator {
                         let width = (hi as i128 - lo as i128 + 1) as u128;
                         let offset = self.lcg_bounded_offset(width);
                         let v = (lo as i128 + offset as i128) as i64;
-                        EvalResult::Value(self.alloc(ObjectData::Integer(v)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(v))))
                     }
                     _ => self.rt_err_kind("TypeError", "Random.int requires integer arguments"),
                 }
@@ -84,11 +85,11 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Random.uniform(lo, hi) requires 2 arguments");
                 }
                 let r0 = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let r1 = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let lo = match self.resolve(r0) {
@@ -114,7 +115,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("RangeError", "Random.uniform: lo must be < hi");
                 }
                 let v = lo + self.lcg_next_f64() * (hi - lo);
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(v))))
             }
 
             "normal" => {
@@ -123,11 +124,11 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Random.normal(mean, std) requires 2 arguments");
                 }
                 let r0 = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let r1 = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let mean = match self.resolve(r0) {
@@ -155,7 +156,7 @@ impl super::Evaluator {
                         .rt_err_kind("RangeError", "Random.normal: std must be non-negative");
                 }
                 let v = self.lcg_normal(mean, std);
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(v))))
             }
 
             "normalTensor" => {
@@ -171,11 +172,11 @@ impl super::Evaluator {
                 };
                 let total: usize = shape.iter().product();
                 let r1 = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let r2 = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let mean = match self.resolve(r1) {
@@ -209,11 +210,11 @@ impl super::Evaluator {
                     );
                 }
                 let data: Vec<f64> = (0..total).map(|_| self.lcg_normal(mean, std)).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data,
                     tid: 0,
-                }))
+                })))
             }
 
             "uniformTensor" => {
@@ -229,11 +230,11 @@ impl super::Evaluator {
                 };
                 let total: usize = shape.iter().product();
                 let r1 = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let r2 = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let lo = match self.resolve(r1) {
@@ -263,11 +264,11 @@ impl super::Evaluator {
                 let data: Vec<f64> = (0..total)
                     .map(|_| lo + self.lcg_next_f64() * range)
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data,
                     tid: 0,
-                }))
+                })))
             }
 
             "shuffle" => {
@@ -276,7 +277,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Random.shuffle(array) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 match self.resolve(arr_ref).cloned() {
@@ -290,10 +291,10 @@ impl super::Evaluator {
                             let j = (self.lcg_next_u64() % (i as u64 + 1)) as usize;
                             elems.swap(i, j);
                         }
-                        EvalResult::Value(self.alloc(ObjectData::Array {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                             element_type,
                             elements: elems,
-                        }))
+                        })))
                     }
                     _ => self.rt_err_kind("TypeError", "Random.shuffle requires an array"),
                 }
@@ -305,7 +306,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Random.choice(array) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 match self.resolve(arr_ref).cloned() {
@@ -314,7 +315,7 @@ impl super::Evaluator {
                             return self.rt_err_kind("RangeError", "Random.choice: array is empty");
                         }
                         let idx = (self.lcg_next_u64() % elements.len() as u64) as usize;
-                        EvalResult::Value(self.plant(elements[idx].clone()))
+                        Ok(ExecutionFlow::Value(self.plant(elements[idx].clone())))
                     }
                     _ => self.rt_err_kind("TypeError", "Random.choice requires an array"),
                 }
@@ -326,7 +327,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Random.bernoulli(p) requires 1 argument");
                 }
                 let r = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let p = match self.resolve(r) {
@@ -346,7 +347,7 @@ impl super::Evaluator {
                     );
                 }
                 let b = self.lcg_next_f64() < p;
-                EvalResult::Value(self.bool_ref(b))
+                Ok(ExecutionFlow::Value(self.bool_ref(b)))
             }
 
             _ => self.rt_err_kind(

@@ -1,3 +1,4 @@
+use super::{ExecutionFlow, RuntimeFailure};
 // GPU namespace — CPU-backed compute buffers with a GPU-shaped API
 //
 // Buffers are flat f64 arrays stored in the evaluator. The API mirrors
@@ -39,7 +40,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let id = self.alloc_gpu_buffer(vec![0.0f64; size]);
-                EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
             }
 
             "createBufferFromArray" => {
@@ -50,7 +51,7 @@ impl super::Evaluator {
                     );
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let data = match self.array_to_f64_vec(arr_ref, "GPU.createBufferFromArray") {
@@ -58,7 +59,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let id = self.alloc_gpu_buffer(data);
-                EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
             }
 
             "readBuffer" => {
@@ -79,10 +80,10 @@ impl super::Evaluator {
                     }
                 };
                 let owned: Vec<OwnedValue> = data.iter().map(|&f| OwnedValue::Decimal(f)).collect();
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("decimal".to_string()),
                     elements: owned,
-                }))
+                })))
             }
 
             "freeBuffer" => {
@@ -98,7 +99,7 @@ impl super::Evaluator {
                 // the same mistake; recorded in MATURITY_AUDIT.md rather than
                 // changed inside a refactor.
                 self.gpu.remove(id);
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "fill" => {
@@ -111,7 +112,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let val_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let val = match self.to_f64(val_ref) {
@@ -129,7 +130,7 @@ impl super::Evaluator {
                         );
                     }
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "size" => {
@@ -149,7 +150,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             "map" => {
@@ -163,7 +164,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let fn_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let data = match self.gpu.get(id) {
@@ -177,7 +178,7 @@ impl super::Evaluator {
                 for val in data {
                     let arg = OwnedValue::Decimal(val);
                     match self.call_function(fn_ref, vec![arg]) {
-                        EvalResult::Value(r) => match self.to_f64(r) {
+                        Ok(ExecutionFlow::Value(r)) => match self.to_f64(r) {
                             Some(f) => out.push(f),
                             None => {
                                 return self.rt_err_kind(
@@ -186,12 +187,14 @@ impl super::Evaluator {
                                 );
                             }
                         },
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                        Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                        _ => return Err(RuntimeFailure),
                     }
                 }
                 let new_id = self.alloc_gpu_buffer(out);
-                EvalResult::Value(self.alloc(ObjectData::Integer(new_id)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(new_id)),
+                ))
             }
 
             "reduce" => {
@@ -207,11 +210,11 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let fn_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let init_ref = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let mut acc = match self.to_f64(init_ref) {
@@ -233,7 +236,7 @@ impl super::Evaluator {
                 for val in data {
                     let args = vec![OwnedValue::Decimal(acc), OwnedValue::Decimal(val)];
                     match self.call_function(fn_ref, args) {
-                        EvalResult::Value(r) => match self.to_f64(r) {
+                        Ok(ExecutionFlow::Value(r)) => match self.to_f64(r) {
                             Some(f) => acc = f,
                             None => {
                                 return self.rt_err_kind(
@@ -242,11 +245,11 @@ impl super::Evaluator {
                                 );
                             }
                         },
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                        Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                        _ => return Err(RuntimeFailure),
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Decimal(acc)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(acc))))
             }
 
             "dot" => {
@@ -292,7 +295,9 @@ impl super::Evaluator {
                     );
                 }
                 let result: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-                EvalResult::Value(self.alloc(ObjectData::Decimal(result)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(result)),
+                ))
             }
 
             "axpy" => {
@@ -304,7 +309,7 @@ impl super::Evaluator {
                     );
                 }
                 let alpha_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let alpha = match self.to_f64(alpha_ref) {
@@ -355,7 +360,9 @@ impl super::Evaluator {
                     .map(|(xi, yi)| alpha * xi + yi)
                     .collect();
                 let new_id = self.alloc_gpu_buffer(out);
-                EvalResult::Value(self.alloc(ObjectData::Integer(new_id)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(new_id)),
+                ))
             }
 
             "matmul" => {
@@ -478,7 +485,9 @@ impl super::Evaluator {
                     }
                 }
                 let new_id = self.alloc_gpu_buffer(c);
-                EvalResult::Value(self.alloc(ObjectData::Integer(new_id)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(new_id)),
+                ))
             }
 
             _ => self.rt_err_kind(
@@ -527,8 +536,8 @@ impl super::Evaluator {
 
     fn eval_gpu_id(&mut self, expr: &ast::Expression, ctx: &str) -> Result<i64, EvalResult> {
         let r = match self.eval_expression(expr) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
             other => return Err(other),
         };
         match self.resolve(r) {
@@ -539,8 +548,8 @@ impl super::Evaluator {
 
     fn eval_to_usize(&mut self, expr: &ast::Expression, ctx: &str) -> Result<usize, EvalResult> {
         let r = match self.eval_expression(expr) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
             other => return Err(other),
         };
         match self.resolve(r) {

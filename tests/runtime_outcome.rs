@@ -1,7 +1,9 @@
 //! Regression tests for the structured program-evaluation boundary.
 //!
-//! The evaluator still uses `EvalResult` internally, but a complete program
-//! must expose why it stopped without forcing embedders to parse stderr.
+//! The evaluator uses `EvalResult` — now `Result<ExecutionFlow, RuntimeFailure>`
+//! — internally, but a complete program must expose why it stopped without
+//! forcing embedders to parse stderr. `tests/execution_flow.rs` pins which side
+//! of that `Result` each kind of event lands on; this pins what each one carries.
 
 use serez_code::ast::Program;
 use serez_code::evaluator::{Evaluator, InvalidControlFlow, ProgramOutcome};

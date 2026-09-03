@@ -91,17 +91,73 @@ struct StoredClass {
 
 // ── EvalResult ────────────────────────────────────────────────────────────────
 
+/// How a piece of Serez finished, when it finished.
+///
+/// Every variant here is a **legal state of the language**: a value was
+/// produced, or control left the current construct in a way the grammar
+/// provides for. None of them is a failure.
+///
+/// `Throw` belongs here and that is deliberate. A `throw` is a Serez program
+/// doing what Serez programs may do — the value propagates to the nearest
+/// `try/catch`, and a program that catches it continues normally. It is control
+/// flow with a payload, not a fault. A *runtime* fault is the other half of
+/// [`EvalResult`], and `try/catch` cannot consume one.
 #[derive(Debug, Clone)]
-pub enum EvalResult {
-    Value(ObjectRef),      // Ejecución normal (retorno implícito)
-    Return(ObjectRef),     // Ejecución interrumpida por `return`
-    Break,                 // Señal de break — capturada por while/for
-    Continue,              // Señal de continue — capturada por while/for
-    BreakLabel(String),    // Señal de break con label
-    ContinueLabel(String), // Señal de continue con label
-    Error,                 // Ocurrió un error
-    Throw(ObjectRef),      // Excepción de usuario — propagada hasta try/catch
+pub enum ExecutionFlow {
+    /// Normal completion — the value of the expression or the implicit result
+    /// of the statement.
+    Value(ObjectRef),
+    /// `return` — unwinds to the enclosing function.
+    Return(ObjectRef),
+    /// `break` — consumed by the innermost `while`/`for`.
+    Break,
+    /// `continue` — consumed by the innermost `while`/`for`.
+    Continue,
+    /// `break label` — consumed by the loop carrying that label.
+    BreakLabel(String),
+    /// `continue label` — consumed by the loop carrying that label.
+    ContinueLabel(String),
+    /// A user `throw` — propagates to the nearest `try/catch`.
+    Throw(ObjectRef),
 }
+
+/// A real runtime failure: the evaluation cannot continue.
+///
+/// Deliberately carries nothing. The failure's payload — kind, code, message,
+/// span and call stack — is recorded on the evaluator as `last_error` at the
+/// moment it is raised, together with the `catchable` flag that decides whether
+/// `try/catch` may consume it, and `error_generation` so a stale error cannot be
+/// mistaken for a fresh one. Duplicating that into the return value would create
+/// two sources of truth for one event, and `evaluator_reuse_never_reuses_a_stale_runtime_error`
+/// exists because the single source is subtle enough already.
+///
+/// So this is the *signal* — "stop, something failed" — and the evaluator holds
+/// the *description*. What the type buys is that the signal can no longer be
+/// mistaken for a value, a `return`, or a `throw`, because it is on the other
+/// side of a `Result`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeFailure;
+
+/// What evaluating anything produces: legal control flow, or a runtime failure.
+///
+/// # Why this is a `Result` and not one enum
+///
+/// It used to be one enum with eight variants — seven kinds of control flow and
+/// an untyped `Error` sentinel sharing the list. `MATURITY_AUDIT.md` carried
+/// that as debt under M6: *"`EvalResult` mixes values, control flow, throw and
+/// an untyped `Error` sentinel"*. The cost was not aesthetic. Every `match` over
+/// a result had to decide, per arm, whether it was handling a language state or
+/// a fault, and the two read identically — `EvalResult::Throw(v)` and
+/// `EvalResult::Error` sat one line apart and meant entirely different things
+/// about whether the program was still running.
+///
+/// Splitting them puts that distinction in the type. `Ok(_)` is the language
+/// doing something; `Err(_)` is the runtime failing. A function that only
+/// forwards failures can say so.
+///
+/// The alias keeps the name every one of the 1,600 call sites already used, and
+/// keeps `EvalResult` meaning what it has always meant at the boundary.
+pub type EvalResult = Result<ExecutionFlow, RuntimeFailure>;
 
 pub(crate) enum DefaultArgumentResult {
     Value(ObjectRef),
@@ -172,7 +228,7 @@ pub enum ProgramOutcome {
         message: String,
     },
     InvalidControlFlow(InvalidControlFlow),
-    /// A legacy `EvalResult::Error` path that did not call `rt_err_kind`.
+    /// A legacy `Err(RuntimeFailure)` path that did not call `rt_err_kind`.
     /// This remains explicit until those producers are migrated one by one.
     UnstructuredError,
 }
@@ -544,7 +600,7 @@ impl Evaluator {
     /// message) pair so an enclosing `try/catch` can bind a structured Error
     /// object (`e.message`, `e.kind`). Prints to stderr only when NOT inside a
     /// try-with-catch, so caught errors don't spam the console. Always returns
-    /// `EvalResult::Error`, which `eval_try` intercepts for recoverable errors.
+    /// `Err(RuntimeFailure)`, which `eval_try` intercepts for recoverable errors.
     pub(crate) fn rt_err_kind(
         &mut self,
         kind: impl Into<String>,
@@ -622,7 +678,7 @@ impl Evaluator {
         }
         self.error_generation = self.error_generation.wrapping_add(1);
         self.last_error = Some(PendingRuntimeError { error, catchable });
-        EvalResult::Error
+        Err(RuntimeFailure)
     }
 
     /// Read-only diagnostic: current sizes of the two arenas (object slots).
@@ -808,8 +864,8 @@ impl Evaluator {
         expression: &ast::Expression,
     ) -> DefaultArgumentResult {
         match self.eval_expression(expression) {
-            EvalResult::Value(value) => DefaultArgumentResult::Value(value),
-            EvalResult::Throw(value) => DefaultArgumentResult::Throw(self.extract(value)),
+            Ok(ExecutionFlow::Value(value)) => DefaultArgumentResult::Value(value),
+            Ok(ExecutionFlow::Throw(value)) => DefaultArgumentResult::Throw(self.extract(value)),
             _ => DefaultArgumentResult::Error,
         }
     }
@@ -1610,7 +1666,7 @@ impl Evaluator {
             };
 
             match self.eval_statement(statement) {
-                EvalResult::Value(v) => {
+                Ok(ExecutionFlow::Value(v)) => {
                     if scratch_mark.is_none() {
                         result = v;
                     }
@@ -1618,25 +1674,25 @@ impl Evaluator {
                         self.global_arena.reset_to(mark);
                     }
                 }
-                EvalResult::Return(_) => {
+                Ok(ExecutionFlow::Return(_)) => {
                     if let Some(mark) = scratch_mark {
                         self.global_arena.reset_to(mark);
                     }
                     return ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Return);
                 }
-                EvalResult::Break | EvalResult::BreakLabel(_) => {
+                Ok(ExecutionFlow::Break) | Ok(ExecutionFlow::BreakLabel(_)) => {
                     if let Some(mark) = scratch_mark {
                         self.global_arena.reset_to(mark);
                     }
                     return ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Break);
                 }
-                EvalResult::Continue | EvalResult::ContinueLabel(_) => {
+                Ok(ExecutionFlow::Continue) | Ok(ExecutionFlow::ContinueLabel(_)) => {
                     if let Some(mark) = scratch_mark {
                         self.global_arena.reset_to(mark);
                     }
                     return ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Continue);
                 }
-                EvalResult::Error => {
+                Err(RuntimeFailure) => {
                     if let Some(mark) = scratch_mark {
                         self.global_arena.reset_to(mark);
                     }
@@ -1647,7 +1703,7 @@ impl Evaluator {
                     }
                     return ProgramOutcome::UnstructuredError;
                 }
-                EvalResult::Throw(r) => {
+                Ok(ExecutionFlow::Throw(r)) => {
                     // Render the thrown value BEFORE rewinding the scratch mark:
                     // for `out f()` the payload lives above the watermark and the
                     // reset would free it (the message became "Referencia inválida").
@@ -1824,14 +1880,14 @@ in the program that was run. Please report it."
                 let cn = class_name.clone();
                 if self.find_method(&cn, "op_str").is_some() {
                     match self.call_op_method(obj_ref, &cn, "op_str", vec![], 0, 0) {
-                        EvalResult::Value(r) => {
+                        Ok(ExecutionFlow::Value(r)) => {
                             if let Some(ObjectData::Str(s)) = self.resolve(r) {
                                 return Ok(s.clone());
                             }
                             Ok(self.display(r))
                         }
-                        EvalResult::Throw(v) => Err(EvalResult::Throw(v)),
-                        EvalResult::Error => Err(EvalResult::Error),
+                        Ok(ExecutionFlow::Throw(v)) => Err(Ok(ExecutionFlow::Throw(v))),
+                        Err(RuntimeFailure) => Err(Err(RuntimeFailure)),
                         other => Err(other),
                     }
                 } else {
@@ -1901,27 +1957,27 @@ in the program that was run. Please report it."
         let mut method_throw: Option<ObjectRef> = None;
         for stmt in &method.body.statements {
             match self.eval_statement(stmt) {
-                EvalResult::Value(_) => {}
-                EvalResult::Return(v) => {
+                Ok(ExecutionFlow::Value(_)) => {}
+                Ok(ExecutionFlow::Return(v)) => {
                     result_ref = v;
                     break;
                 }
-                EvalResult::Throw(v) => {
+                Ok(ExecutionFlow::Throw(v)) => {
                     method_throw = Some(v);
                     break;
                 }
-                EvalResult::Error => {
+                Err(RuntimeFailure) => {
                     error = true;
                     break;
                 }
-                EvalResult::Break
-                | EvalResult::Continue
-                | EvalResult::BreakLabel(_)
-                | EvalResult::ContinueLabel(_) => {
+                Ok(ExecutionFlow::Break)
+                | Ok(ExecutionFlow::Continue)
+                | Ok(ExecutionFlow::BreakLabel(_))
+                | Ok(ExecutionFlow::ContinueLabel(_)) => {
                     let message = format!(
                         "break/continue used outside a loop in operator method '{method_name}'"
                     );
-                    self.rt_err(message);
+                    let _ = self.rt_err(message);
                     error = true;
                     break;
                 }
@@ -1936,12 +1992,12 @@ in the program that was run. Please report it."
         self.executing_class = old_executing_class;
 
         if error {
-            return EvalResult::Error;
+            return Err(RuntimeFailure);
         }
         if let Some(t) = throw_owned {
-            return EvalResult::Throw(self.plant(t));
+            return Ok(ExecutionFlow::Throw(self.plant(t)));
         }
-        EvalResult::Value(self.plant(owned))
+        Ok(ExecutionFlow::Value(self.plant(owned)))
     }
 
     // ── Callback calling helper ───────────────────────────────────────────────
@@ -2010,7 +2066,7 @@ in the program that was run. Please report it."
                                 if let Some(previous) = prev_exec_class.clone() {
                                     self.executing_class = previous;
                                 }
-                                return EvalResult::Throw(self.plant(owned));
+                                return Ok(ExecutionFlow::Throw(self.plant(owned)));
                             }
                             DefaultArgumentResult::Error => {
                                 self.call_depth -= 1;
@@ -2018,7 +2074,7 @@ in the program that was run. Please report it."
                                 if let Some(previous) = prev_exec_class.clone() {
                                     self.executing_class = previous;
                                 }
-                                return EvalResult::Error;
+                                return Err(RuntimeFailure);
                             }
                         }
                     } else {
@@ -2030,27 +2086,27 @@ in the program that was run. Please report it."
                 let mut fn_throw: Option<ObjectRef> = None;
                 for s in &body.statements {
                     match self.eval_statement(s) {
-                        EvalResult::Value(_) => {} // only explicit return contributes result
-                        EvalResult::Return(v) => {
+                        Ok(ExecutionFlow::Value(_)) => {} // only explicit return contributes result
+                        Ok(ExecutionFlow::Return(v)) => {
                             result_ref = v;
                             break;
                         }
-                        EvalResult::Throw(v) => {
+                        Ok(ExecutionFlow::Throw(v)) => {
                             fn_throw = Some(v);
                             break;
                         }
-                        EvalResult::Error => {
+                        Err(RuntimeFailure) => {
                             self.call_depth -= 1;
                             self.scopes.pop();
                             if let Some(prev) = prev_exec_class.clone() {
                                 self.executing_class = prev;
                             }
-                            return EvalResult::Error;
+                            return Err(RuntimeFailure);
                         }
-                        EvalResult::Break
-                        | EvalResult::Continue
-                        | EvalResult::BreakLabel(_)
-                        | EvalResult::ContinueLabel(_) => {
+                        Ok(ExecutionFlow::Break)
+                        | Ok(ExecutionFlow::Continue)
+                        | Ok(ExecutionFlow::BreakLabel(_))
+                        | Ok(ExecutionFlow::ContinueLabel(_)) => {
                             self.call_depth -= 1;
                             self.scopes.pop();
                             if let Some(prev) = prev_exec_class.clone() {
@@ -2067,12 +2123,12 @@ in the program that was run. Please report it."
                     let owned = self.extract(thrown);
                     self.call_depth -= 1;
                     self.scopes.pop();
-                    return EvalResult::Throw(self.plant(owned));
+                    return Ok(ExecutionFlow::Throw(self.plant(owned)));
                 }
                 let owned = self.extract(result_ref);
                 self.call_depth -= 1;
                 self.scopes.pop();
-                EvalResult::Value(self.plant(owned))
+                Ok(ExecutionFlow::Value(self.plant(owned)))
             }
             _ => self.rt_err_kind("TypeError", "Callback is not a function"),
         }

@@ -1,3 +1,4 @@
+use super::ExecutionFlow;
 // Methods on the exact `dec` value and the `Dec` static namespace.
 //
 // `dec` is an exact base-10 decimal (rust_decimal): 28-29 significant digits,
@@ -83,18 +84,20 @@ impl super::Evaluator {
                 if method == "setScale" {
                     out.rescale(n);
                 }
-                return EvalResult::Value(self.alloc(ObjectData::Dec(out)));
+                return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dec(out))));
             }
             _ => {}
         }
 
         // Zero-argument methods.
         match method {
-            "scale" => EvalResult::Value(self.alloc(ObjectData::Integer(d.scale() as i64))),
-            "abs" => EvalResult::Value(self.alloc(ObjectData::Dec(d.abs()))),
-            "floor" => EvalResult::Value(self.alloc(ObjectData::Dec(d.floor()))),
-            "ceil" => EvalResult::Value(self.alloc(ObjectData::Dec(d.ceil()))),
-            "isZero" => EvalResult::Value(self.bool_ref(d.is_zero())),
+            "scale" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Integer(d.scale() as i64)),
+            )),
+            "abs" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dec(d.abs())))),
+            "floor" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dec(d.floor())))),
+            "ceil" => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dec(d.ceil())))),
+            "isZero" => Ok(ExecutionFlow::Value(self.bool_ref(d.is_zero()))),
             "sign" => {
                 let s = if d.is_zero() {
                     0
@@ -103,15 +106,17 @@ impl super::Evaluator {
                 } else {
                     1
                 };
-                EvalResult::Value(self.alloc(ObjectData::Integer(s)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(s))))
             }
-            "toString" => EvalResult::Value(self.alloc(ObjectData::Str(d.to_string()))),
+            "toString" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Str(d.to_string())),
+            )),
             "toInt" => match d.trunc().to_i64() {
-                Some(i) => EvalResult::Value(self.alloc(ObjectData::Integer(i))),
+                Some(i) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(i)))),
                 None => self.rt_err_kind("Overflow", "dec.toInt() out of i64 range"),
             },
             "toDecimal" => match d.to_f64() {
-                Some(f) => EvalResult::Value(self.alloc(ObjectData::Decimal(f))),
+                Some(f) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(f)))),
                 None => self.rt_err_kind("Overflow", "dec.toDecimal() not representable as f64"),
             },
             // min / max take one dec (or int) argument.
@@ -132,7 +137,7 @@ impl super::Evaluator {
                 } else {
                     d.max(other)
                 };
-                EvalResult::Value(self.alloc(ObjectData::Dec(out)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dec(out))))
             }
             other => {
                 let message = format!("Unknown dec method '{other}'");
@@ -162,7 +167,7 @@ impl super::Evaluator {
                     s.trim().parse::<Decimal>().ok()
                 };
                 match parsed {
-                    Some(d) => EvalResult::Value(self.alloc(ObjectData::Dec(d))),
+                    Some(d) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dec(d)))),
                     None => {
                         let message = format!("Dec.parse: invalid decimal '{s}'");
                         self.rt_err_kind("RangeError", message)
@@ -191,25 +196,31 @@ impl super::Evaluator {
                     }
                     Err(e) => return e,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Dec(Decimal::new(value, scale))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Dec(Decimal::new(value, scale))),
+                ))
             }
             "MAX" => {
                 if let Some(error) = self.reject_arguments(dot_call, "Dec") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Dec(Decimal::MAX)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Dec(Decimal::MAX)),
+                ))
             }
             "MIN" => {
                 if let Some(error) = self.reject_arguments(dot_call, "Dec") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Dec(Decimal::MIN)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Dec(Decimal::MIN)),
+                ))
             }
             "MAX_SCALE" => {
                 if let Some(error) = self.reject_arguments(dot_call, "Dec") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(28)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(28))))
             }
             other => {
                 let message = format!(
@@ -228,7 +239,7 @@ impl super::Evaluator {
         parameter: &str,
     ) -> Result<i64, EvalResult> {
         let r = match self.eval_expression(e) {
-            EvalResult::Value(r) => r,
+            Ok(ExecutionFlow::Value(r)) => r,
             other => return Err(other),
         };
         match self.resolve(r) {
@@ -247,7 +258,7 @@ impl super::Evaluator {
         parameter: &str,
     ) -> Result<String, EvalResult> {
         let r = match self.eval_expression(e) {
-            EvalResult::Value(r) => r,
+            Ok(ExecutionFlow::Value(r)) => r,
             other => return Err(other),
         };
         match self.resolve(r) {
@@ -266,7 +277,7 @@ impl super::Evaluator {
         parameter: &str,
     ) -> Result<Decimal, EvalResult> {
         let r = match self.eval_expression(e) {
-            EvalResult::Value(r) => r,
+            Ok(ExecutionFlow::Value(r)) => r,
             other => return Err(other),
         };
         match self.resolve(r) {

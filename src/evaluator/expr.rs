@@ -5,6 +5,7 @@ use super::{
     json_stringify_owned, obj_data_eq, obj_data_to_key_str, operator_to_method_name,
     owned_to_key_str, type_matches,
 };
+use super::{ExecutionFlow, RuntimeFailure};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 
@@ -46,7 +47,7 @@ impl super::Evaluator {
         field_name: &str,
         obj_ref: ObjectRef,
     ) {
-        if let EvalResult::Value(inst_ref) = self.eval_expression(inner_obj_expr) {
+        if let Ok(ExecutionFlow::Value(inst_ref)) = self.eval_expression(inner_obj_expr) {
             if let Some(ObjectData::Instance {
                 class_name,
                 mut fields,
@@ -141,8 +142,8 @@ impl super::Evaluator {
             return Ok(None);
         }
         let key_ref = match self.eval_expression(key_expr) {
-            EvalResult::Value(r) => r,
-            _ => return Err(EvalResult::Error),
+            Ok(ExecutionFlow::Value(r)) => r,
+            _ => return Err(Err(RuntimeFailure)),
         };
         let key_str = match self.resolve(key_ref).cloned() {
             Some(ObjectData::Str(s)) => s,
@@ -201,21 +202,23 @@ impl super::Evaluator {
 
     pub(super) fn eval_expression(&mut self, expr: &Expression) -> EvalResult {
         match expr {
-            Expression::Integer { value: i, .. } => EvalResult::Value(self.int_ref(*i)),
+            Expression::Integer { value: i, .. } => Ok(ExecutionFlow::Value(self.int_ref(*i))),
             Expression::Decimal { value: d, .. } => {
-                EvalResult::Value(self.alloc(ObjectData::Decimal(*d)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(*d))))
             }
-            Expression::Dec { value: d, .. } => EvalResult::Value(self.alloc(ObjectData::Dec(*d))),
+            Expression::Dec { value: d, .. } => {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dec(*d))))
+            }
             Expression::String { value: s, .. } => {
-                EvalResult::Value(self.alloc(ObjectData::Str(s.clone())))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s.clone()))))
             }
             Expression::Boolean { value: b, .. } => {
-                EvalResult::Value(self.alloc(ObjectData::Boolean(*b)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(*b))))
             }
-            Expression::Null { .. } => EvalResult::Value(self.null_ref),
+            Expression::Null { .. } => Ok(ExecutionFlow::Value(self.null_ref)),
 
             Expression::Identifier { name, .. } => match self.lookup_var(name) {
-                Some(r) => EvalResult::Value(r),
+                Some(r) => Ok(ExecutionFlow::Value(r)),
                 None => {
                     let n = name.clone();
                     self.rt_err_kind("ReferenceError", format!("Variable not found: {}", n))
@@ -232,7 +235,7 @@ impl super::Evaluator {
                     is_generator: func_lit.is_generator,
                     bound_class: None,
                 };
-                EvalResult::Value(self.alloc(func_data))
+                Ok(ExecutionFlow::Value(self.alloc(func_data)))
             }
 
             Expression::Lambda(lambda) => {
@@ -263,14 +266,14 @@ impl super::Evaluator {
                     },
                 };
                 let captured = self.capture_lambda_env(&body); // snapshot incl. referenced globals (B-83)
-                EvalResult::Value(self.alloc(ObjectData::Function {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Function {
                     return_type: None,
                     parameters: Rc::new(params),
                     body: Rc::new(body),
                     captured: Rc::new(captured),
                     is_generator: false,
                     bound_class: None,
-                }))
+                })))
             }
 
             Expression::InterpolatedString { parts, .. } => {
@@ -279,7 +282,7 @@ impl super::Evaluator {
                     match part {
                         ast::StringPart::Literal(s) => result.push_str(s),
                         ast::StringPart::Expr(expr) => match self.eval_expression(expr) {
-                            EvalResult::Value(r) => match self.fmt_value(r) {
+                            Ok(ExecutionFlow::Value(r)) => match self.fmt_value(r) {
                                 Ok(s) => result.push_str(&s),
                                 Err(e) => return e,
                             },
@@ -287,7 +290,7 @@ impl super::Evaluator {
                         },
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Str(result)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(result))))
             }
 
             Expression::Call(call_expr) => {
@@ -332,9 +335,9 @@ impl super::Evaluator {
                 }
 
                 let func_ref = match self.eval_expression(&call_expr.function) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
 
                 let call_name = match call_expr.function.as_ref() {
@@ -399,19 +402,19 @@ impl super::Evaluator {
                     // Spread: ...expr expands an array into the argument list
                     if let Expression::Spread { value: inner, .. } = arg {
                         let spread_ref = match self.eval_expression(inner) {
-                            EvalResult::Value(r) => r,
-                            EvalResult::Throw(v) => {
+                            Ok(ExecutionFlow::Value(r)) => r,
+                            Ok(ExecutionFlow::Throw(v)) => {
                                 let owned = self.extract(v);
                                 self.scopes.pop();
                                 self.call_depth -= 1;
                                 self.call_stack.pop();
-                                return EvalResult::Throw(self.plant(owned));
+                                return Ok(ExecutionFlow::Throw(self.plant(owned)));
                             }
                             _ => {
                                 self.scopes.pop();
                                 self.call_depth -= 1;
                                 self.call_stack.pop();
-                                return EvalResult::Error;
+                                return Err(RuntimeFailure);
                             }
                         };
                         match self.resolve(spread_ref).cloned() {
@@ -438,22 +441,22 @@ impl super::Evaluator {
                         continue;
                     }
                     match self.eval_expression(arg) {
-                        EvalResult::Value(r) => arg_refs.push(r),
+                        Ok(ExecutionFlow::Value(r)) => arg_refs.push(r),
                         // A throw inside an argument (g() in f(g())) must unwind as a
                         // THROW, not degrade to a silent Error. Re-plant the payload
                         // across the pop so it survives this frame's teardown.
-                        EvalResult::Throw(v) => {
+                        Ok(ExecutionFlow::Throw(v)) => {
                             let owned = self.extract(v);
                             self.scopes.pop();
                             self.call_depth -= 1;
                             self.call_stack.pop();
-                            return EvalResult::Throw(self.plant(owned));
+                            return Ok(ExecutionFlow::Throw(self.plant(owned)));
                         }
                         _ => {
                             self.scopes.pop();
                             self.call_depth -= 1;
                             self.call_stack.pop();
-                            return EvalResult::Error;
+                            return Err(RuntimeFailure);
                         }
                     }
                 }
@@ -554,13 +557,13 @@ impl super::Evaluator {
                                 self.scopes.pop();
                                 self.call_depth -= 1;
                                 self.call_stack.pop();
-                                return EvalResult::Throw(self.plant(owned));
+                                return Ok(ExecutionFlow::Throw(self.plant(owned)));
                             }
                             DefaultArgumentResult::Error => {
                                 self.scopes.pop();
                                 self.call_depth -= 1;
                                 self.call_stack.pop();
-                                return EvalResult::Error;
+                                return Err(RuntimeFailure);
                             }
                         }
                     } else {
@@ -590,24 +593,25 @@ impl super::Evaluator {
                 let mut early_error = false;
                 for s in &body.statements {
                     match self.eval_statement(s) {
-                        EvalResult::Value(_) => {} // implicit — function result is null unless explicit return
-                        EvalResult::Return(v) => {
+                        Ok(ExecutionFlow::Value(_)) => {} // implicit — function result is null unless explicit return
+                        Ok(ExecutionFlow::Return(v)) => {
                             result_ref = v;
                             break;
                         }
-                        EvalResult::Throw(v) => {
+                        Ok(ExecutionFlow::Throw(v)) => {
                             early_throw = Some(self.extract(v));
                             break;
                         }
-                        EvalResult::Error => {
+                        Err(RuntimeFailure) => {
                             early_error = true;
                             break;
                         }
-                        EvalResult::Break
-                        | EvalResult::Continue
-                        | EvalResult::BreakLabel(_)
-                        | EvalResult::ContinueLabel(_) => {
-                            self.rt_err("'break'/'continue' cannot be used outside of a loop");
+                        Ok(ExecutionFlow::Break)
+                        | Ok(ExecutionFlow::Continue)
+                        | Ok(ExecutionFlow::BreakLabel(_))
+                        | Ok(ExecutionFlow::ContinueLabel(_)) => {
+                            let _ =
+                                self.rt_err("'break'/'continue' cannot be used outside of a loop");
                             early_error = true;
                             break;
                         }
@@ -626,29 +630,29 @@ impl super::Evaluator {
                     self.call_depth -= 1;
                     self.call_stack.pop();
                     if early_error {
-                        return EvalResult::Error;
+                        return Err(RuntimeFailure);
                     }
                     if let Some(thrown) = early_throw {
-                        return EvalResult::Throw(self.plant(thrown));
+                        return Ok(ExecutionFlow::Throw(self.plant(thrown)));
                     }
                     let arr_ref = self.alloc(ObjectData::Array {
                         element_type: None,
                         elements: collected,
                     });
-                    return EvalResult::Value(arr_ref);
+                    return Ok(ExecutionFlow::Value(arr_ref));
                 }
 
                 if early_error {
                     self.scopes.pop();
                     self.call_depth -= 1;
                     self.call_stack.pop();
-                    return EvalResult::Error;
+                    return Err(RuntimeFailure);
                 }
                 if let Some(thrown) = early_throw {
                     self.scopes.pop();
                     self.call_depth -= 1;
                     self.call_stack.pop();
-                    return EvalResult::Throw(self.plant(thrown));
+                    return Ok(ExecutionFlow::Throw(self.plant(thrown)));
                 }
 
                 // Deep-extract ANTES del pop — preserva elementos de arrays anidados
@@ -673,7 +677,7 @@ impl super::Evaluator {
                     }
                 }
 
-                EvalResult::Value(result_ref)
+                Ok(ExecutionFlow::Value(result_ref))
             }
 
             Expression::ArrayLiteral(arr) => {
@@ -682,9 +686,9 @@ impl super::Evaluator {
                     // Spread: ...expr expands an array into this array
                     if let Expression::Spread { value: inner, .. } = el {
                         let spread_ref = match self.eval_expression(inner) {
-                            EvalResult::Value(r) => r,
-                            EvalResult::Throw(v) => return EvalResult::Throw(v),
-                            _ => return EvalResult::Error,
+                            Ok(ExecutionFlow::Value(r)) => r,
+                            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                            _ => return Err(RuntimeFailure),
                         };
                         match self.resolve(spread_ref).cloned() {
                             Some(ObjectData::Array {
@@ -703,7 +707,7 @@ impl super::Evaluator {
                         continue;
                     }
                     match self.eval_expression(el) {
-                        EvalResult::Value(r) => {
+                        Ok(ExecutionFlow::Value(r)) => {
                             if let Some(ref et) = arr.element_type {
                                 let mismatch = match self.resolve(r) {
                                     Some(data) if type_matches(et, data) => None,
@@ -720,20 +724,20 @@ impl super::Evaluator {
                             let owned = self.extract(r);
                             owned_elems.push(owned);
                         }
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                        Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                        _ => return Err(RuntimeFailure),
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: arr.element_type.clone(),
                     elements: owned_elems,
-                }))
+                })))
             }
 
             Expression::If(if_expr) => {
                 let condition_ref = match self.eval_expression(&if_expr.condition) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Return(v) => return EvalResult::Return(v),
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Return(v)) => return Ok(ExecutionFlow::Return(v)),
                     other => return other,
                 };
 
@@ -743,20 +747,20 @@ impl super::Evaluator {
                 } else if let Some(alt) = &if_expr.alternative {
                     self.eval_block(alt)
                 } else {
-                    EvalResult::Value(self.null_ref)
+                    Ok(ExecutionFlow::Value(self.null_ref))
                 }
             }
 
             Expression::Index(index_expr) => {
                 let left_ref = match self.eval_expression(&index_expr.left) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let idx_ref = match self.eval_expression(&index_expr.index) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
 
                 let idx_data = self.resolve(idx_ref).unwrap().clone();
@@ -775,8 +779,8 @@ impl super::Evaluator {
                         .lookup(entries, &search_key)
                         .map(|i| entries[i].1.clone());
                     return match found {
-                        Some(v) => EvalResult::Value(self.plant_global(v)),
-                        None => EvalResult::Value(self.null_ref),
+                        Some(v) => Ok(ExecutionFlow::Value(self.plant_global(v))),
+                        None => Ok(ExecutionFlow::Value(self.null_ref)),
                     };
                 }
 
@@ -801,7 +805,7 @@ impl super::Evaluator {
                     };
                     if let Some(got) = from_array {
                         return match got {
-                            Ok(v) => EvalResult::Value(self.plant(v)),
+                            Ok(v) => Ok(ExecutionFlow::Value(self.plant(v))),
                             Err(len) => self.rt_err_kind(
                                 "IndexOutOfBounds",
                                 format!("Index out of bounds: {} (length {})", i, len),
@@ -820,8 +824,8 @@ impl super::Evaluator {
                     };
                     if let Some(got) = from_str {
                         return match got {
-                            Some(c) => EvalResult::Value(self.alloc(ObjectData::Str(c))),
-                            None => EvalResult::Value(self.null_ref),
+                            Some(c) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(c)))),
+                            None => Ok(ExecutionFlow::Value(self.null_ref)),
                         };
                     }
                 }
@@ -841,14 +845,14 @@ impl super::Evaluator {
                 let mut entries: Vec<(OwnedValue, OwnedValue)> = Vec::new();
                 for (key_expr, val_expr) in &dict_lit.entries {
                     let key_ref = match self.eval_expression(key_expr) {
-                        EvalResult::Value(r) => r,
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                        Ok(ExecutionFlow::Value(r)) => r,
+                        Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                        _ => return Err(RuntimeFailure),
                     };
                     let val_ref = match self.eval_expression(val_expr) {
-                        EvalResult::Value(r) => r,
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                        Ok(ExecutionFlow::Value(r)) => r,
+                        Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                        _ => return Err(RuntimeFailure),
                     };
 
                     if dict_lit.key_type != "any" {
@@ -882,12 +886,12 @@ impl super::Evaluator {
 
                     entries.push((self.extract(key_ref), self.extract(val_ref)));
                 }
-                EvalResult::Value(self.alloc(ObjectData::Dict {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dict {
                     key_type: dict_lit.key_type.clone(),
                     value_type: dict_lit.value_type.clone(),
                     entries,
                     index: Default::default(),
-                }))
+                })))
             }
 
             Expression::EntryLiteral {
@@ -977,10 +981,10 @@ impl super::Evaluator {
                     if let Some(variants) = self.enum_registry.get(name).cloned() {
                         let variant = dot_call.method.clone();
                         if variants.contains(&variant) {
-                            return EvalResult::Value(self.alloc(ObjectData::EnumVariant {
+                            return Ok(ExecutionFlow::Value(self.alloc(ObjectData::EnumVariant {
                                 enum_name: name.clone(),
                                 variant,
-                            }));
+                            })));
                         }
                         let message =
                             format!("'{}' is not a variant of enum '{}'", dot_call.method, name);
@@ -994,12 +998,14 @@ impl super::Evaluator {
                             let mut arg_vals = Vec::new();
                             for arg in &dot_call.arguments {
                                 match self.eval_expression(arg) {
-                                    EvalResult::Value(v) => {
+                                    Ok(ExecutionFlow::Value(v)) => {
                                         let owned = self.extract(v);
                                         arg_vals.push(owned);
                                     }
-                                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                                    _ => return EvalResult::Error,
+                                    Ok(ExecutionFlow::Throw(v)) => {
+                                        return Ok(ExecutionFlow::Throw(v));
+                                    }
+                                    _ => return Err(RuntimeFailure),
                                 }
                             }
                             // Create a temporary null instance ref for static dispatch
@@ -1036,9 +1042,9 @@ impl super::Evaluator {
                     };
 
                 let obj_ref = match self.eval_expression(&dot_call.object) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
 
                 // All Set methods run against the arena slot (methods_set.rs):
@@ -1191,7 +1197,7 @@ impl super::Evaluator {
                         _ => None,
                     };
                     if let Some(n) = n {
-                        return EvalResult::Value(self.alloc(ObjectData::Integer(n)));
+                        return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))));
                     }
                 }
 
@@ -1205,7 +1211,7 @@ impl super::Evaluator {
                 // Optional chaining: return null if object is null
                 if dot_call.is_optional {
                     if let ObjectData::Null = obj_data {
-                        return EvalResult::Value(self.null_ref);
+                        return Ok(ExecutionFlow::Value(self.null_ref));
                     }
                 }
 
@@ -1277,7 +1283,7 @@ impl super::Evaluator {
                     ObjectData::EnumVariant { enum_name, variant } => {
                         if dot_call.method == "toString" {
                             let s = format!("{}.{}", enum_name, variant);
-                            EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                            Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
                         } else {
                             let message =
                                 format!("Enum variant has no method '{}'", dot_call.method);
@@ -1288,7 +1294,7 @@ impl super::Evaluator {
                     // .toString() available on all types
                     _ if dot_call.method == "toString" => {
                         let s = self.display(obj_ref);
-                        EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
                     }
 
                     _ => {
@@ -1332,9 +1338,9 @@ impl super::Evaluator {
 
             Expression::Ternary(ternary) => {
                 let cond_ref = match self.eval_expression(&ternary.condition) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let cond_data = self.resolve(cond_ref).cloned().unwrap_or(ObjectData::Null);
                 if self.is_truthy(&cond_data) {
@@ -1350,9 +1356,9 @@ impl super::Evaluator {
                 ..
             } => {
                 let right_ref = match self.eval_expression(right_expr) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let right_data = self.resolve(right_ref).unwrap().clone();
                 self.eval_prefix(op, right_ref, right_data)
@@ -1361,27 +1367,27 @@ impl super::Evaluator {
             // `expr is TypeName` — type check returning bool
             Expression::Infix(infix_expr) if infix_expr.operator == "is" => {
                 let left_ref = match self.eval_expression(&infix_expr.left) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let left_data = self.resolve(left_ref).unwrap().clone();
                 let type_name = match infix_expr.right.as_ref() {
                     Expression::Identifier { name: n, .. } => n.as_str(),
-                    _ => return EvalResult::Error,
+                    _ => return Err(RuntimeFailure),
                 };
                 let result = type_matches(type_name, &left_data);
-                EvalResult::Value(self.bool_ref(result))
+                Ok(ExecutionFlow::Value(self.bool_ref(result)))
             }
 
             // Null coalescing: left ?? right — returns left if not null, else right
             Expression::Infix(infix_expr) if infix_expr.operator == "??" => {
                 let left_ref = match self.eval_expression(&infix_expr.left) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 if !matches!(self.resolve(left_ref), Some(ObjectData::Null)) {
-                    return EvalResult::Value(left_ref);
+                    return Ok(ExecutionFlow::Value(left_ref));
                 }
                 self.eval_expression(&infix_expr.right)
             }
@@ -1390,7 +1396,7 @@ impl super::Evaluator {
                 if infix_expr.operator == "&&" || infix_expr.operator == "||" =>
             {
                 let left_ref = match self.eval_expression(&infix_expr.left) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 // `&&` y `||` devuelven UN OPERANDO, no un booleano recalculado:
@@ -1420,10 +1426,10 @@ impl super::Evaluator {
                 };
 
                 if infix_expr.operator == "&&" && !left_truthy {
-                    return EvalResult::Value(left_ref);
+                    return Ok(ExecutionFlow::Value(left_ref));
                 }
                 if infix_expr.operator == "||" && left_truthy {
-                    return EvalResult::Value(left_ref);
+                    return Ok(ExecutionFlow::Value(left_ref));
                 }
 
                 self.eval_expression(&infix_expr.right)
@@ -1431,14 +1437,14 @@ impl super::Evaluator {
 
             Expression::Infix(infix_expr) => {
                 let left_ref = match self.eval_expression(&infix_expr.left) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let right_ref = match self.eval_expression(&infix_expr.right) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let left_data = self.resolve(left_ref).unwrap().clone();
                 let right_data = self.resolve(right_ref).unwrap().clone();
@@ -1470,7 +1476,7 @@ impl super::Evaluator {
                     },
                     SizeOfTarget::Expr(inner) => {
                         let val_ref = match self.eval_expression(inner) {
-                            EvalResult::Value(r) => r,
+                            Ok(ExecutionFlow::Value(r)) => r,
                             other => return other,
                         };
                         match self.resolve(val_ref) {
@@ -1484,7 +1490,7 @@ impl super::Evaluator {
                         }
                     }
                 };
-                EvalResult::Value(self.alloc(ObjectData::Integer(size)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(size))))
             }
 
             Expression::AddressOf { value: inner, .. } => {
@@ -1495,7 +1501,7 @@ impl super::Evaluator {
                         return self.rt_err_kind("ReferenceError", message);
                     }
                     let ptr = ObjectData::Ptr(name.clone());
-                    EvalResult::Value(self.alloc(ptr))
+                    Ok(ExecutionFlow::Value(self.alloc(ptr)))
                 } else {
                     self.rt_err_kind("TypeError", "'&' can only be applied to a named variable")
                 }
@@ -1505,12 +1511,12 @@ impl super::Evaluator {
                 value: ptr_expr, ..
             } => {
                 let ptr_ref = match self.eval_expression(ptr_expr) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 match self.resolve(ptr_ref).cloned() {
                     Some(ObjectData::Ptr(name)) => match self.lookup_var(&name) {
-                        Some(r) => EvalResult::Value(r),
+                        Some(r) => Ok(ExecutionFlow::Value(r)),
                         None => {
                             let message = format!("Dangling pointer to '{name}'");
                             self.rt_err_kind("ReferenceError", message)
@@ -1522,12 +1528,12 @@ impl super::Evaluator {
 
             Expression::Match(m) => {
                 let subject_ref = match self.eval_expression(&m.subject) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
                 let subject_data = match self.resolve(subject_ref) {
                     Some(d) => d.clone(),
-                    None => return EvalResult::Error,
+                    None => return Err(RuntimeFailure),
                 };
 
                 let arms = m.arms.clone();
@@ -1548,7 +1554,7 @@ impl super::Evaluator {
                     if let Some(guard) = &arm.guard {
                         let guard = guard.clone();
                         let guard_ref = match self.eval_expression(&guard) {
-                            EvalResult::Value(v) => v,
+                            Ok(ExecutionFlow::Value(v)) => v,
                             other => {
                                 self.scopes.pop();
                                 return other;
@@ -1570,7 +1576,7 @@ impl super::Evaluator {
                     let body = arm.body.clone();
                     for s in &body.statements {
                         match self.eval_statement(s) {
-                            EvalResult::Value(v) => result_ref = v,
+                            Ok(ExecutionFlow::Value(v)) => result_ref = v,
                             other => {
                                 early = Some(other);
                                 break;
@@ -1584,11 +1590,11 @@ impl super::Evaluator {
                     if let Some(r) = early {
                         return r;
                     }
-                    return EvalResult::Value(self.plant(owned));
+                    return Ok(ExecutionFlow::Value(self.plant(owned)));
                 }
 
                 // No arm matched — null
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Expression::UnsafeBlock(block) => {
@@ -1613,7 +1619,7 @@ impl super::Evaluator {
             }
             ast::MatchPattern::Literal(lit_expr) => {
                 let lit_ref = match self.eval_expression(lit_expr) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     _ => return false,
                 };
                 let lit_data = match self.resolve(lit_ref) {

@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use super::ExecutionFlow;
 use super::{
     CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
     obj_data_eq, obj_data_to_key_str, operator_to_method_name, owned_to_obj_data, type_matches,
@@ -20,7 +21,7 @@ impl super::Evaluator {
         };
         if let Some(init_expr) = init_arg {
             let arr_ref = match self.eval_expression(&init_expr) {
-                EvalResult::Value(r) => r,
+                Ok(ExecutionFlow::Value(r)) => r,
                 other => return other,
             };
             // A non-array initialiser used to be dropped on the floor, so
@@ -62,10 +63,10 @@ impl super::Evaluator {
                 }
             }
         }
-        EvalResult::Value(self.alloc(ObjectData::Set {
+        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Set {
             elements,
             index: Default::default(),
-        }))
+        })))
     }
 
     /// True when the set contains `vd`, honouring obj_data_eq semantics.
@@ -129,7 +130,7 @@ impl super::Evaluator {
                     Some(ObjectData::Set { elements, .. }) => elements.len() as i64,
                     _ => return self.set_receiver_broken("size"),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             "toArray" => {
@@ -140,10 +141,10 @@ impl super::Evaluator {
                     Some(ObjectData::Set { elements, .. }) => elements.clone(),
                     _ => return self.set_receiver_broken("toArray"),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: items,
-                }))
+                })))
             }
 
             "has" | "contains" => {
@@ -151,7 +152,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Set.has(val) requires 1 argument");
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let vd = self.extract(vr);
@@ -162,7 +163,7 @@ impl super::Evaluator {
                     }
                     _ => false,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Boolean(found)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(found))))
             }
 
             "add" => {
@@ -170,7 +171,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Set.add(val) requires 1 argument");
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let vd = self.extract(vr);
@@ -188,7 +189,7 @@ impl super::Evaluator {
                         }
                     }
                 }
-                EvalResult::Value(set_ref)
+                Ok(ExecutionFlow::Value(set_ref))
             }
 
             "delete" | "remove" => {
@@ -196,7 +197,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Set.delete(val) requires 1 argument");
                 }
                 let vr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let vd = self.extract(vr);
@@ -232,7 +233,9 @@ impl super::Evaluator {
                 } else {
                     false
                 };
-                EvalResult::Value(self.alloc(ObjectData::Boolean(removed)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Boolean(removed)),
+                ))
             }
 
             "clear" => {
@@ -246,7 +249,7 @@ impl super::Evaluator {
                 if let Some(ObjectData::Set { elements, .. }) = arena.get_mut(set_ref.index) {
                     elements.clear();
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "union" => {
@@ -254,7 +257,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Set.union(other) requires 1 argument");
                 }
                 let or = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let other_elems: Vec<OwnedValue> = match self.resolve(or) {
@@ -283,10 +286,10 @@ impl super::Evaluator {
                         None => result.push(elem),
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Set {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Set {
                     elements: result,
                     index: Default::default(),
-                }))
+                })))
             }
 
             "intersection" => {
@@ -295,7 +298,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Set.intersection(other) requires 1 argument");
                 }
                 let or = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let other_keys: HashSet<String> = match self.resolve(or) {
@@ -318,10 +321,10 @@ impl super::Evaluator {
                     .into_iter()
                     .filter(|e| set_key_str(e).map_or(false, |k| other_keys.contains(&k)))
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Set {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Set {
                     elements: result,
                     index: Default::default(),
-                }))
+                })))
             }
 
             "toString" => {
@@ -329,7 +332,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let s = self.display(set_ref);
-                EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
             }
 
             // ReferenceError, matching Array, String, Random, DateTime and Task.

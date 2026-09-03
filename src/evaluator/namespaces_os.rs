@@ -1,5 +1,6 @@
 #![allow(unused_imports)]
 use super::EvalResult;
+use super::{ExecutionFlow, RuntimeFailure};
 use crate::ast::{self};
 use crate::region::{ObjectData, ObjectRef, OwnedValue};
 use std::io::{Read, Write};
@@ -285,10 +286,10 @@ impl super::Evaluator {
                     Ok((cols, rows)) => {
                         let cr = self.alloc(ObjectData::Integer(cols as i64));
                         let rr = self.alloc(ObjectData::Integer(rows as i64));
-                        EvalResult::Value(self.alloc(ObjectData::Array {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                             element_type: Some("int".to_string()),
                             elements: vec![self.extract(cr), self.extract(rr)],
-                        }))
+                        })))
                     }
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("Terminal.getSize failed: {}", e))
@@ -305,7 +306,7 @@ impl super::Evaluator {
                     terminal::{Clear, ClearType},
                 };
                 match std::io::stdout().execute(Clear(ClearType::All)) {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => self.rt_err_kind("IOError", format!("Terminal.clear failed: {}", e)),
                 }
             }
@@ -318,14 +319,14 @@ impl super::Evaluator {
                     );
                 }
                 let rr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let cr = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let row = match self.resolve(rr).cloned() {
                     Some(ObjectData::Integer(v)) => v as u16,
@@ -343,7 +344,7 @@ impl super::Evaluator {
                 };
                 use crossterm::{ExecutableCommand, cursor::MoveTo};
                 match std::io::stdout().execute(MoveTo(col, row)) {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("Terminal.setCursor failed: {}", e))
                     }
@@ -356,9 +357,9 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Terminal.writeByte(byte) requires 1 argument");
                 }
                 let br = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let byte = match self.resolve(br).cloned() {
                     Some(ObjectData::Integer(v)) if v >= 0 && v <= 255 => v as u8,
@@ -373,7 +374,7 @@ impl super::Evaluator {
                 if out.write_all(&[byte]).is_err() || out.flush().is_err() {
                     return self.rt_err_kind("IOError", "Terminal.writeByte write failed");
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "setRawMode" => {
@@ -387,9 +388,9 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Terminal.setRawMode(bool) requires 1 argument");
                 }
                 let ar = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let enable = match self.resolve(ar).cloned() {
                     Some(ObjectData::Boolean(b)) => b,
@@ -404,7 +405,7 @@ impl super::Evaluator {
                     crossterm::terminal::disable_raw_mode()
                 };
                 match result {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("Terminal.setRawMode failed: {}", e))
                     }
@@ -422,7 +423,9 @@ impl super::Evaluator {
                 }
                 let mut buf = [0u8; 1];
                 match std::io::stdin().lock().read_exact(&mut buf) {
-                    Ok(_) => EvalResult::Value(self.alloc(ObjectData::Integer(buf[0] as i64))),
+                    Ok(_) => Ok(ExecutionFlow::Value(
+                        self.alloc(ObjectData::Integer(buf[0] as i64)),
+                    )),
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("Terminal.readByte failed: {}", e))
                     }
@@ -442,9 +445,9 @@ impl super::Evaluator {
                     );
                 }
                 let ar = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let enable = match self.resolve(ar).cloned() {
                     Some(ObjectData::Boolean(b)) => b,
@@ -464,7 +467,7 @@ impl super::Evaluator {
                     out.execute(DisableMouseCapture)
                 };
                 match result {
-                    Ok(_) => EvalResult::Value(self.null_ref),
+                    Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("Terminal.enableMouse failed: {}", e))
                     }
@@ -522,14 +525,14 @@ impl super::Evaluator {
                             element_type: Some("string".to_string()),
                             elements: mods,
                         };
-                        EvalResult::Value(self.alloc(ObjectData::Instance {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Instance {
                             class_name: "KeyEvent".to_string(),
                             fields: vec![
                                 ("type".to_string(), OwnedValue::Str("key".to_string())),
                                 ("code".to_string(), OwnedValue::Str(code)),
                                 ("modifiers".to_string(), mods_owned),
                             ],
-                        }))
+                        })))
                     }
                     Ok(Event::Mouse(mouse)) => {
                         let kind = match mouse.kind {
@@ -567,7 +570,7 @@ impl super::Evaluator {
                             element_type: Some("string".to_string()),
                             elements: mods,
                         };
-                        EvalResult::Value(self.alloc(ObjectData::Instance {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Instance {
                             class_name: "MouseEvent".to_string(),
                             fields: vec![
                                 ("type".to_string(), OwnedValue::Str("mouse".to_string())),
@@ -577,22 +580,22 @@ impl super::Evaluator {
                                 ("row".to_string(), OwnedValue::Integer(mouse.row as i64)),
                                 ("modifiers".to_string(), mods_owned),
                             ],
-                        }))
+                        })))
                     }
                     Ok(Event::Resize(cols, rows)) => {
-                        EvalResult::Value(self.alloc(ObjectData::Instance {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Instance {
                             class_name: "ResizeEvent".to_string(),
                             fields: vec![
                                 ("type".to_string(), OwnedValue::Str("resize".to_string())),
                                 ("cols".to_string(), OwnedValue::Integer(cols as i64)),
                                 ("rows".to_string(), OwnedValue::Integer(rows as i64)),
                             ],
-                        }))
+                        })))
                     }
                     Err(e) => {
                         self.rt_err_kind("IOError", format!("Terminal.readEvent failed: {}", e))
                     }
-                    _ => EvalResult::Value(self.null_ref),
+                    _ => Ok(ExecutionFlow::Value(self.null_ref)),
                 }
             }
 
@@ -618,9 +621,9 @@ impl super::Evaluator {
         operation: &str,
     ) -> Result<Vec<String>, EvalResult> {
         let arg_ref = match self.eval_expression(expr) {
-            EvalResult::Value(v) => v,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
-            _ => return Err(EvalResult::Error),
+            Ok(ExecutionFlow::Value(v)) => v,
+            Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
+            _ => return Err(Err(RuntimeFailure)),
         };
         let elements = match self.resolve(arg_ref).cloned() {
             Some(ObjectData::Array { elements, .. }) => elements,
@@ -657,14 +660,18 @@ impl super::Evaluator {
                 if let Some(error) = self.reject_arguments(dot_call, "OS") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Str(std::env::consts::OS.to_string())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Str(std::env::consts::OS.to_string())),
+                ))
             }
 
             "pid" => {
                 if let Some(error) = self.reject_arguments(dot_call, "OS") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(std::process::id() as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(std::process::id() as i64)),
+                ))
             }
 
             "exec" => {
@@ -680,9 +687,9 @@ impl super::Evaluator {
                     );
                 }
                 let cr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let cmd = match self.resolve(cr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -708,14 +715,14 @@ impl super::Evaluator {
                         let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
                         let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
                         let code = output.status.code().unwrap_or(-1) as i64;
-                        EvalResult::Value(self.alloc(ObjectData::Instance {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Instance {
                             class_name: "ExecResult".to_string(),
                             fields: vec![
                                 ("stdout".to_string(), OwnedValue::Str(stdout_str)),
                                 ("stderr".to_string(), OwnedValue::Str(stderr_str)),
                                 ("code".to_string(), OwnedValue::Integer(code)),
                             ],
-                        }))
+                        })))
                     }
                     Err(e) => {
                         self.rt_err_kind("OSError", format!("OS.exec '{}' failed: {}", cmd, e))
@@ -740,9 +747,9 @@ impl super::Evaluator {
                     );
                 }
                 let cr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let cmd = match self.resolve(cr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -802,7 +809,7 @@ impl super::Evaluator {
                             pid,
                             stderr: collected,
                         });
-                        EvalResult::Value(self.int_ref(pid))
+                        Ok(ExecutionFlow::Value(self.int_ref(pid)))
                     }
                     Err(e) => {
                         // `-1` is the documented return, so the program keeps
@@ -811,7 +818,7 @@ impl super::Evaluator {
                         // the conformance runner both read as "this program
                         // failed", while the program went on to exit 0.
                         eprintln!("⚠️  WARNING: OS.spawn '{}' failed: {}", cmd, e);
-                        EvalResult::Value(self.int_ref(-1))
+                        Ok(ExecutionFlow::Value(self.int_ref(-1)))
                     }
                 }
             }
@@ -866,10 +873,10 @@ impl super::Evaluator {
                         }
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("any".to_string()),
                     elements: finished,
-                }))
+                })))
             }
 
             "kill" => {
@@ -880,9 +887,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "OS.kill(pid) requires 1 argument");
                 }
                 let pr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let pid = match self.resolve(pr).cloned() {
                     Some(ObjectData::Integer(v)) => v,
@@ -903,7 +910,9 @@ impl super::Evaluator {
                     .arg(pid.to_string())
                     .output();
                 match result {
-                    Ok(output) if output.status.success() => EvalResult::Value(self.null_ref),
+                    Ok(output) if output.status.success() => {
+                        Ok(ExecutionFlow::Value(self.null_ref))
+                    }
                     Ok(output) => {
                         let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
                         let detail = if detail.is_empty() {
@@ -936,17 +945,17 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Env.get(key) requires 1 argument");
                 }
                 let kr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let key = match self.resolve(kr).cloned() {
                     Some(ObjectData::Str(s)) => s,
                     _ => return self.rt_err_kind("TypeError", "Env.get requires a string key"),
                 };
                 match std::env::var(&key) {
-                    Ok(val) => EvalResult::Value(self.alloc(ObjectData::Str(val))),
-                    Err(_) => EvalResult::Value(self.null_ref),
+                    Ok(val) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(val)))),
+                    Err(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                 }
             }
 
@@ -955,10 +964,10 @@ impl super::Evaluator {
                     return error;
                 }
                 let owned: Vec<OwnedValue> = std::env::args().map(|a| OwnedValue::Str(a)).collect();
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("string".to_string()),
                     elements: owned,
-                }))
+                })))
             }
 
             "set" => {
@@ -972,14 +981,14 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Env.set(key, value) requires 2 arguments");
                 }
                 let kr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let vr = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let key = match self.resolve(kr).cloned() {
                     Some(ObjectData::Str(s)) => s,
@@ -987,7 +996,7 @@ impl super::Evaluator {
                 };
                 let val = self.display(vr);
                 unsafe { std::env::set_var(&key, &val) };
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             _ => {
@@ -1012,7 +1021,7 @@ impl super::Evaluator {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
-                EvalResult::Value(self.alloc(ObjectData::Integer(ms)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(ms))))
             }
 
             "sleep" => {
@@ -1020,9 +1029,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Time.sleep(ms) requires 1 argument");
                 }
                 let mr = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let ms = match self.resolve(mr).cloned() {
                     Some(ObjectData::Integer(v)) => v.max(0) as u64,
@@ -1034,7 +1043,7 @@ impl super::Evaluator {
                     }
                 };
                 std::thread::sleep(std::time::Duration::from_millis(ms));
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             _ => {
@@ -1078,35 +1087,43 @@ impl super::Evaluator {
                 let n = std::thread::available_parallelism()
                     .map(|n| n.get() as i64)
                     .unwrap_or(1);
-                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             "totalMemory" => {
                 if let Some(error) = self.reject_arguments(dot_call, "System") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(os_total_memory())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(os_total_memory())),
+                ))
             }
 
             "freeMemory" => {
                 if let Some(error) = self.reject_arguments(dot_call, "System") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(os_free_memory())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(os_free_memory())),
+                ))
             }
 
             "hostname" => {
                 if let Some(error) = self.reject_arguments(dot_call, "System") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Str(os_hostname())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Str(os_hostname())),
+                ))
             }
 
             "uptime" => {
                 if let Some(error) = self.reject_arguments(dot_call, "System") {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(os_uptime_secs())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(os_uptime_secs())),
+                ))
             }
 
             _ => {

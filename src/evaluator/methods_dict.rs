@@ -1,3 +1,4 @@
+use super::ExecutionFlow;
 use super::{EvalResult, obj_data_to_key_str, owned_to_key_str, type_matches};
 use crate::ast;
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
@@ -85,7 +86,7 @@ impl super::Evaluator {
                 if let Some(ObjectData::Dict { entries, .. }) = arena.get_mut(dict_ref.index) {
                     entries.clear();
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             // Returns array of keys: [k1, k2, ...]
@@ -99,10 +100,10 @@ impl super::Evaluator {
                     }
                     _ => return self.dict_receiver_broken("keys"),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: keys,
-                }))
+                })))
             }
 
             "values" => {
@@ -115,10 +116,10 @@ impl super::Evaluator {
                     }
                     _ => return self.dict_receiver_broken("values"),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: vals,
-                }))
+                })))
             }
 
             // Returns 2-D array of entries: [[k1,v1],[k2,v2],...]
@@ -136,10 +137,10 @@ impl super::Evaluator {
                         .collect(),
                     _ => return self.dict_receiver_broken("toArray"),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: pairs,
-                }))
+                })))
             }
 
             // Reached only through a dict living somewhere the upstream length()
@@ -152,7 +153,7 @@ impl super::Evaluator {
                     Some(ObjectData::Dict { entries, .. }) => entries.len() as i64,
                     _ => return self.dict_receiver_broken("length"),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             "toString" => {
@@ -160,7 +161,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let s = self.display(dict_ref);
-                EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
             }
 
             unknown => {
@@ -198,11 +199,11 @@ impl super::Evaluator {
                 ..
             } => {
                 let k = match self.eval_expression(k_expr) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let v = match self.eval_expression(v_expr) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 (k, v)
@@ -277,7 +278,7 @@ impl super::Evaluator {
                 }
             }
         }
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     /// `d.Remove(key)` — drops every entry under that key (a dict literal is the
@@ -297,7 +298,7 @@ impl super::Evaluator {
             );
         }
         let key_ref = match self.eval_expression(&dot_call.arguments[0]) {
-            EvalResult::Value(r) => r,
+            Ok(ExecutionFlow::Value(r)) => r,
             other => return other,
         };
         let search_key = match self.resolve(key_ref) {
@@ -319,6 +320,6 @@ impl super::Evaluator {
                 entries.retain(|(k, _)| owned_to_key_str(k) != search_key);
             }
         }
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 }

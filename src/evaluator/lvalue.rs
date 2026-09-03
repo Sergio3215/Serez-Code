@@ -31,7 +31,7 @@
 //! el writeback copia el receptor de vuelta a su contenedor, así que se paga
 //! sólo cuando el método puede escribir en `this`.
 
-use super::{EvalResult, obj_data_to_key_str};
+use super::{ExecutionFlow, obj_data_to_key_str};
 use crate::ast::{self, Expression};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 
@@ -69,7 +69,7 @@ impl super::Evaluator {
             Expression::Index(ix) => {
                 let (root, mut steps) = self.resolve_lvalue_path(&ix.left)?;
                 let key_ref = match self.eval_expression(&ix.index) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     _ => return None,
                 };
                 // Un DateField indexa por su valor entero, igual que en IndexAssign.

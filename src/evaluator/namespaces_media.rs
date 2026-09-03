@@ -1,3 +1,4 @@
+use super::ExecutionFlow;
 // namespaces_media.rs — `Media`: reproducción de audio nativa (rodio: wav,
 // mp3, flac, vorbis). Sonidos asíncronos identificados por id (int).
 //
@@ -108,7 +109,7 @@ impl super::Evaluator {
                 let id = media.next;
                 media.next += 1;
                 media.sinks.insert(id, sink);
-                EvalResult::Value(self.alloc(ObjectData::Integer(id)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(id))))
             }
 
             // Media.isPlaying(id) -> bool
@@ -130,11 +131,11 @@ impl super::Evaluator {
                     .and_then(|m| m.sinks.get(&id))
                     .map(|s| !s.empty() && !s.is_paused())
                     .unwrap_or(false);
-                EvalResult::Value(if playing {
+                Ok(ExecutionFlow::Value(if playing {
                     self.true_ref
                 } else {
                     self.false_ref
-                })
+                }))
             }
 
             // Media.stop(id) -> bool (true si existía)
@@ -157,11 +158,11 @@ impl super::Evaluator {
                         true
                     })
                     .unwrap_or(false);
-                EvalResult::Value(if existed {
+                Ok(ExecutionFlow::Value(if existed {
                     self.true_ref
                 } else {
                     self.false_ref
-                })
+                }))
             }
 
             "stopAll" => {
@@ -173,7 +174,7 @@ impl super::Evaluator {
                         s.stop();
                     }
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             // Media.pause(id) / Media.resume(id) -> bool
@@ -207,7 +208,11 @@ impl super::Evaluator {
                         true
                     })
                     .unwrap_or(false);
-                EvalResult::Value(if ok { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if ok {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
 
             // Media.setVolume(id, vol) — vol 0..200 (100 = normal) -> bool
@@ -236,7 +241,11 @@ impl super::Evaluator {
                         true
                     })
                     .unwrap_or(false);
-                EvalResult::Value(if ok { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if ok {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
 
             // Media.playingCount() -> int (sonidos activos)
@@ -252,7 +261,7 @@ impl super::Evaluator {
                         m.sinks.len() as i64
                     })
                     .unwrap_or(0);
-                EvalResult::Value(self.alloc(ObjectData::Integer(n)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             other => {

@@ -1,3 +1,4 @@
+use super::ExecutionFlow;
 use super::{EvalResult, ProgramOutcome};
 use crate::ast;
 use crate::region::ObjectData;
@@ -136,7 +137,7 @@ impl super::Evaluator {
                 }
 
                 let path_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(value) => value,
+                    Ok(ExecutionFlow::Value(value)) => value,
                     other => return other,
                 };
                 let script_path = match self.resolve(path_ref).cloned() {
@@ -148,7 +149,7 @@ impl super::Evaluator {
                 };
 
                 let arg_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(value) => value,
+                    Ok(ExecutionFlow::Value(value)) => value,
                     other => return other,
                 };
                 let arg_string = match self.resolve(arg_ref).cloned() {
@@ -293,7 +294,7 @@ impl super::Evaluator {
                     );
                 }
 
-                EvalResult::Value(self.int_ref(task_id))
+                Ok(ExecutionFlow::Value(self.int_ref(task_id)))
             }
 
             "message" => {
@@ -301,7 +302,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Task.message() requires 0 arguments");
                 }
                 let message = self.task.arg.clone().unwrap_or_default();
-                EvalResult::Value(self.alloc(ObjectData::Str(message)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(message))))
             }
 
             "reply" => {
@@ -310,7 +311,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Task.reply(result_string) requires 1 argument");
                 }
                 let result_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(value) => value,
+                    Ok(ExecutionFlow::Value(value)) => value,
                     other => return other,
                 };
                 let result = match self.resolve(result_ref).cloned() {
@@ -338,7 +339,7 @@ impl super::Evaluator {
                 } else {
                     eprintln!("⚠️ WARNING: Task.reply called outside of a background task");
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "poll" => {
@@ -346,7 +347,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Task.poll(taskId) requires 1 argument");
                 }
                 let id_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(value) => value,
+                    Ok(ExecutionFlow::Value(value)) => value,
                     other => return other,
                 };
                 let task_id = match self.resolve(id_ref).cloned() {
@@ -360,13 +361,13 @@ impl super::Evaluator {
                 let runtime = Arc::clone(&self.task.runtime);
                 let reg = runtime.lock_registry();
                 match reg.get(&task_id) {
-                    Some(TaskState::Running { .. }) => EvalResult::Value(self.null_ref),
-                    Some(TaskState::Finished { result }) => {
-                        EvalResult::Value(self.alloc(ObjectData::Str(result.clone())))
-                    }
-                    Some(TaskState::Failed { error }) => {
-                        EvalResult::Value(self.alloc(ObjectData::Str(format!("ERROR: {}", error))))
-                    }
+                    Some(TaskState::Running { .. }) => Ok(ExecutionFlow::Value(self.null_ref)),
+                    Some(TaskState::Finished { result }) => Ok(ExecutionFlow::Value(
+                        self.alloc(ObjectData::Str(result.clone())),
+                    )),
+                    Some(TaskState::Failed { error }) => Ok(ExecutionFlow::Value(
+                        self.alloc(ObjectData::Str(format!("ERROR: {}", error))),
+                    )),
                     None => {
                         drop(reg);
                         self.rt_err_kind(
@@ -383,7 +384,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Task.isDone(taskId) requires 1 argument");
                 }
                 let id_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(value) => value,
+                    Ok(ExecutionFlow::Value(value)) => value,
                     other => return other,
                 };
                 let task_id = match self.resolve(id_ref).cloned() {
@@ -407,7 +408,11 @@ impl super::Evaluator {
                         );
                     }
                 };
-                EvalResult::Value(if done { self.true_ref } else { self.false_ref })
+                Ok(ExecutionFlow::Value(if done {
+                    self.true_ref
+                } else {
+                    self.false_ref
+                }))
             }
 
             method => self.rt_err_kind(

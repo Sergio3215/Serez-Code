@@ -73,7 +73,7 @@ pub enum RunFailure {
         message: String,
     },
     InvalidControlFlow(evaluator::InvalidControlFlow),
-    /// A legacy `EvalResult::Error` producer that has not migrated to a
+    /// A legacy runtime-failure producer that has not migrated to a
     /// structured runtime diagnostic yet.
     UnstructuredRuntime,
 }

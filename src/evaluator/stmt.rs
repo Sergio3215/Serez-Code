@@ -3,6 +3,7 @@ use super::{
     CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
     obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
 };
+use super::{ExecutionFlow, RuntimeFailure};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
@@ -26,9 +27,9 @@ impl super::Evaluator {
         match stmt {
             Statement::Let(let_stmt) => {
                 let val_ref = match self.eval_expression(&let_stmt.value) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
 
                 // Allocate a fresh slot so the variable never aliases its
@@ -58,7 +59,7 @@ impl super::Evaluator {
                 if let_stmt.is_const {
                     self.const_names.insert(let_stmt.name.clone());
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Statement::Assign(assign_stmt) => {
@@ -82,9 +83,9 @@ impl super::Evaluator {
                 }
 
                 let val_ref = match self.eval_expression(&assign_stmt.value) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let new_data = self.resolve(val_ref).unwrap().clone();
 
@@ -92,15 +93,15 @@ impl super::Evaluator {
                     if r.region == RegionId::Global {
                         self.global_arena.update(r.index, new_data);
                     }
-                    return EvalResult::Value(r);
+                    return Ok(ExecutionFlow::Value(r));
                 }
 
                 if let Some(&existing_ref) = self.global_bindings.get(&assign_stmt.name) {
                     self.global_arena.update(existing_ref.index, new_data);
-                    return EvalResult::Value(existing_ref);
+                    return Ok(ExecutionFlow::Value(existing_ref));
                 }
 
-                EvalResult::Error
+                Err(RuntimeFailure)
             }
 
             Statement::FunctionDeclaration(func_decl) => {
@@ -121,12 +122,12 @@ impl super::Evaluator {
                 } else {
                     self.scopes.declare(func_decl.name.clone(), func_ref);
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Statement::NativeDeclaration(decl) => {
                 self.native_fns.insert(decl.name.clone());
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Statement::Import(path) => self.eval_import(path),
@@ -138,14 +139,14 @@ impl super::Evaluator {
 
             Statement::Yield(expr) => {
                 let val_ref = match self.eval_expression(expr) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 if self.yield_collector.is_some() {
                     let owned = self.extract(val_ref);
                     self.yield_collector.as_mut().unwrap().push(owned);
-                    EvalResult::Value(self.null_ref)
+                    Ok(ExecutionFlow::Value(self.null_ref))
                 } else {
                     self.rt_err_kind(
                         "TypeError",
@@ -172,7 +173,7 @@ impl super::Evaluator {
                     self.warn_about_grant(p);
                     self.security.grant(p.clone());
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Statement::Block(block_stmt) => self.eval_block(block_stmt),
@@ -186,9 +187,9 @@ impl super::Evaluator {
                     return error;
                 }
                 let ptr_ref = match self.eval_expression(ptr) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let var_name = match self.resolve(ptr_ref).cloned() {
                     Some(ObjectData::Ptr(name)) => name,
@@ -200,20 +201,20 @@ impl super::Evaluator {
                     }
                 };
                 let val_ref = match self.eval_expression(value) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let new_data = self.resolve(val_ref).unwrap().clone();
                 if let Some(r) = self.scopes.assign(&var_name, new_data.clone()) {
                     if r.region == RegionId::Global {
                         self.global_arena.update(r.index, new_data);
                     }
-                    return EvalResult::Value(r);
+                    return Ok(ExecutionFlow::Value(r));
                 }
                 if let Some(&existing_ref) = self.global_bindings.get(&var_name) {
                     self.global_arena.update(existing_ref.index, new_data);
-                    return EvalResult::Value(existing_ref);
+                    return Ok(ExecutionFlow::Value(existing_ref));
                 }
                 let message = format!("Pointer target '{var_name}' not found in scope");
                 self.rt_err_kind("ReferenceError", message)
@@ -256,24 +257,24 @@ impl super::Evaluator {
 
                 // Init: declare the loop variable
                 let init_val = match self.eval_expression(&for_stmt.init.value) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Error => {
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Err(RuntimeFailure) => {
                         self.scopes.pop();
-                        return EvalResult::Error;
+                        return Err(RuntimeFailure);
                     }
-                    EvalResult::Return(v) => {
+                    Ok(ExecutionFlow::Return(v)) => {
                         let owned = self.extract(v);
                         self.scopes.pop();
-                        return EvalResult::Return(self.plant(owned));
+                        return Ok(ExecutionFlow::Return(self.plant(owned)));
                     }
-                    EvalResult::Throw(v) => {
+                    Ok(ExecutionFlow::Throw(v)) => {
                         let owned = self.extract(v);
                         self.scopes.pop();
-                        return EvalResult::Throw(self.plant(owned));
+                        return Ok(ExecutionFlow::Throw(self.plant(owned)));
                     }
                     _ => {
                         self.scopes.pop();
-                        return EvalResult::Error;
+                        return Err(RuntimeFailure);
                     }
                 };
                 // Fresh slot to prevent aliasing (e.g. `for (let i = arr[0]; ...)` would
@@ -292,16 +293,16 @@ impl super::Evaluator {
                     // Evaluate condition, free its temporary immediately
                     let cond_mark = self.scopes.arena.watermark();
                     let condition_ref = match self.eval_expression(&for_stmt.condition) {
-                        EvalResult::Value(v) => v,
-                        EvalResult::Error => {
+                        Ok(ExecutionFlow::Value(v)) => v,
+                        Err(RuntimeFailure) => {
                             loop_error = true;
                             break;
                         }
-                        EvalResult::Return(v) => {
+                        Ok(ExecutionFlow::Return(v)) => {
                             loop_return = Some(self.extract(v));
                             break;
                         }
-                        EvalResult::Throw(v) => {
+                        Ok(ExecutionFlow::Throw(v)) => {
                             loop_throw = Some(self.extract(v));
                             break;
                         }
@@ -319,46 +320,46 @@ impl super::Evaluator {
 
                     // Execute body — eval_block_discard handles its own push/pop
                     match self.eval_block_discard(&for_stmt.body) {
-                        EvalResult::Value(_) => {}
-                        EvalResult::Break => break,
-                        EvalResult::Continue => {} // fall through to update
-                        EvalResult::Return(v) => {
+                        Ok(ExecutionFlow::Value(_)) => {}
+                        Ok(ExecutionFlow::Break) => break,
+                        Ok(ExecutionFlow::Continue) => {} // fall through to update
+                        Ok(ExecutionFlow::Return(v)) => {
                             loop_return = Some(self.extract(v));
                             break;
                         }
-                        EvalResult::Throw(v) => {
+                        Ok(ExecutionFlow::Throw(v)) => {
                             loop_throw = Some(self.extract(v));
                             break;
                         }
-                        EvalResult::Error => {
+                        Err(RuntimeFailure) => {
                             loop_error = true;
                             break;
                         }
-                        EvalResult::BreakLabel(ref l)
+                        Ok(ExecutionFlow::BreakLabel(ref l))
                             if for_stmt.label.as_deref() == Some(l.as_str()) =>
                         {
                             break;
                         }
-                        EvalResult::ContinueLabel(ref l)
+                        Ok(ExecutionFlow::ContinueLabel(ref l))
                             if for_stmt.label.as_deref() == Some(l.as_str()) => {} // fall to update
                         other => {
                             // Propagate label signals upward
-                            let owned_throw = if let EvalResult::Throw(v) = &other {
+                            let owned_throw = if let Ok(ExecutionFlow::Throw(v)) = &other {
                                 Some(self.extract(*v))
                             } else {
                                 None
                             };
-                            let owned_ret = if let EvalResult::Return(v) = &other {
+                            let owned_ret = if let Ok(ExecutionFlow::Return(v)) = &other {
                                 Some(self.extract(*v))
                             } else {
                                 None
                             };
                             self.scopes.pop();
                             if let Some(owned) = owned_throw {
-                                return EvalResult::Throw(self.plant(owned));
+                                return Ok(ExecutionFlow::Throw(self.plant(owned)));
                             }
                             if let Some(owned) = owned_ret {
-                                return EvalResult::Return(self.plant(owned));
+                                return Ok(ExecutionFlow::Return(self.plant(owned)));
                             }
                             return other;
                         }
@@ -380,7 +381,7 @@ impl super::Evaluator {
                     // Evaluate update, free its temporaries, then assign in-place
                     let update_mark = self.scopes.arena.watermark();
                     let new_val_ref = match self.eval_expression(&for_stmt.update.value) {
-                        EvalResult::Value(v) => v,
+                        Ok(ExecutionFlow::Value(v)) => v,
                         _ => {
                             self.scopes.arena.reset_to(update_mark);
                             loop_error = true;
@@ -400,7 +401,7 @@ impl super::Evaluator {
                         self.global_arena.update(existing_ref.index, new_data);
                     } else {
                         let n = for_stmt.update.name.clone();
-                        self.rt_err_kind(
+                        let _ = self.rt_err_kind(
                             "ReferenceError",
                             format!("Undeclared variable in for-loop update: {}", n),
                         );
@@ -413,15 +414,15 @@ impl super::Evaluator {
                 self.scopes.pop();
 
                 if loop_error {
-                    return EvalResult::Error;
+                    return Err(RuntimeFailure);
                 }
                 if let Some(owned) = loop_throw {
-                    return EvalResult::Throw(self.plant(owned));
+                    return Ok(ExecutionFlow::Throw(self.plant(owned)));
                 }
                 if let Some(owned) = loop_return {
-                    return EvalResult::Return(self.plant(owned));
+                    return Ok(ExecutionFlow::Return(self.plant(owned)));
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Statement::IndexAssign(stmt) => {
@@ -469,9 +470,9 @@ impl super::Evaluator {
                         }
                     },
                     _ => match self.eval_expression(&target) {
-                        EvalResult::Value(r) => r,
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                        Ok(ExecutionFlow::Value(r)) => r,
+                        Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                        _ => return Err(RuntimeFailure),
                     },
                 };
 
@@ -488,14 +489,14 @@ impl super::Evaluator {
 
                 // Evaluate index and new value
                 let idx_ref = match self.eval_expression(&stmt.index) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let val_ref = match self.eval_expression(&stmt.value) {
-                    EvalResult::Value(v) => v,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => v,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
 
                 let idx_data = self.resolve(idx_ref).unwrap().clone();
@@ -625,33 +626,33 @@ impl super::Evaluator {
                     }
                 }
 
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Statement::Return(return_stmt) => {
                 match self.eval_expression(&return_stmt.return_value) {
-                    EvalResult::Value(v) => EvalResult::Return(v),
-                    EvalResult::Throw(v) => EvalResult::Throw(v),
-                    _ => EvalResult::Error,
+                    Ok(ExecutionFlow::Value(v)) => Ok(ExecutionFlow::Return(v)),
+                    Ok(ExecutionFlow::Throw(v)) => Ok(ExecutionFlow::Throw(v)),
+                    _ => Err(RuntimeFailure),
                 }
             }
 
-            Statement::Break => EvalResult::Break,
-            Statement::Continue => EvalResult::Continue,
-            Statement::BreakLabel(l) => EvalResult::BreakLabel(l.clone()),
-            Statement::ContinueLabel(l) => EvalResult::ContinueLabel(l.clone()),
+            Statement::Break => Ok(ExecutionFlow::Break),
+            Statement::Continue => Ok(ExecutionFlow::Continue),
+            Statement::BreakLabel(l) => Ok(ExecutionFlow::BreakLabel(l.clone())),
+            Statement::ContinueLabel(l) => Ok(ExecutionFlow::ContinueLabel(l.clone())),
 
             Statement::Out(out_stmt) => match self.eval_expression(&out_stmt.value) {
-                EvalResult::Value(v) => {
+                Ok(ExecutionFlow::Value(v)) => {
                     match self.fmt_value(v) {
                         Ok(s) => println!("{}", s),
                         Err(e) => return e,
                     }
-                    EvalResult::Value(self.null_ref)
+                    Ok(ExecutionFlow::Value(self.null_ref))
                 }
-                EvalResult::Return(v) => EvalResult::Return(v),
-                EvalResult::Throw(v) => EvalResult::Throw(v),
-                EvalResult::Error => EvalResult::Error,
+                Ok(ExecutionFlow::Return(v)) => Ok(ExecutionFlow::Return(v)),
+                Ok(ExecutionFlow::Throw(v)) => Ok(ExecutionFlow::Throw(v)),
+                Err(RuntimeFailure) => Err(RuntimeFailure),
                 other => other,
             },
 
@@ -659,10 +660,10 @@ impl super::Evaluator {
 
             Statement::Throw(expr) => {
                 let val = match self.eval_expression(expr) {
-                    EvalResult::Value(v) => v,
+                    Ok(ExecutionFlow::Value(v)) => v,
                     other => return other,
                 };
-                EvalResult::Throw(val)
+                Ok(ExecutionFlow::Throw(val))
             }
 
             Statement::ForEach(fe) => self.eval_foreach(fe),
@@ -674,7 +675,7 @@ impl super::Evaluator {
                 self.warn_if_shadowed_declaration(&decl.name, "interface");
                 self.interface_registry
                     .insert(decl.name.clone(), decl.fields.clone());
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Statement::ClassDeclaration(decl) => {
@@ -725,18 +726,18 @@ impl super::Evaluator {
                         fields: decl.fields.clone(),
                     },
                 );
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Statement::EnumDeclaration(decl) => {
                 self.enum_registry
                     .insert(decl.name.clone(), decl.variants.clone());
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             Statement::FieldAssign(stmt) => {
                 let val_ref = match self.eval_expression(&stmt.value) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let new_val = self.extract(val_ref);
@@ -762,18 +763,18 @@ impl super::Evaluator {
             // parseo y había que rearmar el objeto intermedio a mano.
             Statement::NestedFieldAssign(stmt) => {
                 let val_ref = match self.eval_expression(&stmt.value) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let new_val = self.extract(val_ref);
 
                 let obj_ref = match self.eval_expression(&stmt.object) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
 
                 let res = self.assign_field_on(obj_ref, &stmt.field, new_val, "the target");
-                if matches!(res, EvalResult::Error) {
+                if matches!(res, Err(RuntimeFailure)) {
                     return res;
                 }
 
@@ -818,18 +819,18 @@ impl super::Evaluator {
         };
 
         let idx_ref = match self.eval_expression(index) {
-            EvalResult::Value(v) => v,
+            Ok(ExecutionFlow::Value(v)) => v,
             other => return other,
         };
         let val_ref = match self.eval_expression(value) {
-            EvalResult::Value(v) => v,
+            Ok(ExecutionFlow::Value(v)) => v,
             other => return other,
         };
 
         let idx_data = match self.resolve(idx_ref).cloned() {
             Some(ObjectData::DateField { value, .. }) => ObjectData::Integer(value),
             Some(other) => other,
-            None => return EvalResult::Error,
+            None => return Err(RuntimeFailure),
         };
 
         let Some(container) = self.peek_path_container(root, &steps) else {
@@ -882,7 +883,7 @@ impl super::Evaluator {
                 "The write could not reach its target (the path changed while it was being resolved).",
             );
         }
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     /// Asigna `new_val` al campo `field` de la instancia en `obj_ref`, con los
@@ -933,7 +934,7 @@ impl super::Evaluator {
                     .arena
                     .update(obj_ref.index, ObjectData::Instance { class_name, fields }),
             }
-            EvalResult::Value(self.null_ref)
+            Ok(ExecutionFlow::Value(self.null_ref))
         } else {
             let message = format!("'{}' is not a class or interface instance", what);
             self.rt_err_kind("TypeError", message)
@@ -944,15 +945,15 @@ impl super::Evaluator {
     // Throw/Return payloads first so their refs survive the frame's truncation.
     fn pop_loop_frame(&mut self, res: EvalResult) -> EvalResult {
         match res {
-            EvalResult::Throw(v) => {
+            Ok(ExecutionFlow::Throw(v)) => {
                 let owned = self.extract(v);
                 self.scopes.pop();
-                EvalResult::Throw(self.plant(owned))
+                Ok(ExecutionFlow::Throw(self.plant(owned)))
             }
-            EvalResult::Return(v) => {
+            Ok(ExecutionFlow::Return(v)) => {
                 let owned = self.extract(v);
                 self.scopes.pop();
-                EvalResult::Return(self.plant(owned))
+                Ok(ExecutionFlow::Return(self.plant(owned)))
             }
             other => {
                 self.scopes.pop();
@@ -973,11 +974,11 @@ impl super::Evaluator {
 
             // 1. Evaluate condition
             let condition_ref = match self.eval_expression(&while_stmt.condition) {
-                EvalResult::Value(v) => v,
-                EvalResult::Error => return EvalResult::Error,
-                EvalResult::Return(v) => return EvalResult::Return(v),
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                _ => return EvalResult::Error,
+                Ok(ExecutionFlow::Value(v)) => v,
+                Err(RuntimeFailure) => return Err(RuntimeFailure),
+                Ok(ExecutionFlow::Return(v)) => return Ok(ExecutionFlow::Return(v)),
+                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                _ => return Err(RuntimeFailure),
             };
 
             let condition_data = self.resolve(condition_ref).unwrap().clone();
@@ -993,18 +994,18 @@ impl super::Evaluator {
 
             // 2. Evaluate body — body value is discarded (while is a statement, not expression)
             match self.eval_block_discard(&while_stmt.body) {
-                EvalResult::Value(_) => {}
-                EvalResult::Break => break,
-                EvalResult::Continue => continue,
-                EvalResult::Return(v) => return EvalResult::Return(v),
-                EvalResult::Error => return EvalResult::Error,
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                EvalResult::BreakLabel(ref l)
+                Ok(ExecutionFlow::Value(_)) => {}
+                Ok(ExecutionFlow::Break) => break,
+                Ok(ExecutionFlow::Continue) => continue,
+                Ok(ExecutionFlow::Return(v)) => return Ok(ExecutionFlow::Return(v)),
+                Err(RuntimeFailure) => return Err(RuntimeFailure),
+                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                Ok(ExecutionFlow::BreakLabel(ref l))
                     if while_stmt.label.as_deref() == Some(l.as_str()) =>
                 {
                     break;
                 }
-                EvalResult::ContinueLabel(ref l)
+                Ok(ExecutionFlow::ContinueLabel(ref l))
                     if while_stmt.label.as_deref() == Some(l.as_str()) =>
                 {
                     continue;
@@ -1012,23 +1013,25 @@ impl super::Evaluator {
                 other => return other,
             }
         }
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     fn eval_do_while_loop(&mut self, do_stmt: &ast::WhileStatement) -> EvalResult {
         loop {
             // Execute body first
             match self.eval_block_discard(&do_stmt.body) {
-                EvalResult::Value(_) => {}
-                EvalResult::Break => break,
-                EvalResult::Continue => {}
-                EvalResult::Return(v) => return EvalResult::Return(v),
-                EvalResult::Error => return EvalResult::Error,
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                EvalResult::BreakLabel(ref l) if do_stmt.label.as_deref() == Some(l.as_str()) => {
+                Ok(ExecutionFlow::Value(_)) => {}
+                Ok(ExecutionFlow::Break) => break,
+                Ok(ExecutionFlow::Continue) => {}
+                Ok(ExecutionFlow::Return(v)) => return Ok(ExecutionFlow::Return(v)),
+                Err(RuntimeFailure) => return Err(RuntimeFailure),
+                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                Ok(ExecutionFlow::BreakLabel(ref l))
+                    if do_stmt.label.as_deref() == Some(l.as_str()) =>
+                {
                     break;
                 }
-                EvalResult::ContinueLabel(ref l)
+                Ok(ExecutionFlow::ContinueLabel(ref l))
                     if do_stmt.label.as_deref() == Some(l.as_str()) => {}
                 other => return other,
             }
@@ -1039,11 +1042,11 @@ impl super::Evaluator {
                 None
             };
             let cond_ref = match self.eval_expression(&do_stmt.condition) {
-                EvalResult::Value(v) => v,
-                EvalResult::Error => return EvalResult::Error,
-                EvalResult::Return(v) => return EvalResult::Return(v),
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                _ => return EvalResult::Error,
+                Ok(ExecutionFlow::Value(v)) => v,
+                Err(RuntimeFailure) => return Err(RuntimeFailure),
+                Ok(ExecutionFlow::Return(v)) => return Ok(ExecutionFlow::Return(v)),
+                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                _ => return Err(RuntimeFailure),
             };
             let truthy = self.is_truthy(self.resolve(cond_ref).unwrap());
             if let Some(mark) = cond_mark {
@@ -1053,14 +1056,14 @@ impl super::Evaluator {
                 break;
             }
         }
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     pub(super) fn eval_foreach(&mut self, stmt: &ast::ForEachStatement) -> EvalResult {
         let iter_ref = match self.eval_expression(&stmt.iterable) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
 
         let items: Vec<OwnedValue> = match self.resolve(iter_ref).cloned() {
@@ -1139,23 +1142,29 @@ impl super::Evaluator {
             }
 
             match self.eval_block_discard(&stmt.body) {
-                EvalResult::Value(_) => {}
-                EvalResult::Break => break,
-                EvalResult::Continue => continue,
-                EvalResult::Return(v) => {
+                Ok(ExecutionFlow::Value(_)) => {}
+                Ok(ExecutionFlow::Break) => break,
+                Ok(ExecutionFlow::Continue) => continue,
+                Ok(ExecutionFlow::Return(v)) => {
                     loop_return = Some(self.extract(v));
                     break;
                 }
-                EvalResult::Throw(v) => {
+                Ok(ExecutionFlow::Throw(v)) => {
                     loop_throw = Some(self.extract(v));
                     break;
                 }
-                EvalResult::Error => {
+                Err(RuntimeFailure) => {
                     loop_error = true;
                     break;
                 }
-                EvalResult::BreakLabel(ref l) if stmt.label.as_deref() == Some(l.as_str()) => break,
-                EvalResult::ContinueLabel(ref l) if stmt.label.as_deref() == Some(l.as_str()) => {
+                Ok(ExecutionFlow::BreakLabel(ref l))
+                    if stmt.label.as_deref() == Some(l.as_str()) =>
+                {
+                    break;
+                }
+                Ok(ExecutionFlow::ContinueLabel(ref l))
+                    if stmt.label.as_deref() == Some(l.as_str()) =>
+                {
                     continue;
                 }
                 other => {
@@ -1169,22 +1178,22 @@ impl super::Evaluator {
         self.scopes.pop();
 
         if let Some(owned) = loop_throw {
-            return EvalResult::Throw(self.plant(owned));
+            return Ok(ExecutionFlow::Throw(self.plant(owned)));
         }
         if let Some(owned) = loop_return {
-            return EvalResult::Return(self.plant(owned));
+            return Ok(ExecutionFlow::Return(self.plant(owned)));
         }
         if loop_error {
-            return EvalResult::Error;
+            return Err(RuntimeFailure);
         }
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     fn eval_let_destructure_array(&mut self, d: &ast::LetDestructureArray) -> EvalResult {
         let val_ref = match self.eval_expression(&d.value) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
 
         let elems: Vec<OwnedValue> = match self.resolve(val_ref).cloned() {
@@ -1229,14 +1238,14 @@ impl super::Evaluator {
             }
         }
 
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     fn eval_let_destructure_dict(&mut self, d: &ast::LetDestructureDict) -> EvalResult {
         let val_ref = match self.eval_expression(&d.value) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
 
         let entries: Vec<(OwnedValue, OwnedValue)> = match self.resolve(val_ref).cloned() {
@@ -1276,7 +1285,7 @@ impl super::Evaluator {
             }
         }
 
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     pub(super) fn eval_unsafe_block(&mut self, block: &ast::BlockStatement) -> EvalResult {
@@ -1298,37 +1307,37 @@ impl super::Evaluator {
     /// escapan del loop y se preservan igual que en eval_block.
     pub(super) fn eval_block_discard(&mut self, block: &ast::BlockStatement) -> EvalResult {
         self.scopes.push();
-        let mut result = EvalResult::Value(self.null_ref);
+        let mut result = Ok(ExecutionFlow::Value(self.null_ref));
 
         for s in &block.statements {
             match self.eval_statement(s) {
-                EvalResult::Value(_) => {} // descartado: ningún caller de cuerpo de loop lo usa
-                EvalResult::Return(v) => {
-                    result = EvalResult::Return(v);
+                Ok(ExecutionFlow::Value(_)) => {} // descartado: ningún caller de cuerpo de loop lo usa
+                Ok(ExecutionFlow::Return(v)) => {
+                    result = Ok(ExecutionFlow::Return(v));
                     break;
                 }
-                EvalResult::Break => {
-                    result = EvalResult::Break;
+                Ok(ExecutionFlow::Break) => {
+                    result = Ok(ExecutionFlow::Break);
                     break;
                 }
-                EvalResult::Continue => {
-                    result = EvalResult::Continue;
+                Ok(ExecutionFlow::Continue) => {
+                    result = Ok(ExecutionFlow::Continue);
                     break;
                 }
-                EvalResult::BreakLabel(l) => {
-                    result = EvalResult::BreakLabel(l);
+                Ok(ExecutionFlow::BreakLabel(l)) => {
+                    result = Ok(ExecutionFlow::BreakLabel(l));
                     break;
                 }
-                EvalResult::ContinueLabel(l) => {
-                    result = EvalResult::ContinueLabel(l);
+                Ok(ExecutionFlow::ContinueLabel(l)) => {
+                    result = Ok(ExecutionFlow::ContinueLabel(l));
                     break;
                 }
-                EvalResult::Error => {
-                    result = EvalResult::Error;
+                Err(RuntimeFailure) => {
+                    result = Err(RuntimeFailure);
                     break;
                 }
-                EvalResult::Throw(v) => {
-                    result = EvalResult::Throw(v);
+                Ok(ExecutionFlow::Throw(v)) => {
+                    result = Ok(ExecutionFlow::Throw(v));
                     break;
                 }
             }
@@ -1336,7 +1345,7 @@ impl super::Evaluator {
 
         // Solo Return/Throw escapan del bloque con un valor que el caller usa.
         let owned = match &result {
-            EvalResult::Return(v) | EvalResult::Throw(v) => Some(self.extract(*v)),
+            Ok(ExecutionFlow::Return(v)) | Ok(ExecutionFlow::Throw(v)) => Some(self.extract(*v)),
             _ => None,
         };
 
@@ -1346,8 +1355,8 @@ impl super::Evaluator {
             Some(val) => {
                 let promoted = self.plant(val);
                 match result {
-                    EvalResult::Return(_) => EvalResult::Return(promoted),
-                    EvalResult::Throw(_) => EvalResult::Throw(promoted),
+                    Ok(ExecutionFlow::Return(_)) => Ok(ExecutionFlow::Return(promoted)),
+                    Ok(ExecutionFlow::Throw(_)) => Ok(ExecutionFlow::Throw(promoted)),
                     _ => unreachable!(),
                 }
             }
@@ -1357,37 +1366,37 @@ impl super::Evaluator {
 
     pub(super) fn eval_block(&mut self, block: &ast::BlockStatement) -> EvalResult {
         self.scopes.push();
-        let mut result = EvalResult::Value(self.null_ref);
+        let mut result = Ok(ExecutionFlow::Value(self.null_ref));
 
         for s in &block.statements {
             match self.eval_statement(s) {
-                EvalResult::Value(v) => result = EvalResult::Value(v),
-                EvalResult::Return(v) => {
-                    result = EvalResult::Return(v);
+                Ok(ExecutionFlow::Value(v)) => result = Ok(ExecutionFlow::Value(v)),
+                Ok(ExecutionFlow::Return(v)) => {
+                    result = Ok(ExecutionFlow::Return(v));
                     break;
                 }
-                EvalResult::Break => {
-                    result = EvalResult::Break;
+                Ok(ExecutionFlow::Break) => {
+                    result = Ok(ExecutionFlow::Break);
                     break;
                 }
-                EvalResult::Continue => {
-                    result = EvalResult::Continue;
+                Ok(ExecutionFlow::Continue) => {
+                    result = Ok(ExecutionFlow::Continue);
                     break;
                 }
-                EvalResult::BreakLabel(l) => {
-                    result = EvalResult::BreakLabel(l);
+                Ok(ExecutionFlow::BreakLabel(l)) => {
+                    result = Ok(ExecutionFlow::BreakLabel(l));
                     break;
                 }
-                EvalResult::ContinueLabel(l) => {
-                    result = EvalResult::ContinueLabel(l);
+                Ok(ExecutionFlow::ContinueLabel(l)) => {
+                    result = Ok(ExecutionFlow::ContinueLabel(l));
                     break;
                 }
-                EvalResult::Error => {
-                    result = EvalResult::Error;
+                Err(RuntimeFailure) => {
+                    result = Err(RuntimeFailure);
                     break;
                 }
-                EvalResult::Throw(v) => {
-                    result = EvalResult::Throw(v);
+                Ok(ExecutionFlow::Throw(v)) => {
+                    result = Ok(ExecutionFlow::Throw(v));
                     break;
                 }
             }
@@ -1395,14 +1404,14 @@ impl super::Evaluator {
 
         // Deep-extract ANTES del pop: preserva elementos de arrays y valores anidados.
         let owned = match &result {
-            EvalResult::Value(v) | EvalResult::Return(v) | EvalResult::Throw(v) => {
-                Some(self.extract(*v))
-            }
-            EvalResult::Break
-            | EvalResult::Continue
-            | EvalResult::Error
-            | EvalResult::BreakLabel(_)
-            | EvalResult::ContinueLabel(_) => None,
+            Ok(ExecutionFlow::Value(v))
+            | Ok(ExecutionFlow::Return(v))
+            | Ok(ExecutionFlow::Throw(v)) => Some(self.extract(*v)),
+            Ok(ExecutionFlow::Break)
+            | Ok(ExecutionFlow::Continue)
+            | Err(RuntimeFailure)
+            | Ok(ExecutionFlow::BreakLabel(_))
+            | Ok(ExecutionFlow::ContinueLabel(_)) => None,
         };
 
         self.scopes.pop();
@@ -1411,9 +1420,9 @@ impl super::Evaluator {
             Some(val) => {
                 let promoted = self.plant(val);
                 match result {
-                    EvalResult::Value(_) => EvalResult::Value(promoted),
-                    EvalResult::Return(_) => EvalResult::Return(promoted),
-                    EvalResult::Throw(_) => EvalResult::Throw(promoted),
+                    Ok(ExecutionFlow::Value(_)) => Ok(ExecutionFlow::Value(promoted)),
+                    Ok(ExecutionFlow::Return(_)) => Ok(ExecutionFlow::Return(promoted)),
+                    Ok(ExecutionFlow::Throw(_)) => Ok(ExecutionFlow::Throw(promoted)),
                     _ => unreachable!(),
                 }
             }
@@ -1441,7 +1450,7 @@ impl super::Evaluator {
                 Err(e) => {
                     let msg = format!("ModuleNotFound: Cannot read cached module '{}': {}", url, e);
                     let msg_ref = self.alloc(ObjectData::Str(msg));
-                    return EvalResult::Throw(msg_ref);
+                    return Ok(ExecutionFlow::Throw(msg_ref));
                 }
             }
         } else {
@@ -1459,13 +1468,13 @@ impl super::Evaluator {
                         let msg =
                             format!("ModuleNotFound: Cannot read response from '{}': {}", url, e);
                         let msg_ref = self.alloc(ObjectData::Str(msg));
-                        return EvalResult::Throw(msg_ref);
+                        return Ok(ExecutionFlow::Throw(msg_ref));
                     }
                 },
                 Err(e) => {
                     let msg = format!("ModuleNotFound: Cannot fetch '{}': {}", url, e);
                     let msg_ref = self.alloc(ObjectData::Str(msg));
-                    return EvalResult::Throw(msg_ref);
+                    return Ok(ExecutionFlow::Throw(msg_ref));
                 }
             }
         };
@@ -1473,7 +1482,7 @@ impl super::Evaluator {
         // Use the cache_file path as canonical ID to prevent re-imports
         // Recorded before the body runs, which is what makes a cycle terminate.
         if !self.modules.loaded.mark(&cache_file) {
-            return EvalResult::Value(self.null_ref);
+            return Ok(ExecutionFlow::Value(self.null_ref));
         }
 
         let prev_dir = self.modules.current_dir.clone();
@@ -1513,7 +1522,7 @@ impl super::Evaluator {
         self.modules.current_dir = prev_dir;
 
         if result.is_none() {
-            return EvalResult::Error;
+            return Err(RuntimeFailure);
         }
         // A module that declares a name the importer already held replaces it,
         // and used to do so without a word. `modules.md` records the hazard;
@@ -1545,7 +1554,7 @@ impl super::Evaluator {
                 .retain(|k, _| before_enums.contains(k) || exports.contains(k));
         }
 
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     fn eval_export(&mut self, inner: &crate::ast::Statement) -> EvalResult {
@@ -1590,7 +1599,7 @@ impl super::Evaluator {
             None => {
                 let msg = format!("ModuleNotFound: Cannot find module '{}'", path);
                 let msg_ref = self.alloc(ObjectData::Str(msg));
-                return EvalResult::Throw(msg_ref);
+                return Ok(ExecutionFlow::Throw(msg_ref));
             }
         };
 
@@ -1598,7 +1607,7 @@ impl super::Evaluator {
         // terminate instead of recursing, and what makes a second import of the
         // same file a no-op. See spec/modules.md.
         if !self.modules.loaded.mark(&canonical) {
-            return EvalResult::Value(self.null_ref); // already imported — skip
+            return Ok(ExecutionFlow::Value(self.null_ref)); // already imported — skip
         }
 
         // What the module *says* is `crate::modules`' question, not the
@@ -1655,7 +1664,7 @@ impl super::Evaluator {
         self.modules.current_dir = prev_dir;
 
         if result.is_none() {
-            return EvalResult::Error;
+            return Err(RuntimeFailure);
         }
         // A module that declares a name the importer already held replaces it,
         // and used to do so without a word. `modules.md` records the hazard;
@@ -1709,7 +1718,7 @@ impl super::Evaluator {
         }
         // If no `export` was used, everything the module defined stays (backwards compat)
 
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 }
 

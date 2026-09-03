@@ -1,3 +1,4 @@
+use super::{ExecutionFlow, RuntimeFailure};
 // Crypto namespace: sha256, md5, base64, hmacSha256, hexEncode, hexDecode,
 // randomBytes (CSPRNG), ed25519Keypair/Sign/Verify (firmas).
 // Hashes/encodings en Rust puro. Las primitivas con implicaciones de seguridad
@@ -20,7 +21,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let hex = to_hex(&sha256(s.as_bytes()));
-                EvalResult::Value(self.alloc(ObjectData::Str(hex)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(hex))))
             }
             "md5" => {
                 let s = match self.require_one_string(&dot_call.arguments, "Crypto.md5") {
@@ -28,7 +29,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let hex = to_hex(&md5(s.as_bytes()));
-                EvalResult::Value(self.alloc(ObjectData::Str(hex)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(hex))))
             }
             "hmacSha256" => {
                 if dot_call.arguments.len() != 2 {
@@ -48,14 +49,18 @@ impl super::Evaluator {
                         Err(e) => return e,
                     };
                 let hash = hmac_sha256(key.as_bytes(), data.as_bytes());
-                EvalResult::Value(self.alloc(ObjectData::Str(to_hex(&hash))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Str(to_hex(&hash))),
+                ))
             }
             "base64encode" => {
                 let s = match self.require_one_string(&dot_call.arguments, "Crypto.base64encode") {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Str(base64_encode(s.as_bytes()))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Str(base64_encode(s.as_bytes()))),
+                ))
             }
             "base64decode" => {
                 let s = match self.require_one_string(&dot_call.arguments, "Crypto.base64decode") {
@@ -64,18 +69,20 @@ impl super::Evaluator {
                 };
                 match base64_decode(&s) {
                     Ok(bytes) => match String::from_utf8(bytes) {
-                        Ok(decoded) => EvalResult::Value(self.alloc(ObjectData::Str(decoded))),
+                        Ok(decoded) => {
+                            Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(decoded))))
+                        }
                         Err(_) => {
                             let msg = self.alloc(ObjectData::Str(
                                 "Crypto.base64decode: result is not valid UTF-8".to_string(),
                             ));
-                            EvalResult::Throw(msg)
+                            Ok(ExecutionFlow::Throw(msg))
                         }
                     },
                     Err(e) => {
                         let msg =
                             self.alloc(ObjectData::Str(format!("Crypto.base64decode: {}", e)));
-                        EvalResult::Throw(msg)
+                        Ok(ExecutionFlow::Throw(msg))
                     }
                 }
             }
@@ -85,9 +92,9 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Crypto.hexEncode(bytes) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 match self.resolve(arr_ref).cloned() {
                     Some(ObjectData::Array { elements, .. }) => {
@@ -102,11 +109,13 @@ impl super::Evaluator {
                                         "Crypto.hexEncode: all elements must be integers 0-255"
                                             .to_string(),
                                     ));
-                                    return EvalResult::Throw(msg);
+                                    return Ok(ExecutionFlow::Throw(msg));
                                 }
                             }
                         }
-                        EvalResult::Value(self.alloc(ObjectData::Str(to_hex(&bytes))))
+                        Ok(ExecutionFlow::Value(
+                            self.alloc(ObjectData::Str(to_hex(&bytes))),
+                        ))
                     }
                     _ => self
                         .rt_err_kind("TypeError", "Crypto.hexEncode() requires an array of bytes"),
@@ -123,14 +132,14 @@ impl super::Evaluator {
                             .iter()
                             .map(|&b| OwnedValue::Integer(b as i64))
                             .collect();
-                        EvalResult::Value(self.alloc(ObjectData::Array {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                             element_type: Some("int".to_string()),
                             elements: owned,
-                        }))
+                        })))
                     }
                     Err(e) => {
                         let msg = self.alloc(ObjectData::Str(format!("Crypto.hexDecode: {}", e)));
-                        EvalResult::Throw(msg)
+                        Ok(ExecutionFlow::Throw(msg))
                     }
                 }
             }
@@ -140,7 +149,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let hex = to_hex(&sha1(s.as_bytes()));
-                EvalResult::Value(self.alloc(ObjectData::Str(hex)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(hex))))
             }
             "sha1base64" => {
                 // SHA-1 hash followed by base64 encode — used for WebSocket handshake
@@ -150,7 +159,7 @@ impl super::Evaluator {
                 };
                 let hash = sha1(s.as_bytes());
                 let b64 = base64_encode(&hash);
-                EvalResult::Value(self.alloc(ObjectData::Str(b64)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(b64))))
             }
             "randomBytes" => {
                 // CSPRNG real (entropía del OS vía getrandom). NO usar Random.* para
@@ -169,21 +178,21 @@ impl super::Evaluator {
                         "Crypto.randomBytes: n must be between 1 and {}",
                         MAX_RANDOM_BYTES
                     )));
-                    return EvalResult::Throw(msg);
+                    return Ok(ExecutionFlow::Throw(msg));
                 }
                 let mut buf = vec![0u8; n as usize];
                 if getrandom::getrandom(&mut buf).is_err() {
                     let msg = self.alloc(ObjectData::Str(
                         "Crypto.randomBytes: OS entropy source unavailable".to_string(),
                     ));
-                    return EvalResult::Throw(msg);
+                    return Ok(ExecutionFlow::Throw(msg));
                 }
                 let owned: Vec<OwnedValue> =
                     buf.iter().map(|&b| OwnedValue::Integer(b as i64)).collect();
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: owned,
-                }))
+                })))
             }
             "ed25519Keypair" => {
                 if !dot_call.arguments.is_empty() {
@@ -195,7 +204,7 @@ impl super::Evaluator {
                     let msg = self.alloc(ObjectData::Str(
                         "Crypto.ed25519Keypair: OS entropy source unavailable".to_string(),
                     ));
-                    return EvalResult::Throw(msg);
+                    return Ok(ExecutionFlow::Throw(msg));
                 }
                 let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
                 let public = signing.verifying_key();
@@ -209,12 +218,12 @@ impl super::Evaluator {
                         OwnedValue::Str(to_hex(public.as_bytes())),
                     ),
                 ];
-                EvalResult::Value(self.alloc(ObjectData::Dict {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Dict {
                     key_type: "string".to_string(),
                     value_type: "string".to_string(),
                     entries,
                     index: Default::default(),
-                }))
+                })))
             }
             "ed25519Sign" => {
                 if dot_call.arguments.len() != 2 {
@@ -246,13 +255,15 @@ impl super::Evaluator {
                             "Crypto.ed25519Sign: privateHex must be 64 hex chars (32 bytes)"
                                 .to_string(),
                         ));
-                        return EvalResult::Throw(msg);
+                        return Ok(ExecutionFlow::Throw(msg));
                     }
                 };
                 use ed25519_dalek::Signer;
                 let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
                 let sig = signing.sign(message.as_bytes());
-                EvalResult::Value(self.alloc(ObjectData::Str(to_hex(&sig.to_bytes()))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Str(to_hex(&sig.to_bytes()))),
+                ))
             }
             "ed25519Verify" => {
                 if dot_call.arguments.len() != 3 {
@@ -289,7 +300,7 @@ impl super::Evaluator {
                             "Crypto.ed25519Verify: publicHex must be 64 hex chars (32 bytes)"
                                 .to_string(),
                         ));
-                        return EvalResult::Throw(msg);
+                        return Ok(ExecutionFlow::Throw(msg));
                     }
                 };
                 let sig_bytes: [u8; 64] = match hex_decode(&sig_hex) {
@@ -303,17 +314,19 @@ impl super::Evaluator {
                             "Crypto.ed25519Verify: signatureHex must be 128 hex chars (64 bytes)"
                                 .to_string(),
                         ));
-                        return EvalResult::Throw(msg);
+                        return Ok(ExecutionFlow::Throw(msg));
                     }
                 };
                 let verifying = match ed25519_dalek::VerifyingKey::from_bytes(&pub_bytes) {
                     Ok(k) => k,
-                    Err(_) => return EvalResult::Value(self.alloc(ObjectData::Boolean(false))),
+                    Err(_) => {
+                        return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(false))));
+                    }
                 };
                 let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
                 // verify_strict: rechaza claves/firmas no canónicas (malleability).
                 let ok = verifying.verify_strict(message.as_bytes(), &sig).is_ok();
-                EvalResult::Value(self.alloc(ObjectData::Boolean(ok)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(ok))))
             }
             _ => self.rt_err_kind(
                 "TypeError",
@@ -345,8 +358,8 @@ impl super::Evaluator {
         ctx: &str,
     ) -> Result<String, EvalResult> {
         let r = match self.eval_expression(expr) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
             other => return Err(other),
         };
         match self.resolve(r) {

@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use super::ExecutionFlow;
 use super::{
     CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
     obj_data_eq, obj_data_to_key_str, operator_to_method_name, owned_to_obj_data, type_matches,
@@ -84,7 +85,7 @@ impl super::Evaluator {
                     _ => return self.rt_err_kind("TypeError", "push: receiver is not an array"),
                 };
                 let val_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 if let Some(ref et) = element_type {
@@ -103,7 +104,7 @@ impl super::Evaluator {
                 if let Some(ObjectData::Array { elements, .. }) = arena.get_mut(arr_ref.index) {
                     elements.push(val);
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
             "pop" => {
                 if let Some(error) = self.array_arity(dot_call, 0, 0) {
@@ -118,7 +119,7 @@ impl super::Evaluator {
                     _ => None,
                 };
                 match popped {
-                    Some(value) => EvalResult::Value(self.plant(value)),
+                    Some(value) => Ok(ExecutionFlow::Value(self.plant(value))),
                     None => self.rt_err_kind("IndexOutOfBounds", "pop() called on an empty array"),
                 }
             }
@@ -144,7 +145,9 @@ impl super::Evaluator {
                 if let Some(error) = self.array_arity(dot_call, 0, 0) {
                     return error;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(elems.len() as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(elems.len() as i64)),
+                ))
             }
 
             "push" => {
@@ -152,7 +155,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let val_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 if let Some(ref et) = element_type {
@@ -167,7 +170,7 @@ impl super::Evaluator {
                 let mut e = elems;
                 e.push(val);
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "pop" => {
@@ -183,7 +186,7 @@ impl super::Evaluator {
                     }
                 };
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(self.plant(last))
+                Ok(ExecutionFlow::Value(self.plant(last)))
             }
 
             "shift" => {
@@ -197,7 +200,7 @@ impl super::Evaluator {
                 let mut e = elems;
                 let first = e.remove(0);
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(self.plant(first))
+                Ok(ExecutionFlow::Value(self.plant(first)))
             }
 
             "unshift" => {
@@ -205,7 +208,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let val_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 if let Some(ref et) = element_type {
@@ -220,7 +223,7 @@ impl super::Evaluator {
                 let mut e = elems;
                 e.insert(0, val);
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "remove" => {
@@ -235,7 +238,7 @@ impl super::Evaluator {
                 // empty array yields null instead of failing. It predates the
                 // bounds check below and is pinned by the conformance suite.
                 if elems.is_empty() {
-                    return EvalResult::Value(self.null_ref);
+                    return Ok(ExecutionFlow::Value(self.null_ref));
                 }
                 if idx < 0 || idx as usize >= elems.len() {
                     let len = elems.len();
@@ -247,7 +250,7 @@ impl super::Evaluator {
                 let mut e = elems;
                 let removed = e.remove(idx as usize);
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(self.plant(removed))
+                Ok(ExecutionFlow::Value(self.plant(removed)))
             }
 
             "sort" => {
@@ -257,7 +260,7 @@ impl super::Evaluator {
                 // Evaluate the optional argument exactly once
                 let arg_ref: Option<ObjectRef> = if dot_call.arguments.len() == 1 {
                     match self.eval_expression(&dot_call.arguments[0]) {
-                        EvalResult::Value(r) => Some(r),
+                        Ok(ExecutionFlow::Value(r)) => Some(r),
                         other => return other,
                     }
                 } else {
@@ -286,7 +289,7 @@ impl super::Evaluator {
                             // Classify first: the immutable borrow of `resolve`
                             // must end before a diagnostic can be recorded.
                             let comparison = match cmp_result {
-                                EvalResult::Value(r) => match self.resolve(r) {
+                                Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                                     Some(ObjectData::Integer(v)) => Some(*v > 0),
                                     Some(ObjectData::Decimal(v)) => Some(*v > 0.0),
                                     _ => None,
@@ -317,7 +320,7 @@ impl super::Evaluator {
                         return err;
                     }
                     self.update_array(arr_ref, element_type, owned_vals);
-                    return EvalResult::Value(arr_ref);
+                    return Ok(ExecutionFlow::Value(arr_ref));
                 }
 
                 // Any other argument names a sort order. Falling back to "asc"
@@ -375,7 +378,7 @@ impl super::Evaluator {
                 });
 
                 self.update_array(arr_ref, element_type, owned_vals);
-                EvalResult::Value(arr_ref)
+                Ok(ExecutionFlow::Value(arr_ref))
             }
 
             "map" => {
@@ -383,7 +386,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let n_params = match self.array_callback_params(cb_ref, "map") {
@@ -399,14 +402,14 @@ impl super::Evaluator {
                         vec![val]
                     };
                     match self.call_function(cb_ref, args) {
-                        EvalResult::Value(r) => results.push(self.extract(r)),
+                        Ok(ExecutionFlow::Value(r)) => results.push(self.extract(r)),
                         other => return other,
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: results,
-                }))
+                })))
             }
 
             "filter" => {
@@ -414,7 +417,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let n_params = match self.array_callback_params(cb_ref, "filter") {
@@ -430,7 +433,7 @@ impl super::Evaluator {
                         vec![val.clone()]
                     };
                     let keep = match self.call_function(cb_ref, args) {
-                        EvalResult::Value(r) => {
+                        Ok(ExecutionFlow::Value(r)) => {
                             let d = self.resolve(r).cloned();
                             self.is_truthy(&d.unwrap_or(ObjectData::Null))
                         }
@@ -440,10 +443,10 @@ impl super::Evaluator {
                         kept.push(val);
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type,
                     elements: kept,
-                }))
+                })))
             }
 
             "reduce" => {
@@ -455,11 +458,11 @@ impl super::Evaluator {
                     // reduce(initial, callback) — the initial value comes first
                     // in Serez. This order is public API; see spec/values.md.
                     let init = match self.eval_expression(&dot_call.arguments[0]) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     let cb = match self.eval_expression(&dot_call.arguments[1]) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     (init, cb, 0usize)
@@ -472,7 +475,7 @@ impl super::Evaluator {
                         );
                     }
                     let cb = match self.eval_expression(&dot_call.arguments[0]) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     let first_ref = self.plant(owned_elems[0].clone());
@@ -484,11 +487,11 @@ impl super::Evaluator {
                 for val in owned_elems.into_iter().skip(start_idx) {
                     let acc_val = self.extract(acc_ref);
                     acc_ref = match self.call_function(cb_ref, vec![acc_val, val]) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                 }
-                EvalResult::Value(acc_ref)
+                Ok(ExecutionFlow::Value(acc_ref))
             }
 
             "join" => {
@@ -504,7 +507,9 @@ impl super::Evaluator {
                     }
                 };
                 let parts: Vec<String> = elems.iter().map(|v| v.display_str()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Str(parts.join(&sep))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Str(parts.join(&sep))),
+                ))
             }
 
             "toString" => {
@@ -512,7 +517,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let s = self.display(arr_ref);
-                EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
             }
 
             "indexOf" => {
@@ -520,7 +525,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let needle_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let needle_data = self.resolve(needle_ref).cloned();
@@ -533,7 +538,7 @@ impl super::Evaluator {
                     })
                     .map(|(i, _)| i as i64)
                     .unwrap_or(-1);
-                EvalResult::Value(self.alloc(ObjectData::Integer(idx)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(idx))))
             }
 
             "includes" | "contains" => {
@@ -541,7 +546,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let needle_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let needle_data = self.resolve(needle_ref).cloned();
@@ -549,7 +554,7 @@ impl super::Evaluator {
                     let elem_data = Some(owned_to_obj_data(elem));
                     obj_data_eq(&elem_data, &needle_data)
                 });
-                EvalResult::Value(self.alloc(ObjectData::Boolean(found)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(found))))
             }
 
             "find" => {
@@ -557,7 +562,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 if let Err(error) = self.array_callback_params(cb_ref, "find") {
@@ -567,14 +572,14 @@ impl super::Evaluator {
                 for val in owned_elems {
                     let val_clone = val.clone();
                     let result = match self.call_function(cb_ref, vec![val]) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     if self.is_truthy(self.resolve(result).unwrap()) {
-                        return EvalResult::Value(self.plant(val_clone));
+                        return Ok(ExecutionFlow::Value(self.plant(val_clone)));
                     }
                 }
-                EvalResult::Value(self.null_ref)
+                Ok(ExecutionFlow::Value(self.null_ref))
             }
 
             "findIndex" => {
@@ -582,7 +587,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 if let Err(error) = self.array_callback_params(cb_ref, "findIndex") {
@@ -591,14 +596,16 @@ impl super::Evaluator {
                 let owned_elems: Vec<OwnedValue> = elems.clone();
                 for (i, val) in owned_elems.into_iter().enumerate() {
                     let result = match self.call_function(cb_ref, vec![val]) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     if self.is_truthy(self.resolve(result).unwrap()) {
-                        return EvalResult::Value(self.alloc(ObjectData::Integer(i as i64)));
+                        return Ok(ExecutionFlow::Value(
+                            self.alloc(ObjectData::Integer(i as i64)),
+                        ));
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(-1)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(-1))))
             }
 
             "slice" => {
@@ -635,10 +642,10 @@ impl super::Evaluator {
                 }) as usize;
                 let end = end.max(start); // prevent inverted range
                 let sliced: Vec<OwnedValue> = elems[start..end].iter().cloned().collect();
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: element_type.clone(),
                     elements: sliced,
-                }))
+                })))
             }
 
             "reverse" => {
@@ -648,7 +655,7 @@ impl super::Evaluator {
                 let mut e = elems;
                 e.reverse();
                 self.update_array(arr_ref, element_type, e);
-                EvalResult::Value(arr_ref)
+                Ok(ExecutionFlow::Value(arr_ref))
             }
 
             "every" => {
@@ -656,7 +663,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 if let Err(error) = self.array_callback_params(cb_ref, "every") {
@@ -665,14 +672,14 @@ impl super::Evaluator {
                 let owned_elems: Vec<OwnedValue> = elems.clone();
                 for val in owned_elems {
                     let result = match self.call_function(cb_ref, vec![val]) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     if !self.is_truthy(self.resolve(result).unwrap()) {
-                        return EvalResult::Value(self.alloc(ObjectData::Boolean(false)));
+                        return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(false))));
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Boolean(true)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(true))))
             }
 
             "some" => {
@@ -680,7 +687,7 @@ impl super::Evaluator {
                     return error;
                 }
                 let cb_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 if let Err(error) = self.array_callback_params(cb_ref, "some") {
@@ -689,14 +696,14 @@ impl super::Evaluator {
                 let owned_elems: Vec<OwnedValue> = elems.clone();
                 for val in owned_elems {
                     let result = match self.call_function(cb_ref, vec![val]) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     if self.is_truthy(self.resolve(result).unwrap()) {
-                        return EvalResult::Value(self.alloc(ObjectData::Boolean(true)));
+                        return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(true))));
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Boolean(false)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Boolean(false))))
             }
 
             "flat" => {
@@ -731,10 +738,10 @@ impl super::Evaluator {
                 }
 
                 let flat = flat_owned(elems.clone(), depth);
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: None,
                     elements: flat,
-                }))
+                })))
             }
 
             unknown => {

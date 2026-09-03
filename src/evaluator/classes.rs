@@ -3,6 +3,7 @@ use super::{
     CallFrame, DefaultArgumentResult, EvalResult, StoredClass, format_decimal, json_parse,
     json_stringify_owned, obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
 };
+use super::{ExecutionFlow, RuntimeFailure};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
@@ -68,7 +69,7 @@ impl super::Evaluator {
             match entry {
                 Some((_, expr)) => {
                     let val_ref = match self.eval_expression(expr) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     if let Some(actual) = self.resolve(val_ref) {
@@ -95,10 +96,10 @@ impl super::Evaluator {
             }
         }
 
-        EvalResult::Value(self.alloc(ObjectData::Instance {
+        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Instance {
             class_name: new_expr.class_name.clone(),
             fields,
-        }))
+        })))
     }
 
     pub(super) fn eval_new_class(
@@ -130,7 +131,7 @@ impl super::Evaluator {
         let mut arg_vals: Vec<OwnedValue> = Vec::new();
         for expr in &arg_exprs {
             match self.eval_expression(expr) {
-                EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                Ok(ExecutionFlow::Value(r)) => arg_vals.push(self.extract(r)),
                 other => return other,
             }
         }
@@ -141,7 +142,7 @@ impl super::Evaluator {
         for field in &class.fields {
             if let Some(ref default_expr) = field.default_value {
                 match self.eval_expression(default_expr) {
-                    EvalResult::Value(r) => {
+                    Ok(ExecutionFlow::Value(r)) => {
                         let owned = self.extract(r);
                         initial_fields.push((field.name.clone(), owned));
                     }
@@ -200,11 +201,11 @@ impl super::Evaluator {
                         DefaultArgumentResult::Value(value) => value,
                         DefaultArgumentResult::Throw(owned) => {
                             self.scopes.pop();
-                            return EvalResult::Throw(self.plant(owned));
+                            return Ok(ExecutionFlow::Throw(self.plant(owned)));
                         }
                         DefaultArgumentResult::Error => {
                             self.scopes.pop();
-                            return EvalResult::Error;
+                            return Err(RuntimeFailure);
                         }
                     }
                 } else {
@@ -249,8 +250,8 @@ impl super::Evaluator {
             // constructor propio pueda leerlos o pisarlos.
             if !self.ctor_calls_super(&new_expr.class_name, &ctor) {
                 match self.run_implicit_super(&new_expr.class_name, instance_ref, true) {
-                    EvalResult::Error => body_error = true,
-                    EvalResult::Throw(v) => ctor_throw = Some(v),
+                    Err(RuntimeFailure) => body_error = true,
+                    Ok(ExecutionFlow::Throw(v)) => ctor_throw = Some(v),
                     _ => {}
                 }
             }
@@ -260,21 +261,21 @@ impl super::Evaluator {
                     break;
                 }
                 match self.eval_statement(stmt) {
-                    EvalResult::Error => {
+                    Err(RuntimeFailure) => {
                         body_error = true;
                         break;
                     }
-                    EvalResult::Return(_) => break,
-                    EvalResult::Value(_) => {}
-                    EvalResult::Throw(v) => {
+                    Ok(ExecutionFlow::Return(_)) => break,
+                    Ok(ExecutionFlow::Value(_)) => {}
+                    Ok(ExecutionFlow::Throw(v)) => {
                         ctor_throw = Some(v);
                         break;
                     }
-                    EvalResult::Break
-                    | EvalResult::Continue
-                    | EvalResult::BreakLabel(_)
-                    | EvalResult::ContinueLabel(_) => {
-                        self.rt_err("break/continue used outside a loop");
+                    Ok(ExecutionFlow::Break)
+                    | Ok(ExecutionFlow::Continue)
+                    | Ok(ExecutionFlow::BreakLabel(_))
+                    | Ok(ExecutionFlow::ContinueLabel(_)) => {
+                        let _ = self.rt_err("break/continue used outside a loop");
                         body_error = true;
                         break;
                     }
@@ -292,10 +293,10 @@ impl super::Evaluator {
             self.scopes.pop();
 
             if body_error {
-                return EvalResult::Error;
+                return Err(RuntimeFailure);
             }
             if let Some(owned) = throw_owned {
-                return EvalResult::Throw(self.plant(owned));
+                return Ok(ExecutionFlow::Throw(self.plant(owned)));
             }
 
             // Se devuelve el slot que el constructor usó, NO una copia suya.
@@ -313,7 +314,7 @@ impl super::Evaluator {
             // toca, y el plant que había después alocaba a la misma profundidad.
             // De paso se ahorra una copia profunda de la instancia por cada
             // `new`.
-            EvalResult::Value(live_ref)
+            Ok(ExecutionFlow::Value(live_ref))
         } else {
             if !arg_vals.is_empty() {
                 let message = format!(
@@ -341,20 +342,20 @@ impl super::Evaluator {
                 // padre creó una closure que lo captura — mismo caso que arriba.
                 let live_ref = self.scopes.lookup("this").unwrap_or(instance_ref);
                 let throw_owned = match res {
-                    EvalResult::Throw(v) => Some(self.extract(v)),
-                    EvalResult::Error => {
+                    Ok(ExecutionFlow::Throw(v)) => Some(self.extract(v)),
+                    Err(RuntimeFailure) => {
                         self.scopes.pop();
-                        return EvalResult::Error;
+                        return Err(RuntimeFailure);
                     }
                     _ => None,
                 };
                 self.scopes.pop();
                 if let Some(owned) = throw_owned {
-                    return EvalResult::Throw(self.plant(owned));
+                    return Ok(ExecutionFlow::Throw(self.plant(owned)));
                 }
-                return EvalResult::Value(live_ref);
+                return Ok(ExecutionFlow::Value(live_ref));
             }
-            EvalResult::Value(instance_ref)
+            Ok(ExecutionFlow::Value(instance_ref))
         }
     }
 
@@ -407,7 +408,7 @@ impl super::Evaluator {
             .get(class_name)
             .and_then(|c| c.parent.clone())
         else {
-            return EvalResult::Value(self.null_ref);
+            return Ok(ExecutionFlow::Value(self.null_ref));
         };
         let parent_class = match self.class_registry.get(&parent_name).cloned() {
             Some(parent) => parent,
@@ -420,7 +421,7 @@ impl super::Evaluator {
             }
         };
         let Some(parent_ctor) = parent_class.constructor else {
-            return EvalResult::Value(self.null_ref);
+            return Ok(ExecutionFlow::Value(self.null_ref));
         };
 
         let required = parent_ctor
@@ -430,7 +431,7 @@ impl super::Evaluator {
             .count();
         if required > 0 {
             if has_own_ctor {
-                return EvalResult::Value(self.null_ref);
+                return Ok(ExecutionFlow::Value(self.null_ref));
             }
             let message = format!(
                 "'{}' extends '{}', whose constructor needs {} argument(s), so it cannot be \
@@ -477,7 +478,7 @@ impl super::Evaluator {
         };
         let parent_ctor = match parent_class.constructor {
             Some(ctor) => ctor,
-            None if args.is_empty() => return EvalResult::Value(self.null_ref),
+            None if args.is_empty() => return Ok(ExecutionFlow::Value(self.null_ref)),
             None => {
                 let message = format!(
                     "Parent class '{}' has no constructor but super() received {} argument(s)",
@@ -491,7 +492,7 @@ impl super::Evaluator {
         let mut arg_vals: Vec<OwnedValue> = Vec::new();
         for expr in args {
             match self.eval_expression(expr) {
-                EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                Ok(ExecutionFlow::Value(r)) => arg_vals.push(self.extract(r)),
                 other => return other,
             }
         }
@@ -542,11 +543,11 @@ impl super::Evaluator {
                     DefaultArgumentResult::Value(value) => value,
                     DefaultArgumentResult::Throw(owned) => {
                         self.scopes.pop();
-                        return EvalResult::Throw(self.plant(owned));
+                        return Ok(ExecutionFlow::Throw(self.plant(owned)));
                     }
                     DefaultArgumentResult::Error => {
                         self.scopes.pop();
-                        return EvalResult::Error;
+                        return Err(RuntimeFailure);
                     }
                 }
             } else {
@@ -561,21 +562,21 @@ impl super::Evaluator {
         let mut super_throw: Option<ObjectRef> = None;
         for stmt in &parent_ctor.body.statements {
             match self.eval_statement(stmt) {
-                EvalResult::Error => {
+                Err(RuntimeFailure) => {
                     error = true;
                     break;
                 }
-                EvalResult::Return(_) => break,
-                EvalResult::Value(_) => {}
-                EvalResult::Throw(v) => {
+                Ok(ExecutionFlow::Return(_)) => break,
+                Ok(ExecutionFlow::Value(_)) => {}
+                Ok(ExecutionFlow::Throw(v)) => {
                     super_throw = Some(v);
                     break;
                 }
-                EvalResult::Break
-                | EvalResult::Continue
-                | EvalResult::BreakLabel(_)
-                | EvalResult::ContinueLabel(_) => {
-                    self.rt_err("break/continue used outside a loop");
+                Ok(ExecutionFlow::Break)
+                | Ok(ExecutionFlow::Continue)
+                | Ok(ExecutionFlow::BreakLabel(_))
+                | Ok(ExecutionFlow::ContinueLabel(_)) => {
+                    let _ = self.rt_err("break/continue used outside a loop");
                     error = true;
                     break;
                 }
@@ -587,12 +588,12 @@ impl super::Evaluator {
         self.scopes.pop();
 
         if error {
-            return EvalResult::Error;
+            return Err(RuntimeFailure);
         }
         if let Some(owned) = throw_owned {
-            return EvalResult::Throw(self.plant(owned));
+            return Ok(ExecutionFlow::Throw(self.plant(owned)));
         }
-        EvalResult::Value(self.null_ref)
+        Ok(ExecutionFlow::Value(self.null_ref))
     }
 
     pub(super) fn eval_super_method_call(
@@ -655,7 +656,7 @@ impl super::Evaluator {
         let mut arg_vals: Vec<OwnedValue> = Vec::new();
         for expr in &dot_call.arguments {
             match self.eval_expression(expr) {
-                EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                Ok(ExecutionFlow::Value(r)) => arg_vals.push(self.extract(r)),
                 other => return other,
             }
         }
@@ -720,14 +721,14 @@ impl super::Evaluator {
                         self.scopes.pop();
                         self.call_stack.pop();
                         self.executing_class = old_executing_class;
-                        return EvalResult::Throw(self.plant(owned));
+                        return Ok(ExecutionFlow::Throw(self.plant(owned)));
                     }
                     DefaultArgumentResult::Error => {
                         self.call_depth -= 1;
                         self.scopes.pop();
                         self.call_stack.pop();
                         self.executing_class = old_executing_class;
-                        return EvalResult::Error;
+                        return Err(RuntimeFailure);
                     }
                 }
             } else {
@@ -741,24 +742,24 @@ impl super::Evaluator {
         let mut method_throw: Option<ObjectRef> = None;
         for stmt in &method.body.statements {
             match self.eval_statement(stmt) {
-                EvalResult::Value(_) => {}
-                EvalResult::Return(v) => {
+                Ok(ExecutionFlow::Value(_)) => {}
+                Ok(ExecutionFlow::Return(v)) => {
                     result_ref = v;
                     break;
                 }
-                EvalResult::Throw(v) => {
+                Ok(ExecutionFlow::Throw(v)) => {
                     method_throw = Some(v);
                     break;
                 }
-                EvalResult::Error => {
+                Err(RuntimeFailure) => {
                     error = true;
                     break;
                 }
-                EvalResult::Break
-                | EvalResult::Continue
-                | EvalResult::BreakLabel(_)
-                | EvalResult::ContinueLabel(_) => {
-                    self.rt_err("break/continue used outside a loop");
+                Ok(ExecutionFlow::Break)
+                | Ok(ExecutionFlow::Continue)
+                | Ok(ExecutionFlow::BreakLabel(_))
+                | Ok(ExecutionFlow::ContinueLabel(_)) => {
+                    let _ = self.rt_err("break/continue used outside a loop");
                     error = true;
                     break;
                 }
@@ -773,12 +774,12 @@ impl super::Evaluator {
         self.executing_class = old_executing_class;
 
         if error {
-            return EvalResult::Error;
+            return Err(RuntimeFailure);
         }
         if let Some(t) = throw_owned {
-            return EvalResult::Throw(self.plant(t));
+            return Ok(ExecutionFlow::Throw(self.plant(t)));
         }
-        EvalResult::Value(self.plant(owned))
+        Ok(ExecutionFlow::Value(self.plant(owned)))
     }
 
     pub(super) fn eval_object_patch(
@@ -804,7 +805,7 @@ impl super::Evaluator {
 
             for (field_name, expr) in patch {
                 let val_ref = match self.eval_expression(&expr) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 if let Some(ref schema_fields) = schema {
@@ -842,7 +843,7 @@ impl super::Evaluator {
                     .arena
                     .update(obj_ref.index, ObjectData::Instance { class_name, fields }),
             }
-            EvalResult::Value(self.null_ref)
+            Ok(ExecutionFlow::Value(self.null_ref))
         } else {
             let message =
                 format!("'{var_name}' is not an interface instance — cannot use patch syntax");
@@ -866,7 +867,7 @@ impl super::Evaluator {
         // Field read: no parens and no args and field exists → return value (not call)
         if !dot_call.has_parens && dot_call.arguments.is_empty() {
             if let Some(owned) = self.field_value(obj_ref, method_name) {
-                return EvalResult::Value(self.plant(owned));
+                return Ok(ExecutionFlow::Value(self.plant(owned)));
             }
             // Getter: no parens, no field → look for `get prop()`
             if let Some(getter) = self.find_getter(&class_name, method_name) {
@@ -892,14 +893,14 @@ impl super::Evaluator {
                     );
                     return self.rt_err_kind("TypeError", message);
                 }
-                return EvalResult::Value(self.alloc(ObjectData::Function {
+                return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Function {
                     return_type: m.return_type.clone(),
                     parameters: Rc::new(m.parameters.clone()),
                     body: Rc::new(m.body.clone()),
                     captured: Rc::new(vec![("this".to_string(), obj_ref)]),
                     is_generator: false,
                     bound_class: Some(class_name.clone()),
-                }));
+                })));
             }
         }
 
@@ -911,7 +912,7 @@ impl super::Evaluator {
                 let mut arg_vals: Vec<OwnedValue> = Vec::new();
                 for expr in &args_exprs {
                     match self.eval_expression(expr) {
-                        EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                        Ok(ExecutionFlow::Value(r)) => arg_vals.push(self.extract(r)),
                         other => return other,
                     }
                 }
@@ -928,7 +929,7 @@ impl super::Evaluator {
                 // Fallback: toString() is available on all instance types
                 if method_name == "toString" {
                     let s = self.display(obj_ref);
-                    return EvalResult::Value(self.alloc(ObjectData::Str(s)));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))));
                 }
                 // Fallback: field holds a callable function (this.fn_field(args)).
                 // The field is snapshotted BEFORE the arguments are evaluated —
@@ -939,7 +940,7 @@ impl super::Evaluator {
                     let mut arg_vals = Vec::new();
                     for arg_expr in &dot_call.arguments {
                         match self.eval_expression(arg_expr) {
-                            EvalResult::Value(r) => arg_vals.push(self.extract(r)),
+                            Ok(ExecutionFlow::Value(r)) => arg_vals.push(self.extract(r)),
                             other => return other,
                         }
                     }
@@ -1111,14 +1112,14 @@ impl super::Evaluator {
                         self.scopes.pop();
                         self.call_stack.pop();
                         self.executing_class = old_executing_class;
-                        return EvalResult::Throw(self.plant(owned));
+                        return Ok(ExecutionFlow::Throw(self.plant(owned)));
                     }
                     DefaultArgumentResult::Error => {
                         self.call_depth -= 1;
                         self.scopes.pop();
                         self.call_stack.pop();
                         self.executing_class = old_executing_class;
-                        return EvalResult::Error;
+                        return Err(RuntimeFailure);
                     }
                 }
             } else {
@@ -1132,24 +1133,24 @@ impl super::Evaluator {
         let mut method_throw: Option<ObjectRef> = None;
         for stmt in &m.body.statements {
             match self.eval_statement(stmt) {
-                EvalResult::Value(_) => {}
-                EvalResult::Return(v) => {
+                Ok(ExecutionFlow::Value(_)) => {}
+                Ok(ExecutionFlow::Return(v)) => {
                     result_ref = v;
                     break;
                 }
-                EvalResult::Throw(v) => {
+                Ok(ExecutionFlow::Throw(v)) => {
                     method_throw = Some(v);
                     break;
                 }
-                EvalResult::Error => {
+                Err(RuntimeFailure) => {
                     error = true;
                     break;
                 }
-                EvalResult::Break
-                | EvalResult::Continue
-                | EvalResult::BreakLabel(_)
-                | EvalResult::ContinueLabel(_) => {
-                    self.rt_err("break/continue used outside a loop");
+                Ok(ExecutionFlow::Break)
+                | Ok(ExecutionFlow::Continue)
+                | Ok(ExecutionFlow::BreakLabel(_))
+                | Ok(ExecutionFlow::ContinueLabel(_)) => {
+                    let _ = self.rt_err("break/continue used outside a loop");
                     error = true;
                     break;
                 }
@@ -1164,10 +1165,10 @@ impl super::Evaluator {
         self.executing_class = old_executing_class;
 
         if error {
-            return EvalResult::Error;
+            return Err(RuntimeFailure);
         }
         if let Some(t) = throw_owned {
-            return EvalResult::Throw(self.plant(t));
+            return Ok(ExecutionFlow::Throw(self.plant(t)));
         }
 
         let result = self.plant(owned);
@@ -1185,7 +1186,7 @@ impl super::Evaluator {
             }
         }
 
-        EvalResult::Value(result)
+        Ok(ExecutionFlow::Value(result))
     }
 
     // ── Array methods ─────────────────────────────────────────────────────────

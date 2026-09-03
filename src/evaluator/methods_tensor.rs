@@ -1,4 +1,5 @@
 use super::EvalResult;
+use super::{ExecutionFlow, RuntimeFailure};
 use crate::ast;
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 
@@ -82,24 +83,24 @@ impl super::Evaluator {
         };
         let fill = if args.len() >= 2 {
             match self.eval_expression(&args[1]) {
-                EvalResult::Value(r) => match self.resolve(r) {
+                Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                     Some(ObjectData::Integer(n)) => *n as f64,
                     Some(ObjectData::Decimal(d)) => *d,
                     _ => {
                         return self.rt_err_kind("TypeError", "Tensor fill value must be a number");
                     }
                 },
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                _ => return EvalResult::Error,
+                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                _ => return Err(RuntimeFailure),
             }
         } else {
             0.0
         };
-        EvalResult::Value(self.alloc(ObjectData::Tensor {
+        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
             shape,
             data: vec![fill; total],
             tid: 0,
-        }))
+        })))
     }
 
     // ── Static namespace: Tensor.zeros / ones / eye / from ───────────────────
@@ -118,11 +119,11 @@ impl super::Evaluator {
                     Ok(total) => total,
                     Err(error) => return error,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: vec![0.0; total],
                     tid: 0,
-                }))
+                })))
             }
             "ones" => {
                 if dot_call.arguments.len() != 1 {
@@ -137,18 +138,18 @@ impl super::Evaluator {
                     Ok(total) => total,
                     Err(error) => return error,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: vec![1.0; total],
                     tid: 0,
-                }))
+                })))
             }
             "eye" => {
                 if dot_call.arguments.len() != 1 {
                     return self.rt_err_kind("TypeError", "Tensor.eye(n) requires 1 argument");
                 }
                 let n = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => match self.resolve(r) {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) if *n > 0 => *n as usize,
                         _ => {
                             return self.rt_err_kind(
@@ -157,27 +158,27 @@ impl super::Evaluator {
                             );
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let mut data = vec![0.0f64; n * n];
                 for i in 0..n {
                     data[i * n + i] = 1.0;
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: vec![n, n],
                     data,
                     tid: 0,
-                }))
+                })))
             }
             "from" => {
                 if dot_call.arguments.len() != 1 {
                     return self.rt_err_kind("TypeError", "Tensor.from(array) requires 1 argument");
                 }
                 let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 self.tensor_from_array(arr_ref)
             }
@@ -202,22 +203,26 @@ impl super::Evaluator {
                     .iter()
                     .map(|&d| OwnedValue::Integer(d as i64))
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Array {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                     element_type: Some("int".to_string()),
                     elements: owned,
-                }))
+                })))
             }
-            "ndim" => EvalResult::Value(self.alloc(ObjectData::Integer(shape.len() as i64))),
+            "ndim" => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Integer(shape.len() as i64)),
+            )),
             "size" => {
                 let total = shape.iter().product::<usize>() as i64;
-                EvalResult::Value(self.alloc(ObjectData::Integer(total)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(total))))
             }
             "get" => {
                 let idx = match self.tensor_flat_index(&shape, &dot_call.arguments.clone()) {
                     Ok(i) => i,
                     Err(e) => return e,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Decimal(data[idx])))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(data[idx])),
+                ))
             }
             "set" => {
                 if dot_call.arguments.len() < 2 {
@@ -234,7 +239,7 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 let val = match self.eval_expression(&val_expr) {
-                    EvalResult::Value(r) => match self.resolve(r) {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
                         _ => {
@@ -242,8 +247,8 @@ impl super::Evaluator {
                                 .rt_err_kind("TypeError", "Tensor.set() value must be a number");
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let mut new_data = data;
                 new_data[idx] = val;
@@ -256,7 +261,7 @@ impl super::Evaluator {
                     RegionId::Global => self.global_arena.update(tensor_ref.index, new_obj),
                     RegionId::Scoped => self.scopes.arena.update(tensor_ref.index, new_obj),
                 }
-                EvalResult::Value(tensor_ref)
+                Ok(ExecutionFlow::Value(tensor_ref))
             }
             "reshape" => {
                 if dot_call.arguments.len() != 1 {
@@ -278,11 +283,11 @@ impl super::Evaluator {
                         ),
                     );
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: new_shape,
                     data,
                     tid: 0,
-                }))
+                })))
             }
             "transpose" => {
                 if shape.len() != 2 {
@@ -314,7 +319,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
             "add" => self.tensor_elementwise(tensor_ref, shape, data, dot_call, "add"),
             "sub" => self.tensor_elementwise(tensor_ref, shape, data, dot_call, "sub"),
@@ -325,9 +330,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Tensor.dot() requires 1 argument");
                 }
                 let arg_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 match self.resolve(arg_ref).cloned() {
                     Some(ObjectData::Tensor {
@@ -348,7 +353,9 @@ impl super::Evaluator {
                             );
                         }
                         let result: f64 = data.iter().zip(d2.iter()).map(|(a, b)| a * b).sum();
-                        EvalResult::Value(self.alloc(ObjectData::Decimal(result)))
+                        Ok(ExecutionFlow::Value(
+                            self.alloc(ObjectData::Decimal(result)),
+                        ))
                     }
                     _ => {
                         self.rt_err_kind("TypeError", "Tensor.dot() requires a 1D Tensor argument")
@@ -360,9 +367,9 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Tensor.matmul() requires 1 argument");
                 }
                 let arg_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 match self.resolve(arg_ref).cloned() {
                     Some(ObjectData::Tensor {
@@ -407,7 +414,7 @@ impl super::Evaluator {
                                 },
                             );
                         }
-                        EvalResult::Value(out_ref)
+                        Ok(ExecutionFlow::Value(out_ref))
                     }
                     _ => self
                         .rt_err_kind("TypeError", "Tensor.matmul() requires a 2D Tensor argument"),
@@ -415,7 +422,7 @@ impl super::Evaluator {
             }
             "sum" => {
                 if data.is_empty() {
-                    return EvalResult::Value(self.alloc(ObjectData::Decimal(0.0)));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(0.0))));
                 }
                 let in_len = data.len();
                 let s: f64 = data.iter().sum();
@@ -431,14 +438,14 @@ impl super::Evaluator {
                         out_ref,
                         crate::evaluator::namespaces_autodiff::TapeOp::Sum { in_id, in_len },
                     );
-                    EvalResult::Value(out_ref)
+                    Ok(ExecutionFlow::Value(out_ref))
                 } else {
-                    EvalResult::Value(self.alloc(ObjectData::Decimal(s)))
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(s))))
                 }
             }
             "mean" => {
                 if data.is_empty() {
-                    return EvalResult::Value(self.alloc(ObjectData::Decimal(0.0)));
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(0.0))));
                 }
                 let in_len = data.len();
                 let m = data.iter().sum::<f64>() / in_len as f64;
@@ -453,9 +460,9 @@ impl super::Evaluator {
                         out_ref,
                         crate::evaluator::namespaces_autodiff::TapeOp::Mean { in_id, in_len },
                     );
-                    EvalResult::Value(out_ref)
+                    Ok(ExecutionFlow::Value(out_ref))
                 } else {
-                    EvalResult::Value(self.alloc(ObjectData::Decimal(m)))
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(m))))
                 }
             }
             "max" => {
@@ -463,29 +470,29 @@ impl super::Evaluator {
                     return self.rt_err_kind("TensorError", "Tensor.max() on empty tensor");
                 }
                 let v = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(v))))
             }
             "min" => {
                 if data.is_empty() {
                     return self.rt_err_kind("TensorError", "Tensor.min() on empty tensor");
                 }
                 let v = data.iter().cloned().fold(f64::INFINITY, f64::min);
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(v))))
             }
             "flatten" => {
                 let len = data.len();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: vec![len],
                     data,
                     tid: 0,
-                }))
+                })))
             }
             "fill" => {
                 if dot_call.arguments.len() != 1 {
                     return self.rt_err_kind("TypeError", "Tensor.fill(val) requires 1 argument");
                 }
                 let val = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => match self.resolve(r) {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
                         _ => {
@@ -493,23 +500,23 @@ impl super::Evaluator {
                                 .rt_err_kind("TypeError", "Tensor.fill() value must be a number");
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: vec![val; data.len()],
                     tid: 0,
-                }))
+                })))
             }
             "toArray" => {
                 if shape.len() == 1 {
                     let owned: Vec<OwnedValue> =
                         data.iter().map(|&x| OwnedValue::Decimal(x)).collect();
-                    EvalResult::Value(self.alloc(ObjectData::Array {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                         element_type: Some("decimal".to_string()),
                         elements: owned,
-                    }))
+                    })))
                 } else if shape.len() == 2 {
                     let (rows, cols) = (shape[0], shape[1]);
                     let row_owned: Vec<OwnedValue> = (0..rows)
@@ -523,23 +530,23 @@ impl super::Evaluator {
                             }
                         })
                         .collect();
-                    EvalResult::Value(self.alloc(ObjectData::Array {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                         element_type: None,
                         elements: row_owned,
-                    }))
+                    })))
                 } else {
                     // Higher dims: return flat
                     let owned: Vec<OwnedValue> =
                         data.iter().map(|&x| OwnedValue::Decimal(x)).collect();
-                    EvalResult::Value(self.alloc(ObjectData::Array {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
                         element_type: Some("decimal".to_string()),
                         elements: owned,
-                    }))
+                    })))
                 }
             }
             "toString" => {
                 let s = self.display(tensor_ref);
-                EvalResult::Value(self.alloc(ObjectData::Str(s)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
             }
 
             // ── Activation functions ─────────────────────────────────────────
@@ -564,7 +571,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
             "sigmoid" => {
                 let new_data: Vec<f64> = data.iter().map(|&x| 1.0 / (1.0 + (-x).exp())).collect();
@@ -583,7 +590,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
             "tanh" => {
                 let new_data: Vec<f64> = data.iter().map(|&x| x.tanh()).collect();
@@ -602,16 +609,16 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
             "softmax" => {
                 // Row-wise softmax for 2D, global for 1D — both tracked by autodiff
                 if data.is_empty() {
-                    return EvalResult::Value(self.alloc(ObjectData::Tensor {
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                         shape,
                         data,
                         tid: 0,
-                    }));
+                    })));
                 }
                 let (rows, cols) = if shape.len() >= 2 {
                     (shape[0], shape[1..].iter().product())
@@ -645,17 +652,17 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── Element-wise math ────────────────────────────────────────────
             "abs" => {
                 let new_data: Vec<f64> = data.iter().map(|&x| x.abs()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
             "sqrt" => {
                 for &x in &data {
@@ -667,19 +674,19 @@ impl super::Evaluator {
                     }
                 }
                 let new_data: Vec<f64> = data.iter().map(|&x| x.sqrt()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
             "exp" => {
                 let new_data: Vec<f64> = data.iter().map(|&x| x.exp()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
             "log" => {
                 for &x in &data {
@@ -691,11 +698,11 @@ impl super::Evaluator {
                     }
                 }
                 let new_data: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
             "pow" => {
                 if dot_call.arguments.len() != 1 {
@@ -703,7 +710,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Tensor.pow(exponent) requires 1 argument");
                 }
                 let exp = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => match self.resolve(r) {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
                         _ => {
@@ -713,15 +720,15 @@ impl super::Evaluator {
                             );
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let new_data: Vec<f64> = data.iter().map(|&x| x.powf(exp)).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── Norms ────────────────────────────────────────────────────────
@@ -731,7 +738,7 @@ impl super::Evaluator {
                     2i64
                 } else {
                     match self.eval_expression(&dot_call.arguments[0]) {
-                        EvalResult::Value(r) => match self.resolve(r) {
+                        Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                             Some(ObjectData::Integer(n)) => *n,
                             _ => {
                                 return self.rt_err_kind(
@@ -740,8 +747,8 @@ impl super::Evaluator {
                                 );
                             }
                         },
-                        EvalResult::Throw(v) => return EvalResult::Throw(v),
-                        _ => return EvalResult::Error,
+                        Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                        _ => return Err(RuntimeFailure),
                     }
                 };
                 let result = match order {
@@ -754,7 +761,9 @@ impl super::Evaluator {
                         );
                     }
                 };
-                EvalResult::Value(self.alloc(ObjectData::Decimal(result)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(result)),
+                ))
             }
 
             // ── Clamp ────────────────────────────────────────────────────────
@@ -764,7 +773,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Tensor.clamp(min, max) requires 2 arguments");
                 }
                 let lo = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => match self.resolve(r) {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
                         _ => {
@@ -772,11 +781,11 @@ impl super::Evaluator {
                                 .rt_err_kind("TypeError", "Tensor.clamp() min must be a number");
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let hi = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => match self.resolve(r) {
+                    Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                         Some(ObjectData::Integer(n)) => *n as f64,
                         Some(ObjectData::Decimal(d)) => *d,
                         _ => {
@@ -784,18 +793,18 @@ impl super::Evaluator {
                                 .rt_err_kind("TypeError", "Tensor.clamp() max must be a number");
                         }
                     },
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 if lo > hi {
                     return self.rt_err_kind("TensorError", "Tensor.clamp() min > max");
                 }
                 let new_data: Vec<f64> = data.iter().map(|&x| x.clamp(lo, hi)).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── Broadcast add: (m,n) + (n,) ─────────────────────────────────
@@ -812,9 +821,9 @@ impl super::Evaluator {
                 }
                 let (rows, cols) = (shape[0], shape[1]);
                 let bias_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let bias_data = match self.resolve(bias_ref).cloned() {
                     Some(ObjectData::Tensor {
@@ -864,7 +873,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── Broadcast mul/sub/div: (m,n) op (n,) ────────────────────────
@@ -883,9 +892,9 @@ impl super::Evaluator {
                 }
                 let (rows, cols) = (shape[0], shape[1]);
                 let rhs_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
-                    EvalResult::Throw(v) => return EvalResult::Throw(v),
-                    _ => return EvalResult::Error,
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    _ => return Err(RuntimeFailure),
                 };
                 let rhs_data = match self.resolve(rhs_ref).cloned() {
                     Some(ObjectData::Tensor {
@@ -955,7 +964,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── sum(axis) / mean(axis) ────────────────────────────────────────
@@ -972,7 +981,7 @@ impl super::Evaluator {
                 }
                 let (rows, cols) = (shape[0], shape[1]);
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let axis = match self.resolve(ax_ref).cloned() {
@@ -989,11 +998,11 @@ impl super::Evaluator {
                             out[c] += data[r * cols + c];
                         }
                     }
-                    EvalResult::Value(self.alloc(ObjectData::Tensor {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                         shape: vec![cols],
                         data: out,
                         tid: 0,
-                    }))
+                    })))
                 } else {
                     let mut out = vec![0.0f64; rows];
                     for r in 0..rows {
@@ -1001,11 +1010,11 @@ impl super::Evaluator {
                             out[r] += data[r * cols + c];
                         }
                     }
-                    EvalResult::Value(self.alloc(ObjectData::Tensor {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                         shape: vec![rows],
                         data: out,
                         tid: 0,
-                    }))
+                    })))
                 }
             }
 
@@ -1022,7 +1031,7 @@ impl super::Evaluator {
                 }
                 let (rows, cols) = (shape[0], shape[1]);
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let axis = match self.resolve(ax_ref).cloned() {
@@ -1042,11 +1051,11 @@ impl super::Evaluator {
                     for v in &mut out {
                         *v /= rows as f64;
                     }
-                    EvalResult::Value(self.alloc(ObjectData::Tensor {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                         shape: vec![cols],
                         data: out,
                         tid: 0,
-                    }))
+                    })))
                 } else {
                     let mut out = vec![0.0f64; rows];
                     for r in 0..rows {
@@ -1057,11 +1066,11 @@ impl super::Evaluator {
                     for v in &mut out {
                         *v /= cols as f64;
                     }
-                    EvalResult::Value(self.alloc(ObjectData::Tensor {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                         shape: vec![rows],
                         data: out,
                         tid: 0,
-                    }))
+                    })))
                 }
             }
 
@@ -1076,7 +1085,9 @@ impl super::Evaluator {
                     .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(i, _)| i)
                     .unwrap_or(0);
-                EvalResult::Value(self.alloc(ObjectData::Integer(idx as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(idx as i64)),
+                ))
             }
 
             "argmin" => {
@@ -1089,7 +1100,9 @@ impl super::Evaluator {
                     .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(i, _)| i)
                     .unwrap_or(0);
-                EvalResult::Value(self.alloc(ObjectData::Integer(idx as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(idx as i64)),
+                ))
             }
 
             // ── slice(start, end) — flat index range ──────────────────────────
@@ -1099,11 +1112,11 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Tensor.slice(start, end) requires 2 arguments");
                 }
                 let r0 = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let r1 = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let (start, end) = match (self.resolve(r0).cloned(), self.resolve(r1).cloned()) {
@@ -1128,11 +1141,11 @@ impl super::Evaluator {
                 }
                 let sliced = data[start..end].to_vec();
                 let len = end - start;
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: vec![len],
                     data: sliced,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── concat(other, axis) — 2D row/col concatenation ────────────────
@@ -1150,11 +1163,11 @@ impl super::Evaluator {
                     );
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let ax_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let axis = match self.resolve(ax_ref).cloned() {
@@ -1184,11 +1197,11 @@ impl super::Evaluator {
                             }
                             let mut out = data.clone();
                             out.extend_from_slice(&od);
-                            EvalResult::Value(self.alloc(ObjectData::Tensor {
+                            Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                                 shape: vec![rows + os[0], cols],
                                 data: out,
                                 tid: 0,
-                            }))
+                            })))
                         } else {
                             if os.len() != 2 || os[0] != rows {
                                 return self.rt_err_kind(
@@ -1207,11 +1220,11 @@ impl super::Evaluator {
                                 out.extend_from_slice(&data[r * cols..(r + 1) * cols]);
                                 out.extend_from_slice(&od[r * other_cols..(r + 1) * other_cols]);
                             }
-                            EvalResult::Value(self.alloc(ObjectData::Tensor {
+                            Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                                 shape: vec![rows, new_cols],
                                 data: out,
                                 tid: 0,
-                            }))
+                            })))
                         }
                     }
                     _ => self.rt_err_kind("TypeError", "Tensor.concat() argument must be a Tensor"),
@@ -1233,7 +1246,7 @@ impl super::Evaluator {
                         crate::evaluator::namespaces_autodiff::TapeOp::Neg { in_id },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             "scale" => {
@@ -1241,7 +1254,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Tensor.scale(s) requires 1 argument");
                 }
                 let s_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let s = match self.resolve(s_ref).cloned() {
@@ -1265,7 +1278,7 @@ impl super::Evaluator {
                         crate::evaluator::namespaces_autodiff::TapeOp::Scale { in_id, scalar: s },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── leaky_relu / gelu ─────────────────────────────────────────────
@@ -1275,7 +1288,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Tensor.leaky_relu(alpha) requires 1 argument");
                 }
                 let a_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let alpha = match self.resolve(a_ref).cloned() {
@@ -1305,7 +1318,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             "gelu" => {
@@ -1327,7 +1340,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── Phase 1-2: New activations (tracked) ─────────────────────────
@@ -1336,7 +1349,7 @@ impl super::Evaluator {
                     1.0
                 } else {
                     match self.eval_expression(&dot_call.arguments[0]) {
-                        EvalResult::Value(r) => match self.resolve(r) {
+                        Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                             Some(ObjectData::Decimal(d)) => *d,
                             Some(ObjectData::Integer(n)) => *n as f64,
                             _ => 1.0,
@@ -1361,7 +1374,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             "swish" | "silu" => {
@@ -1386,7 +1399,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             "mish" => {
@@ -1410,7 +1423,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // leaky_relu with autodiff tracking
@@ -1422,7 +1435,7 @@ impl super::Evaluator {
                     );
                 }
                 let a_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let alpha = match self.resolve(a_ref).cloned() {
@@ -1452,7 +1465,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── Phase 2: avg_pool2d ───────────────────────────────────────────
@@ -1470,11 +1483,11 @@ impl super::Evaluator {
                     );
                 }
                 let k_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let s_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let kernel = match self.resolve(k_ref) {
@@ -1534,7 +1547,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── Phase 3: Additional tensor utilities ──────────────────────────
@@ -1543,11 +1556,11 @@ impl super::Evaluator {
                 let n = data.len() as f64;
                 let mean = data.iter().sum::<f64>() / n;
                 let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: vec![1],
                     data: vec![var],
                     tid: 0,
-                }))
+                })))
             }
 
             "std" => {
@@ -1555,11 +1568,11 @@ impl super::Evaluator {
                 let n = data.len() as f64;
                 let mean = data.iter().sum::<f64>() / n;
                 let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: vec![1],
                     data: vec![var.sqrt()],
                     tid: 0,
-                }))
+                })))
             }
 
             "cumsum" => {
@@ -1570,21 +1583,21 @@ impl super::Evaluator {
                     acc += x;
                     out.push(acc);
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: vec![data.len()],
                     data: out,
                     tid: 0,
-                }))
+                })))
             }
 
             "softplus" => {
                 // softplus(x) = log(1 + exp(x))
                 let new_data: Vec<f64> = data.iter().map(|&x| (1.0 + x.exp()).ln()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "hardsigmoid" => {
@@ -1593,11 +1606,11 @@ impl super::Evaluator {
                     .iter()
                     .map(|&x| ((x + 3.0) / 6.0).clamp(0.0, 1.0))
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "hardswish" => {
@@ -1606,11 +1619,11 @@ impl super::Evaluator {
                     .iter()
                     .map(|&x| x * ((x + 3.0) / 6.0).clamp(0.0, 1.0))
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── Phase 3: N-D shape manipulation ──────────────────────────────
@@ -1621,7 +1634,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Tensor.unsqueeze(dim) requires 1 argument");
                 }
                 let d_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let dim = match self.resolve(d_ref) {
@@ -1646,11 +1659,11 @@ impl super::Evaluator {
                 };
                 let mut new_shape = shape.clone();
                 new_shape.insert(dim, 1);
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: new_shape,
                     data,
                     tid: 0,
-                }))
+                })))
             }
 
             "squeeze" => {
@@ -1660,7 +1673,7 @@ impl super::Evaluator {
                     shape.iter().cloned().filter(|&d| d != 1).collect()
                 } else {
                     let d_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     let dim = match self.resolve(d_ref) {
@@ -1686,11 +1699,11 @@ impl super::Evaluator {
                 } else {
                     new_shape
                 };
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: new_shape,
                     data,
                     tid: 0,
-                }))
+                })))
             }
 
             "permute" => {
@@ -1700,7 +1713,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Tensor.permute([axes]) requires 1 argument");
                 }
                 let axes_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let axes: Vec<usize> = match self.eval_shape_expr(&dot_call.arguments[0]) {
@@ -1760,11 +1773,11 @@ impl super::Evaluator {
                     }
                     new_data[new_flat] = data[old_flat];
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: new_shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── Phase 3: N-D broadcasting ─────────────────────────────────────
@@ -1781,11 +1794,11 @@ impl super::Evaluator {
                     Err(e) => return e,
                 };
                 match Self::broadcast_data(&data, &shape, &target_shape) {
-                    Some(new_data) => EvalResult::Value(self.alloc(ObjectData::Tensor {
+                    Some(new_data) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                         shape: target_shape,
                         data: new_data,
                         tid: 0,
-                    })),
+                    }))),
                     None => self.rt_err_kind(
                         "TensorError",
                         format!(
@@ -1805,7 +1818,7 @@ impl super::Evaluator {
                     );
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let (other_data, other_shape) = match self.resolve(other_ref).cloned() {
@@ -1832,11 +1845,11 @@ impl super::Evaluator {
                     .zip(b_data.iter())
                     .map(|(a, b)| a + b)
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: out_shape,
                     data: result,
                     tid: 0,
-                }))
+                })))
             }
 
             "broadcastMulNd" => {
@@ -1847,7 +1860,7 @@ impl super::Evaluator {
                     );
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let (other_data, other_shape) = match self.resolve(other_ref).cloned() {
@@ -1877,11 +1890,11 @@ impl super::Evaluator {
                     .zip(b_data.iter())
                     .map(|(a, b)| a * b)
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: out_shape,
                     data: result,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── Phase 3: Batch matmul ─────────────────────────────────────────
@@ -1900,7 +1913,7 @@ impl super::Evaluator {
                     );
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let (other_data, other_shape) = match self.resolve(other_ref).cloned() {
@@ -1936,11 +1949,11 @@ impl super::Evaluator {
                         }
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: vec![b, n, k],
                     data: out_data,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── Phase 3: N-D reduce along axis ────────────────────────────────
@@ -1953,7 +1966,7 @@ impl super::Evaluator {
                     );
                 }
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let axis = match self.resolve(ax_ref) {
@@ -1975,15 +1988,15 @@ impl super::Evaluator {
                 let keepdim = dot_call.arguments.len() > 1
                     && matches!(
                         self.eval_expression(&dot_call.arguments[1]),
-                        EvalResult::Value(r) if matches!(self.resolve(r), Some(ObjectData::Boolean(true)))
+                        Ok(ExecutionFlow::Value(r)) if matches!(self.resolve(r), Some(ObjectData::Boolean(true)))
                     );
                 let (new_shape, out_data) =
                     Self::reduce_along_axis(&data, &shape, axis, keepdim, |a, b| a + b, 0.0);
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: new_shape,
                     data: out_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "reduceMean" => {
@@ -1994,7 +2007,7 @@ impl super::Evaluator {
                     );
                 }
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let axis = match self.resolve(ax_ref) {
@@ -2016,17 +2029,17 @@ impl super::Evaluator {
                 let keepdim = dot_call.arguments.len() > 1
                     && matches!(
                         self.eval_expression(&dot_call.arguments[1]),
-                        EvalResult::Value(r) if matches!(self.resolve(r), Some(ObjectData::Boolean(true)))
+                        Ok(ExecutionFlow::Value(r)) if matches!(self.resolve(r), Some(ObjectData::Boolean(true)))
                     );
                 let n_reduce = shape[axis] as f64;
                 let (new_shape, sum_data) =
                     Self::reduce_along_axis(&data, &shape, axis, keepdim, |a, b| a + b, 0.0);
                 let out_data: Vec<f64> = sum_data.iter().map(|x| x / n_reduce).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: new_shape,
                     data: out_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "reduceMax" => {
@@ -2037,7 +2050,7 @@ impl super::Evaluator {
                     );
                 }
                 let ax_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let axis = match self.resolve(ax_ref) {
@@ -2053,7 +2066,7 @@ impl super::Evaluator {
                 let keepdim = dot_call.arguments.len() > 1
                     && matches!(
                         self.eval_expression(&dot_call.arguments[1]),
-                        EvalResult::Value(r) if matches!(self.resolve(r), Some(ObjectData::Boolean(true)))
+                        Ok(ExecutionFlow::Value(r)) if matches!(self.resolve(r), Some(ObjectData::Boolean(true)))
                     );
                 let (new_shape, out_data) = Self::reduce_along_axis(
                     &data,
@@ -2063,21 +2076,21 @@ impl super::Evaluator {
                     f64::max,
                     f64::NEG_INFINITY,
                 );
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: new_shape,
                     data: out_data,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── Phase 3: stopGrad (detach from tape) ──────────────────────────
             "stopGrad" | "detach" => {
                 // Returns a copy of the tensor not connected to the tape
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── Phase 3: Element-wise operations ─────────────────────────────
@@ -2094,65 +2107,65 @@ impl super::Evaluator {
                         }
                     })
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "round" => {
                 let new_data: Vec<f64> = data.iter().map(|x| x.round()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "floor" => {
                 let new_data: Vec<f64> = data.iter().map(|x| x.floor()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "ceil" => {
                 let new_data: Vec<f64> = data.iter().map(|x| x.ceil()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "reciprocal" => {
                 let new_data: Vec<f64> = data.iter().map(|x| 1.0 / x).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "sin" => {
                 let new_data: Vec<f64> = data.iter().map(|x| x.sin()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "cos" => {
                 let new_data: Vec<f64> = data.iter().map(|x| x.cos()).collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "maximum" => {
@@ -2162,7 +2175,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Tensor.maximum(other) requires 1 argument");
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let other_data = match self.resolve(other_ref).cloned() {
@@ -2178,11 +2191,11 @@ impl super::Evaluator {
                     .zip(other_data.iter())
                     .map(|(&a, &b)| a.max(b))
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             "minimum" => {
@@ -2191,7 +2204,7 @@ impl super::Evaluator {
                         .rt_err_kind("TypeError", "Tensor.minimum(other) requires 1 argument");
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let other_data = match self.resolve(other_ref).cloned() {
@@ -2207,11 +2220,11 @@ impl super::Evaluator {
                     .zip(other_data.iter())
                     .map(|(&a, &b)| a.min(b))
                     .collect();
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape,
                     data: new_data,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── conv2d(weights, bias, kernel, stride) ─────────────────────────
@@ -2232,19 +2245,19 @@ impl super::Evaluator {
                     );
                 }
                 let w_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let b_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let k_ref = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let s_ref = match self.eval_expression(&dot_call.arguments[3]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let kernel = match self.resolve(k_ref).cloned() {
@@ -2378,7 +2391,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── max_pool2d(kernel, stride) ────────────────────────────────────
@@ -2396,11 +2409,11 @@ impl super::Evaluator {
                     );
                 }
                 let k_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let s_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let kernel = match self.resolve(k_ref).cloned() {
@@ -2481,7 +2494,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── layer_norm(gamma, beta, eps) ─────────────────────────────────
@@ -2499,15 +2512,15 @@ impl super::Evaluator {
                     );
                 }
                 let g_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let b_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let e_ref = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let gamma_data = match self.resolve(g_ref).cloned() {
@@ -2540,7 +2553,7 @@ impl super::Evaluator {
                         "❌ Tensor.layer_norm(): gamma and beta must each have {} element(s) (one per column); got gamma={}, beta={}",
                         cols, gamma_data.len(), beta_data.len()
                     )));
-                    return EvalResult::Throw(msg);
+                    return Ok(ExecutionFlow::Throw(msg));
                 }
                 let mut out_data = vec![0.0f64; rows * cols];
                 let mut x_norm = vec![0.0f64; rows * cols];
@@ -2585,7 +2598,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── mha(Wq, Wk, Wv, Wo, n_heads) — multi-head self-attention ─────
@@ -2604,23 +2617,23 @@ impl super::Evaluator {
                 }
                 let (seq_len, d_model) = (shape[0], shape[1]);
                 let wq_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let wk_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let wv_ref = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let wo_ref = match self.eval_expression(&dot_call.arguments[3]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let nh_ref = match self.eval_expression(&dot_call.arguments[4]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let n_heads = match self.resolve(nh_ref).cloned() {
@@ -2642,15 +2655,15 @@ impl super::Evaluator {
                 };
                 let wk_data = match self.resolve(wk_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => return EvalResult::Error,
+                    _ => return Err(RuntimeFailure),
                 };
                 let wv_data = match self.resolve(wv_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => return EvalResult::Error,
+                    _ => return Err(RuntimeFailure),
                 };
                 let wo_data = match self.resolve(wo_ref).cloned() {
                     Some(ObjectData::Tensor { data: d, .. }) => d,
-                    _ => return EvalResult::Error,
+                    _ => return Err(RuntimeFailure),
                 };
                 if wq_shape.len() != 2
                     || wq_shape[0] != d_model
@@ -2769,7 +2782,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── one_hot(vocab_size) ───────────────────────────────────────────
@@ -2787,7 +2800,7 @@ impl super::Evaluator {
                     );
                 }
                 let v_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let vocab = match self.resolve(v_ref).cloned() {
@@ -2807,11 +2820,11 @@ impl super::Evaluator {
                         out[i * vocab + idx] = 1.0;
                     }
                 }
-                EvalResult::Value(self.alloc(ObjectData::Tensor {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                     shape: vec![seq_len, vocab],
                     data: out,
                     tid: 0,
-                }))
+                })))
             }
 
             // ── lstm(Wx, Wh, b, h0, c0) → [1, hidden_size] last hidden state ─
@@ -2830,23 +2843,23 @@ impl super::Evaluator {
                 }
                 let (seq_len, input_size) = (shape[0], shape[1]);
                 let wx_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let wh_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let b_ref = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let h0_ref = match self.eval_expression(&dot_call.arguments[3]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let c0_ref = match self.eval_expression(&dot_call.arguments[4]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let (wx_shape, wx_data) = match self.resolve(wx_ref).cloned() {
@@ -2988,7 +3001,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── gru(Wx, Wh, b, h0) → [1, hidden_size] last hidden state ──────
@@ -3007,19 +3020,19 @@ impl super::Evaluator {
                 }
                 let (seq_len, input_size) = (shape[0], shape[1]);
                 let wx_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let wh_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let b_ref = match self.eval_expression(&dot_call.arguments[2]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let h0_ref = match self.eval_expression(&dot_call.arguments[3]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 let (wx_shape, wx_data) = match self.resolve(wx_ref).cloned() {
@@ -3146,7 +3159,7 @@ impl super::Evaluator {
                         },
                     );
                 }
-                EvalResult::Value(out_ref)
+                Ok(ExecutionFlow::Value(out_ref))
             }
 
             // ── outer product ─────────────────────────────────────────────────
@@ -3159,7 +3172,7 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "Tensor.outer() requires 1D tensors");
                 }
                 let other_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 match self.resolve(other_ref).cloned() {
@@ -3182,11 +3195,11 @@ impl super::Evaluator {
                                 out.push(data[i] * od[j]);
                             }
                         }
-                        EvalResult::Value(self.alloc(ObjectData::Tensor {
+                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                             shape: vec![m, n],
                             data: out,
                             tid: 0,
-                        }))
+                        })))
                     }
                     _ => self.rt_err_kind("TypeError", "Tensor.outer() argument must be a Tensor"),
                 }
@@ -3228,8 +3241,8 @@ impl super::Evaluator {
         expr: &ast::Expression,
     ) -> Result<Vec<usize>, EvalResult> {
         let r = match self.eval_expression(expr) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
             other => return Err(other),
         };
         match self.resolve(r).cloned() {
@@ -3280,7 +3293,7 @@ impl super::Evaluator {
         for (dim_idx, (dim_size, arg)) in shape.iter().zip(index_args.iter()).enumerate() {
             stride /= dim_size;
             let idx = match self.eval_expression(arg) {
-                EvalResult::Value(r) => match self.resolve(r) {
+                Ok(ExecutionFlow::Value(r)) => match self.resolve(r) {
                     Some(ObjectData::Integer(n)) => {
                         let n = *n;
                         if n < 0 || (n as usize) >= *dim_size {
@@ -3301,7 +3314,7 @@ impl super::Evaluator {
                         );
                     }
                 },
-                EvalResult::Throw(v) => return Err(EvalResult::Throw(v)),
+                Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
                 other => return Err(other),
             };
             flat += idx * stride;
@@ -3313,11 +3326,11 @@ impl super::Evaluator {
         match self.resolve(arr_ref).cloned() {
             Some(ObjectData::Array { elements, .. }) => {
                 if elements.is_empty() {
-                    return EvalResult::Value(self.alloc(ObjectData::Tensor {
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                         shape: vec![0],
                         data: vec![],
                         tid: 0,
-                    }));
+                    })));
                 }
                 // Detect 2D: first element is also an array
                 if let OwnedValue::Array { .. } = &elements[0] {
@@ -3356,11 +3369,11 @@ impl super::Evaluator {
                             }
                         }
                     }
-                    EvalResult::Value(self.alloc(ObjectData::Tensor {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                         shape: vec![nrows, ncols],
                         data,
                         tid: 0,
-                    }))
+                    })))
                 } else {
                     // 1D
                     let mut data = Vec::new();
@@ -3377,11 +3390,11 @@ impl super::Evaluator {
                         }
                     }
                     let len = data.len();
-                    EvalResult::Value(self.alloc(ObjectData::Tensor {
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Tensor {
                         shape: vec![len],
                         data,
                         tid: 0,
-                    }))
+                    })))
                 }
             }
             _ => self.rt_err_kind("TypeError", "Tensor.from() requires an array argument"),
@@ -3400,9 +3413,9 @@ impl super::Evaluator {
             return self.rt_err_kind("TypeError", format!("Tensor.{}() requires 1 argument", op));
         }
         let arg_ref = match self.eval_expression(&dot_call.arguments[0]) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
         let is_tensor_arg = matches!(self.resolve(arg_ref), Some(ObjectData::Tensor { .. }));
         // For mul tape recording, save both input data before consuming them
@@ -3508,12 +3521,12 @@ impl super::Evaluator {
                     b_data: saved_b.unwrap_or_default(),
                 },
                 _ => {
-                    return EvalResult::Value(out_ref);
+                    return Ok(ExecutionFlow::Value(out_ref));
                 }
             };
             self.ad_push(out_ref, tape_op);
         }
-        EvalResult::Value(out_ref)
+        Ok(ExecutionFlow::Value(out_ref))
     }
 
     // ── Phase 3: Static helpers for N-D broadcasting & reduction ─────────────

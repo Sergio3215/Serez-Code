@@ -3,6 +3,7 @@ use super::{
     CallFrame, EvalResult, StoredClass, format_decimal, json_parse, json_stringify_owned,
     obj_data_eq, obj_data_to_key_str, operator_to_method_name, type_matches,
 };
+use super::{ExecutionFlow, RuntimeFailure};
 use crate::ast::{self, Expression, Statement};
 use crate::region::{ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::scope::ScopeStack;
@@ -28,24 +29,24 @@ impl super::Evaluator {
             );
         }
         let cond_ref = match self.eval_expression(&args[0]) {
-            EvalResult::Value(v) => v,
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Value(v)) => v,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
         let is_true = matches!(self.resolve(cond_ref), Some(ObjectData::Boolean(true)));
         if !is_true {
             let msg = if args.len() == 2 {
                 match self.eval_expression(&args[1]) {
-                    EvalResult::Value(r) => self.display(r),
+                    Ok(ExecutionFlow::Value(r)) => self.display(r),
                     _ => "Assertion failed".to_string(),
                 }
             } else {
                 "Assertion failed".to_string()
             };
             let msg_ref = self.alloc(ObjectData::Str(msg));
-            EvalResult::Throw(msg_ref)
+            Ok(ExecutionFlow::Throw(msg_ref))
         } else {
-            EvalResult::Value(self.null_ref)
+            Ok(ExecutionFlow::Value(self.null_ref))
         }
     }
 
@@ -54,9 +55,9 @@ impl super::Evaluator {
             return self.rt_err_kind("TypeError", "type_of expects 1 argument");
         }
         let r = match self.eval_expression(&args[0]) {
-            EvalResult::Value(v) => v,
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Value(v)) => v,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
         let type_name = match self.resolve(r) {
             Some(ObjectData::Integer(_)) => "int",
@@ -71,14 +72,14 @@ impl super::Evaluator {
                 // class_name vive en la arena, necesitamos clonar antes de alloc
                 let name = class_name.clone();
                 let s = self.alloc(ObjectData::Str(name));
-                return EvalResult::Value(s);
+                return Ok(ExecutionFlow::Value(s));
             }
             Some(ObjectData::Ptr(_)) => "ptr",
             Some(ObjectData::Null) | None => "null",
             Some(ObjectData::EnumVariant { enum_name, .. }) => {
                 let name = enum_name.clone();
                 let s = self.alloc(ObjectData::Str(name));
-                return EvalResult::Value(s);
+                return Ok(ExecutionFlow::Value(s));
             }
             Some(ObjectData::Set { .. }) => "Set",
             Some(ObjectData::Tensor { .. }) => "Tensor",
@@ -86,7 +87,9 @@ impl super::Evaluator {
             // A DateField behaves as an int under operators.
             Some(ObjectData::DateField { .. }) => "int",
         };
-        EvalResult::Value(self.alloc(ObjectData::Str(type_name.to_string())))
+        Ok(ExecutionFlow::Value(
+            self.alloc(ObjectData::Str(type_name.to_string())),
+        ))
     }
 
     pub(super) fn eval_parse_int(&mut self, args: &[ast::Expression]) -> EvalResult {
@@ -94,12 +97,14 @@ impl super::Evaluator {
             return self.rt_err_kind("TypeError", "parseInt expects 1 argument");
         }
         let r = match self.eval_expression(&args[0]) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
         match self.resolve(r).cloned() {
-            Some(ObjectData::Integer(i)) => EvalResult::Value(self.alloc(ObjectData::Integer(i))),
+            Some(ObjectData::Integer(i)) => {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(i))))
+            }
             Some(ObjectData::Decimal(d)) => {
                 if !d.is_finite() || d > i64::MAX as f64 || d < i64::MIN as f64 {
                     return self.rt_err_kind(
@@ -107,10 +112,12 @@ impl super::Evaluator {
                         "parseInt: decimal value is out of int range or not finite",
                     );
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(d as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(d as i64)),
+                ))
             }
             Some(ObjectData::Str(s)) => match s.trim().parse::<i64>() {
-                Ok(n) => EvalResult::Value(self.alloc(ObjectData::Integer(n))),
+                Ok(n) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n)))),
                 Err(_) => self.rt_err_kind(
                     "RuntimeError",
                     format!("parseInt: cannot parse '{}' as int", s),
@@ -125,17 +132,19 @@ impl super::Evaluator {
             return self.rt_err_kind("TypeError", "parseDecimal expects 1 argument");
         }
         let r = match self.eval_expression(&args[0]) {
-            EvalResult::Value(r) => r,
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
         match self.resolve(r).cloned() {
-            Some(ObjectData::Integer(i)) => {
-                EvalResult::Value(self.alloc(ObjectData::Decimal(i as f64)))
+            Some(ObjectData::Integer(i)) => Ok(ExecutionFlow::Value(
+                self.alloc(ObjectData::Decimal(i as f64)),
+            )),
+            Some(ObjectData::Decimal(d)) => {
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(d))))
             }
-            Some(ObjectData::Decimal(d)) => EvalResult::Value(self.alloc(ObjectData::Decimal(d))),
             Some(ObjectData::Str(s)) => match s.trim().parse::<f64>() {
-                Ok(n) => EvalResult::Value(self.alloc(ObjectData::Decimal(n))),
+                Ok(n) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(n)))),
                 Err(_) => self.rt_err_kind(
                     "RuntimeError",
                     format!("parseDecimal: cannot parse '{}' as decimal", s),
@@ -150,7 +159,7 @@ impl super::Evaluator {
     /// Evaluate one Math argument without collapsing its control/error signal.
     ///
     /// The old `Option<f64>` helper mapped `Throw` and structured runtime errors
-    /// to `None`; callers then returned a fresh empty `EvalResult::Error`, losing
+    /// to `None`; callers then returned a fresh empty `Err(RuntimeFailure)`, losing
     /// the user exception or its diagnostic payload. Only an evaluated,
     /// non-numeric value is a new Math `TypeError`.
     fn eval_math_number(
@@ -159,7 +168,7 @@ impl super::Evaluator {
         expr: &ast::Expression,
     ) -> Result<f64, EvalResult> {
         let value_ref = match self.eval_expression(expr) {
-            EvalResult::Value(value_ref) => value_ref,
+            Ok(ExecutionFlow::Value(value_ref)) => value_ref,
             other => return Err(other),
         };
 
@@ -185,20 +194,20 @@ impl super::Evaluator {
                     return self.rt_err_kind("TypeError", "abs() expects 1 argument");
                 }
                 let r = match self.eval_expression(&args[0]) {
-                    EvalResult::Value(r) => r,
+                    Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
                 match self.resolve(r).cloned() {
                     Some(ObjectData::Integer(i)) => match i.checked_abs() {
-                        Some(v) => EvalResult::Value(self.alloc(ObjectData::Integer(v))),
+                        Some(v) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(v)))),
                         None => self.rt_err_kind(
                             "RuntimeError",
                             "abs() overflow (i64::MIN has no positive representation)",
                         ),
                     },
-                    Some(ObjectData::Decimal(d)) => {
-                        EvalResult::Value(self.alloc(ObjectData::Decimal(d.abs())))
-                    }
+                    Some(ObjectData::Decimal(d)) => Ok(ExecutionFlow::Value(
+                        self.alloc(ObjectData::Decimal(d.abs())),
+                    )),
                     _ => self.rt_err_kind("TypeError", "abs() expects a numeric argument"),
                 }
             }
@@ -213,7 +222,9 @@ impl super::Evaluator {
                 if v < 0.0 {
                     return self.rt_err_kind("RuntimeError", "sqrt() of negative number");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.sqrt())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.sqrt())),
+                ))
             }
             "floor" => {
                 if args.len() != 1 {
@@ -227,7 +238,9 @@ impl super::Evaluator {
                     return self
                         .rt_err_kind("TypeError", "floor() argument must be a finite number");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(v.floor() as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(v.floor() as i64)),
+                ))
             }
             "ceil" => {
                 if args.len() != 1 {
@@ -241,7 +254,9 @@ impl super::Evaluator {
                     return self
                         .rt_err_kind("TypeError", "ceil() argument must be a finite number");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(v.ceil() as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(v.ceil() as i64)),
+                ))
             }
             "round" => {
                 if args.len() != 1 {
@@ -255,7 +270,9 @@ impl super::Evaluator {
                     return self
                         .rt_err_kind("TypeError", "round() argument must be a finite number");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(v.round() as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(v.round() as i64)),
+                ))
             }
             "log" => {
                 if args.len() != 1 {
@@ -268,7 +285,9 @@ impl super::Evaluator {
                 if v <= 0.0 {
                     return self.rt_err_kind("RuntimeError", "log() of non-positive number");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.ln())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.ln())),
+                ))
             }
             "log2" => {
                 if args.len() != 1 {
@@ -281,7 +300,9 @@ impl super::Evaluator {
                 if v <= 0.0 {
                     return self.rt_err_kind("RuntimeError", "log2() of non-positive number");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.log2())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.log2())),
+                ))
             }
             "log10" => {
                 if args.len() != 1 {
@@ -294,7 +315,9 @@ impl super::Evaluator {
                 if v <= 0.0 {
                     return self.rt_err_kind("RuntimeError", "log10() of non-positive number");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.log10())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.log10())),
+                ))
             }
             // --- Two-argument ---
             "min" => {
@@ -306,7 +329,7 @@ impl super::Evaluator {
                 let mut int_vals: Vec<i64> = Vec::new();
                 for arg in args {
                     let r = match self.eval_expression(arg) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     match self.resolve(r).cloned() {
@@ -326,13 +349,15 @@ impl super::Evaluator {
                 }
                 if all_int && int_vals.len() == args.len() {
                     match int_vals.iter().min().copied() {
-                        Some(value) => EvalResult::Value(self.alloc(ObjectData::Integer(value))),
+                        Some(value) => {
+                            Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(value))))
+                        }
                         None => self
                             .rt_err_kind("InternalError", "min() lost its non-empty argument list"),
                     }
                 } else {
                     let m = vals.iter().cloned().fold(f64::INFINITY, f64::min);
-                    EvalResult::Value(self.alloc(ObjectData::Decimal(m)))
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(m))))
                 }
             }
             "max" => {
@@ -344,7 +369,7 @@ impl super::Evaluator {
                 let mut int_vals: Vec<i64> = Vec::new();
                 for arg in args {
                     let r = match self.eval_expression(arg) {
-                        EvalResult::Value(r) => r,
+                        Ok(ExecutionFlow::Value(r)) => r,
                         other => return other,
                     };
                     match self.resolve(r).cloned() {
@@ -364,13 +389,15 @@ impl super::Evaluator {
                 }
                 if all_int && int_vals.len() == args.len() {
                     match int_vals.iter().max().copied() {
-                        Some(value) => EvalResult::Value(self.alloc(ObjectData::Integer(value))),
+                        Some(value) => {
+                            Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(value))))
+                        }
                         None => self
                             .rt_err_kind("InternalError", "max() lost its non-empty argument list"),
                     }
                 } else {
                     let m = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                    EvalResult::Value(self.alloc(ObjectData::Decimal(m)))
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Decimal(m))))
                 }
             }
             "pow" => {
@@ -385,7 +412,9 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(signal) => return signal,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Decimal(base.powf(exp))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(base.powf(exp))),
+                ))
             }
             "sin" => {
                 if args.len() != 1 {
@@ -395,7 +424,9 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(signal) => return signal,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.sin())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.sin())),
+                ))
             }
             "cos" => {
                 if args.len() != 1 {
@@ -405,7 +436,9 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(signal) => return signal,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.cos())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.cos())),
+                ))
             }
             "tan" => {
                 if args.len() != 1 {
@@ -415,7 +448,9 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(signal) => return signal,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.tan())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.tan())),
+                ))
             }
             "asin" => {
                 if args.len() != 1 {
@@ -428,7 +463,9 @@ impl super::Evaluator {
                 if !(-1.0..=1.0).contains(&v) {
                     return self.rt_err_kind("TypeError", "asin() argument must be in [-1, 1]");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.asin())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.asin())),
+                ))
             }
             "acos" => {
                 if args.len() != 1 {
@@ -441,7 +478,9 @@ impl super::Evaluator {
                 if !(-1.0..=1.0).contains(&v) {
                     return self.rt_err_kind("TypeError", "acos() argument must be in [-1, 1]");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.acos())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.acos())),
+                ))
             }
             "atan" => {
                 if args.len() != 1 {
@@ -451,7 +490,9 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(signal) => return signal,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.atan())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.atan())),
+                ))
             }
             "atan2" => {
                 if args.len() != 2 {
@@ -465,7 +506,9 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(signal) => return signal,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Decimal(y.atan2(x))))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(y.atan2(x))),
+                ))
             }
             "trunc" => {
                 if args.len() != 1 {
@@ -479,7 +522,9 @@ impl super::Evaluator {
                     return self
                         .rt_err_kind("TypeError", "trunc() argument must be a finite number");
                 }
-                EvalResult::Value(self.alloc(ObjectData::Integer(v.trunc() as i64)))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Integer(v.trunc() as i64)),
+                ))
             }
             "exp" => {
                 if args.len() != 1 {
@@ -489,7 +534,9 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(signal) => return signal,
                 };
-                EvalResult::Value(self.alloc(ObjectData::Decimal(v.exp())))
+                Ok(ExecutionFlow::Value(
+                    self.alloc(ObjectData::Decimal(v.exp())),
+                ))
             }
             _ => self.rt_err_kind("TypeError", format!("Unknown math function '{}'", name)),
         }
@@ -501,20 +548,20 @@ impl super::Evaluator {
         }
         if let Some(prompt_expr) = args.first() {
             match self.eval_expression(prompt_expr) {
-                EvalResult::Value(r) => {
+                Ok(ExecutionFlow::Value(r)) => {
                     let prompt = self.display(r);
                     print!("{}", prompt);
                     let _ = io::stdout().flush();
                 }
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                _ => return EvalResult::Error,
+                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                _ => return Err(RuntimeFailure),
             }
         }
         let mut line = String::new();
         match io::stdin().read_line(&mut line) {
             Ok(_) => {
                 let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
-                EvalResult::Value(self.alloc(ObjectData::Str(trimmed)))
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(trimmed))))
             }
             Err(e) => self.rt_err_kind(
                 "RuntimeError",
@@ -551,17 +598,17 @@ impl super::Evaluator {
 
         // ── arg[0]: url (required, string) ────────────────────────────────────
         let url = match self.eval_expression(&args[0]) {
-            EvalResult::Value(r) => match self.resolve(r).cloned() {
+            Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                 Some(ObjectData::Str(s)) => s,
                 _ => {
                     let msg = self.alloc(ObjectData::Str(
                         "❌ fetch: url must be a string".to_string(),
                     ));
-                    return EvalResult::Throw(msg);
+                    return Ok(ExecutionFlow::Throw(msg));
                 }
             },
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
 
         // ── args[1..]: 1st string = method, 2nd string = body, dict = options ──
@@ -571,9 +618,9 @@ impl super::Evaluator {
         let mut options: Option<ObjectData> = None;
         for arg in &args[1..] {
             let r = match self.eval_expression(arg) {
-                EvalResult::Value(r) => r,
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                _ => return EvalResult::Error,
+                Ok(ExecutionFlow::Value(r)) => r,
+                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                _ => return Err(RuntimeFailure),
             };
             match self.resolve(r).cloned() {
                 Some(ObjectData::Str(s)) => {
@@ -587,7 +634,7 @@ impl super::Evaluator {
                             "❌ fetch: too many string arguments (expected method, body)"
                                 .to_string(),
                         ));
-                        return EvalResult::Throw(msg);
+                        return Ok(ExecutionFlow::Throw(msg));
                     }
                 }
                 Some(d @ ObjectData::Dict { .. }) => {
@@ -595,14 +642,14 @@ impl super::Evaluator {
                         let msg = self.alloc(ObjectData::Str(
                             "❌ fetch: options dict provided more than once".to_string(),
                         ));
-                        return EvalResult::Throw(msg);
+                        return Ok(ExecutionFlow::Throw(msg));
                     }
                     options = Some(d);
                 }
                 _ => {
                     let msg = self.alloc(ObjectData::Str(
                         "❌ fetch: arguments after url must be strings (method/body) or a dict (options)".to_string()));
-                    return EvalResult::Throw(msg);
+                    return Ok(ExecutionFlow::Throw(msg));
                 }
             }
         }
@@ -625,7 +672,7 @@ impl super::Evaluator {
                             let msg = self.alloc(ObjectData::Str(
                                 "❌ fetch: header names must be strings".to_string(),
                             ));
-                            return EvalResult::Throw(msg);
+                            return Ok(ExecutionFlow::Throw(msg));
                         }
                     };
                     let value = v.display_str();
@@ -638,7 +685,7 @@ impl super::Evaluator {
                             "❌ fetch: illegal control character in header '{}'",
                             name
                         )));
-                        return EvalResult::Throw(msg);
+                        return Ok(ExecutionFlow::Throw(msg));
                     }
                     headers.push((name, value));
                 }
@@ -663,7 +710,7 @@ impl super::Evaluator {
                 "❌ fetch: only http:// and https:// URLs are allowed (got: {})",
                 url
             )));
-            return EvalResult::Throw(msg);
+            return Ok(ExecutionFlow::Throw(msg));
         }
 
         // Reject control characters (header injection, etc.)
@@ -674,7 +721,7 @@ impl super::Evaluator {
             let msg = self.alloc(ObjectData::Str(
                 "❌ fetch: URL contains illegal control characters".to_string(),
             ));
-            return EvalResult::Throw(msg);
+            return Ok(ExecutionFlow::Throw(msg));
         }
 
         // Reject suspiciously long URLs
@@ -682,7 +729,7 @@ impl super::Evaluator {
             let msg = self.alloc(ObjectData::Str(
                 "❌ fetch: URL exceeds maximum length (2048)".to_string(),
             ));
-            return EvalResult::Throw(msg);
+            return Ok(ExecutionFlow::Throw(msg));
         }
 
         // Reject malformed methods (spaces / control chars would be header smuggling)
@@ -691,7 +738,7 @@ impl super::Evaluator {
                 "❌ fetch: invalid HTTP method '{}'",
                 method
             )));
-            return EvalResult::Throw(msg);
+            return Ok(ExecutionFlow::Throw(msg));
         }
 
         // ── Perform the request ───────────────────────────────────────────────
@@ -713,13 +760,13 @@ impl super::Evaluator {
                         None => format!("❌ fetch: HTTP {}", resp.status),
                     };
                     let m = self.alloc(ObjectData::Str(msg));
-                    return EvalResult::Throw(m);
+                    return Ok(ExecutionFlow::Throw(m));
                 }
                 self.fetch_make_value(resp, full, binary)
             }
             Err(e) => {
                 let m = self.alloc(ObjectData::Str(format!("❌ fetch: {}", e)));
-                EvalResult::Throw(m)
+                Ok(ExecutionFlow::Throw(m))
             }
         }
     }
@@ -748,11 +795,11 @@ impl super::Evaluator {
         if !full {
             // Containers (the binary byte array) must live in the global arena to
             // survive scope pops; a plain string can stay scoped like before.
-            return EvalResult::Value(if binary {
+            return Ok(ExecutionFlow::Value(if binary {
                 self.plant_global(body_val)
             } else {
                 self.plant(body_val)
-            });
+            }));
         }
 
         let headers_dict = OwnedValue::Dict {
@@ -783,7 +830,7 @@ impl super::Evaluator {
                 (OwnedValue::Str("body".to_string()), body_val),
             ],
         };
-        EvalResult::Value(self.plant_global(resp_dict))
+        Ok(ExecutionFlow::Value(self.plant_global(resp_dict)))
     }
 
     // ── fetch transport ───────────────────────────────────────────────────────
@@ -876,7 +923,7 @@ impl super::Evaluator {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        EvalResult::Value(self.alloc(ObjectData::Integer(ms)))
+        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(ms))))
     }
 
     // ── env(name) — read environment variable ─────────────────────────────────
@@ -885,17 +932,17 @@ impl super::Evaluator {
             return self.rt_err_kind("TypeError", "env(name) requires exactly 1 argument");
         }
         let name = match self.eval_expression(&args[0]) {
-            EvalResult::Value(r) => match self.resolve(r).cloned() {
+            Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                 Some(ObjectData::Str(s)) => s,
                 _ => {
                     return self.rt_err_kind("TypeError", "env() argument must be a string");
                 }
             },
-            EvalResult::Throw(v) => return EvalResult::Throw(v),
-            _ => return EvalResult::Error,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
         };
         let val = std::env::var(&name).unwrap_or_default();
-        EvalResult::Value(self.alloc(ObjectData::Str(val)))
+        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(val))))
     }
 
     // ── exit(code) — terminate the process ────────────────────────────────────
@@ -904,14 +951,14 @@ impl super::Evaluator {
             0i32
         } else {
             match self.eval_expression(&args[0]) {
-                EvalResult::Value(r) => match self.resolve(r).cloned() {
+                Ok(ExecutionFlow::Value(r)) => match self.resolve(r).cloned() {
                     Some(ObjectData::Integer(n)) => n as i32,
                     _ => {
                         return self.rt_err_kind("TypeError", "exit() argument must be an integer");
                     }
                 },
-                EvalResult::Throw(v) => return EvalResult::Throw(v),
-                _ => return EvalResult::Error,
+                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                _ => return Err(RuntimeFailure),
             }
         };
         std::process::exit(code);
