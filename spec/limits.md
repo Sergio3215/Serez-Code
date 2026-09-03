@@ -71,6 +71,9 @@ measurement made here.
 | `Memory.alloc` size | 256 MiB | Larger requests are fatal `SZ6002`; requires `unsafe`. |
 | One GPU buffer | 256 MiB = 33,554,432 `f64` elements | Larger creation/upload/matmul results are fatal `SZ6002`. |
 | `File.read` / `File.read_asBinary` | 256 MiB | Larger files are rejected before contents are read, fatal `SZ6002`. |
+| `fetch` response body | 64 MiB | Fatal `ResourceError` (`SZ6002`). |
+| HTTP `import` module text | 64 MiB | Fatal `ResourceError` (`SZ6002`), before the module is cached to disk. |
+| `OS.spawn` child stderr | 64 MiB | Fatal `ResourceError` (`SZ6002`), raised when `OS.tick` harvests the job. |
 | WebSocket frame payload | 16 MiB | Frame rejected. |
 | Concurrent Task workers, per runtime | 32 | New worker creation is fatal `SZ6002`. |
 | Task argument, reply or stored worker error | 1 MiB | Larger messages become `SZ6002`; worker error text is bounded before retention. |
@@ -150,6 +153,30 @@ The two regex limits bound the matcher rather than the pattern: a pattern with
 catastrophic backtracking fails to match instead of running until the process is
 killed. This means a match can report "no match" for a string it would have
 matched given unbounded time.
+
+### The three unbounded reads
+
+`fetch`, an HTTP `import` and an `OS.spawn` child's stderr each read an amount the
+program does not control, from a source it does not control, into memory. They
+share **one** ceiling rather than one each: this page is a single policy, and a
+second kind of ceiling would make it two.
+
+64 MiB rather than the 256 MiB `File.read` and `Memory.alloc` use, because those
+read something the user chose from their own disk while these read whatever a
+remote host or a child process decides to send.
+
+The reader takes one byte *past* the ceiling before deciding, so a body of
+exactly 64 MiB is accepted and one of 64 MiB + 1 is refused.
+`tests/read_ceiling.rs` asserts both, the far-over case, that the refusal is not
+catchable, and that an ordinary small body is unaffected.
+
+`OS.spawn`'s is the one that cannot be raised where it is detected: the stderr
+pipe is drained by a background thread that has no evaluator. That thread records
+the ceiling, and `OS.tick` raises it when it harvests the job — so the failure
+still reaches the program as a fatal `ResourceError`, just at the next harvest
+rather than at the moment the byte arrived.
+
+Until 10.0.0 none of the three had a ceiling at all.
 
 ## What is not limited
 

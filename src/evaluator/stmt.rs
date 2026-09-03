@@ -1532,10 +1532,24 @@ impl super::Evaluator {
                 .timeout(std::time::Duration::from_secs(15))
                 .build();
             match agent.get(url).call() {
-                Ok(resp) => match resp.into_string() {
+                // DEC-M9-001: bounded like every other unbounded read, and one
+                // byte past the ceiling so "exactly at it" is not "over it".
+                // `into_string` had no limit at all, and the result is cached to
+                // disk as well as held in memory.
+                Ok(resp) => match super::read_bounded(resp.into_reader())
+                    .and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+                {
                     Ok(s) => {
                         let _ = std::fs::write(&cache_file, &s);
                         s
+                    }
+                    // The ceiling is a resource limit, so it is fatal and not a
+                    // throw — the same treatment every other entry in
+                    // `spec/limits.md` gets. Every other read failure keeps the
+                    // catchable ModuleNotFound it always had.
+                    Err(e) if e == super::OVER_THE_READ_CEILING => {
+                        return self
+                            .fatal_err_kind("ResourceError", format!("Module '{}' {}", url, e));
                     }
                     Err(e) => {
                         let msg =

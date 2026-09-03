@@ -34,6 +34,64 @@ mod svg;
 
 /// How deep a program may recurse before the interpreter stops it. `main()` hands
 /// the interpreter a 64 MB stack, which is what makes this many frames survivable.
+/// How much any one **unbounded read** may pull into memory: 64 MiB.
+///
+/// **DEC-M9-001, decided: option A** — one fixed ceiling, fatal.
+///
+/// Three paths read an amount the program does not control, from a source it
+/// does not control, straight into memory. The independent audit in `audit/`
+/// raises the first two as high severity:
+///
+/// | Path | What it reads |
+/// |---|---|
+/// | `fetch` | the whole HTTP response body |
+/// | HTTP `import` | the whole remote module, then caches it to disk |
+/// | `OS.spawn` stderr | everything the child writes |
+///
+/// A server, a module host or a child process could therefore exhaust the
+/// interpreter's memory, with the host's RAM as the only limit.
+///
+/// **One policy, three call sites**, which is the part of the decision that
+/// matters most: `spec/limits.md` reads as a single policy today, and a second
+/// kind of ceiling would make it two. It is fatal, like every other ceiling
+/// there, so `try/catch` cannot turn a memory-exhaustion guard into ordinary
+/// control flow.
+///
+/// 64 MiB rather than the 256 MiB of `File.read` and `Memory.alloc`: those read
+/// something the user chose off their own disk, while these read whatever a
+/// remote host decides to send. The audit's own upper suggestion.
+pub(crate) const MAX_UNBOUNDED_READ_BYTES: usize = 64 * 1024 * 1024;
+
+/// The message an over-the-ceiling read reports, and the signal that says so.
+///
+/// The two readers bounded by [`MAX_UNBOUNDED_READ_BYTES`] sit behind
+/// transports whose failures are already `Result<_, String>` and are surfaced to
+/// the program as *catchable* throws. A resource ceiling must not be catchable,
+/// so the caller has to be able to tell this failure from an ordinary I/O one.
+/// A sentinel keeps that check in two visible places rather than threading a new
+/// error type through two transports for one condition.
+pub(crate) const OVER_THE_READ_CEILING: &str =
+    "response exceeds the 64 MiB read ceiling (see spec/limits.md)";
+
+/// Read at most [`MAX_UNBOUNDED_READ_BYTES`], and say so when there was more.
+///
+/// Reads one byte *past* the ceiling on purpose: with a plain `take(limit)` a
+/// body of exactly the ceiling is indistinguishable from a larger one that was
+/// truncated, so the boundary case would be reported wrongly in one direction or
+/// the other. The audit recommends the same shape.
+pub(crate) fn read_bounded(reader: impl std::io::Read) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    reader
+        .take(MAX_UNBOUNDED_READ_BYTES as u64 + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    if buf.len() > MAX_UNBOUNDED_READ_BYTES {
+        return Err(OVER_THE_READ_CEILING.to_string());
+    }
+    Ok(buf)
+}
+
 pub(crate) const MAX_CALL_DEPTH: usize = 512;
 
 /// How deeply a *value* may nest before `extract` refuses to copy it.

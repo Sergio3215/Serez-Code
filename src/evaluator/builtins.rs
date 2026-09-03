@@ -779,6 +779,13 @@ impl super::Evaluator {
                 }
                 self.fetch_make_value(resp, full, binary)
             }
+            // A resource ceiling is fatal, like every other entry in
+            // `spec/limits.md`; `try/catch` must not be able to turn a
+            // memory-exhaustion guard into ordinary control flow. Every other
+            // transport failure keeps the catchable throw it always had.
+            Err(e) if e == super::OVER_THE_READ_CEILING => {
+                self.fatal_err_kind("ResourceError", format!("fetch: {e}"))
+            }
             Err(e) => {
                 let m = self.alloc(ObjectData::Str(format!("❌ fetch: {}", e)));
                 Ok(ExecutionFlow::Throw(m))
@@ -1005,10 +1012,17 @@ impl super::Evaluator {
             .filter_map(|n| resp.header(n).map(|v| (n.to_lowercase(), v.to_string())))
             .collect();
 
-        let mut buf: Vec<u8> = Vec::new();
-        if let Err(e) = resp.into_reader().read_to_end(&mut buf) {
-            return Err(format!("failed to read response body: {}", e));
-        }
+        // DEC-M9-001. Read one byte past the ceiling so that "exactly at the
+        // limit" and "over it" are distinguishable — a plain `take(limit)` makes
+        // a body of exactly the ceiling look truncated and a larger one look
+        // like it fits.
+        // DEC-M9-001: bounded, and the ceiling is reported as itself so the
+        // caller can raise it fatally rather than as an ordinary throw.
+        let buf = match super::read_bounded(resp.into_reader()) {
+            Ok(buf) => buf,
+            Err(e) if e == super::OVER_THE_READ_CEILING => return Err(e),
+            Err(e) => return Err(format!("failed to read response body: {}", e)),
+        };
 
         Ok(FetchResponse {
             status,

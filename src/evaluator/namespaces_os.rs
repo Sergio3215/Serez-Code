@@ -793,12 +793,26 @@ impl super::Evaluator {
                         if let Some(mut pipe) = child.stderr.take() {
                             let sink = std::sync::Arc::clone(&collected);
                             std::thread::spawn(move || {
-                                let mut buffer = String::new();
-                                // Errors are dropped deliberately: a child that
-                                // writes invalid UTF-8 or closes early still has
-                                // to be harvestable, and the exit code is the
-                                // signal that matters.
-                                let _ = pipe.read_to_string(&mut buffer);
+                                // DEC-M9-001. Bounded like the other two
+                                // unbounded reads: a child that writes without
+                                // stopping used to grow this buffer until the
+                                // host ran out of memory.
+                                //
+                                // The ceiling cannot be *raised* from here — this
+                                // is a background thread with no evaluator — so
+                                // the buffer records that it was hit, and
+                                // `OS.tick` raises it fatally when it harvests
+                                // the job. Errors are still dropped deliberately:
+                                // a child writing invalid UTF-8 or closing early
+                                // has to stay harvestable, and the exit code is
+                                // the signal that matters.
+                                let buffer = match crate::evaluator::read_bounded(&mut pipe) {
+                                    Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                                    Err(e) if e == crate::evaluator::OVER_THE_READ_CEILING => {
+                                        crate::evaluator::OVER_THE_READ_CEILING.to_string()
+                                    }
+                                    Err(_) => String::new(),
+                                };
                                 if let Ok(mut sink) = sink.lock() {
                                     *sink = buffer;
                                 }
@@ -855,6 +869,16 @@ impl super::Evaluator {
                                 .lock()
                                 .map(|guard| guard.clone())
                                 .unwrap_or_default();
+                            // The reader thread cannot raise, so it records the
+                            // ceiling in the buffer and the harvest raises it
+                            // here, where there is an evaluator. Fatal, like
+                            // every other resource limit.
+                            if errbuf == crate::evaluator::OVER_THE_READ_CEILING {
+                                return self.fatal_err_kind(
+                                    "ResourceError",
+                                    format!("OS.spawn: child {pid} stderr {errbuf}"),
+                                );
+                            }
                             let msg = if code == 0 || errbuf.trim().is_empty() {
                                 String::new()
                             } else {

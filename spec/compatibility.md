@@ -52,6 +52,13 @@ useless:
   release — but only after a sweep of every official package found zero
   occurrences of the affected form, which the changelog entry records by name.
 
+- **Unreleased** gave the three unbounded reads a 64 MiB ceiling — `fetch`'s
+  response body, an HTTP `import`'s module text, and an `OS.spawn` child's
+  stderr. Over it is a fatal `ResourceError` (`SZ6002`), like every other entry
+  in `limits.md`. Breaking for any program that reads more than that, which no
+  corpus fixture and no official package does; the exposure is to deployed
+  programs this repository cannot see, and `limits.md` records that rather than
+  claiming a sweep proved something it could not. See `limits.md`.
 - **Unreleased** made a name that does not resolve lexically a fatal `SZ8000`.
   Dynamic resolution through the caller's scope is gone: a function reading a
   name it does not declare is rejected before the program runs, where it used to
