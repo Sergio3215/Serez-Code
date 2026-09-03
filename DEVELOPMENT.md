@@ -625,6 +625,7 @@ The `.vsix` is in `.gitignore` — it is a build artifact, not source code.
 | `cargo test --all-targets` | 3 OS | any failing Rust test |
 | Serez conformance | 3 OS | any failing `.sz` fixture, per runner |
 | **Ecosystem canary** | Linux | any official package failing against the core built here |
+| Performance phases | 3 OS | *nothing* — advisory, see below |
 
 **Clippy is a baseline, not `-D warnings`.** The 180 existing warnings are known
 debt; the gate is `current <= baseline`, keyed per lint and per file so that
@@ -638,6 +639,23 @@ belongs in the commit message.
 only thing that can turn the gate red is a change in *this* repository — a
 compatibility signal that someone else's push can break is not a gate. The core
 under test is always built from the checkout, never a released `sz`.
+
+**Performance is advisory, and stays that way until the runners are measured.**
+`tests/perf_budget.rs` times the pipeline's phases — parse, semantic, type-check,
+execute — against `perf-baseline.txt` and prints a table with a `ratio` and a
+`spread` column. A phase past 1.5× its baseline is flagged and **does not fail**:
+timing on a shared runner is noisy, and a flaky gate teaches people to re-run
+until green, which is how a real regression gets merged. The `spread` column is
+this run's own max/min, collected on all three runners, and it is the evidence
+for whether any phase is stable enough to become a gate later — on the machine
+this was first recorded on, `semantic.validate` varied by 2.7× between the
+fastest and slowest of seven consecutive runs.
+
+The baseline is machine-specific and recorded in release
+(`SEREZ_PERF_UPDATE=1 cargo test --release --test perf_budget`); a debug run
+prints its numbers and skips the comparison rather than warning every time.
+`run_benchmarks.{sh,ps1}` remain the whole-program measurement; this one says
+*which phase* moved.
 
 `ecosystem-daily.yml` runs the same canary against each package's default branch,
 once a day, and cannot block a PR. The two answer different questions: the gate

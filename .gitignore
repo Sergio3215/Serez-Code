@@ -20,6 +20,7 @@ ANALISIS_MEMORIA_RENDIMIENTO.md
 # a deliberate act that belongs in a diff someone reviews.
 !clippy-baseline.txt
 !ecosystem-pins.txt
+!perf-baseline.txt
 # Fixture trees the conformance runners load. `!tests/*.sz` only un-ignores the
 # top level, so these stayed untracked: a fresh clone had no tests/lib, and the
 # import, export, package and runner-integrity tests failed with ModuleNotFound.

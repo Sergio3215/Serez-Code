@@ -59,6 +59,17 @@ jobs:
       - name: Rust tests
         run: cargo test --all-targets
 
+      # Advisory, never blocking. The phase timings are compared against
+      # `perf-baseline.txt` in a release build — a debug run would be several
+      # times slower and warn every time — and a phase past its budget is
+      # printed rather than failed. Timing on a shared runner is noisy, and a
+      # flaky gate teaches people to re-run until green, which is how a real
+      # regression gets merged. The `spread` column collected here on all three
+      # runners is the evidence for whether any of these is stable enough to
+      # become a gate later.
+      - name: Performance phases (advisory)
+        run: cargo test --release --test perf_budget -- --nocapture
+
       - name: Serez conformance, regression, error-path, security and CLI tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

@@ -1,0 +1,23 @@
+# serez-perf-baseline/1
+# Phase timings in microseconds, as `<phase>\t<micros>`, sorted.
+#
+# The statistic is the MINIMUM of several runs: a process is only ever slowed by
+# its neighbours, never sped up, so the fastest run is the least-contaminated
+# estimate of the work itself.
+#
+# These are advisory. `tests/perf_budget.rs` flags a phase more than 1.5x its
+# baseline and does **not** fail: timing on a shared runner is noisy, and a flaky
+# gate teaches people to re-run until green, which is how a real regression gets
+# merged. It records the observed spread on every run so that promoting any of
+# these to a gate is a decision taken against evidence.
+#
+# Numbers are machine-specific. A baseline recorded on one machine and compared
+# on another says more about the two machines than about the code — which is why
+# a difference here is a prompt to look, not a verdict.
+#
+# Refresh with: SEREZ_PERF_UPDATE=1 cargo test --release --test perf_budget
+frontend.parse	1519
+runtime.execute	4242
+semantic.declarations	24
+semantic.validate	136
+types.check	56
