@@ -200,9 +200,9 @@ fn graph() -> BTreeMap<String, BTreeMap<String, String>> {
             continue;
         };
         let Ok(text) = std::fs::read_to_string(path) else {
-            // `src/test_run.rs` is UTF-16 and outside the module tree — §5.3's
-            // tracked dead weight. Skipped rather than special-cased, since
-            // anything unreadable is by definition not compiled.
+            // Anything unreadable as UTF-8 is by definition not compiled, so it
+            // has no edges. Kept as a skip rather than an assertion: this held
+            // one file, `src/test_run.rs`, and §5.3 deleted it.
             continue;
         };
         let shown = path

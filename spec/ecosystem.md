@@ -59,7 +59,7 @@ manifest and its own suite. They are consumers of the language, and are treated
 as its compatibility suite: `run_ecosystem.sh` / `run_ecosystem.ps1` run them
 against a freshly built core.
 
-**Developer tooling** — the `sz-lsp` binary and `lsp/`, `test_run.rs`, the
+**Developer tooling** — the `sz-lsp` binary and `lsp/`, and the
 benchmark runners. These read or run Serez without being part of it.
 
 ## Tiers

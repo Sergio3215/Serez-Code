@@ -69,7 +69,6 @@ serez-code/
 │   ├── scope.rs                — ScopeStack: push/pop/lookup with watermarks
 │   ├── repl.rs                 — Read-eval-print loop
 │   ├── package_manager.rs      — serez.json, install_package, install_all, packages_dir
-│   ├── test_run.rs             — Internal test helper
 │   ├── lsp_main.rs             — Entry point of the sz-lsp binary (stdio JSON-RPC)
 │   ├── lsp/                    — Language Server (6 modules)
 │   │   ├── server.rs               — LSP loop: initialize, didOpen/didChange, publishDiagnostics
