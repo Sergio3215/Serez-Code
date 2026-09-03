@@ -77,8 +77,18 @@ pub enum UseKind {
     Write,
     /// The name is called: `name(...)`.
     Call,
-    /// The name names a class: `new Name(...)`, or `class X : Name`.
+    /// The name names a class at a construction site: `new Name(...)`.
     Type,
+    /// The name is a class's declared parent: `class X : Name`.
+    ///
+    /// Split from [`UseKind::Type`] because the two carry different weight.
+    /// `new Missing()` already fails at run time with `SZ4001`, so a free `Type`
+    /// use is a name that *would* have failed anyway. A free `Parent` is
+    /// §5.39's finding: `class Child : Missing` runs to completion as long as
+    /// nobody constructs it, so `--check` could not tell you that you inherit
+    /// from something that does not exist. `semantic::validate` reports this
+    /// kind and only this kind.
+    Parent,
 }
 
 /// One identifier use that lexical structure cannot account for.
@@ -456,7 +466,7 @@ impl Walker {
     fn class(&mut self, c: &ClassDeclaration) {
         self.bind(&c.name);
         if let Some(parent) = &c.parent {
-            self.use_name(parent, UseKind::Type, c.span);
+            self.use_name(parent, UseKind::Parent, c.span);
         }
         self.enclosing.push(c.name.clone());
 

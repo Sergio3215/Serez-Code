@@ -156,6 +156,7 @@ fn kind_label(kind: UseKind) -> &'static str {
         UseKind::Write => "write",
         UseKind::Call => "call",
         UseKind::Type => "type",
+        UseKind::Parent => "parent",
     }
 }
 
