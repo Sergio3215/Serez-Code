@@ -303,7 +303,7 @@ impl super::Evaluator {
                     data: new_data,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -391,7 +391,7 @@ impl super::Evaluator {
                             data: result,
                             tid: 0,
                         });
-                        if self.ad_recording {
+                        if self.autodiff.recording {
                             let a_id = self.ad_tensor_id(tensor_ref);
                             let b_id = self.ad_tensor_id(arg_ref);
                             self.ad_push(
@@ -419,7 +419,7 @@ impl super::Evaluator {
                 }
                 let in_len = data.len();
                 let s: f64 = data.iter().sum();
-                if self.ad_recording {
+                if self.autodiff.recording {
                     // Return a 1-element Tensor so backward() can track it
                     let out_ref = self.alloc(ObjectData::Tensor {
                         shape: vec![1],
@@ -442,7 +442,7 @@ impl super::Evaluator {
                 }
                 let in_len = data.len();
                 let m = data.iter().sum::<f64>() / in_len as f64;
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let out_ref = self.alloc(ObjectData::Tensor {
                         shape: vec![1],
                         data: vec![m],
@@ -554,7 +554,7 @@ impl super::Evaluator {
                     data: new_data,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -573,7 +573,7 @@ impl super::Evaluator {
                     data: new_data.clone(),
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -592,7 +592,7 @@ impl super::Evaluator {
                     data: new_data.clone(),
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -633,7 +633,7 @@ impl super::Evaluator {
                     data: new_data.clone(),
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -851,7 +851,7 @@ impl super::Evaluator {
                     data: new_data,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let mat_id = self.ad_tensor_id(tensor_ref);
                     let bias_id = self.ad_tensor_id(bias_ref);
                     self.ad_push(
@@ -938,7 +938,7 @@ impl super::Evaluator {
                     data: new_data,
                     tid: 0,
                 });
-                if self.ad_recording && dot_call.method == "broadcastMul" {
+                if self.autodiff.recording && dot_call.method == "broadcastMul" {
                     let mat_id = self.ad_tensor_id(tensor_ref);
                     let rhs_id = self.ad_tensor_id(rhs_ref);
                     let mat_saved = data.clone();
@@ -1226,7 +1226,7 @@ impl super::Evaluator {
                     data: new_data,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -1258,7 +1258,7 @@ impl super::Evaluator {
                     data: new_data,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -1294,7 +1294,7 @@ impl super::Evaluator {
                     .map(|&x| if x >= 0.0 { x } else { alpha * x })
                     .collect();
                 let out_ref = self.alloc_tensor(shape, new_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -1317,7 +1317,7 @@ impl super::Evaluator {
                     .map(|&x| 0.5 * x * (1.0 + (c * (x + 0.044715 * x * x * x)).tanh()))
                     .collect();
                 let out_ref = self.alloc_tensor(shape, new_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -1350,7 +1350,7 @@ impl super::Evaluator {
                     .map(|&x| if x > 0.0 { x } else { alpha * (x.exp() - 1.0) })
                     .collect();
                 let out_ref = self.alloc_tensor(shape, new_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -1375,7 +1375,7 @@ impl super::Evaluator {
                     .map(|(&x, &s)| x * s)
                     .collect();
                 let out_ref = self.alloc_tensor(shape, new_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -1400,7 +1400,7 @@ impl super::Evaluator {
                     })
                     .collect();
                 let out_ref = self.alloc_tensor(shape, new_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -1441,7 +1441,7 @@ impl super::Evaluator {
                     .map(|&x| if x >= 0.0 { x } else { alpha * x })
                     .collect();
                 let out_ref = self.alloc_tensor(shape, new_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -1521,7 +1521,7 @@ impl super::Evaluator {
                 }
                 let out_shape = vec![n_batch, out_h, out_w, ch];
                 let out_ref = self.alloc_tensor(out_shape.clone(), out_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -2357,7 +2357,7 @@ impl super::Evaluator {
                     data: out_2d,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     let w_id = self.ad_tensor_id(w_ref);
                     let b_id = self.ad_tensor_id(b_ref);
@@ -2467,7 +2467,7 @@ impl super::Evaluator {
                     data: out_data,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     self.ad_push(
                         out_ref,
@@ -2565,7 +2565,7 @@ impl super::Evaluator {
                     data: out_data,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id(tensor_ref);
                     let g_id = self.ad_tensor_id(g_ref);
                     let b_id = self.ad_tensor_id(b_ref);
@@ -2738,7 +2738,7 @@ impl super::Evaluator {
                     data: out_data,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let x_id = self.ad_tensor_id(tensor_ref);
                     let wq_id = self.ad_tensor_id(wq_ref);
                     let wk_id = self.ad_tensor_id(wk_ref);
@@ -2957,7 +2957,7 @@ impl super::Evaluator {
                     data: last_h,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let x_id = self.ad_tensor_id(tensor_ref);
                     let wx_id = self.ad_tensor_id(wx_ref);
                     let wh_id = self.ad_tensor_id(wh_ref);
@@ -3119,7 +3119,7 @@ impl super::Evaluator {
                     data: last_h,
                     tid: 0,
                 });
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let x_id = self.ad_tensor_id(tensor_ref);
                     let wx_id = self.ad_tensor_id(wx_ref);
                     let wh_id = self.ad_tensor_id(wh_ref);
@@ -3406,12 +3406,12 @@ impl super::Evaluator {
         };
         let is_tensor_arg = matches!(self.resolve(arg_ref), Some(ObjectData::Tensor { .. }));
         // For mul tape recording, save both input data before consuming them
-        let saved_a = if self.ad_recording && is_tensor_arg && op == "mul" {
+        let saved_a = if self.autodiff.recording && is_tensor_arg && op == "mul" {
             Some(data.clone())
         } else {
             None
         };
-        let saved_b = if self.ad_recording && is_tensor_arg && op == "mul" {
+        let saved_b = if self.autodiff.recording && is_tensor_arg && op == "mul" {
             match self.resolve(arg_ref) {
                 Some(ObjectData::Tensor { data: d2, .. }) => Some(d2.clone()),
                 _ => None,
@@ -3495,7 +3495,7 @@ impl super::Evaluator {
             data: result_data,
             tid: 0,
         });
-        if self.ad_recording && is_tensor_arg {
+        if self.autodiff.recording && is_tensor_arg {
             let a_id = self.ad_tensor_id(tensor_ref);
             let b_id = self.ad_tensor_id(arg_ref);
             let tape_op = match op {

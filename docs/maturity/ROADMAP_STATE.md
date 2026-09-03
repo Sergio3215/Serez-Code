@@ -4022,6 +4022,87 @@ DEC-M4-004 — and none of them is unmet through omission. The repository is gre
 and nothing is half-migrated: both modules are leaves, so there is no partial
 state to unwind if a decision goes the other way.
 
+## 9J. M6 — Runtime Molecular
+
+Charter: *the evaluator should evaluate the language, not simultaneously be a
+filesystem, a process manager, a socket manager, a GPU manager, a GUI runtime, a
+media runtime, a task scheduler, a memory manager and an autodiff runtime.*
+
+### 9J.0 The audit: 48 fields, and what each one is
+
+`Evaluator` had **48 fields**. §6 already records that `handles.rs`, `GuiRuntime`
+and `modules.rs` were extracted before this roadmap began, so M6 is partly
+pre-empted; the audit's job is to say what is left and in what order it can move.
+
+Classified by the taxonomy the plan asks for:
+
+| Class | Fields | Count |
+|---|---|---|
+| **Language state** | `global_arena`, `global_bindings`, `scopes`, `null_ref`, `true_ref`, `false_ref`, `class_registry`, `interface_registry`, `enum_registry`, `sealed_classes`, `const_names`, `native_fns` | 12 |
+| **Execution state** | `call_stack`, `call_depth`, `constructing_class`, `executing_class`, `in_unsafe_block`, `yield_collector`, `try_depth`, `diagnostic_capture_depth`, `value_depth_exceeded`, `last_error`, `error_generation`, `source_lines` | 12 |
+| **Module state** | `imported_files`, `current_dir`, `current_module_exports` | 3 |
+| **Cache** | `int_cache`, `mutator_cache`, `super_cache` | 3 |
+| **Security policy** | `permissions`, `lockdown` | 2 |
+| **Host service** | `sockets`, `gpu`, `memory`, `gui`, `spawned`, `media`, `task_runtime`, `task_id`, `task_arg`, `lcg_state`, `tensor_id_counter`, and the 5 autodiff fields | 16 |
+
+**Language state and execution state are 24 of the 48 and are not extraction
+targets.** They are what an evaluator *is*. The milestone's subject is the other
+24, and specifically the 16 host-service fields, because those are the ones that
+make the evaluator something other than an evaluator.
+
+**Extraction order, derived from measured coupling** rather than from how large
+each cluster looks. Reference counts and the number of files touching each field:
+
+| Cluster | Fields | Refs | Files | Order |
+|---|---|---|---|---|
+| Autodiff tape | 5 | 120 | 2 | **1st** — most fields, and 4 of 5 confined to one file |
+| Module state | 3 | 25 | 2 | 2nd |
+| Task context | 3 | 9 | 2 | 3rd |
+| Security policy | 2 | 12 | 4 | 4th — fewest fields, widest spread |
+| Method caches | 2 | 4 | 1 | 5th |
+
+Already single-field and therefore already extracted in the sense that matters:
+`sockets`, `gpu`, `memory` (all `handles.rs`), `gui` (`GuiRuntime`), `spawned`,
+`media`.
+
+**Not a target: `lcg_state` and `tensor_id_counter`.** One field each, and neither
+has a second field to be cohesive *with*. Wrapping a single `u64` in a struct
+produces a file, not a boundary — rule 3 of the molecular architecture rules.
+They are recorded here so that a later reader knows they were considered and
+declined, rather than missed.
+
+### 9J.1 — M6.1: the autodiff tape
+
+Five fields become one: `namespaces_autodiff::AutodiffTape`, owning `recording`,
+`tape`, `grads`, `next_id` and `tensor_ids`, held by `Evaluator` as `autodiff`.
+
+The evidence that they are one thing rather than five that happen to share a
+prefix is behavioural: **`Autodiff.record()` and `Autodiff.stop()` each reset
+three of them together** (`namespaces_autodiff.rs:333-335, 345-347`). `grads` is
+only ever populated by `backward()` walking `tape`; `tensor_ids` only maps
+identities that exist inside one recording session. Apart, none of them means
+anything.
+
+**`tensor_id_counter` was deliberately left behind**, and this is the part of the
+molecule worth arguing. It has `tensor` in its name and sits in the same region of
+the struct, so folding it in would look tidy. But it issues stable identity for
+*every* tensor, whether or not anything is recording — `Evaluator::alloc` uses it
+on the allocation path. It belongs to a tensor service that does not exist yet.
+Moving it here would put a field used by all tensor allocation inside a type named
+after differentiation, which is exactly the tidy-looking mistake the milestone is
+meant to avoid.
+
+**Behaviour: unchanged, and mechanically so.** 120 call sites renamed
+`self.ad_x` -> `self.autodiff.x`, one of them written across two lines and caught
+by the compiler rather than by the first regex — which is the argument for a
+rename the type system checks rather than a textual one. No logic, no ordering and
+no initialisation moved: `next_id` still starts at 1, expressed as
+`AutodiffTape::new()` because `Default` cannot say so.
+
+`Evaluator`: **48 fields -> 44.**
+
+---
+
 ## 9I. M5 MILESTONE AUDIT
 
 Charter: *"Reglas de tipos coherentes, normativas y consistentes entre

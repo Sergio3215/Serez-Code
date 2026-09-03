@@ -35,7 +35,7 @@ impl super::Evaluator {
                 // source (e.g. `let x = arr[0]` must not share the slot with arr[0],
                 // or a later `x = new_val` would silently mutate the array element).
                 // Cloning ObjectData::Tensor preserves the tid, so autodiff tracking
-                // works automatically via the stable tid in ad_tensor_ids.
+                // works automatically via the stable tid in autodiff.tensor_ids.
                 //
                 // EXCEPCIÓN: `let x = new C(...)`. Un `new` produce un objeto
                 // RECIÉN hecho que nadie más puede estar mirando, así que copiarlo

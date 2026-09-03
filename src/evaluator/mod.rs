@@ -237,12 +237,9 @@ pub struct Evaluator {
     // them. Network access is NOT part of this. See run::RunOpts::sandboxed.
     lockdown: bool,
     // ── Autodiff tape ─────────────────────────────────────────────────────────
-    ad_recording: bool,
-    ad_tape: Vec<namespaces_autodiff::TapeEntry>,
-    ad_grads: HashMap<u64, Vec<f64>>,
-    ad_next_id: u64,
-    // Maps stable tensor tid → tape_node_id for the current recording session
-    ad_tensor_ids: HashMap<u64, u64>,
+    // Five fields until M6.1; see `namespaces_autodiff::AutodiffTape` for why
+    // they are one thing, and why `tensor_id_counter` is not part of it.
+    autodiff: namespaces_autodiff::AutodiffTape,
     // Monotonically increasing counter for stable tensor identity (tid)
     tensor_id_counter: u64,
     // ── GUI ───────────────────────────────────────────────────────────────────
@@ -524,11 +521,7 @@ impl Evaluator {
             memory: crate::handles::HandleRegistry::new(),
             permissions: HashSet::new(),
             lockdown: false,
-            ad_recording: false,
-            ad_tape: Vec::new(),
-            ad_grads: HashMap::new(),
-            ad_next_id: 1,
-            ad_tensor_ids: HashMap::new(),
+            autodiff: namespaces_autodiff::AutodiffTape::new(),
             tensor_id_counter: 1,
             gui: namespaces_gui::GuiRuntime::default(),
             #[cfg(feature = "audio")]

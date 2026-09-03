@@ -9,6 +9,7 @@
 use super::EvalResult;
 use crate::ast;
 use crate::region::ObjectData;
+use std::collections::HashMap;
 
 // ── Tape structures ───────────────────────────────────────────────────────────
 
@@ -318,6 +319,44 @@ pub struct TapeEntry {
     pub op: TapeOp,
 }
 
+/// The reverse-mode tape, and everything that only exists while it is recording.
+///
+/// These five fields were five fields of `Evaluator`, which is what M6 exists to
+/// undo: an evaluator that also *is* an autodiff runtime has no boundary between
+/// evaluating a program and differentiating one. They move together because they
+/// are meaningless apart — `grads` is only populated by `backward()` over `tape`,
+/// and `tensor_ids` only maps identities that exist within one recording session.
+/// `Autodiff.record()` and `stop()` reset three of them at once, which is the
+/// clearest evidence they are one thing.
+///
+/// Deliberately **not** included: `Evaluator::tensor_id_counter`. It issues stable
+/// identity for every tensor whether or not anything is recording, so it belongs
+/// to a tensor service that does not exist yet, not to the tape. Folding it in
+/// here because it has `tensor` in its name would be the kind of tidy-looking
+/// mistake this milestone is supposed to avoid.
+#[derive(Default)]
+pub struct AutodiffTape {
+    /// True between `Autodiff.record()` and `Autodiff.stop()`.
+    pub recording: bool,
+    pub tape: Vec<TapeEntry>,
+    /// tape node id -> accumulated gradient, filled by `backward()`.
+    pub grads: HashMap<u64, Vec<f64>>,
+    /// Next tape node id. Starts at 1, so 0 is never a valid node.
+    pub next_id: u64,
+    /// Stable tensor tid -> tape node id, for the current recording session only.
+    pub tensor_ids: HashMap<u64, u64>,
+}
+
+impl AutodiffTape {
+    /// `next_id` starts at 1 rather than 0, which `Default` cannot express.
+    pub fn new() -> Self {
+        AutodiffTape {
+            next_id: 1,
+            ..Default::default()
+        }
+    }
+}
+
 // ── Evaluator methods ─────────────────────────────────────────────────────────
 
 impl super::Evaluator {
@@ -330,11 +369,11 @@ impl super::Evaluator {
                 if !dot_call.arguments.is_empty() {
                     return self.rt_err_kind("TypeError", "Autodiff.tape() takes no arguments");
                 }
-                self.ad_recording = true;
-                self.ad_tape.clear();
-                self.ad_grads.clear();
-                self.ad_tensor_ids.clear();
-                self.ad_next_id = 1;
+                self.autodiff.recording = true;
+                self.autodiff.tape.clear();
+                self.autodiff.grads.clear();
+                self.autodiff.tensor_ids.clear();
+                self.autodiff.next_id = 1;
                 EvalResult::Value(self.null_ref)
             }
 
@@ -342,11 +381,11 @@ impl super::Evaluator {
                 if let Some(error) = self.reject_arguments(dot_call, "Autodiff") {
                     return error;
                 }
-                self.ad_recording = false;
-                self.ad_tape.clear();
-                self.ad_grads.clear();
-                self.ad_tensor_ids.clear();
-                self.ad_next_id = 1;
+                self.autodiff.recording = false;
+                self.autodiff.tape.clear();
+                self.autodiff.grads.clear();
+                self.autodiff.tensor_ids.clear();
+                self.autodiff.next_id = 1;
                 EvalResult::Value(self.null_ref)
             }
 
@@ -354,7 +393,7 @@ impl super::Evaluator {
                 if let Some(error) = self.reject_arguments(dot_call, "Autodiff") {
                     return error;
                 }
-                let b = self.ad_recording;
+                let b = self.autodiff.recording;
                 EvalResult::Value(self.bool_ref(b))
             }
 
@@ -376,7 +415,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                let seed_id = match self.ad_tensor_ids.get(&loss_tid).copied() {
+                let seed_id = match self.autodiff.tensor_ids.get(&loss_tid).copied() {
                     Some(id) => id,
                     None => {
                         return self.rt_err_kind(
@@ -385,24 +424,26 @@ impl super::Evaluator {
                         );
                     }
                 };
-                self.ad_grads.insert(seed_id, vec![1.0; loss_data.len()]);
+                self.autodiff
+                    .grads
+                    .insert(seed_id, vec![1.0; loss_data.len()]);
 
                 // Run backward pass in reverse order
-                let tape = self.ad_tape.clone();
+                let tape = self.autodiff.tape.clone();
                 for entry in tape.iter().rev() {
-                    let out_grad = match self.ad_grads.get(&entry.out_id).cloned() {
+                    let out_grad = match self.autodiff.grads.get(&entry.out_id).cloned() {
                         Some(g) => g,
                         None => continue, // not yet reachable
                     };
                     match &entry.op {
                         TapeOp::Add { a_id, b_id } => {
-                            Self::accum_grad(&mut self.ad_grads, *a_id, out_grad.clone());
-                            Self::accum_grad(&mut self.ad_grads, *b_id, out_grad);
+                            Self::accum_grad(&mut self.autodiff.grads, *a_id, out_grad.clone());
+                            Self::accum_grad(&mut self.autodiff.grads, *b_id, out_grad);
                         }
                         TapeOp::Sub { a_id, b_id } => {
-                            Self::accum_grad(&mut self.ad_grads, *a_id, out_grad.clone());
+                            Self::accum_grad(&mut self.autodiff.grads, *a_id, out_grad.clone());
                             let neg: Vec<f64> = out_grad.iter().map(|x| -x).collect();
-                            Self::accum_grad(&mut self.ad_grads, *b_id, neg);
+                            Self::accum_grad(&mut self.autodiff.grads, *b_id, neg);
                         }
                         TapeOp::Mul {
                             a_id,
@@ -421,16 +462,16 @@ impl super::Evaluator {
                                 .zip(a_data.iter())
                                 .map(|(g, a)| g * a)
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *a_id, da);
-                            Self::accum_grad(&mut self.ad_grads, *b_id, db);
+                            Self::accum_grad(&mut self.autodiff.grads, *a_id, da);
+                            Self::accum_grad(&mut self.autodiff.grads, *b_id, db);
                         }
                         TapeOp::Scale { in_id, scalar } => {
                             let g: Vec<f64> = out_grad.iter().map(|x| x * scalar).collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         TapeOp::Neg { in_id } => {
                             let g: Vec<f64> = out_grad.iter().map(|x| -x).collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         TapeOp::BroadcastAdd {
                             mat_id,
@@ -439,14 +480,14 @@ impl super::Evaluator {
                             cols,
                         } => {
                             let (r, c) = (*rows, *cols);
-                            Self::accum_grad(&mut self.ad_grads, *mat_id, out_grad.clone());
+                            Self::accum_grad(&mut self.autodiff.grads, *mat_id, out_grad.clone());
                             let mut bias_grad = vec![0.0f64; c];
                             for row in 0..r {
                                 for col in 0..c {
                                     bias_grad[col] += out_grad[row * c + col];
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *bias_id, bias_grad);
+                            Self::accum_grad(&mut self.autodiff.grads, *bias_id, bias_grad);
                         }
                         TapeOp::BroadcastMul {
                             mat_id,
@@ -464,7 +505,7 @@ impl super::Evaluator {
                                     dmat[i * c + j] = out_grad[i * c + j] * rhs_data[j];
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *mat_id, dmat);
+                            Self::accum_grad(&mut self.autodiff.grads, *mat_id, dmat);
                             // d_rhs[j] = sum_i(out_grad[i,j] * mat[i,j])
                             let mut drhs = vec![0.0f64; c];
                             for i in 0..r {
@@ -472,7 +513,7 @@ impl super::Evaluator {
                                     drhs[j] += out_grad[i * c + j] * mat_data[i * c + j];
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *rhs_id, drhs);
+                            Self::accum_grad(&mut self.autodiff.grads, *rhs_id, drhs);
                         }
                         TapeOp::MatMul {
                             a_id,
@@ -503,8 +544,8 @@ impl super::Evaluator {
                             }
                             let mut db = vec![0.0f64; k * n];
                             super::methods_tensor::matmul_kernel(&at, &out_grad, k, m, n, &mut db);
-                            Self::accum_grad(&mut self.ad_grads, *a_id, da);
-                            Self::accum_grad(&mut self.ad_grads, *b_id, db);
+                            Self::accum_grad(&mut self.autodiff.grads, *a_id, da);
+                            Self::accum_grad(&mut self.autodiff.grads, *b_id, db);
                         }
                         TapeOp::Relu {
                             in_id,
@@ -515,7 +556,7 @@ impl super::Evaluator {
                                 .zip(cached_input.iter())
                                 .map(|(dout, &x)| if x > 0.0 { *dout } else { 0.0 })
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         TapeOp::Sigmoid {
                             in_id,
@@ -526,7 +567,7 @@ impl super::Evaluator {
                                 .zip(cached_output.iter())
                                 .map(|(dout, &s)| dout * s * (1.0 - s))
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         TapeOp::Tanh {
                             in_id,
@@ -537,17 +578,25 @@ impl super::Evaluator {
                                 .zip(cached_output.iter())
                                 .map(|(dout, &t)| dout * (1.0 - t * t))
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         TapeOp::Sum { in_id, in_len } => {
                             // Scalar sum: broadcast gradient to all inputs
                             let g_val = out_grad.iter().sum::<f64>();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, vec![g_val; *in_len]);
+                            Self::accum_grad(
+                                &mut self.autodiff.grads,
+                                *in_id,
+                                vec![g_val; *in_len],
+                            );
                         }
                         TapeOp::Mean { in_id, in_len } => {
                             let n = *in_len as f64;
                             let g_val = out_grad.iter().sum::<f64>() / n;
-                            Self::accum_grad(&mut self.ad_grads, *in_id, vec![g_val; *in_len]);
+                            Self::accum_grad(
+                                &mut self.autodiff.grads,
+                                *in_id,
+                                vec![g_val; *in_len],
+                            );
                         }
                         TapeOp::Conv2d {
                             in_id,
@@ -573,7 +622,7 @@ impl super::Evaluator {
                                     }
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *w_id, dw);
+                            Self::accum_grad(&mut self.autodiff.grads, *w_id, dw);
                             // dBias = row-sum of grad_out → [co]
                             let mut db = vec![0.0f64; co];
                             for i in 0..cr {
@@ -581,7 +630,7 @@ impl super::Evaluator {
                                     db[j] += out_grad[i * co + j];
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *b_id, db);
+                            Self::accum_grad(&mut self.autodiff.grads, *b_id, db);
                             // dCol = grad_out @ W^T  [cr x co] @ [co x cc] → [cr x cc]
                             let mut dcol = vec![0.0f64; cr * cc];
                             for i in 0..cr {
@@ -622,7 +671,7 @@ impl super::Evaluator {
                                     }
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *in_id, dinput);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, dinput);
                         }
                         TapeOp::MaxPool2d {
                             in_id,
@@ -637,7 +686,7 @@ impl super::Evaluator {
                                     dinput[idx] += out_grad[i];
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *in_id, dinput);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, dinput);
                         }
                         TapeOp::Lstm {
                             x_id,
@@ -735,12 +784,12 @@ impl super::Evaluator {
                                 dh_next = new_dh_next;
                                 dc_next = (0..hs).map(|j| dc[j] * f_t[j]).collect();
                             }
-                            Self::accum_grad(&mut self.ad_grads, *x_id, dx);
-                            Self::accum_grad(&mut self.ad_grads, *wx_id, dwx);
-                            Self::accum_grad(&mut self.ad_grads, *wh_id, dwh);
-                            Self::accum_grad(&mut self.ad_grads, *b_id, db);
-                            Self::accum_grad(&mut self.ad_grads, *h0_id, dh_next);
-                            Self::accum_grad(&mut self.ad_grads, *c0_id, dc_next);
+                            Self::accum_grad(&mut self.autodiff.grads, *x_id, dx);
+                            Self::accum_grad(&mut self.autodiff.grads, *wx_id, dwx);
+                            Self::accum_grad(&mut self.autodiff.grads, *wh_id, dwh);
+                            Self::accum_grad(&mut self.autodiff.grads, *b_id, db);
+                            Self::accum_grad(&mut self.autodiff.grads, *h0_id, dh_next);
+                            Self::accum_grad(&mut self.autodiff.grads, *c0_id, dc_next);
                         }
                         TapeOp::Transpose { in_id, rows, cols } => {
                             // Gradient of transpose is transpose of gradient
@@ -751,7 +800,7 @@ impl super::Evaluator {
                                     din[i * c + j] = out_grad[j * r + i];
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *in_id, din);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, din);
                         }
                         TapeOp::Softmax {
                             in_id,
@@ -769,7 +818,7 @@ impl super::Evaluator {
                                     dx[row * c + col] = s[col] * (g[col] - dot);
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *in_id, dx);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, dx);
                         }
                         TapeOp::LayerNorm {
                             in_id,
@@ -812,9 +861,9 @@ impl super::Evaluator {
                                         / std_i;
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *in_id, dx);
-                            Self::accum_grad(&mut self.ad_grads, *g_id, dgamma);
-                            Self::accum_grad(&mut self.ad_grads, *b_id, dbeta);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, dx);
+                            Self::accum_grad(&mut self.autodiff.grads, *g_id, dgamma);
+                            Self::accum_grad(&mut self.autodiff.grads, *b_id, dbeta);
                         }
                         TapeOp::Mha {
                             x_id,
@@ -977,11 +1026,11 @@ impl super::Evaluator {
                                     }
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *x_id, dxd);
-                            Self::accum_grad(&mut self.ad_grads, *wq_id, dwq);
-                            Self::accum_grad(&mut self.ad_grads, *wk_id, dwk);
-                            Self::accum_grad(&mut self.ad_grads, *wv_id, dwv);
-                            Self::accum_grad(&mut self.ad_grads, *wo_id, dwo);
+                            Self::accum_grad(&mut self.autodiff.grads, *x_id, dxd);
+                            Self::accum_grad(&mut self.autodiff.grads, *wq_id, dwq);
+                            Self::accum_grad(&mut self.autodiff.grads, *wk_id, dwk);
+                            Self::accum_grad(&mut self.autodiff.grads, *wv_id, dwv);
+                            Self::accum_grad(&mut self.autodiff.grads, *wo_id, dwo);
                         }
                         // ── Phase 1: Loss function backwards ─────────────────
                         TapeOp::MseLoss {
@@ -1002,13 +1051,13 @@ impl super::Evaluator {
                             // NOTE: MseLoss TapeOp now stores pred-target diff. See forward.
                             let dpred: Vec<f64> =
                                 target_data.iter().map(|diff| diff * scale).collect();
-                            Self::accum_grad(&mut self.ad_grads, *pred_id, dpred);
+                            Self::accum_grad(&mut self.autodiff.grads, *pred_id, dpred);
                         }
                         TapeOp::MaeLoss { pred_id, signs, n } => {
                             let g_scalar = out_grad.iter().sum::<f64>();
                             let scale = g_scalar / (*n as f64);
                             let dpred: Vec<f64> = signs.iter().map(|s| s * scale).collect();
-                            Self::accum_grad(&mut self.ad_grads, *pred_id, dpred);
+                            Self::accum_grad(&mut self.autodiff.grads, *pred_id, dpred);
                         }
                         TapeOp::BceLoss {
                             pred_id,
@@ -1027,7 +1076,7 @@ impl super::Evaluator {
                                     (-t / p + (1.0 - t) / (1.0 - p)) * scale
                                 })
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *pred_id, dpred);
+                            Self::accum_grad(&mut self.autodiff.grads, *pred_id, dpred);
                         }
                         TapeOp::CrossEntropyLoss {
                             logits_id,
@@ -1048,7 +1097,7 @@ impl super::Evaluator {
                                     dlogits[b * classes + c] = d * scale;
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *logits_id, dlogits);
+                            Self::accum_grad(&mut self.autodiff.grads, *logits_id, dlogits);
                         }
                         // ── Phase 2: Activation backwards ────────────────────
                         TapeOp::Elu {
@@ -1067,7 +1116,7 @@ impl super::Evaluator {
                                     }
                                 })
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         TapeOp::Swish {
                             in_id,
@@ -1086,7 +1135,7 @@ impl super::Evaluator {
                                     dout * d
                                 })
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         TapeOp::Gelu {
                             in_id,
@@ -1107,7 +1156,7 @@ impl super::Evaluator {
                                     dout * d
                                 })
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         TapeOp::Mish {
                             in_id,
@@ -1128,7 +1177,7 @@ impl super::Evaluator {
                                     dout * d
                                 })
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         TapeOp::LeakyRelu {
                             in_id,
@@ -1140,7 +1189,7 @@ impl super::Evaluator {
                                 .zip(cached_input.iter())
                                 .map(|(dout, &x)| dout * if x > 0.0 { 1.0 } else { *alpha })
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         // ── Phase 2: BatchNorm backward ───────────────────────
                         TapeOp::BatchNorm {
@@ -1186,9 +1235,9 @@ impl super::Evaluator {
                                 }
                                 let _ = x_mu; // used during forward; not needed in backward
                             }
-                            Self::accum_grad(&mut self.ad_grads, *in_id, dx);
-                            Self::accum_grad(&mut self.ad_grads, *g_id, dgamma);
-                            Self::accum_grad(&mut self.ad_grads, *b_id, dbeta);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, dx);
+                            Self::accum_grad(&mut self.autodiff.grads, *g_id, dgamma);
+                            Self::accum_grad(&mut self.autodiff.grads, *b_id, dbeta);
                         }
                         // ── Phase 2: Dropout backward ─────────────────────────
                         TapeOp::Dropout {
@@ -1202,7 +1251,7 @@ impl super::Evaluator {
                                 .zip(mask.iter())
                                 .map(|(dout, &m)| dout * m / kp)
                                 .collect();
-                            Self::accum_grad(&mut self.ad_grads, *in_id, g);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, g);
                         }
                         // ── Phase 2: Embedding backward ───────────────────────
                         TapeOp::Embedding {
@@ -1224,7 +1273,7 @@ impl super::Evaluator {
                                     }
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *w_id, dw);
+                            Self::accum_grad(&mut self.autodiff.grads, *w_id, dw);
                         }
                         // ── Phase 2: AvgPool2d backward ───────────────────────
                         TapeOp::AvgPool2d {
@@ -1268,7 +1317,7 @@ impl super::Evaluator {
                                     }
                                 }
                             }
-                            Self::accum_grad(&mut self.ad_grads, *in_id, dinput);
+                            Self::accum_grad(&mut self.autodiff.grads, *in_id, dinput);
                         }
                         TapeOp::Gru {
                             x_id,
@@ -1376,15 +1425,15 @@ impl super::Evaluator {
                                 }
                                 dh_next = new_dh_next;
                             }
-                            Self::accum_grad(&mut self.ad_grads, *x_id, dx);
-                            Self::accum_grad(&mut self.ad_grads, *wx_id, dwx);
-                            Self::accum_grad(&mut self.ad_grads, *wh_id, dwh);
-                            Self::accum_grad(&mut self.ad_grads, *b_id, db);
-                            Self::accum_grad(&mut self.ad_grads, *h0_id, dh_next);
+                            Self::accum_grad(&mut self.autodiff.grads, *x_id, dx);
+                            Self::accum_grad(&mut self.autodiff.grads, *wx_id, dwx);
+                            Self::accum_grad(&mut self.autodiff.grads, *wh_id, dwh);
+                            Self::accum_grad(&mut self.autodiff.grads, *b_id, db);
+                            Self::accum_grad(&mut self.autodiff.grads, *h0_id, dh_next);
                         }
                     }
                 }
-                self.ad_recording = false;
+                self.autodiff.recording = false;
                 EvalResult::Value(self.null_ref)
             }
 
@@ -1406,7 +1455,7 @@ impl super::Evaluator {
                         );
                     }
                 };
-                let tape_id = match self.ad_tensor_ids.get(&t_tid).copied() {
+                let tape_id = match self.autodiff.tensor_ids.get(&t_tid).copied() {
                     Some(id) => id,
                     None => {
                         return self.rt_err_kind(
@@ -1419,7 +1468,8 @@ impl super::Evaluator {
                     }
                 };
                 let grad_data = self
-                    .ad_grads
+                    .autodiff
+                    .grads
                     .get(&tape_id)
                     .cloned()
                     .unwrap_or_else(|| vec![0.0; shape.iter().product()]);
@@ -1476,7 +1526,7 @@ impl super::Evaluator {
                     .map(|(p, t)| p - t)
                     .collect();
                 let out_ref = self.alloc_tensor(vec![1], vec![loss]);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let pred_id = self.ad_tensor_id_from_tid(pred_tid);
                     self.ad_push(
                         out_ref,
@@ -1540,7 +1590,7 @@ impl super::Evaluator {
                     })
                     .collect();
                 let out_ref = self.alloc_tensor(vec![1], vec![loss]);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let pred_id = self.ad_tensor_id_from_tid(pred_tid);
                     self.ad_push(out_ref, TapeOp::MaeLoss { pred_id, signs, n });
                 }
@@ -1588,7 +1638,7 @@ impl super::Evaluator {
                     .sum::<f64>()
                     / n as f64;
                 let out_ref = self.alloc_tensor(vec![1], vec![loss]);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let pred_id = self.ad_tensor_id_from_tid(pred_tid);
                     self.ad_push(
                         out_ref,
@@ -1686,7 +1736,7 @@ impl super::Evaluator {
                     .sum::<f64>()
                     / batch as f64;
                 let out_ref = self.alloc_tensor(vec![1], vec![loss]);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let logits_id = self.ad_tensor_id_from_tid(logits_tid);
                     self.ad_push(
                         out_ref,
@@ -2374,7 +2424,7 @@ impl super::Evaluator {
                     }
                 }
                 let out_ref = self.alloc_tensor(x_shape.clone(), out_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id_from_tid(x_tid);
                     let g_id = self.ad_tensor_id_from_tid(g_tid);
                     let b_id2 = self.ad_tensor_id_from_tid(b_tid);
@@ -2449,7 +2499,7 @@ impl super::Evaluator {
                     .map(|(&x, &m)| x * m / keep_prob)
                     .collect();
                 let out_ref = self.alloc_tensor(x_shape, out_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let in_id = self.ad_tensor_id_from_tid(x_tid);
                     self.ad_push(
                         out_ref,
@@ -2529,7 +2579,7 @@ impl super::Evaluator {
                         .copy_from_slice(&w_data[row * emb_dim..(row + 1) * emb_dim]);
                 }
                 let out_ref = self.alloc_tensor(vec![seq_len, emb_dim], out_data);
-                if self.ad_recording {
+                if self.autodiff.recording {
                     let w_id = self.ad_tensor_id_from_tid(w_tid);
                     self.ad_push(
                         out_ref,
@@ -2708,18 +2758,18 @@ impl super::Evaluator {
             Some(crate::region::ObjectData::Tensor { tid, .. }) => *tid,
             _ => return 0,
         };
-        if let Some(&id) = self.ad_tensor_ids.get(&tid) {
+        if let Some(&id) = self.autodiff.tensor_ids.get(&tid) {
             return id;
         }
-        let id = self.ad_next_id;
-        self.ad_next_id += 1;
-        self.ad_tensor_ids.insert(tid, id);
+        let id = self.autodiff.next_id;
+        self.autodiff.next_id += 1;
+        self.autodiff.tensor_ids.insert(tid, id);
         id
     }
 
     pub(super) fn ad_push(&mut self, out_ref: crate::region::ObjectRef, op: TapeOp) {
         let out_id = self.ad_tensor_id(out_ref);
-        self.ad_tape.push(TapeEntry { out_id, op });
+        self.autodiff.tape.push(TapeEntry { out_id, op });
     }
 
     fn accum_grad(grads: &mut std::collections::HashMap<u64, Vec<f64>>, id: u64, delta: Vec<f64>) {
@@ -2733,12 +2783,12 @@ impl super::Evaluator {
 
     /// Get or create a tape ID from a raw tensor `tid` (bypasses ObjectRef lookup).
     pub(super) fn ad_tensor_id_from_tid(&mut self, tid: u64) -> u64 {
-        if let Some(&id) = self.ad_tensor_ids.get(&tid) {
+        if let Some(&id) = self.autodiff.tensor_ids.get(&tid) {
             return id;
         }
-        let id = self.ad_next_id;
-        self.ad_next_id += 1;
-        self.ad_tensor_ids.insert(tid, id);
+        let id = self.autodiff.next_id;
+        self.autodiff.next_id += 1;
+        self.autodiff.tensor_ids.insert(tid, id);
         id
     }
 
