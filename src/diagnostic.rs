@@ -68,6 +68,11 @@ pub enum Severity {
 pub enum Phase {
     Lexer,
     Parser,
+    /// Rules about what a program *means* that reject it. Fatal, and distinct
+    /// from [`Phase::Type`], which is advisory by contract in `spec/types.md`.
+    /// DEC-M4-001 created the phase; DEC-M4-005 chose this label and the
+    /// `SZ8xxx` range.
+    Semantic,
     Type,
     Runtime,
     Compiler,
@@ -83,6 +88,7 @@ impl Phase {
         match self {
             Phase::Lexer => Some("LEXER"),
             Phase::Parser => Some("PARSER"),
+            Phase::Semantic => Some("SEMANTIC"),
             Phase::Type => Some("TYPE"),
             Phase::Runtime => None,
             Phase::Compiler => Some("COMPILER"),
@@ -135,7 +141,10 @@ impl Diagnostic {
             code,
             phase,
             // The type checker is partial by design and its findings do not
-            // change the exit code; the lexer's and parser's do.
+            // change the exit code; the lexer's, the parser's and the semantic
+            // phase's do. `Phase::Semantic` falling into the `_` arm is the
+            // intended reading and not an oversight: it is fatal, which is the
+            // property that separates it from `Phase::Type` (DEC-M4-001).
             severity: match phase {
                 Phase::Type => Severity::Advisory,
                 _ => Severity::Error,

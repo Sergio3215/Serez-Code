@@ -142,6 +142,31 @@ here would imply a resolver that does not exist.
 A package should declare the runtime version that froze the behavior it relies
 on, which is the version whose spec documents describe it.
 
+## Diagnostic output is a compatibility surface
+
+Stderr is not covered by SemVer the way program behaviour is, but tools read it,
+so a change to *how* a diagnostic is reported is recorded here rather than made
+silently.
+
+**10.0.x — the reserved-name rule moved phase.** Declaring a `class`, `interface`
+or `enum` named after a reserved namespace was reported as
+`❌ PARSER ERROR [SZ2000]`. It is now `❌ SEMANTIC ERROR [SZ8000]`, from the
+semantic phase (`errors.md`).
+
+Classified **behavioural**, not breaking: the set of accepted programs is
+unchanged, the exit code is unchanged at `1`, and the message text is unchanged.
+What moved is the phase word, the code and — because the declaration is now
+parsed before being rejected — the caret, which points at the declaration rather
+than at the name.
+
+It also **removes** diagnostics: a rejected class with a body used to produce two
+spurious `Unexpected token '}'` errors, and now produces none.
+
+Anything matching on `PARSER ERROR` or on `SZ2000` for this case is affected. No
+consumer that does so is known: the corpus has one affected file, the eight
+official packages have none, and `vscode-serez` matches no diagnostic code at all.
+That is a measurement of *this* repository and its ecosystem, not of every user.
+
 ## Known gaps
 
 These are stated so nobody mistakes silence for a guarantee.

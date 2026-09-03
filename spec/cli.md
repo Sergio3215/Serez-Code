@@ -11,15 +11,15 @@ and stream rules are pinned by CLI tests in `run_tests.ps1` and `run_tests.sh`.
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. The program ran to completion, the check passed, the subcommand succeeded, or an informational flag (`--version`, `--help`) was answered. |
-| `1` | Any failure: usage error, unknown flag, missing or non-`.sz` file, a lexer or parser diagnostic, a runtime error, an uncaught exception, or a failed package subcommand. |
+| `1` | Any failure: usage error, unknown flag, missing or non-`.sz` file, a lexer, parser or semantic diagnostic, a runtime error, an uncaught exception, or a failed package subcommand. |
 
 There is deliberately no finer granularity today. A caller that needs to know
 *why* something failed reads the diagnostic code on stderr, which is stable;
 inventing distinct exit codes now would freeze a classification the runtime
 does not yet make consistently. See `errors.md`.
 
-An uncaught user `throw` and a runtime error both exit `1`. A **type diagnostic
-does not**: the checker is advisory, so `sz file.sz` reports `SZ3000` and runs
+An uncaught user `throw` and a runtime error both exit `1`. So does a **semantic
+diagnostic** (`SZ8xxx`), which is fatal. A **type diagnostic does not**: the checker is advisory, so `sz file.sz` reports `SZ3000` and runs
 the program anyway, and `sz --check` reports it and still exits `0`. Until this
 cycle `sz --help` listed "type error" among the things that exit `1`, which was
 simply false, and the test guarding that section only asserted the words "EXIT

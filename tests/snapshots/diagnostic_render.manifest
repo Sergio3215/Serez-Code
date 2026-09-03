@@ -65,7 +65,7 @@ err_sort_mixed.sz	1	90	96361d746a252ad2
 err_string_unknown_method.sz	1	60	9203259650e83ff3
 err_super_outside.sz	1	61	2ee55054683fa3cb
 err_task_poll_invalid.sz	1	53	f0a46aeca40c2703
-err_task_reserved_class.sz	1	222	120c29fde60d77b4
+err_task_reserved_class.sz	1	212	9ea4b15f583aaf0c
 err_task_unknown_method.sz	1	51	328776bfe57c1c56
 err_throw_nested_arg.sz	1	36	dda3944987dddb0f
 err_throw_out_stmt.sz	1	45	b8e9f26de577d691

@@ -23,9 +23,10 @@ than all at once. What is emitted now:
 | --- | --- |
 | `SZ1xxx` | Emitted. The lexer reports unexpected characters, incomplete strings/comments and invalid base-prefixed integers through the shared frontend channel. |
 | `SZ2xxx` | Emitted. `SZ2000` is the generic syntax error every parser message falls back to; `SZ2001` is the AST depth ceiling. |
-| `SZ3xxx` | Emitted. `SZ3000` is the generic semantic/type diagnostic. |
+| `SZ3xxx` | Emitted. `SZ3000` is the generic **type** diagnostic, and is advisory. |
 | `SZ4xxx`–`SZ6xxx` | Emitted for structured runtime failures, by `kind`. See below. |
 | `SZ7xxx` | Emitted by the experimental compiler. |
+| `SZ8xxx` | Emitted by the semantic phase. `SZ8000` is the generic semantic diagnostic, and is **fatal**. |
 
 Individual messages move from a generic code to a narrower one only once a test
 pins what the narrower code means. Until then the generic code is the honest
@@ -42,12 +43,32 @@ nothing verifies.
 | `SZ1004` | Empty, malformed or overflowing binary/hex integer. |
 | `SZ2000` | Syntax error. |
 | `SZ2001` | Source describes an AST deeper than `MAX_PARSE_DEPTH` (512). Nesting costs one level per level; an operator chain costs one level per operator, because it builds a tree that deep for the type checker, the evaluator and the AST's drop glue to walk. Rejecting this is what keeps such source from exhausting the native stack and killing the process without a diagnostic. |
-| `SZ3000` | Semantic or type diagnostic. Advisory: the checker is partial and runtime checks remain authoritative, so `sz file.sz` reports these and still runs. |
+| `SZ3000` | Type diagnostic. Advisory: the checker is partial and runtime checks remain authoritative, so `sz file.sz` reports these and still runs. |
+| `SZ8000` | Semantic diagnostic. **Fatal**: the program does not run and `sz file.sz` exits `1`. Emitted by the semantic phase, which sits between the parser and the type checker. |
 
 They are reported on stderr as `❌ LEXER ERROR [SZ1001] [file line:col]: …`,
-`❌ PARSER ERROR [SZ2000] [file line:col]: …` and `❌ TYPE ERROR [SZ3000]
-[line line:col]: …`, and are published to the LSP with the code in the standard
-`code` field of each diagnostic. See `lexical-grammar.md` for the lexical rules.
+`❌ PARSER ERROR [SZ2000] [file line:col]: …`, `❌ SEMANTIC ERROR [SZ8000]
+[file line:col]: …` and `❌ TYPE ERROR [SZ3000] [line line:col]: …`, and are
+published to the LSP with the code in the standard `code` field of each
+diagnostic. See `lexical-grammar.md` for the lexical rules.
+
+### The semantic phase
+
+Between the parser and the type checker there is a **semantic phase**: rules
+about what a program *means* that reject it. It is **fatal**, which is what
+distinguishes it from the type checker — the checker is advisory by the contract
+in `types.md`, so a program rejected on meaning must not reach it.
+
+It runs only on a program the parser accepted, because validating a broken tree
+reports consequences of the syntax error rather than problems of its own. Its
+findings print after every parser diagnostic.
+
+**One rule today.** A `class`, `interface` or `enum` may not be named after a
+reserved runtime namespace; see `classes.md`. The phase exists rather than the
+rule living in the parser because a rule about meaning that has to masquerade as
+a rule about syntax reports badly: the parser abandons a half-built declaration,
+and the unconsumed body is then re-parsed as expressions, producing invented
+errors alongside the real one.
 
 The experimental compiler currently uses `SZ7001` for unsupported statements
 and `SZ7002` for unsupported expressions. Lowering is atomic: if either code is

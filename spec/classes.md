@@ -12,6 +12,34 @@ Normative words such as "must" describe compatibility requirements.
 a separately documented built-in construction target such as `Set` or `Tensor`.
 An unknown target raises catchable `ReferenceError` (`SZ4001`).
 
+### A reserved namespace name cannot be declared
+
+A `class`, `interface` or `enum` may not be named after one of these seven
+runtime namespaces:
+
+`Task` · `Time` · `DateTime` · `System` · `Gui` · `Dec` · `Media`
+
+```serez
+// runtime-error-example: the semantic phase rejects the declaration
+class Task { }
+```
+
+The rejection is a **fatal** `SZ8000` from the semantic phase (`errors.md`), so
+the program does not run and `sz` exits `1`. It applies to the declaration only:
+`let Task = 1;` is legal, because a variable does not introduce a nominal type.
+
+**The list is seven of the runtime's twenty-two namespaces**, and that is a known
+inconsistency rather than a design statement. `class Math { }` is accepted, and a
+program may then declare it, call `new Math(...)`, and still call `Math.floor(3.7)`
+— two unrelated things of the same name in one program, told apart only by the
+shape of the call site. Extending the list to all twenty-two is a breaking change
+and needs the process in `compatibility.md`.
+
+Until 10.0.0 this rule was enforced by the parser, which reported it as a syntax
+error and abandoned the half-parsed declaration — so a class with a body produced
+two invented `Unexpected token '}'` errors alongside the real one. It now runs
+after parsing, against a complete declaration, and reports once.
+
 ### A class and an interface cannot share a name
 
 They live in separate registries, so both declarations are accepted — and

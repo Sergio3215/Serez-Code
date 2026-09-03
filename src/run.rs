@@ -126,17 +126,27 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
     // before the checker, because this is fatal and the checker is not — a
     // program rejected here must not reach a stage whose findings may be ignored.
     //
-    // It has no rules yet, on purpose. Introducing the stage and introducing a
-    // rule are separate changes, and the first has to be provably invisible
-    // before the second is trusted. See `semantic::validate`.
+    // See `semantic::validate` for what it checks and what it deliberately
+    // does not.
     let semantic_findings = if parse_failed {
         Vec::new()
     } else {
         semantic::validate::validate(&program)
     };
 
+    // The checker is skipped when the semantic phase rejected the program, which
+    // is DEC-M4-001's rule applied literally: a program rejected on meaning must
+    // not reach a stage whose findings may be ignored. Reporting advisory type
+    // findings about a program that is not going to run is noise, and it would
+    // grow into misleading noise as the phase acquires rules.
+    //
+    // It is *not* skipped when the parser failed. That is pre-existing behaviour
+    // and out of this molecule's scope; changing it is a separate question about
+    // what the checker should say about a broken tree.
     let mut checker = type_checker::TypeChecker::new(&program);
-    checker.check();
+    if semantic_findings.is_empty() {
+        checker.check();
+    }
 
     let render_lines = source_lines.clone();
     let mut evaluator = evaluator::Evaluator::new();

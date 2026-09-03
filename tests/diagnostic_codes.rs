@@ -40,6 +40,11 @@ const CASES: &[(&str, &str, &str)] = &[
         "an advisory type diagnostic",
         "fn int f(int a) { return a; }\nf(\"s\");",
     ),
+    (
+        "SZ8000",
+        "a reserved namespace used as a class name",
+        "class Task { }",
+    ),
     ("SZ4000", "integer overflow", "out 9223372036854775807 + 1;"),
     ("SZ4001", "an unknown name", "out nope;"),
     ("SZ4002", "a type mismatch", "out true + 1;"),

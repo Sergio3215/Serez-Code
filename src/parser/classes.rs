@@ -11,8 +11,19 @@
 //! between the files, or duplicated them.
 //!
 //! `enum` joins them because it is the third way this language introduces a
-//! nominal type by name, and because `is_reserved_name` guards all three
-//! against shadowing a built-in namespace (`Task`, `Gui`, `Dec`, …).
+//! nominal type by name.
+//!
+//! Until M4.5.4 this file also held `is_reserved_name`, the parser's **only**
+//! semantic rule: it rejected a `class`, `interface` or `enum` named after a
+//! built-in namespace. It now lives in `semantic::validate`, where the language's
+//! meaning-level rules go (DEC-M4-001). The move is why rejecting
+//! `class Task { … }` produces one diagnostic instead of three — the parser used
+//! to abandon a half-built declaration, leaving its body to be re-parsed as
+//! top-level expressions.
+//!
+//! **This file has no semantic rules left, and should acquire none.** A check
+//! that needs to know what a name *means* belongs in the semantic phase; the
+//! parser's question is whether the text is well-formed.
 //!
 //! `spec/classes.md` is the normative contract for the class model, including
 //! two compatibility caveats it records and this file must not quietly change:
@@ -52,13 +63,6 @@ impl Parser {
     /// call `Math.floor(3.7)`, both resolving correctly. So the guard is not
     /// preventing a collision the language cannot survive, and which seven names
     /// it covers looks accidental. See `docs/maturity/ROADMAP_STATE.md` §5.20.
-    fn is_reserved_name(&self, name: &str) -> bool {
-        matches!(
-            name,
-            "Task" | "Time" | "DateTime" | "System" | "Gui" | "Dec" | "Media"
-        )
-    }
-
     // ── Class declaration ─────────────────────────────────────────────────────
     pub(super) fn parse_class_declaration(
         &mut self,
@@ -77,14 +81,6 @@ impl Parser {
         }
         self.next_token();
         let name = self.current_token.literal.clone();
-        if self.is_reserved_name(&name) {
-            self.parser_error(&format!(
-                "'{}' is a reserved system namespace and cannot be used as a class name",
-                name
-            ));
-            return None;
-        }
-
         // Optional inheritance: class Child : Parent
         let parent = if self.peek_token.token_type == TokenType::Colon {
             self.next_token(); // ':'
@@ -334,14 +330,6 @@ impl Parser {
         }
         self.next_token();
         let name = self.current_token.literal.clone();
-        if self.is_reserved_name(&name) {
-            self.parser_error(&format!(
-                "'{}' is a reserved system namespace and cannot be used as an interface name",
-                name
-            ));
-            return None;
-        }
-
         if self.peek_token.token_type != TokenType::LBrace {
             self.parser_error("Expected '{{' after interface name");
             return None;
@@ -446,14 +434,6 @@ impl Parser {
         }
         self.next_token();
         let name = self.current_token.literal.clone();
-        if self.is_reserved_name(&name) {
-            self.parser_error(&format!(
-                "'{}' is a reserved system namespace and cannot be used as an enum name",
-                name
-            ));
-            return None;
-        }
-
         if self.peek_token.token_type != TokenType::LBrace {
             self.parser_error("Expected '{{' after enum name");
             return None;

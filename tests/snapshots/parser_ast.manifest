@@ -195,7 +195,7 @@ tests/err_sort_mixed.sz	760	0	8de6cee5c1c1b33d	cbf29ce484222325
 tests/err_string_unknown_method.sz	290	0	767e2238cb4e6c1c	cbf29ce484222325
 tests/err_super_outside.sz	222	0	325c6d8306610ad0	cbf29ce484222325
 tests/err_task_poll_invalid.sz	389	0	13650cd816f34c89	cbf29ce484222325
-tests/err_task_reserved_class.sz	26	1	884d3c60e861b329	66c8e53d5abe2729
+tests/err_task_reserved_class.sz	245	0	724b54244a116720	cbf29ce484222325
 tests/err_task_unknown_method.sz	312	0	b8bae07f36073fee	cbf29ce484222325
 tests/err_throw_nested_arg.sz	2273	0	c7837acf1ae0d984	cbf29ce484222325
 tests/err_throw_out_stmt.sz	1483	0	d46ac4a5072ec409	cbf29ce484222325

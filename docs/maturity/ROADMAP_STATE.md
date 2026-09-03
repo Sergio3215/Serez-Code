@@ -34,7 +34,7 @@ Read before starting any milestone, in this order:
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — **DEC-M4-005 DECIDED** (option A, `SZ8xxx` + `SEMANTIC`); M4.5.2–M4.5.3 landed |
+| Last state update | 2026-09-03 — **M4.5 complete** (§9F.8). The parser has no semantic rules left |
 
 Milestone ledger:
 
@@ -44,7 +44,7 @@ Milestone ledger:
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
 | M2 — AST + Spans Stable | **COMPLETE** (2026-09-02) — all 28 `Expression` variants and 39 of 40 structs carry a span |
 | M3 — Diagnostics Unified | **COMPLETE** (2026-09-02) — 5 diagnostic types -> 1, 4 rendered formats -> 1 renderer, §5.17 fixed |
-| M4 — Semantic Layer Established | **PARTIAL** (2026-09-02, §9G) — 3 of 6 DoD items met. Layer established, validated, **unadopted**; adoption held by DEC-M4-001/002/004 |
+| M4 — Semantic Layer Established | **PARTIAL** — M4.5 complete (§9F.8): the semantic phase exists and the parser's only semantic rule moved into it. Still held by DEC-M4-002 (resolver) and DEC-M4-004 (LSP) |
 | M5 — Type System Stable | **COMPLETE** (2026-09-03, §9I) — 4 checker/runtime divergences fixed, §5.29 closed, 5 decisions registered |
 | M6 — Runtime Molecular | **PARTIAL** (2026-09-03, §9K) — `Evaluator` 48 fields -> 38; dispatch still on the evaluator, held by DEC-M6-001 |
 | M7 — Semantics Frozen | **PARTIAL** (2026-09-03, §9M) — everything settled is specified; 6 decisions open and pinned |
@@ -4728,6 +4728,95 @@ at all**, and every gate stays green in both cases.
 label and the diagnostic code. The perturbation borrowed `PARSER`/`SZ2000` because
 it was temporary. Choosing the real ones is **DEC-M4-005**, and M4.5.4 cannot
 proceed without it.
+
+### §9F.8 — M4.5.4-M4.5.6: the rule moves, and M4.5 closes
+
+`is_reserved_name` is gone from the parser. `semantic::validate` rejects a
+`class`, `interface` or `enum` named after one of the seven reserved namespaces,
+as `SZ8000` / `SEMANTIC` (DEC-M4-005).
+
+M4.5.4 and M4.5.5 landed together because a half-state is meaningless: while the
+parser still rejects, the phase never runs, so adding the rule without removing
+the old one produces a dead rule and no observable change.
+
+**Measured, and exactly what DEC-M4-001 predicted: two manifest rows, one
+fixture.**
+
+| Manifest | Before | After | What the delta says |
+|---|---|---|---|
+| `diagnostic_render` | `1 · 222 bytes` | `1 · 212 bytes` | exit code unchanged at `1`; the rendered text changed |
+| `parser_ast` | `26 · 1 diagnostic` | `245 · 0 diagnostics` | **the class now enters the AST** — tree 26 -> 245 — and the parser reports nothing |
+
+That second row is the change made visible: the parser no longer has an opinion
+about this program, and the tree it produces is a real class declaration instead
+of the wreckage of an abandoned one.
+
+**§5.32 is fixed.** A rejected class *with a body* produced three diagnostics and
+now produces one:
+
+```
+before:  ❌ PARSER ERROR … reserved system namespace
+         ❌ PARSER ERROR … Unexpected token '}'
+         ❌ PARSER ERROR … Unexpected token '}'
+after:   ❌ SEMANTIC ERROR [SZ8000] … reserved system namespace
+```
+
+**A wiring mistake found and fixed inside the molecule.** The first version ran
+the type checker before the semantic gate, so a program rejected on meaning would
+still have been type-checked. No observable difference today — the checker does
+not inspect classes — but it contradicts DEC-M4-001's own rule that such a program
+"must not reach a stage whose findings may be ignored", and it would have grown
+into misleading noise as the phase acquired rules. The checker is now skipped when
+the semantic phase reports. It is deliberately **not** skipped when the *parser*
+failed: that is pre-existing behaviour and a separate question.
+
+**A gate caught something this molecule had not thought about.**
+`tests/diagnostic_codes.rs` cross-checks `spec/errors.md`'s registry against codes
+the binary actually emits, and failed with *"spec/errors.md lists codes this suite
+does not pin: SZ8000"*. A case was added. Worth recording because the gate did the
+thing gates are for — it noticed a promise made in a document and not yet kept by
+anything executable.
+
+### §5.40 — the caret moved from the name to the declaration — *diagnostic quality*, low (M4.5.4)
+
+A cost of the move, recorded rather than absorbed:
+
+```
+before:  [2:7]   class Task {     after:  [2:1]   class Task {
+                       ^                          ^
+```
+
+The parser pointed at the *name*, because it reported from the token it had just
+read. The phase points at the *declaration*, because `ClassDeclaration` carries a
+span for itself and none for its name.
+
+Fixing it means adding a `name_span` to `ClassDeclaration`, `InterfaceDeclaration`
+and `EnumDeclaration` — an AST change that would move `parser_ast.manifest` for
+**every** class, interface and enum in the corpus, for one caret column. Out of
+scope for a molecule whose contract was to move a rule, and recorded as a
+candidate rather than done quietly.
+
+Arguable in both directions: the message is about the declaration, and pointing at
+the item is what several languages do. It is listed as a cost because it is a
+change from what users saw, not because the new position is wrong.
+
+### M4.5 — status
+
+| Molecule | State |
+|---|---|
+| **M4.5.1** public surface | **done** — DEC-M4-005 |
+| **M4.5.2** the phase, no-op | **done** — §9F.7 |
+| **M4.5.3** prove the net sees it | **done** — §9F.7 |
+| **M4.5.4** move the rule | **done** |
+| **M4.5.5** delete the parser's copy | **done** |
+| **M4.5.6** specs | **done** — `errors.md` (the phase, `SZ8xxx`, and `SZ3xxx` corrected to "type"), `classes.md` (the rule, stated for the first time), `cli.md` (the exit-code sentence), `compatibility.md` (the behavioural note) |
+
+**M4.5 is complete.** The parser has no semantic rules left, and
+`src/parser/classes.rs` says so at the top so the next one does not land there.
+
+**Next in M4:** DEC-M4-003 now has its landing site — the name list lives in
+`semantic::validate::RESERVED_NAMESPACES`, pinned at seven by a unit test that
+names DEC-M4-003 as the only thing that may change it.
 
 ### §9F.5 — M4's remaining molecules, conditioned on the decisions
 
