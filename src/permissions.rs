@@ -29,6 +29,28 @@
 ///
 /// Kept in step with the call sites by `enforced_permissions_match_the_evaluator`
 /// in `tests/frontend_robustness.rs`.
+/// What this evaluator is allowed to do.
+///
+/// Two fields of `Evaluator` until M6.3, and they are one thing because neither
+/// answers a question on its own: every gate in the runtime asks *"is this
+/// granted, and are we in lockdown?"* together.
+///
+/// The distinction between them is worth stating at the type, because it is
+/// counter-intuitive. `granted` is a **manifest, not a sandbox** - any program
+/// can hand itself the lot with `use permissions { .. }`, and File, `import` and
+/// Autodiff's weight files reach the disk with no permission declared at all.
+/// That is fine when you are running your own file and wrong when the source
+/// arrived from somewhere else, which is what `lockdown` is for: it closes the
+/// paths the manifest cannot. Network access is deliberately part of neither;
+/// see `run::RunOpts::sandboxed`.
+#[derive(Debug, Default, Clone)]
+pub struct SecurityPolicy {
+    /// Populated from `serez.json` and `use permissions { }` blocks.
+    pub granted: std::collections::HashSet<String>,
+    /// Untrusted-source mode.
+    pub lockdown: bool,
+}
+
 pub const ENFORCED: &[&str] = &[
     "Env", "Gui", "Media", "OS", "Socket", "System", "Task", "Terminal", "Time",
 ];

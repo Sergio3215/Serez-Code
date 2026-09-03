@@ -69,7 +69,6 @@ use crate::render;
 use crate::scope::ScopeStack;
 use crate::span::Span;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -184,6 +183,25 @@ impl ProgramOutcome {
     }
 }
 
+/// Answers about declarations, memoised.
+///
+/// Two fields of `Evaluator` until M6.3. They are grouped because they share the
+/// property that makes caching *sound* here: both answer a question about a
+/// declaration, and a declaration cannot change while a program runs. A cache
+/// keyed on anything mutable would be a bug, and stating the shared invariant
+/// once is worth more than the two lines it saves.
+#[derive(Default)]
+struct DispatchCaches {
+    /// (class, method) -> can the body write to `this`? Filled by
+    /// `method_mutates_self` (lvalue.rs) on first consultation; decides whether
+    /// `a[i].m()` has to write the receiver back to its container. Consulted only
+    /// when the receiver is a nested path.
+    mutator: HashMap<(String, String), bool>,
+    /// class -> does its constructor call `super(...)`? Decides whether
+    /// `eval_new_class` chains to the parent itself (see `run_implicit_super`).
+    super_call: HashMap<String, bool>,
+}
+
 pub struct Evaluator {
     global_arena: Arena,
     global_bindings: HashMap<String, ObjectRef>,
@@ -224,15 +242,9 @@ pub struct Evaluator {
     // Raw memory: the allocation handles a program holds, and what they name.
     // The registry owns id issuing and the never-reissued rule; see handles.rs.
     memory: crate::handles::HandleRegistry<Vec<u8>>,
-    // Granted permissions: populated from serez.json + `use permissions { }` blocks
-    permissions: HashSet<String>,
-    // Untrusted-source mode. The permission set is a MANIFEST, not a sandbox: any
-    // program can hand itself the lot with `use permissions { .. }`, and File /
-    // import / Autodiff's weight files reach the disk with no permission declared
-    // at all. Fine when you are running your own file, wrong when the source
-    // arrived from somewhere else (`--eval`, the playground), so lockdown closes
-    // them. Network access is NOT part of this. See run::RunOpts::sandboxed.
-    lockdown: bool,
+    // Two fields until M6.3. See `permissions::SecurityPolicy` for why the
+    // manifest and lockdown are one thing, and how they differ.
+    security: crate::permissions::SecurityPolicy,
     // ── Autodiff tape ─────────────────────────────────────────────────────────
     // Five fields until M6.1; see `namespaces_autodiff::AutodiffTape` for why
     // they are one thing, and why `tensor_id_counter` is not part of it.
@@ -251,12 +263,9 @@ pub struct Evaluator {
     // Audio (Media.playSound): stream + sinks activos. None hasta el primer uso.
     #[cfg(feature = "audio")]
     media: Option<namespaces_media::MediaState>,
-    // ── Task context ──────────────────────────────────────────────────────────
-    // Shared by one top-level evaluator and the workers it creates. Keeping the
-    // registry here isolates unrelated evaluators while preserving nested tasks.
-    task_runtime: Arc<namespaces_task::TaskRuntime>,
-    task_id: Option<i64>,
-    task_arg: Option<String>,
+    // ──────────────────────────────────────────────────────────────────────────
+    // Task context. Three fields until M6.3; see `namespaces_task::TaskContext`.
+    task: namespaces_task::TaskContext,
     // ── Pending structured runtime error ───────────────────────────────────────
     // Payload and recoverability of the most recent structured runtime failure.
     // `eval_try` consumes only recoverable errors; fatal permission/resource
@@ -277,15 +286,9 @@ pub struct Evaluator {
     /// It records the fact here and [`Self::value_depth_overflow`] turns it into
     /// a fatal error at the next statement boundary.
     value_depth_exceeded: std::cell::Cell<bool>,
-    // ── Writeback de receptores anidados ──────────────────────────────────────
-    // (clase, método) → ¿el cuerpo puede escribir en `this`? Lo llena
-    // `method_mutates_self` (lvalue.rs) la primera vez que se consulta un
-    // método; decide si `a[i].m()` tiene que devolver el receptor a su
-    // contenedor. Se consulta sólo cuando el receptor es una ruta anidada.
-    mutator_cache: HashMap<(String, String), bool>,
-    // clase → ¿su constructor llama a `super(...)`? Decide si eval_new_class
-    // encadena al padre por su cuenta (ver run_implicit_super).
-    super_cache: HashMap<String, bool>,
+    // ──────────────────────────────────────────────────────────────────────────
+    // Dispatch caches. Two fields until M6.3; see `DispatchCaches`.
+    dispatch: DispatchCaches,
 }
 
 // ── Free-identifier collection (for consistent lambda capture, B-83) ──────────
@@ -514,24 +517,20 @@ impl Evaluator {
             sockets: crate::handles::SocketTable::new(),
             gpu: crate::handles::HandleRegistry::new(),
             memory: crate::handles::HandleRegistry::new(),
-            permissions: HashSet::new(),
-            lockdown: false,
+            security: crate::permissions::SecurityPolicy::default(),
             autodiff: namespaces_autodiff::AutodiffTape::new(),
             tensor_id_counter: 1,
             gui: namespaces_gui::GuiRuntime::default(),
             #[cfg(feature = "audio")]
             media: None,
             spawned: Vec::new(),
-            task_runtime: Arc::new(namespaces_task::TaskRuntime::default()),
-            task_id: None,
-            task_arg: None,
+            task: namespaces_task::TaskContext::default(),
             last_error: None,
             error_generation: 0,
             try_depth: 0,
             diagnostic_capture_depth: 0,
             value_depth_exceeded: std::cell::Cell::new(false),
-            mutator_cache: HashMap::new(),
-            super_cache: HashMap::new(),
+            dispatch: DispatchCaches::default(),
         }
     }
 
@@ -642,7 +641,7 @@ impl Evaluator {
     pub fn set_permissions(&mut self, perms: Vec<String>) {
         for p in perms {
             self.warn_about_grant(&p);
-            self.permissions.insert(p);
+            self.security.granted.insert(p);
         }
     }
 
@@ -757,7 +756,7 @@ impl Evaluator {
         operation: &str,
         permission: &str,
     ) -> Option<EvalResult> {
-        if self.permissions.contains(permission) {
+        if self.security.granted.contains(permission) {
             return None;
         }
         Some(self.fatal_err_kind(
@@ -820,11 +819,11 @@ impl Evaluator {
     /// refused. This is defense in depth, not a sandbox: `fetch` remains
     /// available and the process still shares the host's security boundary.
     pub fn set_lockdown(&mut self, on: bool) {
-        self.lockdown = on;
+        self.security.lockdown = on;
     }
 
     pub fn is_lockdown(&self) -> bool {
-        self.lockdown
+        self.security.lockdown
     }
 
     /// Refuse `what` when the source is untrusted, as a catchable `PermissionError`.
@@ -834,7 +833,7 @@ impl Evaluator {
     /// without any permission being declared, unlike OS/Socket/Task/Gui/Media/Time.
     /// Returns `Some(err)` to be propagated, `None` when not under lockdown.
     pub(crate) fn deny_in_lockdown(&mut self, what: &str, hint: &str) -> Option<EvalResult> {
-        if !self.lockdown {
+        if !self.security.lockdown {
             return None;
         }
         Some(self.rt_err_kind(
@@ -844,10 +843,10 @@ impl Evaluator {
     }
 
     pub fn set_task_context(&mut self, id: i64, arg: String) {
-        self.task_id = Some(id);
-        self.task_arg = Some(arg);
+        self.task.id = Some(id);
+        self.task.arg = Some(arg);
         // Por defecto, dale permiso de "Task" a sí mismo para que los workers puedan usar Task.reply / Task.message
-        self.permissions.insert("Task".to_string());
+        self.security.granted.insert("Task".to_string());
     }
 
     fn set_task_runtime_context(
@@ -856,7 +855,7 @@ impl Evaluator {
         arg: String,
         runtime: Arc<namespaces_task::TaskRuntime>,
     ) {
-        self.task_runtime = runtime;
+        self.task.runtime = runtime;
         self.set_task_context(id, arg);
     }
 

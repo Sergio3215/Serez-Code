@@ -4126,6 +4126,43 @@ ecosystem canary — all green.
 
 `Evaluator`: **44 fields -> 42.**
 
+### 9J.3 — M6.3: the last three clusters
+
+Seven fields become three. Grouped in one molecule because they are the same
+mechanical change under the same contract, and because each is too small to carry
+a commit of its own without obscuring rather than clarifying — the same judgement
+rule 3 applies to files.
+
+| New type | Absorbs | Where it lives |
+|---|---|---|
+| `permissions::SecurityPolicy` | `permissions`, `lockdown` | beside the grant classification that already lived there |
+| `namespaces_task::TaskContext` | `task_runtime`, `task_id`, `task_arg` | beside `TaskRuntime` |
+| `DispatchCaches` (private) | `mutator_cache`, `super_cache` | `evaluator/mod.rs`, private because nothing outside needs it |
+
+Each groups on a stated invariant rather than on a shared name prefix:
+
+  * **`SecurityPolicy`** — every gate in the runtime asks *"is this granted, and
+    are we in lockdown?"* as one question. The type also carries the distinction
+    that makes the pair counter-intuitive: `granted` is a **manifest, not a
+    sandbox** — a program can hand itself the lot with `use permissions { .. }` —
+    and `lockdown` exists to close the paths the manifest cannot. That was a
+    comment on one field before; it is now attached to both, where it is true.
+  * **`TaskContext`** — `id` and `arg` are `None` in a parent and `Some` in a
+    worker, so together they answer "am I a worker, and what was I given?" That is
+    one question, and it was asked in three places.
+  * **`DispatchCaches`** — the grouping states the invariant that makes caching
+    *sound* here: both answer a question about a **declaration**, and a
+    declaration cannot change while a program runs. A cache keyed on anything
+    mutable would be a bug, and saying so once is worth more than the two lines it
+    saves.
+
+**A `self.`-only rename missed four sites** — `first.task_runtime` and
+`evaluator.task_runtime` inside `#[cfg(test)]` code — and the compiler named all
+four. Worth recording as the same lesson M6.1 produced from a different angle: a
+textual rename is a proposal, and the type system is what checks it.
+
+`Evaluator`: **42 fields -> 38**, and 48 -> 38 across M6 so far.
+
 ---
 
 ## 9I. M5 MILESTONE AUDIT

@@ -160,7 +160,7 @@ impl super::Evaluator {
                 // allowed to work. Refusing loudly beats ignoring it silently: the
                 // program would otherwise fail later with a confusing permission
                 // error on a line that looks properly declared.
-                if self.lockdown {
+                if self.security.lockdown {
                     return self.fatal_err_kind(
                         "SecurityError",
                         "`use permissions` is not available here — this code is running \
@@ -170,7 +170,7 @@ impl super::Evaluator {
                 }
                 for p in perms {
                     self.warn_about_grant(p);
-                    self.permissions.insert(p.clone());
+                    self.security.granted.insert(p.clone());
                 }
                 EvalResult::Value(self.null_ref)
             }

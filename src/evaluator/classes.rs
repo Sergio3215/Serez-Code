@@ -365,12 +365,14 @@ impl super::Evaluator {
     /// insertar nada (mejor no llamarlo dos veces que llamarlo de más).
     /// Cacheado por clase: el escaneo se hace una vez, no en cada `new`.
     fn ctor_calls_super(&mut self, class_name: &str, ctor: &ast::ClassConstructor) -> bool {
-        if let Some(&hit) = self.super_cache.get(class_name) {
+        if let Some(&hit) = self.dispatch.super_call.get(class_name) {
             return hit;
         }
         let mut found = false;
         super::lvalue::calls_super_block(&ctor.body, &mut found);
-        self.super_cache.insert(class_name.to_string(), found);
+        self.dispatch
+            .super_call
+            .insert(class_name.to_string(), found);
         found
     }
 

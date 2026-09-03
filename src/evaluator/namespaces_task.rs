@@ -103,6 +103,23 @@ fn bounded_worker_error(error: String) -> String {
     }
 }
 
+/// The task this evaluator *is*, and the registry it shares.
+///
+/// Three fields of `Evaluator` until M6.3. `runtime` is shared by a top-level
+/// evaluator and every worker it creates - keeping it here rather than in a
+/// global isolates unrelated evaluators while still letting tasks nest. `id` and
+/// `arg` are `None` in the parent and `Some` in a worker, so together they answer
+/// "am I a worker, and what was I given?" - one question, previously asked in
+/// three places.
+#[derive(Default)]
+pub struct TaskContext {
+    pub runtime: Arc<TaskRuntime>,
+    /// `None` at the top level; `Some` inside a worker.
+    pub id: Option<i64>,
+    /// The message the parent passed to this worker.
+    pub arg: Option<String>,
+}
+
 impl super::Evaluator {
     pub(super) fn eval_task_namespace(&mut self, dot_call: &ast::DotCallExpression) -> EvalResult {
         if let Some(error) = self.require_permission("Task", "Task") {
@@ -152,7 +169,7 @@ impl super::Evaluator {
                     );
                 }
 
-                let runtime = Arc::clone(&self.task_runtime);
+                let runtime = Arc::clone(&self.task.runtime);
                 let task_id = {
                     let mut reg = runtime.lock_registry();
                     if running_count(&reg) >= MAX_CONCURRENT_TASKS {
@@ -177,9 +194,9 @@ impl super::Evaluator {
                     task_id
                 };
 
-                let worker_lockdown = self.lockdown;
+                let worker_lockdown = self.security.lockdown;
                 let inherited_permissions: Vec<String> = if worker_lockdown {
-                    self.permissions.iter().cloned().collect()
+                    self.security.granted.iter().cloned().collect()
                 } else {
                     Vec::new()
                 };
@@ -283,7 +300,7 @@ impl super::Evaluator {
                 if !dot_call.arguments.is_empty() {
                     return self.rt_err_kind("TypeError", "Task.message() requires 0 arguments");
                 }
-                let message = self.task_arg.clone().unwrap_or_default();
+                let message = self.task.arg.clone().unwrap_or_default();
                 EvalResult::Value(self.alloc(ObjectData::Str(message)))
             }
 
@@ -312,8 +329,8 @@ impl super::Evaluator {
                     );
                 }
 
-                if let Some(task_id) = self.task_id {
-                    let runtime = Arc::clone(&self.task_runtime);
+                if let Some(task_id) = self.task.id {
+                    let runtime = Arc::clone(&self.task.runtime);
                     let mut reg = runtime.lock_registry();
                     if let Some(TaskState::Running { reply }) = reg.get_mut(&task_id) {
                         *reply = Some(result);
@@ -340,7 +357,7 @@ impl super::Evaluator {
                     }
                 };
 
-                let runtime = Arc::clone(&self.task_runtime);
+                let runtime = Arc::clone(&self.task.runtime);
                 let reg = runtime.lock_registry();
                 match reg.get(&task_id) {
                     Some(TaskState::Running { .. }) => EvalResult::Value(self.null_ref),
@@ -377,7 +394,7 @@ impl super::Evaluator {
                     }
                 };
 
-                let runtime = Arc::clone(&self.task_runtime);
+                let runtime = Arc::clone(&self.task.runtime);
                 let reg = runtime.lock_registry();
                 let done = match reg.get(&task_id) {
                     Some(TaskState::Running { .. }) => false,
@@ -426,9 +443,9 @@ mod tests {
     fn evaluator_task_runtimes_are_observably_isolated() {
         let first = super::super::Evaluator::new();
         let mut second = super::super::Evaluator::new();
-        assert!(!Arc::ptr_eq(&first.task_runtime, &second.task_runtime));
+        assert!(!Arc::ptr_eq(&first.task.runtime, &second.task.runtime));
 
-        first.task_runtime.lock_registry().insert(
+        first.task.runtime.lock_registry().insert(
             1,
             TaskState::Finished {
                 result: "private-result".to_string(),
@@ -503,7 +520,7 @@ mod tests {
         let mut evaluator = super::super::Evaluator::new();
         evaluator.set_permissions(vec!["Task".to_string()]);
         {
-            let mut registry = evaluator.task_runtime.lock_registry();
+            let mut registry = evaluator.task.runtime.lock_registry();
             for id in 0..MAX_CONCURRENT_TASKS as i64 {
                 registry.insert(id, TaskState::Running { reply: None });
             }

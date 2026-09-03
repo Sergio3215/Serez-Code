@@ -231,12 +231,12 @@ impl super::Evaluator {
     /// recorrido del cuerpo se hace una sola vez por método, no por llamada.
     pub(super) fn method_mutates_self(&mut self, class_name: &str, m: &ast::ClassMethod) -> bool {
         let key = (class_name.to_string(), m.name.clone());
-        if let Some(&hit) = self.mutator_cache.get(&key) {
+        if let Some(&hit) = self.dispatch.mutator.get(&key) {
             return hit;
         }
         let mut found = false;
         writes_self_block(&m.body, &mut found);
-        self.mutator_cache.insert(key, found);
+        self.dispatch.mutator.insert(key, found);
         found
     }
 }
