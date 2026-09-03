@@ -535,10 +535,18 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
         'Autodiff.saveWeights("w.szw", []);' "" --eval -
     run_cli_test "eval/lockdown: permission set is empty" "" "requires permission" \
         'unsafe { OS.exec("whoami"); }' "" --eval -
-    # Deliberately NOT gated: in the wasm build `fetch` runs in the viewer's own
-    # tab under the browser's origin rules. Reaching the arity error proves the
-    # builtin is still live under lockdown (and needs no network to check).
-    run_cli_test "eval/lockdown: fetch is NOT gated" "" "fetch(url," 'out fetch();' "" --eval -
+    # DEC-M7-006. `fetch` used to be exempt from lockdown and this test pinned
+    # that; it is now closed by default and opened only by --allow-fetch. None of
+    # these three needs the network: the refusal happens before any request, and
+    # the allowed case is proved by the *arity* error, which means the builtin ran.
+    run_cli_test "eval/lockdown: fetch is gated" "" "is not available here" \
+        'out fetch("http://example.com/");' "" --eval -
+    run_cli_test "eval/lockdown: fetch stays gated for a host not on the list" "" "is not available here" \
+        'out fetch("http://evil.test/");' "" --eval - --allow-fetch allowed.test
+    run_cli_test "eval/lockdown: an allowed host reaches the builtin" "" "fetch(url," \
+        'out fetch();' "" --eval - --allow-fetch allowed.test
+    run_cli_test "eval/lockdown: the fetch refusal is not catchable" "" "is not available here" \
+        'try { out fetch("http://example.com/"); } catch (e) { out "caught"; }' "" --eval -
 
     # Lockdown is only for `--eval`; running your own file keeps declaring inline.
     TMP_PERM="$(mktemp -d)"

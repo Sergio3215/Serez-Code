@@ -15,7 +15,7 @@ interchangeable and only the last one is a security boundary.
 | --- | --- | --- |
 | Permission manifest | A declaration in `serez.json` (or inline) of which native namespaces a program intends to use. | Not a boundary: outside lockdown a program can grant itself any permission at runtime. |
 | `unsafe { }` | A syntactic gate on individually destructive operations. | Not a permission and not isolation: any program can write `unsafe`. |
-| Lockdown | A restricted profile for source you did not write, closing self-granting and the capabilities that reach disk with nothing declared. | Not a sandbox: `fetch` still reaches the network, and the process still runs with the invoking user's full rights. |
+| Lockdown | A restricted profile for source you did not write, closing self-granting, the capabilities that reach disk with nothing declared, and the network. | Not a sandbox: the process still runs with the invoking user's full rights, and an allowed host is still reached from the machine's network position. |
 | OS isolation | A container, VM or restricted account around the `sz` process. | The only actual security boundary. Provided by the operating system, not by Serez. |
 
 ## Permission manifest
@@ -156,13 +156,49 @@ The split between catchable and fatal is deliberate and pinned by
 `lockdown_denials_split_into_catchable_and_fatal` in `tests/runtime_outcome.rs`.
 Unifying it in either direction would be a semantic change.
 
-Deliberately **still allowed** under lockdown:
+### `fetch` under lockdown
 
-- **`fetch`.** Network egress remains available, from wherever `sz` is running.
-  This has the shape of an SSRF risk: a snippet can reach hosts reachable from
-  the machine, including loopback and link-local addresses. Closing it is
-  desirable but is a breaking change to existing behavior and needs a migration
-  path, so it is tracked rather than done silently.
+**Closed by default.** A `fetch` under lockdown is refused with fatal
+`PermissionError` (`SZ6001`) before any request leaves the process, and
+`try/catch` cannot consume it — a security refusal that a program can turn back
+into control flow is advice.
+
+It is opened only by an **allowlist of hostnames**, which the *embedder* sets and
+the program cannot:
+
+| Surface | How |
+| --- | --- |
+| CLI | `sz --eval "…" --allow-fetch a.example,b.example` (repeatable) |
+| Library | `run::RunOpts::fetch_allowlist` |
+| Embedder API | `Evaluator::allow_fetch_hosts` |
+
+Matching is on the **hostname**, case-insensitively and exactly. There are no
+wildcards, no suffix matching and no port matching: `sub.allowed.test` is not
+`allowed.test`, and neither is `allowed.test.evil.test`. Userinfo does not
+disguise a host — `http://allowed.test@evil.test/` is `evil.test`. A URL whose
+host cannot be read is refused rather than guessed at.
+
+**Redirects are checked at every hop.** A response that redirects from an allowed
+host to one that is not on the list is refused, and the refusal names the host it
+stopped at:
+
+```text
+allowed.example  ->  302  ->  forbidden.internal      refused
+allowed.example  ->  302  ->  allowed.example/next    followed
+```
+
+A `Location` this runtime will not resolve — protocol-relative, path-relative, or
+a different scheme — is refused rather than followed. The redirect ceiling is 5,
+the same as the default outside lockdown.
+
+**Outside lockdown nothing changed.** `sz file.sz` reaches any host and follows
+redirects exactly as before; the allowlist is not consulted at all. Until 10.0.0
+lockdown behaved that way too, and `spec/compatibility.md` records the change.
+
+This closes the SSRF shape lockdown used to have — a snippet reaching loopback,
+link-local and metadata addresses from the machine's own network position. It
+does not make an *allowed* request safe: the host you allow is still reached from
+wherever `sz` is running.
 
 Lockdown narrows the blast radius of a careless snippet. It does not contain a
 hostile one.

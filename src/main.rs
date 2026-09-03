@@ -20,6 +20,35 @@ fn subcommand_code(result: Result<(), String>) -> i32 {
     }
 }
 
+/// Hosts named by `--allow-fetch`, which is the only way to open the network
+/// under `--eval`'s lockdown (DEC-M7-006).
+///
+/// Accepts `--allow-fetch a.example,b.example` and repeats of the flag, so a
+/// caller can build the list either way. The `--eval` snippet itself is one of
+/// these arguments, so a snippet could contain the *text* `--allow-fetch` — it
+/// is read positionally, from the argument after the flag, and a snippet cannot
+/// be the argument after a flag it does not precede.
+fn collect_allow_fetch(args: &[String]) -> Vec<String> {
+    let mut hosts = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--allow-fetch" {
+            if let Some(value) = args.get(i + 1) {
+                for host in value.split(',') {
+                    let host = host.trim();
+                    if !host.is_empty() {
+                        hosts.push(host.to_string());
+                    }
+                }
+            }
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    hosts
+}
+
 /// Read the whole of stdin, for `sz --eval -`. Passing a multi-line snippet as an
 /// argv string means fighting the shell over quotes, newlines and `$`; a pipe
 /// doesn't have that problem.
@@ -52,6 +81,10 @@ USAGE
   sz --watch <file>              Re-run the file whenever it changes
   sz --eval \"<code>\"             Run a snippet (no manifest, lockdown on)
   sz --eval -                    Read the snippet from stdin
+  sz --eval .. --allow-fetch H   Let the snippet fetch host H (repeat or comma-
+                                 separate). Under lockdown the network is closed
+                                 unless this names the host; redirects are
+                                 checked against the same list.
   sz                             Start the REPL
   sz --version                   Print the version
   sz --help                      Print this message
@@ -209,6 +242,12 @@ fn run() -> i32 {
         // is arbitrary source text, not a path.
         if let Some(i) = args.iter().position(|a| a == "--eval" || a == "-e") {
             let is_check = args.iter().any(|a| a == "--check");
+            // DEC-M7-006: under lockdown `fetch` is closed, and this is the only
+            // thing that opens it. Comma-separated hostnames; repeatable.
+            //
+            // It is a *host* flag, not something the snippet can write, which is
+            // the whole point — the snippet is the untrusted party here.
+            let allow_fetch = collect_allow_fetch(&args);
             let src = match args.get(i + 1) {
                 Some(a) if a == "-" => match read_stdin() {
                     Some(s) => s,
@@ -222,7 +261,7 @@ fn run() -> i32 {
                     return 1;
                 }
             };
-            return run_eval(src, is_check);
+            return run_eval(src, is_check, allow_fetch);
         }
 
         for arg in args.iter().skip(1) {

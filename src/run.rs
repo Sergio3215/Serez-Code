@@ -28,12 +28,23 @@ pub struct RunOpts {
     /// reach the disk with no permission declared at all: `File`, `import`, and
     /// Autodiff's weight files.
     ///
-    /// The network is deliberately NOT part of this — see `eval_fetch`. Off for
-    /// normal CLI runs: someone running their own file is supposed to be able to
-    /// declare permissions inline.
+    /// The network is part of this since DEC-M7-006 — see `fetch_allowlist`. Off
+    /// for normal CLI runs: someone running their own file is supposed to be able
+    /// to declare permissions inline.
     pub lockdown: bool,
     /// Type-check and report, don't evaluate (`--check`).
     pub check_only: bool,
+    /// Hosts `fetch` may reach **while `lockdown` is on**. Empty means none.
+    ///
+    /// **DEC-M7-006.** Under lockdown `fetch` is closed by default, and this is
+    /// the only way to open it. It is an *embedder's* list — a program cannot add
+    /// to it, for the same reason `use permissions { }` stops granting under
+    /// lockdown. Ignored entirely when `lockdown` is off.
+    ///
+    /// Entries are hostnames, matched case-insensitively and exactly; every
+    /// redirect hop is matched against the same list. See
+    /// `permissions::SecurityPolicy::allows_fetch`.
+    pub fetch_allowlist: Vec<String>,
 }
 
 impl Default for RunOpts {
@@ -43,6 +54,7 @@ impl Default for RunOpts {
             current_file: None,
             lockdown: false,
             check_only: false,
+            fetch_allowlist: Vec::new(),
         }
     }
 }
@@ -153,6 +165,7 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
     evaluator.set_source(source_lines);
     evaluator.set_permissions(opts.permissions);
     evaluator.set_lockdown(opts.lockdown);
+    evaluator.allow_fetch_hosts(&opts.fetch_allowlist);
     if let Some(ref path) = opts.current_file {
         evaluator.set_current_file(path);
     }
@@ -262,6 +275,9 @@ pub fn run_file(file_path: &str, is_check: bool) -> i32 {
             current_file: Some(file_path_obj.to_path_buf()),
             lockdown: false,
             check_only: is_check,
+            // Not consulted: `lockdown` is off for a file the user handed us, so
+            // `fetch` is unrestricted here exactly as it always was.
+            fetch_allowlist: Vec::new(),
         },
     )
     .exit_code
@@ -305,12 +321,17 @@ fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
 /// Run a snippet handed in as a string (`sz --eval`). No file, so no `serez.json`
 /// and no permissions; lockdown is on because the source did not necessarily come
 /// from whoever is running it.
-pub fn run_eval(src: String, is_check: bool) -> i32 {
+///
+/// `fetch_allowlist` is the CLI's `--allow-fetch`: under lockdown the network is
+/// closed, and this is the only thing that opens it. Empty is the default and
+/// means no outbound request at all.
+pub fn run_eval(src: String, is_check: bool, fetch_allowlist: Vec<String>) -> i32 {
     run_source(
         src,
         "<eval>",
         RunOpts {
             check_only: is_check,
+            fetch_allowlist,
             ..RunOpts::sandboxed()
         },
     )

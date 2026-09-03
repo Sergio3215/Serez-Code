@@ -871,11 +871,24 @@ impl Evaluator {
     }
 
     /// Enable the restricted-source profile: `use permissions { .. }` stops
-    /// granting, and direct disk capabilities outside the permission set are
-    /// refused. This is defense in depth, not a sandbox: `fetch` remains
-    /// available and the process still shares the host's security boundary.
+    /// granting, direct disk capabilities outside the permission set are refused,
+    /// and `fetch` is closed unless [`Self::allow_fetch_hosts`] opened it.
+    ///
+    /// Still defense in depth rather than a sandbox — the process shares the
+    /// host's security boundary either way.
     pub fn set_lockdown(&mut self, on: bool) {
         self.security.lockdown = on;
+    }
+
+    /// Hosts `fetch` may reach while lockdown is on (DEC-M7-006).
+    ///
+    /// For the **embedder**. There is deliberately no way for a running program
+    /// to call this: an allowlist that untrusted source can extend is not a list.
+    /// Has no effect outside lockdown, where `fetch` is unrestricted as before.
+    pub fn allow_fetch_hosts<S: AsRef<str>>(&mut self, hosts: &[S]) {
+        for host in hosts {
+            self.security.allow_fetch_host(host);
+        }
     }
 
     pub fn is_lockdown(&self) -> bool {

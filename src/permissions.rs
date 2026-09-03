@@ -41,14 +41,34 @@
 /// Autodiff's weight files reach the disk with no permission declared at all.
 /// That is fine when you are running your own file and wrong when the source
 /// arrived from somewhere else, which is what `lockdown` is for: it closes the
-/// paths the manifest cannot. Network access is deliberately part of neither;
-/// see `run::RunOpts::sandboxed`.
+/// paths the manifest cannot — now including the network. See `fetch_allowlist`.
 #[derive(Debug, Default, Clone)]
 pub struct SecurityPolicy {
     /// Populated from `serez.json` and `use permissions { }` blocks.
     pub granted: std::collections::HashSet<String>,
     /// Untrusted-source mode.
     pub lockdown: bool,
+    /// Hosts `fetch` may reach **under lockdown**. Empty means none.
+    ///
+    /// **DEC-M7-006.** `fetch` used to be reachable under lockdown, deliberately
+    /// and with a conformance test pinning it, on the reasoning that lockdown was
+    /// about the machine's own capabilities and the network was a separate
+    /// question. The name did more work than the code: a mode described as
+    /// untrusted-source that leaves outbound HTTP open lets untrusted source
+    /// reach cloud metadata endpoints, services bound to localhost, and the host
+    /// as an open relay. Decided: blocked by default, reachable only through an
+    /// explicit allowlist.
+    ///
+    /// **The program cannot put anything in here.** It is set by the embedder —
+    /// `run::RunOpts`, `Evaluator::allow_fetch_hosts`, or the CLI's
+    /// `--allow-fetch` — for the same reason `use permissions { }` stops granting
+    /// under lockdown: a list untrusted source can extend is not a list.
+    ///
+    /// Entries are hostnames, compared case-insensitively and exactly. No
+    /// wildcards and no port matching: both are policy questions, and inventing
+    /// an answer to them inside a security gate is how a gate acquires a hole.
+    /// Outside lockdown this is not consulted at all.
+    pub fetch_allowlist: std::collections::HashSet<String>,
 }
 
 impl SecurityPolicy {
@@ -67,6 +87,101 @@ impl SecurityPolicy {
     pub fn grant(&mut self, permission: impl Into<String>) -> bool {
         self.granted.insert(permission.into())
     }
+
+    /// Add a host `fetch` may reach under lockdown. See [`Self::fetch_allowlist`].
+    pub fn allow_fetch_host(&mut self, host: impl AsRef<str>) {
+        self.fetch_allowlist
+            .insert(host.as_ref().trim().to_ascii_lowercase());
+    }
+
+    /// May `fetch` reach `url`?
+    ///
+    /// Outside lockdown, always — this changes nothing for `sz file.sz`. Under
+    /// lockdown, only when the URL's host is on the allowlist, and the allowlist
+    /// is empty unless an embedder filled it.
+    ///
+    /// A URL whose host cannot be read is refused rather than guessed at: a gate
+    /// that falls open on input it does not understand is not a gate.
+    pub fn allows_fetch(&self, url: &str) -> bool {
+        if !self.lockdown {
+            return true;
+        }
+        match host_of(url) {
+            Some(host) => self.fetch_allowlist.contains(&host),
+            None => false,
+        }
+    }
+}
+
+/// The host of an `http`/`https` URL, lowercased, without userinfo or port.
+///
+/// Written here rather than pulled from a URL crate because it is a security
+/// decision in eight lines and it should be readable as one. It is deliberately
+/// strict: anything it cannot parse confidently returns `None`, and `None` means
+/// refused.
+///
+///   * userinfo is stripped at the **last** `@` before the path, so
+///     `https://evil.test@allowed.test/` reads `allowed.test` — and, more to the
+///     point, `https://allowed.test@evil.test/` reads `evil.test`, which is the
+///     direction that matters;
+///   * a bracketed IPv6 literal keeps its brackets and drops the port after them;
+///   * an empty host is `None`.
+pub fn host_of(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .or_else(|| url.strip_prefix("HTTP://"))
+        .or_else(|| url.strip_prefix("HTTPS://"))?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    };
+    let host = if let Some(close) = authority.find(']') {
+        // `[::1]:8080` -> `[::1]`
+        &authority[..=close]
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(host.to_ascii_lowercase())
+}
+
+/// Resolve a `Location` header against the URL it came from.
+///
+/// Only two shapes are resolved, and everything else returns `None` — which the
+/// caller turns into a refusal, not a silent continue. A redirect target is
+/// about to become a network request under a security policy, so the parser's
+/// job is to be obviously right rather than complete:
+///
+///   * an absolute `http`/`https` URL is taken as it stands;
+///   * a root-relative path (`/next`) is joined to the current scheme and
+///     authority, so it stays on the same host and the allowlist check on the
+///     next hop is trivially satisfied — that is the point, not a shortcut.
+///
+/// A protocol-relative `//host/path`, a relative `../next` and anything with a
+/// different scheme are all `None`.
+pub fn resolve_location(current: &str, location: &str) -> Option<String> {
+    let target = location.trim();
+    if target.is_empty() {
+        return None;
+    }
+    let lower = target.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Some(target.to_string());
+    }
+    if !target.starts_with('/') || target.starts_with("//") {
+        return None;
+    }
+    // Everything up to the end of the authority: scheme, "://", host[:port].
+    let scheme_end = current.find("://")? + 3;
+    let authority_len = current[scheme_end..]
+        .find(['/', '?', '#'])
+        .unwrap_or(current.len() - scheme_end);
+    let base = &current[..scheme_end + authority_len];
+    Some(format!("{base}{target}"))
 }
 
 #[cfg(test)]

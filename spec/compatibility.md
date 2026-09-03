@@ -52,6 +52,15 @@ useless:
   release — but only after a sweep of every official package found zero
   occurrences of the affected form, which the changelog entry records by name.
 
+- **Unreleased** closed `fetch` under lockdown. `sz --eval` and any embedder
+  using `RunOpts::sandboxed()` now refuse an outbound request with fatal
+  `PermissionError` (`SZ6001`) unless the host is on an explicit allowlist, and
+  every redirect hop is checked against the same list. **Breaking for `--eval`
+  and the playground; not for `sz file.sz`**, which is unaffected. The
+  conformance test that pinned the old behaviour — `eval/lockdown: fetch is NOT
+  gated` — inverted by design, in both runners. No official package runs under
+  lockdown, so the ecosystem sweep is vacuous rather than reassuring, and it is
+  recorded that way. See `security.md`.
 - **Unreleased** made `private` private to the declaring class. A subclass
   method reaching an inherited private member now raises catchable `TypeError`
   (`SZ4002`) where it used to succeed. The sweep found **27** private

@@ -797,12 +797,22 @@ if ($runAll -or $cli) {
     Run-CLI-Test "eval/lockdown: permission set is empty" @("--eval", "-") `
                  -expectErr "requires permission" `
                  -stdinContent "unsafe { OS.exec(`"whoami`"); }"
-    # Deliberately NOT gated: in the wasm build `fetch` runs in the viewer's own
-    # tab under the browser's origin rules. Reaching the arity error proves the
-    # builtin is still live under lockdown (and needs no network to check).
-    Run-CLI-Test "eval/lockdown: fetch is NOT gated"     @("--eval", "-") `
+    # DEC-M7-006. `fetch` used to be exempt from lockdown and this test pinned
+    # that; it is now closed by default and opened only by --allow-fetch. None of
+    # these three needs the network: the refusal happens before any request, and
+    # the allowed case is proved by the *arity* error, which means the builtin ran.
+    Run-CLI-Test "eval/lockdown: fetch is gated"        @("--eval", "-") `
+                 -expectErr "is not available here" `
+                 -stdinContent "out fetch(`"http://example.com/`");"
+    Run-CLI-Test "eval/lockdown: fetch stays gated for a host not on the list" @("--eval", "-", "--allow-fetch", "allowed.test") `
+                 -expectErr "is not available here" `
+                 -stdinContent "out fetch(`"http://evil.test/`");"
+    Run-CLI-Test "eval/lockdown: an allowed host reaches the builtin" @("--eval", "-", "--allow-fetch", "allowed.test") `
                  -expectErr "fetch(url," `
                  -stdinContent "out fetch();"
+    Run-CLI-Test "eval/lockdown: the fetch refusal is not catchable" @("--eval", "-") `
+                 -expectErr "is not available here" `
+                 -stdinContent "try { out fetch(`"http://example.com/`"); } catch (e) { out `"caught`"; }"
     # Lockdown is only for `--eval`; running your own file keeps declaring inline.
     $permFile = Join-Path $env:TEMP "sz_eval_perm_$(Get-Random).sz"
     Set-Content $permFile "use permissions { Time };`nout DateTime.now() != null;" -NoNewline

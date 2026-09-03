@@ -582,16 +582,18 @@ impl super::Evaluator {
     //                      and does NOT throw on status.
     //   { binary: true } → body is returned as a byte array [int] instead of a string.
     pub(super) fn eval_fetch(&mut self, args: &[ast::Expression]) -> EvalResult {
-        // NOT gated by lockdown, deliberately: lockdown is about capabilities that
-        // belong to the machine running the code — the filesystem, spawning
-        // processes, granting itself permissions — and the network is treated as a
-        // separate question.
+        // Gated by lockdown since DEC-M7-006. It used to be exempt, on the
+        // reasoning that lockdown was about the machine's own capabilities and
+        // the network was a separate question — but the request goes out from the
+        // host's network position, which is the usual SSRF shape: cloud metadata
+        // endpoints, services bound to localhost, the host as an open relay. A
+        // mode called "untrusted source" that leaves that open is a name doing
+        // more work than the code.
         //
-        // Worth knowing where that leaves `--eval`: the request goes out from the
-        // host's network position, which is the usual SSRF shape (cloud metadata
-        // endpoints, services bound to localhost, the host as an open relay). If
-        // you run source you didn't write, put real isolation around the process,
-        // or gate `fetch` behind a permission of its own.
+        // Blocked by default under lockdown, reachable only through an explicit
+        // allowlist the *embedder* sets. The check is below rather than here,
+        // because it needs the URL — and it is applied again to every redirect
+        // hop, or an allowed host could hand the request to a forbidden one.
         if args.is_empty() || args.len() > 4 {
             return self.rt_err_kind("RuntimeError", "fetch(url, [method], [body], [options])");
         }
@@ -741,11 +743,24 @@ impl super::Evaluator {
             return Ok(ExecutionFlow::Throw(msg));
         }
 
+        // DEC-M7-006 — the lockdown gate. Not catchable as an ordinary throw:
+        // it is a security refusal, so it goes through `fatal_err_kind` the way
+        // every other denied capability does, and `try/catch` cannot turn it
+        // back into control flow.
+        if !self.security.allows_fetch(&url) {
+            let host = crate::permissions::host_of(&url).unwrap_or_else(|| "<unparseable>".into());
+            let message = format!(
+                "fetch to '{host}' is not available here — this code runs as untrusted \
+                 source, and the network is closed unless the host allows it explicitly."
+            );
+            return self.fatal_err_kind("PermissionError", message);
+        }
+
         // ── Perform the request ───────────────────────────────────────────────
         // Everything above is parsing and validation and is the same everywhere.
         // Only the transport differs: ureq natively, a synchronous XHR in the
         // browser. See `fetch_transport` for both.
-        match self.fetch_transport(&method, &url, &headers, &body_str, timeout_secs) {
+        match self.fetch_transport_checked(&method, &url, &headers, &body_str, timeout_secs) {
             Ok(resp) => {
                 // 4xx/5xx: in `full` mode build the response object anyway;
                 // otherwise throw, embedding the body so the detail isn't lost.
@@ -837,6 +852,88 @@ impl super::Evaluator {
     // Native: ureq. A 4xx/5xx comes back as Err(Status) there, but it is a real
     // response, so it is normalised into Ok — the caller decides whether a status
     // is an error (it depends on the `full` option).
+    /// The transport, with every redirect hop checked against the allowlist.
+    ///
+    /// **DEC-M7-006, the half that is easy to miss.** Gating the URL the program
+    /// wrote is not enough: `ureq` follows redirects itself, so
+    ///
+    /// ```text
+    /// allowed.example  ->  302  ->  forbidden.internal
+    /// ```
+    ///
+    /// would have reached the second host without anything asking. Under an
+    /// allowlist the agent is built with `redirects(0)` and the hops are followed
+    /// here, one at a time, each one validated before it is requested.
+    ///
+    /// **Outside lockdown this is not in the path at all.** `allows_fetch` is
+    /// always true there, so the call goes straight to `fetch_transport` and the
+    /// agent keeps ureq's own redirect handling — the behaviour `sz file.sz` has
+    /// today, unchanged.
+    fn fetch_transport_checked(
+        &mut self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        timeout_secs: u64,
+    ) -> Result<FetchResponse, String> {
+        if !self.security.lockdown {
+            return self.fetch_transport(method, url, headers, body, timeout_secs);
+        }
+
+        // Same ceiling ureq uses by default, so a legitimate chain that worked
+        // before still works.
+        const MAX_REDIRECTS: usize = 5;
+        let mut current = url.to_string();
+        for _ in 0..=MAX_REDIRECTS {
+            // Re-checked every hop, including the first: this function must be
+            // safe on its own rather than because a caller checked once.
+            if !self.security.allows_fetch(&current) {
+                let host =
+                    crate::permissions::host_of(&current).unwrap_or_else(|| "<unparseable>".into());
+                return Err(format!(
+                    "redirected to '{host}', which this code is not allowed to reach"
+                ));
+            }
+            let resp =
+                self.fetch_transport_no_redirect(method, &current, headers, body, timeout_secs)?;
+            if !matches!(resp.status, 301 | 302 | 303 | 307 | 308) {
+                return Ok(resp);
+            }
+            let Some(location) = resp
+                .headers
+                .iter()
+                .find(|(name, _)| name == "location")
+                .map(|(_, value)| value.clone())
+            else {
+                // A redirect status with no Location is not a redirect anyone can
+                // follow; hand the response back rather than inventing a target.
+                return Ok(resp);
+            };
+            current = match crate::permissions::resolve_location(&current, &location) {
+                Some(next) => next,
+                None => {
+                    return Err(format!(
+                        "redirect to a location this runtime will not resolve: '{location}'"
+                    ));
+                }
+            };
+        }
+        Err("too many redirects".to_string())
+    }
+
+    /// One hop, with ureq's redirect following switched off.
+    fn fetch_transport_no_redirect(
+        &mut self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        timeout_secs: u64,
+    ) -> Result<FetchResponse, String> {
+        self.fetch_transport_with(method, url, headers, body, timeout_secs, Some(0))
+    }
+
     fn fetch_transport(
         &mut self,
         method: &str,
@@ -845,12 +942,27 @@ impl super::Evaluator {
         body: &str,
         timeout_secs: u64,
     ) -> Result<FetchResponse, String> {
+        self.fetch_transport_with(method, url, headers, body, timeout_secs, None)
+    }
+
+    fn fetch_transport_with(
+        &mut self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        timeout_secs: u64,
+        redirects: Option<u32>,
+    ) -> Result<FetchResponse, String> {
         use std::io::Read;
 
-        let agent = ureq::AgentBuilder::new()
+        let mut builder = ureq::AgentBuilder::new()
             .timeout_connect(std::time::Duration::from_secs(timeout_secs.min(30)))
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .build();
+            .timeout(std::time::Duration::from_secs(timeout_secs));
+        if let Some(limit) = redirects {
+            builder = builder.redirects(limit);
+        }
+        let agent = builder.build();
 
         let mut req = agent.request(method, url);
         // Default JSON content-type only when a body is sent and the user didn't set one.
