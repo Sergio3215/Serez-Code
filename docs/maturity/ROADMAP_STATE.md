@@ -17,10 +17,11 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M8 — Conformance Complete.** M7 PARTIAL (§9M), M6 PARTIAL (§9K), M5 COMPLETE (§9I), M4 PARTIAL (§9G). |
+| **Current milestone** | **M9 — Robustness & Security Hardened.** M8 PARTIAL (§9O), M7 PARTIAL (§9M), M6 PARTIAL (§9K), M5 COMPLETE (§9I), M4 PARTIAL (§9G). |
 | Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, corpus-validated (§9F.3) · **M4.7.1–M4.7.2** the scope model and the measurement (§9F.6) · **audit** (§9G) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
 | Last completed milestone | **M5 — Type System Stable** (§9I). M4 and M6 are **PARTIAL** by decision, not by omission |
+| Goals done in M8 | **M8.0** the audit (§9N.0) · **M8.1** scheme + checker (§9N.1) · **M8.2** `spec/memory.md`, 15 rules proved (§9N.2) · **audit** (§9O) |
 | Goals done in M7 | **M7.0** the spec sweep (§9L.0) · **M7.1** six decisions registered · **M7.2** `frozen_semantics.rs` (§9L.2) · **audit** (§9M) |
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
@@ -30,7 +31,7 @@ Read before starting any milestone, in this order:
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — M7 closed PARTIAL (§9M) |
+| Last state update | 2026-09-03 — M8 closed PARTIAL (§9O) |
 
 Milestone ledger:
 
@@ -44,8 +45,8 @@ Milestone ledger:
 | M5 — Type System Stable | **COMPLETE** (2026-09-03, §9I) — 4 checker/runtime divergences fixed, §5.29 closed, 5 decisions registered |
 | M6 — Runtime Molecular | **PARTIAL** (2026-09-03, §9K) — `Evaluator` 48 fields -> 38; dispatch still on the evaluator, held by DEC-M6-001 |
 | M7 — Semantics Frozen | **PARTIAL** (2026-09-03, §9M) — everything settled is specified; 6 decisions open and pinned |
-| M8 — Conformance Complete | **IN PROGRESS** |
-| M9 — Robustness & Security Hardened | NOT STARTED (partially pre-empted; see §6) |
+| M8 — Conformance Complete | **PARTIAL** (2026-09-03, §9O) — scheme + checker complete and enforced; 1 area of 30 covered |
+| M9 — Robustness & Security Hardened | **IN PROGRESS** (partially pre-empted; see §6) |
 | M10 — Stable Language Platform | NOT STARTED |
 
 ---
@@ -4750,6 +4751,87 @@ semantic core; then the namespaces. `syntax.md` and `lexical-grammar.md` last -
 
 ---
 
+## 9O. M8 MILESTONE AUDIT
+
+Charter: *demonstrate automatically that the implementation satisfies the
+specification.*
+
+### Definition of Done, item by item
+
+The plan's DoD: *important stable rules have normative text, an identifier, and
+automated evidence.*
+
+| Item | Status | Evidence |
+|---|---|---|
+| A scheme for normative identifiers exists | **met** | `spec/conformance.md` |
+| It is enforced, not conventional | **met** | `tests/conformance_map.rs`, three asserted properties |
+| Reuse is preferred over duplication | **met** | 4 of 6 claiming files are pre-existing fixtures that needed only a marker |
+| Important stable rules carry identifiers | **NOT met** | 1 area of 30 |
+
+**Three of four. M8 is PARTIAL**, and the unmet item is unmet by *quantity*, not
+by obstruction: nothing blocks covering the next area, it simply has not been
+done. That is a different kind of PARTIAL from M4, M6 and M7, where a decision
+stands in the way, and the distinction is worth keeping — this one closes with
+work, those close with answers.
+
+### 1. What the milestone actually built
+
+The scheme, the checker, and one area proved end to end. The order matters: an
+identifier scheme without enforcement is a naming convention, and a naming
+convention decays the first time someone is in a hurry. Property 3 — *every rule
+has a test* — is what makes it a gate rather than a habit.
+
+### 2. What it found
+
+Two defects, both in this roadmap's own recent work, and both of the same class:
+
+  * **MEM-007 written from source-reading was wrong.** The 256 MiB ceiling raises
+    a *fatal* error, not a catchable one. Caught because the conformance fixture
+    was run rather than reasoned about.
+  * **§9L.2's memory pin proved arity, not use-after-free** — a three-argument
+    call to a four-argument function. It would have passed unchanged if
+    use-after-free protection were removed.
+
+The second is the same failure mode §5.34 found in three security fixtures, one
+milestone earlier, in someone else's work. Committing it here — with the finding
+still fresh — is the useful evidence: **the discipline that catches this is a
+positive control, not attention.** A negative assertion with no positive control
+proves that *something* refused, and nothing about what.
+
+### 3. Semantic drift
+
+None. No source file touched. Two spec documents, three test files, four markers
+added to existing fixtures, and manifest rows for exactly the new fixtures.
+
+### 4. Gates at close
+
+fmt **PASS** · check **PASS** · clippy **PASS**, per-site **180** unchanged ·
+`cargo test --all-targets` **442 / 0** · both Serez runners **501 / 0 / 0**,
+categories identical · ecosystem **8 / 8**.
+
+### 5. What M8 hands forward
+
+| To | What |
+|---|---|
+| Whoever continues M8 | the coverage order in §9N.3: `errors.md` and `limits.md` first, the semantic core next, namespaces after, grammar last because `parser_snapshot` already pins it harder |
+| M7 | its memory pin is corrected; the handle/free gap it handed over is now `spec/memory.md` |
+| M10 | 29 areas without identifiers is a documentation-architecture fact, not only a testing one |
+
+### 6. Commits
+
+`1535a6e`: `normative identifiers, a checker that enforces them, and the
+first area`.
+
+---
+
+## MILESTONE STATUS: **PARTIAL**
+
+The machinery is complete and enforced; one area of thirty is covered. Unlike M4,
+M6 and M7, nothing blocks the rest — it is work, not a decision, and §9N.3 says
+what order to do it in.
+
+---
+
 ## 9M. M7 MILESTONE AUDIT
 
 Charter: *important observable behaviour should exist because it was decided, not
@@ -5099,6 +5181,8 @@ and each is registered with evidence rather than absorbed.
 | M6.2 | `503d5f6` | `the module context stops being three fields of the evaluator` |
 | M6.3 | `be7fb96` | `security, task context and dispatch caches stop being seven fields` |
 | **M6 checkpoint** | `c946d36` | `M6 closes PARTIAL — the state moved, the behaviour did not` |
+| **M7 checkpoint** | `acd6054` | `M7 closes PARTIAL — the documentation was ahead of the decisions` |
+| M8.1-M8.2 | `1535a6e` | `normative identifiers, a checker that enforces them, and the first area` |
 | M7.1-M7.2 | `2cc1d46` | `pin six undecided behaviours so none of them moves by accident` |
 | M6.4 | `139911d` | `two services stop being data and start answering questions` |
 | M5.4 | `df6a0b8` | `two checker findings that pointed at nothing now point at the code` |
