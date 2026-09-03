@@ -64,8 +64,54 @@ installs go to `<project>/packages/<name>`; global installs use
 `$SEREZ_PACKAGES/<name>` or the platform user's `~/.serez/packages/<name>`.
 
 With dependency recording enabled, the resolved exact version is written to the
-project manifest after installation. Failure to update the manifest is reported
-as a warning because package files are already present.
+project manifest **and to `serez.lock`** after installation. Failure to update
+either is reported as a warning because package files are already present.
+
+### Installation is atomic
+
+An install writes into a staging directory beside the destination and becomes
+visible in a single rename. A failure at any point before that — the download,
+the extraction, the integrity check — leaves the project exactly as it was, with
+any previously installed version still in place and no staging directory left
+behind.
+
+Until 10.0.0 the destination was removed *before* the new version was fetched, so
+a failed download left the project with no package at all.
+
+### `serez.lock`
+
+`serez.lock` sits beside `serez.json` and records the resolved graph, one line
+per package, sorted by name:
+
+```
+<name>	<version>	<integrity>
+```
+
+`integrity` is `sha256-<hex>` over the installed tree: every file's relative path,
+its length and its contents, in path order. Paths use `/` and the file is written
+with `
+` endings, so the same resolved graph produces the same bytes on every
+platform and a diff of the lockfile shows what changed rather than how it was
+written.
+
+A missing lockfile is empty rather than an error — the first install in a project
+is the one that creates it. `sz uninstall` removes the package's line.
+
+### Integrity is checked before the install is committed
+
+When `serez.lock` already has a line for the package **at the version being
+installed**, the staged tree is hashed and compared to it before the rename. A
+mismatch aborts the install with the project untouched and reports both digests.
+
+A package with no line yet, or a line at a different version, is being resolved
+rather than reproduced: it is recorded rather than refused. A lockfile that
+rejected everything it had not already seen could never be created.
+
+The digest covers the installed tree rather than the downloaded archive, because a
+local-registry install has no archive — it copies a directory. For a remote
+install the two are the same statement, since extraction is a pure function of
+the archive, and hashing the tree has the advantage of checking what actually
+landed.
 
 `sz update <name>` differs from versionless install: it always asks the HTTP
 registry for `latest`, avoiding a stale local-registry version.
@@ -116,13 +162,17 @@ contract.
 
 The following are known gaps, not implied guarantees:
 
-- no lockfile or reproducible dependency graph;
-- no archive integrity hash, signature or publisher trust policy;
-- no transitive dependency solver or cycle contract;
+- no **signature or publisher trust policy**. `serez.lock` says a package is the
+  same one that was installed before; it says nothing about who published it, and
+  it cannot detect a substitution made before the first install. That is a
+  separate decision and nothing in the lockfile format anticipates it;
+- no transitive dependency solver or cycle contract. The lockfile records the
+  graph that was resolved, and today that graph is flat;
 - no declared minimum runtime or language-spec version enforced for packages;
-- no atomic install/update: an existing package is removed before replacement,
-  so a failed copy/download can leave it absent or partially installed;
-- no transaction spanning package files and `serez.json`;
+- no transaction spanning package files **and** `serez.json`. The package files
+  are atomic; the manifest and lockfile are written afterwards, and a failure
+  there is a warning rather than a rollback — the package is already correctly
+  installed and removing it would be the worse outcome;
 - no normative yank/cache/offline policy.
 
 These gaps are compatibility and supply-chain work, not reasons to silently

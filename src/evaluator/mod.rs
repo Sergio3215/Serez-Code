@@ -14,6 +14,7 @@ mod methods_tensor;
 mod namespaces;
 mod namespaces_autodiff;
 mod namespaces_binary;
+
 mod namespaces_crypto;
 pub(crate) mod namespaces_datetime;
 mod namespaces_gpu;

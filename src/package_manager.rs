@@ -21,6 +21,7 @@
 //   POST /api/publish                         → publish a new package version
 //   DEL  /api/unpublish/<name>/<version>      → yank a version
 
+use crate::package_install::{LOCKFILE, LockEntry, Lockfile, Transaction};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -226,39 +227,77 @@ pub fn install_package(pkg_spec: &str, record: bool, global: bool) -> Result<(),
     .join(&pkg_name);
     if dest.exists() {
         println!("Package '{}' already installed, updating...", pkg_name);
-        std::fs::remove_dir_all(&dest)
-            .map_err(|e| format!("Failed to remove old version: {}", e))?;
     }
+
+    // The lockfile belongs to the *project*, so only a local install reads or
+    // writes one. A global package is not a project dependency.
+    let project = if global {
+        None
+    } else {
+        std::env::current_dir().ok()
+    };
+    let mut lock = match &project {
+        Some(dir) => Lockfile::read(dir)?,
+        None => Lockfile::default(),
+    };
+
+    // Everything below lands in a staging directory. Until `commit`, the
+    // project has exactly what it had before — including when the download
+    // fails, which used to leave it with nothing because the old version was
+    // deleted first.
+    let transaction = Transaction::begin(&dest)?;
 
     // Try local registry first, fall back to HTTP
     let src = registry.join(&pkg_name).join(&version);
     if src.exists() {
-        copy_dir_recursive(&src, &dest)
+        copy_dir_recursive(&src, transaction.staging_dir())
             .map_err(|e| format!("Failed to install '{}@{}': {}", pkg_name, version, e))?;
-        if global {
-            println!(
-                "✅ Installed {}@{} → {} (global)",
-                pkg_name,
-                version,
-                dest.display()
-            );
-        } else {
-            println!(
-                "✅ Installed {}@{} → ./packages/{}",
-                pkg_name, version, pkg_name
-            );
-        }
     } else {
-        download_package(&pkg_name, &version, global)?;
+        download_package(&pkg_name, &version, transaction.staging_dir())?;
     }
 
-    // Record the resolved dependency in serez.json (local installs only — a
-    // global package is not a project dependency). Manifest write failure is a
-    // warning, not a hard error, since the package is already on disk.
+    // Verified *before* the commit: a package whose tree does not match the one
+    // the lockfile recorded is refused with the project untouched. A package
+    // with no line yet is being resolved for the first time and is recorded
+    // rather than refused — a lockfile that rejected everything it had not
+    // already seen could never be created.
+    let integrity = transaction.digest()?;
+    match lock.get(&pkg_name) {
+        Some(entry) if entry.version == version => transaction.verify(&entry.integrity)?,
+        _ => {}
+    }
+    transaction.commit()?;
+
+    if global {
+        println!(
+            "✅ Installed {}@{} → {} (global)",
+            pkg_name,
+            version,
+            dest.display()
+        );
+    } else {
+        println!(
+            "✅ Installed {}@{} → ./packages/{}",
+            pkg_name, version, pkg_name
+        );
+    }
+
+    // Record the resolved dependency in serez.json and serez.lock (local
+    // installs only). A write failure here is a warning, not a hard error: the
+    // package is already on disk, and failing after a successful install would
+    // be the non-atomicity this change removes, in a different place.
     if record && !global {
-        if let Ok(cwd) = std::env::current_dir() {
-            if let Err(e) = record_dependency(&cwd, &pkg_name, &version) {
+        if let Some(dir) = &project {
+            if let Err(e) = record_dependency(dir, &pkg_name, &version) {
                 eprintln!("⚠ Installed, but could not update serez.json: {}", e);
+            }
+            lock.upsert(LockEntry {
+                name: pkg_name.clone(),
+                version: version.clone(),
+                integrity,
+            });
+            if let Err(e) = lock.write(dir) {
+                eprintln!("⚠ Installed, but could not update {}: {}", LOCKFILE, e);
             }
         }
     }
@@ -619,6 +658,19 @@ pub fn uninstall_package(pkg_name: &str, global: bool) -> Result<(), String> {
         if let Ok(cwd) = std::env::current_dir() {
             if let Err(e) = remove_dependency(&cwd, pkg_name) {
                 eprintln!("⚠ Uninstalled, but could not update serez.json: {}", e);
+            }
+            // And from the lockfile, or the next install would verify the
+            // removed package against a line describing a tree that is no longer
+            // there and refuse it.
+            match Lockfile::read(&cwd) {
+                Ok(mut lock) => {
+                    if lock.remove(pkg_name) {
+                        if let Err(e) = lock.write(&cwd) {
+                            eprintln!("⚠ Uninstalled, but could not update {}: {}", LOCKFILE, e);
+                        }
+                    }
+                }
+                Err(e) => eprintln!("⚠ Uninstalled, but could not read {}: {}", LOCKFILE, e),
             }
         }
     }
@@ -1012,7 +1064,13 @@ fn fetch_latest_version(pkg_name: &str) -> Result<String, String> {
 }
 
 /// Download a package zip from the HTTP registry and extract it to ./packages/<name>/.
-fn download_package(pkg_name: &str, version: &str, global: bool) -> Result<(), String> {
+/// Fetch and extract into `dest`.
+///
+/// `dest` is a caller-owned **staging** directory, not the installed location:
+/// the caller commits it with a rename once the tree has been verified. This
+/// function used to compute the destination itself and extract straight into it,
+/// which is what made a failed download destructive.
+fn download_package(pkg_name: &str, version: &str, dest: &Path) -> Result<(), String> {
     validate_package_name(pkg_name)?;
     validate_package_version(version)?;
     let url = format!(
@@ -1054,29 +1112,8 @@ fn download_package(pkg_name: &str, version: &str, global: bool) -> Result<(), S
         ));
     }
 
-    let dest = if global {
-        packages_dir()
-    } else {
-        local_packages_dir()
-    }
-    .join(pkg_name);
-    extract_zip(&bytes, &dest)
-        .map_err(|e| format!("Failed to extract '{}@{}': {}", pkg_name, version, e))?;
-
-    if global {
-        println!(
-            "✅ Installed {}@{} → {} (global, remote)",
-            pkg_name,
-            version,
-            dest.display()
-        );
-    } else {
-        println!(
-            "✅ Installed {}@{} → ./packages/{} (remote)",
-            pkg_name, version, pkg_name
-        );
-    }
-    Ok(())
+    extract_zip(&bytes, dest)
+        .map_err(|e| format!("Failed to extract '{}@{}': {}", pkg_name, version, e))
 }
 
 // ── Registry credentials ──────────────────────────────────────────────────────
