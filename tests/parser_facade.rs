@@ -120,21 +120,81 @@ fn lexical_diagnostics_are_forwarded_into_the_same_list() {
 }
 
 #[test]
-fn lexical_diagnostics_become_visible_only_once_parsing_has_run() {
-    // `Parser::new` pulls two tokens, so a lexical failure on the first line
-    // already exists inside the parser before `parse_program` is called — but
-    // it is held in a separate queue and flushed at the end of `parse_program`,
-    // after the source lines and label are known. So `has_errors()` is false on
-    // a freshly constructed parser even when the source is already broken.
+fn a_parser_whose_source_is_already_broken_says_so_before_parsing() {
+    // `Parser::new` pulls two tokens, so a malformed token at the head of the
+    // file already exists inside the parser before `parse_program` is called.
+    // It waits in a separate queue, flushed at the end of `parse_program` once
+    // the source lines and label are known — and `has_errors()` used to read
+    // only the flag that flush sets, so it answered `false` about source the
+    // parser had already failed to lex (ROADMAP_STATE.md §5.13).
     //
-    // This is a hazard, not a feature: a caller that checked `has_errors()`
-    // before parsing would get the wrong answer. Nothing in the crate does.
-    // Recorded so that any change to it is deliberate.
-    let parser = Parser::new(Lexer::new("let s = \"unterminated;\n".to_string()));
+    // Decided and fixed: a known error is a known error. `has_errors()` reads
+    // the queue as well, so it is true the moment the parser exists.
+    let parser = Parser::new(Lexer::new(
+        "0x;
+"
+        .to_string(),
+    ));
+    assert!(
+        parser.has_errors(),
+        "the parser held a lexical error from construction and denied it"
+    );
+    // The queue is the only thing that can be answering: nothing has been
+    // flushed, so the *list* is still empty. §5.13 moved the yes/no question
+    // and left ordering (§5.12, decision D6) alone.
+    assert!(
+        parser.take_errors().is_empty(),
+        "take_errors() must still report only what has been flushed"
+    );
+}
+
+#[test]
+fn a_parser_over_clean_source_still_reports_no_errors() {
+    // The positive control for the test above. If `has_errors()` had simply
+    // become `true`, that test would pass for the wrong reason and this one
+    // would fail — which is the whole point of writing it.
+    let parser = Parser::new(Lexer::new(
+        "let s = \"fine\";
+"
+        .to_string(),
+    ));
     assert!(
         !parser.has_errors(),
-        "lexical errors now surface before parse_program; that is a behavior \
-         change, and possibly a good one — decide it, do not drift into it"
+        "a parser over well-formed source invented an error"
+    );
+}
+
+#[test]
+fn a_lexical_error_the_parser_has_not_reached_yet_is_not_yet_known() {
+    // The boundary, stated precisely, because §5.13's own example sat on the
+    // wrong side of it: `let s = "unterminated;` is *not* known at construction
+    // — two tokens of lookahead reach `let` and `s`, and the bad string is the
+    // fourth token. `has_errors()` answers "does the parser know of an error",
+    // not "does this source contain one", and it cannot answer the second
+    // without lexing the whole file eagerly.
+    //
+    // What the fix guarantees is that nothing the parser has already read stays
+    // hidden behind the flush.
+    let mut parser = Parser::new(Lexer::new(
+        "let a = 0x;
+"
+        .to_string(),
+    ));
+    assert!(
+        !parser.has_errors(),
+        "the parser claimed an error it has not read yet"
+    );
+    parser.parse_program();
+    assert!(
+        parser.has_errors(),
+        "the error was still hidden after the whole file was read"
+    );
+    assert!(
+        parser
+            .take_errors()
+            .iter()
+            .any(|e| e.code.starts_with("SZ1")),
+        "expected a lexical SZ1xxx in the list after the flush"
     );
 }
 

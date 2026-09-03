@@ -13,8 +13,8 @@
 //!   * `take_errors` reads the list; it does not take it (§5.11).
 //!   * `flush_lexer_errors` runs at the end of `parse_program`, so every
 //!     `SZ2xxx` precedes every `SZ1xxx` no matter where in the file they
-//!     occurred (§5.12), and `has_errors()` is false before the flush even when
-//!     the source is already lexically broken (§5.13).
+//!     occurred (§5.12). `has_errors()` no longer depends on it — §5.13 is
+//!     fixed, and it reads the queue as well as the flag.
 //!
 //! And one that is a defect: nine sites in the grammar never come through here
 //! at all. They set `had_error` by hand and print their own line, so
@@ -44,9 +44,22 @@ pub const SZ_PARSE_ERROR: &str = "SZ2000";
 pub type ParseError = Diagnostic;
 
 impl Parser {
-    /// Whether any parse error was reported while building the program.
+    /// Whether the parser knows of any error in this source — syntactic or
+    /// lexical, reported or still queued.
+    ///
+    /// The lexical half matters. `Parser::new` pulls two tokens, so a malformed
+    /// token on line 1 exists inside the parser before `parse_program` is ever
+    /// called; it waits in `lexer_errors` until the flush, which runs at the end
+    /// of `parse_program` once the source lines and label are known. Reading only
+    /// `had_error` therefore answered `false` about source the parser had already
+    /// failed to lex (§5.13). The queue is consulted directly so the answer does
+    /// not depend on how far parsing has got.
+    ///
+    /// This says nothing about *ordering*: `take_errors` still returns only what
+    /// has been flushed, and the flush still groups lexical after syntactic
+    /// (§5.12, decision D6). Only the yes/no question moved.
     pub fn has_errors(&self) -> bool {
-        self.had_error.get()
+        self.had_error.get() || !self.lexer_errors.borrow().is_empty()
     }
 
     /// All parse errors reported so far, with positions. Used by tooling (LSP).
