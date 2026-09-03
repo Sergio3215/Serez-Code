@@ -17,17 +17,18 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M5 — Type System Stable.** M4 closed PARTIAL (§9G) with four decisions registered and every independent item done. |
+| **Current milestone** | **M6 — Runtime Molecular.** M5 closed COMPLETE (§9I); M4 closed PARTIAL (§9G). |
 | Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, corpus-validated (§9F.3) · **M4.7.1–M4.7.2** the scope model and the measurement (§9F.6) · **audit** (§9G) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
-| Last completed milestone | **M3 — Diagnostics Unified** (M0, M1, M2 before it). M4 is **PARTIAL** by decision, not by omission |
+| Last completed milestone | **M5 — Type System Stable** (§9I). M4 is **PARTIAL** by decision, not by omission |
+| Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **DEC-M4-001**, **-002**, **-003**, **-004**, **DEC-M5-001** — all OPEN, all in §7A with measured evidence and a marked recommendation |
+| **Open decisions** | 9 OPEN — **DEC-M4-001**…**-004**, **DEC-M5-001**…**-005**. All in §7A with measured evidence and a marked recommendation. Only the M4 four block work |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-02 — baseline re-verified at `9ca4d22` (§1.5); this table had drifted (§5.30); §9F.4 (a) and (c) measured; §5.31, §5.32 recorded; M4's conditional plan is §9F.5 |
+| Last state update | 2026-09-03 — M5 closed COMPLETE (§9I) |
 
 Milestone ledger:
 
@@ -38,8 +39,8 @@ Milestone ledger:
 | M2 — AST + Spans Stable | **COMPLETE** (2026-09-02) — all 28 `Expression` variants and 39 of 40 structs carry a span |
 | M3 — Diagnostics Unified | **COMPLETE** (2026-09-02) — 5 diagnostic types -> 1, 4 rendered formats -> 1 renderer, §5.17 fixed |
 | M4 — Semantic Layer Established | **PARTIAL** (2026-09-02, §9G) — 3 of 6 DoD items met. Layer established, validated, **unadopted**; adoption held by DEC-M4-001/002/004 |
-| M5 — Type System Stable | **IN PROGRESS** — inherits §5.29 from M4 |
-| M6 — Runtime Molecular | NOT STARTED (partially pre-empted; see §6) |
+| M5 — Type System Stable | **COMPLETE** (2026-09-03, §9I) — 4 checker/runtime divergences fixed, §5.29 closed, 5 decisions registered |
+| M6 — Runtime Molecular | **IN PROGRESS** (partially pre-empted; see §6) |
 | M7 — Semantics Frozen | NOT STARTED |
 | M8 — Conformance Complete | NOT STARTED |
 | M9 — Robustness & Security Hardened | NOT STARTED (partially pre-empted; see §6) |
@@ -1209,6 +1210,10 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
 | **DEC-M4-004** | What the editor's outline should show | **OPEN** | the LSP's migration onto `semantic::declarations` |
 | **DEC-M5-001** | Whether a nullable value at a non-nullable parameter is reported | **OPEN** | nothing — a question to answer, not a gate |
+| **DEC-M5-002** | Whether a numeric type widens at a parameter | **OPEN** | nothing |
+| **DEC-M5-003** | Whether an unknown type name is diagnosed | **OPEN** | nothing; option B depends on DEC-M4-001 |
+| **DEC-M5-004** | Whether a declared field type is a constraint or a default | **OPEN** | nothing |
+| **DEC-M5-005** | Whether a declared class type accepts a subclass | **OPEN** | nothing |
 
 ---
 
@@ -1577,6 +1582,227 @@ reports.
 identifier, so the behaviour is pinned and documented either way. This is the
 first decision in the register that blocks **no** work — it is a question the
 roadmap should answer, not a gate.
+
+---
+
+### DEC-M5-002 — Should a numeric type widen at a parameter?
+
+**Problem.** Arithmetic mixes numeric types freely; parameter binding does not.
+`1 + 1.5` is a `decimal` without complaint, and `half(1)` against
+`fn decimal half(decimal d)` is a `TypeError`. The same two values, the same two
+types, opposite answers.
+
+**Current behaviour.** No widening, at a parameter, a return or a constructor.
+`int` does not widen to `decimal`; neither does `dec`. Both the checker and the
+runtime enforce this, and they agree — this is not a consistency defect, it is a
+design question. `spec/types.md` states it and calls declaring `decimal` on a
+parameter callers will pass integers to "a trap", recommending `any` "until this
+is reconciled".
+
+**Measured evidence.** **15** `decimal`-typed parameters across the tracked
+corpus; **0** across all eight ecosystem packages. So the trap is real but
+narrow, and no official package would be affected by changing it in either
+direction.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **Keep exact matching** | No break. The asymmetry with arithmetic stays, and `any` remains the honest annotation for numeric parameters |
+| B | **Widen `int` -> `decimal`** (and `int`/`dec` -> `dec`) at a parameter | Matches arithmetic. **Accepts programs rejected today** — additive, so no existing program stops working, but `TypeError` stops firing where a caller relied on it as a guard |
+| C | Widen, and warn where precision is lost | The safest version of B and the largest |
+
+**Trade-offs.** B is additive for *acceptance* and subtractive for *rejection*: a
+program relying on `half("…")`-style rejection is unaffected, but one relying on
+`half(1)` being rejected is not. That is a narrow but real class.
+
+**Architectural impact.** One table in `evaluator::type_matches`, mirrored in
+`type_checker::types_compatible`, with `tests/type_agreement.rs` holding the two
+to each other.
+
+**Semantic impact.** B and C change which programs run.
+
+**Compatibility.** B and C are breaking in the "accepts more" direction, which
+`spec/compatibility.md` still governs.
+
+**Impact by area.** Tests: `spec/types.md`'s widening example and its pinned
+runtime test would both invert. Specs: `spec/types.md` "No widening" and "Known
+gaps" both rewritten. LSP: inherits the checker. Runtime: the matcher. Ecosystem:
+zero measured exposure.
+
+**Recommendation — this is a recommendation, not a decision.** **B**, in a major,
+narrowly: `int` -> `decimal` and `int` -> `dec` only, never a lossy direction
+(`decimal` -> `int`, or `decimal` -> `dec`). The asymmetry with arithmetic is the
+kind of rule users cannot derive and must memorise, and `spec/types.md` already
+declines to defend it. C's precision warning is a separate, later question.
+
+**Blocked by this decision:** nothing today. Recorded because M5's charter asks
+for each rule to be decided rather than inherited.
+
+---
+
+### DEC-M5-003 — Should an unknown type name be diagnosed?
+
+**Problem.** An annotation is any identifier plus an optional `?`, and nothing
+checks that the name exists. `fn any f(Frobnicate x)` parses, loads, is callable —
+and rejects every value that reaches it. A misspelled type silently produces a
+function that can never succeed.
+
+**Current behaviour.** Accepted, matches nothing, no diagnostic at any phase.
+`spec/types.md` documents it under "Known gaps" and shows the example.
+
+**Measured evidence.** Every `fn` annotation across the tracked corpus and all
+eight ecosystem packages was checked against the type keywords, the runtime-
+recognised names, and every `class`/`interface`/`enum` declared anywhere in the
+same tree:
+
+| Scope | Annotations naming an undeclared type |
+|---|---|
+| Language repo, tracked corpus | **1** — `Frobnicate` in `tests/unit_types.sz`, the fixture that exists to document this behaviour |
+| All 8 ecosystem packages | **0** |
+
+So a diagnostic would fire, today, on exactly one file: the one written to prove
+the behaviour it would report.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **Advisory diagnostic** from the checker | No program stops working; findings are advisory. Needs the set of known type names, which the checker does not collect today (`semantic::declarations` does) |
+| B | **Fatal**, in the semantic phase DEC-M4-001 would create | Strongest, and rejects programs that run today — including ones whose bad annotation is never reached |
+| C | **Leave it** | The documented gap stays |
+
+**Trade-offs.** A is nearly free and catches a whole bug class at its cheapest
+moment. B is more valuable and needs DEC-M4-001 to exist first. C keeps a footgun
+the language can detect for the user but does not.
+
+**Architectural impact.** A gives the checker its **first dependency on the
+semantic layer** — it needs `declarations` to know which class names exist. That
+is a real architectural step and a good one: it is the first consumer M4 built
+the layer for.
+
+**Semantic impact.** None under A. B changes which programs run.
+
+**Compatibility.** A is stderr only. B is breaking.
+
+**Impact by area.** Tests: one fixture gains a finding. Specs: `spec/types.md`
+"Known gaps" loses an entry. LSP: inherits, and gains a genuinely useful squiggle.
+Runtime: unchanged under A. Ecosystem: zero exposure.
+
+**Recommendation — this is a recommendation, not a decision.** **A now, B when
+DEC-M4-001 lands.** The measurement makes A close to free, and it is the first
+piece of work that would give M4's semantic layer a product consumer — which is
+worth something beyond the diagnostic itself.
+
+**Blocked by this decision:** nothing. **Depends on:** DEC-M4-001, for option B
+only.
+
+---
+
+### DEC-M5-004 — Is a declared field type a constraint or a default?
+
+**Problem.** `timeout: int = 30;` on a class looks like a type declaration. It is
+a **default value** with a type annotation that is never enforced after
+construction: `c.timeout = "str"` is accepted, from inside the class and outside
+it. Interface fields are checked when the instance is built and never again. A
+new field can also be created by assignment — `c.brandNew = 1`.
+
+**Current behaviour.** As above; `spec/types.md` and `spec/classes.md` both state
+it. `MATURITY_AUDIT.md` records "property schemas not enforced after
+construction" as **high, open**, assigned to M5.
+
+**Measured evidence.** **68** typed field declarations across the tracked corpus;
+**0** across all eight ecosystem packages. No official package declares a typed
+field at all, so enforcement could not break one.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **Enforce on assignment** — the annotation becomes a constraint | Closes the gap. Breaking: any program assigning off-type to a declared field starts failing at run time, and today nothing warns |
+| B | **Keep as a default**, and say so louder in the docs | No break. The syntax keeps looking like a guarantee it does not give |
+| C | **Enforce, and forbid new fields by assignment** | The full schema story, and much the largest break — `c.brandNew = 1` is a documented, working idiom |
+
+**Trade-offs.** The syntax is the problem: `name: T = v` reads as a typed field in
+every language that has it, and here it is a default. B accepts a permanent
+mismatch between what the code looks like and what it means. A is where users
+already believe they are. C changes an idiom the corpus uses.
+
+**Architectural impact.** A needs a per-class field schema consulted on every
+field write — the runtime knows the declaration but does not carry it to the
+assignment path.
+
+**Semantic impact.** A and C change which programs run.
+
+**Compatibility.** A and C are breaking and need a major.
+
+**Impact by area.** Tests: 68 declaration sites, unknown how many assign off-type
+— that measurement is the natural first molecule if A is chosen. Specs:
+`spec/types.md` "Where enforcement stops" and `spec/classes.md`. Runtime: the
+field-assignment path. Ecosystem: zero measured exposure.
+
+**Recommendation — this is a recommendation, not a decision.** **A**, in a major,
+**not C**. Enforcing a declared field's type is what the syntax already promises,
+and the ecosystem cannot be broken by it. Forbidding undeclared fields is a
+separate and much larger question that should not ride along. Before implementing
+A, measure how many of the 68 sites are ever assigned off-type — that is a
+molecule, and it is the same shape as M4.7.2.
+
+---
+
+### DEC-M5-005 — Should a declared class type accept a subclass?
+
+**Problem.** A declared class name matches that class and nothing else.
+Inheritance drives dispatch and field layout; the type system does not see it.
+`new Derived() is Base` is `false`, and a `Base` parameter rejects a `Derived`.
+A function meant to work across a hierarchy must take `any`.
+
+**Current behaviour.** Exact match, in the checker and the runtime alike — they
+agree, so this is a design question rather than a consistency defect.
+`spec/types.md` records it "as an inconsistency, not defended", and it is pinned
+by `a_declared_type_matches_exactly_and_never_a_subclass` in
+`tests/runtime_outcome.rs` "so it cannot move in either direction by accident".
+
+**Measured evidence.** Zero programs can rely on subtyping working, since it does
+not. The measurable proxy is how much code takes `any` where it means a base
+class, and that is not mechanically distinguishable from code that means `any`.
+Recorded as unmeasured rather than estimated.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **Accept subclasses** at a parameter, and make `is` follow | What every user expects from a language with `class X : Y`. Accepts programs rejected today; changes `is` from `false` to `true` for a subclass, which is a **silent behaviour change in working programs** |
+| B | **Keep exact matching** | No break. Inheritance stays a dispatch mechanism that the type system cannot see |
+| C | Accept subclasses at parameters, leave `is` exact | Splits the two, and creates a second rule to memorise |
+
+**Trade-offs.** A's danger is not the parameter, it is `is`: a program branching
+on `x is Base` today takes the `false` path for a `Derived` and would take the
+`true` path afterwards. That is the one change in this whole register that can
+alter a working program's output silently. C avoids it at the cost of coherence.
+
+**Architectural impact.** The matcher needs the class hierarchy, which the
+evaluator has (`class_registry`) and the checker does not — so under A the
+checker needs the semantic layer, the same dependency DEC-M5-003 option A
+introduces.
+
+**Semantic impact.** A and C change which programs run; A additionally changes
+what `is` returns.
+
+**Compatibility.** Breaking, major, and the `is` half needs an explicit note in
+`spec/compatibility.md` because it is silent.
+
+**Impact by area.** Tests: the pinned exactness test inverts by design, and it was
+written to make that deliberate. Specs: `spec/types.md` "No subtyping" and
+`spec/classes.md`. LSP: inherits. Runtime: `type_matches` gains a hierarchy walk.
+Ecosystem: no package declares a class-typed parameter today.
+
+**Recommendation — this is a recommendation, not a decision.** **A**, in a major,
+with the `is` change called out separately in the release notes as the silent one.
+A language with `class X : Y` whose type system cannot see the `: Y` is teaching
+users a rule that exists for no reason they can find. But this is the single
+largest semantic change in the register and should be its own project, with
+differential testing over the corpus, not a milestone item.
 
 ---
 
@@ -3796,6 +4022,136 @@ DEC-M4-004 — and none of them is unmet through omission. The repository is gre
 and nothing is half-migrated: both modules are leaves, so there is no partial
 state to unwind if a decision goes the other way.
 
+## 9I. M5 MILESTONE AUDIT
+
+Charter: *"Reglas de tipos coherentes, normativas y consistentes entre
+checker/runtime/tooling."*
+
+### Definition of Done, item by item
+
+The plan's DoD: *a type rule means the same thing to the specification, the
+checker, the runtime, the LSP and the compiler.*
+
+| Consumer | Status | Evidence |
+|---|---|---|
+| Specification | **met** | `spec/types.md` is normative, complete for the rules it covers, and was the arbiter in every disagreement M5 found |
+| Runtime | **met** | `evaluator::type_matches` implements the spec's table; nothing in M5 changed it |
+| Checker | **met** | four divergences from the spec+runtime, all fixed (§9H.2, §9H.3); held by `tests/type_agreement.rs` |
+| LSP | **met, structurally** | `lsp/analysis.rs:151` constructs the same `TypeChecker`; there is no second implementation to drift (§9H.4) |
+| Compiler | **not applicable** | `src/compiler/` is feature-gated behind `llvm` and wired to no CLI verb. Recorded as an M10 item, not an M5 gap |
+
+**All five consumers that exist are consistent. M5's stated DoD is met.**
+
+### What "COMPLETE" does and does not claim here
+
+It claims: **no consumer disagrees with another about the same program**, and a
+gate now exists that fails if one starts to.
+
+It does not claim the type system is good. `spec/types.md`'s "Known gaps" section
+lists eight limitations, and M5 fixed none of them — it made every consumer agree
+about them. Those eight are design questions, and five are now registered as
+**DEC-M5-001** through **DEC-M5-005** with measured exposure and a marked
+recommendation. That distinction is the milestone: *coherent* was the charter,
+not *complete*.
+
+### 1. What M5 found
+
+The premise was that the rules might be incoherent. They were not — the rules are
+fine and `spec/types.md` states them well. **What was incoherent was that the
+matching table had two implementations**, 25 arms and 8 lines, and the small one
+was not a subset of the large one:
+
+| Divergence | Direction | Fixed |
+|---|---|---|
+| `void` did not accept `null` | false positive | M5.2 |
+| `[int]` rejected `[string]` | false positive | M5.2 |
+| `array` rejected `[int]` | false positive | M5.2 |
+| `export` hid a declaration from passes 1 and 2 | false negative | M5.3 (§5.29) |
+| Two of four checks carried no position | tooling defect | M5.4 |
+| `int?` at an `int` parameter | undecided | **DEC-M5-001** |
+
+### 2. Why no existing gate could have caught any of them
+
+The three false positives are the important case, and the reason is structural:
+**nothing in the repository pins stderr for a program that succeeds.**
+`diagnostic_render.manifest` covers `err_*` and `sec_*` — failing programs. The
+e2e fixtures compare stdout. So a spurious `TYPE ERROR` printed over a correct
+program was invisible to all 499 conformance tests and all 426 Rust tests
+simultaneously.
+
+`tests/type_agreement.rs` is the gate that closes it, and it closes it by
+construction rather than by enumeration: it runs each case through the real
+checker *and* the real evaluator and compares them, so it does not need to know
+what the right answer is — only that the two halves give the same one.
+
+### 3. Semantic drift
+
+**None.** No program's behaviour changed. Every M5 change is confined to stderr,
+and only for programs that were being reported wrongly or not at all:
+
+  * M5.2 removes findings from programs that run correctly;
+  * M5.3 adds findings to exported declarations that were skipped;
+  * M5.4 adds a position to two findings.
+
+Exit codes cannot move — `spec/types.md` makes type findings advisory — and the
+measurement confirms nothing observable did: **the corpus emits exactly 3
+`SZ3000` findings, in the same 3 files, before M5 and after it**, and no manifest
+row moved across the milestone.
+
+### 4. Duplication introduced
+
+None. M5 *reduced* duplication in the only place it could: `types_compatible` is
+now the name-level half of `type_matches` and says so. The two remain separate
+functions because one reasons about values and the other about type names, and
+the arms of `type_matches` that inspect a value have no name-level counterpart —
+recorded at the definition site rather than left to be rediscovered.
+
+### 5. Circular or new dependencies
+
+None. `type_checker` still depends on `ast`, `diagnostic`, `render` and `span`.
+Note that **DEC-M5-003 option A would add a dependency on `semantic`** — the
+checker needs to know which class names exist — which would make it the first
+product consumer of the layer M4 built. Recorded because it is an architectural
+consequence of a decision, not of a change.
+
+### 6. Gates, at close
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --check` | **PASS** |
+| `cargo check --all-targets` | **PASS**, no warnings |
+| `cargo clippy --all-targets` | **PASS**, 0 errors |
+| Clippy per-site list (§5.26) | **180 lines** — one *fewer* than the 181 baseline; `manual_strip` in `types_compatible`, removed by M5.2 |
+| `cargo test --all-targets` | **PASS**, 426 / 0 failed |
+| `run_tests.ps1` / `run_tests.sh` | **PASS**, 499 / 0 / 0 each, identical per category |
+| Ecosystem canary | **PASS**, 8 / 8 |
+| Corpus `SZ3000` findings | **3**, in the same 3 files as before M5 |
+
+### 7. What M5 hands forward
+
+| To | What |
+|---|---|
+| The decision owner | DEC-M5-001…005, each with measured exposure: 15 `decimal` parameters and 0 in the ecosystem; 1 unknown type name, in the fixture that documents it; 68 typed fields and 0 in the ecosystem |
+| M4 | DEC-M5-003 option A would give `semantic` its first product consumer |
+| M7 | DEC-M5-004 and DEC-M5-005 are semantics to freeze, and both are breaking |
+| M10 | the compiler's type story is unproven because the compiler is unwired |
+| Whoever adds a check | `Expression::span()` does not exist; the array-literal diagnostic points at the literal instead of the element because of it (§9H.4) |
+
+### 8. Commits
+
+`83dfef5` M5.0–M5.2 (audit, net, three false positives) · `b17cedd` M5.3
+(`export`, closing §5.29) · `df6a0b8` M5.4 (positions, tooling parity).
+
+---
+
+## MILESTONE STATUS: **COMPLETE**
+
+Every consumer of a type rule that exists today agrees with every other, the
+specification is the arbiter, and `tests/type_agreement.rs` fails if that stops
+being true. The five open decisions are about what the rules *should be*, which
+is a different question from whether the implementation is coherent about them —
+and each is registered with evidence rather than absorbed.
+
 ## 10. Commits and checkpoints
 
 | Milestone | Commit | Note |
@@ -3819,6 +4175,12 @@ state to unwind if a decision goes the other way.
 | M4.3 | `c2775bd` | `validate the new module against the whole corpus` |
 | **M3 checkpoint** | `78202b5` | `M3 closes — the audit, and two rows that were out of date` |
 | **M1 checkpoint** | the commit that created `src/parser/expressions.rs` — `git log --diff-filter=A -1 --format=%h -- src/parser/expressions.rs` | `the last two grammar areas move out, and M1 closes` — assignment, expressions, and the milestone audit. A commit cannot name its own hash, so this row resolves it. |
+| M4.7.1-M4.7.2 | `69f9553` | `a scope model with no consumers, and the number DEC-M4-002 was missing` |
+| §5.34 fix | `8e67150` | `three fixtures that asserted nothing now assert, and a guard so it cannot recur` |
+| **M4 checkpoint** | `a622e84` | `M4 closes PARTIAL — three of six, and the reason for each of the other three` |
+| M5.0-M5.2 | `83dfef5` | `the checker stops reporting three programs the runtime accepts` — **behaviour change**, stderr |
+| M5.3 | `b17cedd` | `the checker sees through export, and §5.29 closes` — **behaviour change**, stderr |
+| M5.4 | `df6a0b8` | `two checker findings that pointed at nothing now point at the code` |
 | **Re-entry checkpoint** | the commit that added §1.5 — `git log -1 --format=%h -S'1.5 Baseline re-verified' -- docs/maturity/ROADMAP_STATE.md` | `re-verify the baseline, and correct a header three milestones out of date`. Documentation only; no behaviour change. Seven gates plus the canary re-measured green at `9ca4d22`; §0 corrected; §5.30 recorded. Same self-naming problem as the M1 row, resolved the same way. |
 
 ---
