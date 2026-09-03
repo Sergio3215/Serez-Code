@@ -101,30 +101,82 @@ test("[T] on a parameter accepts any array", () => {
            "a literal violating its own element type is rejected");
 });
 
-test("declared field types are defaults, not constraints", () => {
+// A declared field type used to be a default with an annotation that was never
+// enforced again: `c.timeout = "str"` was accepted from inside the class and
+// outside it. It is a constraint for the object's whole life now.
+test("a declared field type constrains every later write", () => {
     class Config {
         timeout: int = 30;
         public Config() { }
         public void setBad() { this.timeout = "not an int"; }
     }
     let c = new Config();
-    assert(c.timeout == 30, "the declaration supplies a default");
-    c.timeout = "str";
-    assert(c.timeout == "str", "assignment from outside ignores the type");
+    assert(c.timeout == 30, "the declaration still supplies a default");
+    c.timeout = 45;
+    assert(c.timeout == 45, "a compatible write is unaffected");
+
+    assert(kind_of(() => { c.timeout = "str"; return 1; }) == "TypeError/SZ4002",
+           "assignment from outside is rejected");
+    assert(c.timeout == 45, "and the field keeps the value it had");
+
     let c2 = new Config();
-    c2.setBad();
-    assert(c2.timeout == "not an int", "so does assignment from inside");
-    c2.brandNew = 1;
-    assert(c2.brandNew == 1, "and a new field can be added by assignment");
+    assert(kind_of(() => { c2.setBad(); return 1; }) == "TypeError/SZ4002",
+           "assignment from inside the class is rejected too");
+    assert(c2.timeout == 30, "the field is unchanged there as well");
 });
 
-test("an interface field is checked at construction and never again", () => {
+test("only a declared type constrains a field", () => {
+    class Loose {
+        annotated: int = 1;
+        bare = 2;
+        public Loose() { }
+    }
+    let l = new Loose();
+    // A field declared with a default and no annotation promises nothing.
+    l.bare = "anything";
+    assert(l.bare == "anything", "an unannotated field is unconstrained");
+    // Creating a field by assignment stays legal — enforcing declared types and
+    // forbidding undeclared fields are two different questions, and only the
+    // first was decided.
+    l.brandNew = 1;
+    assert(l.brandNew == 1, "a new field can still be added by assignment");
+    assert(kind_of(() => { l.annotated = "no"; return 1; }) == "TypeError/SZ4002",
+           "the annotated field is still constrained");
+});
+
+test("an inherited field type constrains a subclass", () => {
+    class Base { count: int = 0; public Base() { } }
+    class Derived : Base { public Derived() { super(); } }
+    let d = new Derived();
+    d.count = 3;
+    assert(d.count == 3, "a compatible write through the subclass works");
+    assert(kind_of(() => { d.count = true; return 1; }) == "TypeError/SZ4002",
+           "the parent's declaration constrains the child");
+});
+
+test("a nullable field accepts null and its base type", () => {
+    // The rule is the runtime's own `type_matches`, not a comparison of type
+    // names, so nullable behaves here exactly as it does at a parameter.
+    class Holder { tag: string? = null; public Holder() { } }
+    let h = new Holder();
+    h.tag = "set";
+    assert(h.tag == "set", "the base type is accepted");
+    h.tag = null;
+    assert(h.tag == null, "and so is null");
+    assert(kind_of(() => { h.tag = 1; return 1; }) == "TypeError/SZ4002",
+           "but not an unrelated type");
+});
+
+test("an interface field is checked on every write, not only at construction", () => {
     interface P { n: int; }
     assert(kind_of(() => { return new P({ n: "not an int" }); }) == "TypeError/SZ4002",
            "construction checks the field type");
     let p = new P({ n: 1 });
-    p.n = "str";
-    assert(p.n == "str", "assignment does not");
+    p.n = 2;
+    assert(p.n == 2, "a compatible write is unaffected");
+    assert(kind_of(() => { p.n = "str"; return 1; }) == "TypeError/SZ4002",
+           "and so does assignment");
+    assert(p.n == 2, "the field keeps the value it had");
 });
 
 test("type_of and is agree", () => {

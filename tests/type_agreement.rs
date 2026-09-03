@@ -160,6 +160,45 @@ fn cases() -> Vec<Case> {
             ),
             checker_must_catch: true,
         },
+        // A declared field type is a constraint for the object's life, not a
+        // default applied once. The runtime enforces it on every write; the
+        // checker does not look inside `FieldAssign` at all, which is a gap
+        // rather than a contradiction — it reports nothing, so it cannot
+        // disagree. `checker_must_catch` is false for exactly that reason, and
+        // the row exists so the gap is visible rather than implicit.
+        Case {
+            name: "off_type_write_to_a_declared_field_is_rejected",
+            rule: "spec/classes.md — a declared field type constrains every later write",
+            source: concat!(
+                "class Config { timeout: int = 30; public Config() { } }\n",
+                "let c = new Config();\n",
+                "c.timeout = \"str\";\n"
+            ),
+            checker_must_catch: false,
+        },
+        Case {
+            name: "compatible_write_to_a_declared_field_is_accepted",
+            rule: "spec/classes.md — the rule is `type_matches`, so a compatible write passes",
+            source: concat!(
+                "class Config { tag: string? = null; public Config() { } }\n",
+                "let c = new Config();\n",
+                "c.tag = \"set\";\n",
+                "c.tag = null;\n",
+                "out 1;\n"
+            ),
+            checker_must_catch: false,
+        },
+        Case {
+            name: "an_undeclared_field_is_still_created_by_assignment",
+            rule: "spec/classes.md — only declared fields are constrained",
+            source: concat!(
+                "class Config { timeout: int = 30; public Config() { } }\n",
+                "let c = new Config();\n",
+                "c.brandNew = \"anything\";\n",
+                "out c.brandNew;\n"
+            ),
+            checker_must_catch: false,
+        },
     ]
 }
 

@@ -920,6 +920,40 @@ impl super::Evaluator {
                 );
                 return self.rt_err_kind("TypeError", message);
             }
+            // A declared field type is a constraint for the object's whole life,
+            // not a hint applied once at construction. `MATURITY_AUDIT.md`
+            // carried the opposite as high, open debt under M5: `timeout: int =
+            // 30` looks like a typed field in every language that has the
+            // syntax, and `c.timeout = "str"` was accepted from inside the class
+            // and outside it.
+            //
+            // The check is the *same* rule the rest of the runtime uses —
+            // `type_matches`, via `declared_field_type` — so nullable, `[T]`,
+            // `any`, enum variants and the `DateField`-satisfies-`int` case all
+            // behave here exactly as they do at a parameter. It is deliberately
+            // not a comparison of type names.
+            //
+            // Only *declared* fields are constrained. Creating a new field by
+            // assignment stays legal: that is a documented idiom, and forbidding
+            // it is a separate and much larger question (DEC-M5-004 option C,
+            // not taken).
+            if let Some(expected) = self.declared_field_type(&class_name, field) {
+                // Classified before raising: `resolve` holds an immutable borrow
+                // that has to end before a diagnostic is recorded.
+                let planted = self.plant(new_val.clone());
+                let mismatch = match self.resolve(planted) {
+                    Some(data) if type_matches(expected.as_str(), data) => None,
+                    Some(data) => Some(data.type_name().to_string()),
+                    None => Some("null".to_string()),
+                };
+                if let Some(actual) = mismatch {
+                    let message = format!(
+                        "Field '{}' of '{}' is declared '{}' and cannot hold '{}'",
+                        field, class_name, expected, actual
+                    );
+                    return self.rt_err_kind("TypeError", message);
+                }
+            }
             if let Some(f) = fields.iter_mut().find(|(n, _)| n == field) {
                 f.1 = new_val;
             } else {
@@ -939,6 +973,45 @@ impl super::Evaluator {
             let message = format!("'{}' is not a class or interface instance", what);
             self.rt_err_kind("TypeError", message)
         }
+    }
+
+    /// The type a field was declared with, or `None` if it carries no
+    /// annotation and is therefore unconstrained.
+    ///
+    /// Both shapes of instance are covered, because both had the same gap:
+    ///
+    ///   * a **class** field, walking the parent chain the way `find_setter`
+    ///     does — an inherited `count: int` constrains a subclass's writes, and
+    ///     a subclass that redeclares the field wins, which is what field
+    ///     shadowing already means for the value;
+    ///   * an **interface** field, which was checked when the instance was built
+    ///     and never again.
+    ///
+    /// The walk is bounded by the registry's size, as `find_setter` is: a
+    /// declaration cycle is refused at declaration time, and this must not be
+    /// where a surviving one becomes an infinite loop.
+    fn declared_field_type(&self, class_name: &str, field: &str) -> Option<String> {
+        if let Some(fields) = self.interface_registry.get(class_name) {
+            return fields
+                .iter()
+                .find(|f| f.name == field)
+                .map(|f| f.type_name.clone());
+        }
+
+        let mut current = class_name.to_string();
+        for _ in 0..self.class_registry.len() {
+            let class = self.class_registry.get(&current)?;
+            if let Some(declared) = class.fields.iter().find(|f| f.name == field) {
+                // A field declared with a default and no annotation — `count = 0`
+                // — promises nothing, so nothing is enforced for it.
+                return declared.type_annotation.clone();
+            }
+            match &class.parent {
+                Some(parent) => current = parent.clone(),
+                None => return None,
+            }
+        }
+        None
     }
 
     // Pops the ephemeral frame that wraps a top-level While/DoWhile, re-planting

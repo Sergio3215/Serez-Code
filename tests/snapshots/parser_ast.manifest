@@ -502,7 +502,7 @@ tests/unit_throw_propagation.sz	13537	0	e52cc9c77f604a31	cbf29ce484222325
 tests/unit_trim_aliases.sz	20061	0	c31f111423470d29	cbf29ce484222325
 tests/unit_try_catch.sz	34809	0	329b6090ca7cb3d3	cbf29ce484222325
 tests/unit_try_catch_edge.sz	42649	0	36f6b037cddd5012	cbf29ce484222325
-tests/unit_types.sz	74767	0	97abf69a8415549e	cbf29ce484222325
+tests/unit_types.sz	93618	0	b29500416ae0c342	cbf29ce484222325
 tests/unit_uncontemplated_edges.sz	56636	0	b91b83bc8836e0d0	cbf29ce484222325
 tests/unit_unsafe_block.sz	16510	0	31c6d085fac65a9d	cbf29ce484222325
 tests/unit_websocket.sz	47232	0	f7827d24c4970c32	cbf29ce484222325

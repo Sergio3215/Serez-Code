@@ -52,6 +52,11 @@ useless:
   release — but only after a sweep of every official package found zero
   occurrences of the affected form, which the changelog entry records by name.
 
+- **Unreleased** made an off-type write to a declared field a catchable
+  `TypeError` where it used to be accepted. The sweep found **2** affected sites
+  across 1,070 corpus and ecosystem files, and both were the conformance
+  fixtures that documented the old behaviour; no package declares a typed field
+  at all. See `types.md`.
 - **Unreleased** made two previously-accepted programs fatal: a name declared
   twice in one scope, and a class declaring a parent that cannot be resolved.
   Both were silent before — the duplicate ran with the later definition, and the

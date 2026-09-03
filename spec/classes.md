@@ -40,6 +40,42 @@ error and abandoned the half-parsed declaration — so a class with a body produ
 two invented `Unexpected token '}'` errors alongside the real one. It now runs
 after parsing, against a complete declaration, and reports once.
 
+### A declared field type holds for the object's whole life
+
+```serez
+class Config {
+    timeout: int = 30;
+    public Config() { }
+}
+let c = new Config();
+c.timeout = 45;      // fine
+```
+
+```serez
+// runtime-error-example: the declared type is checked on every write
+class Config { timeout: int = 30; public Config() { } }
+let c = new Config();
+c.timeout = "str";
+```
+
+An off-type write is a catchable `TypeError` (`SZ4002`), from inside the class
+and outside it, and the field keeps the value it had. Inherited fields count: a
+parent's `count: int` constrains a write made through a subclass. Interface
+fields are checked on every write too, not only when the instance is built.
+
+The rule is `types.md`'s matching table, not a comparison of type names, so a
+`string?` field accepts a string or `null` and a `[int]` field accepts any array.
+
+Two things are deliberately **not** constrained:
+
+- a field declared with a default and no annotation — `bare = 2;` — promises
+  nothing and accepts anything;
+- a field created by assignment — `c.brandNew = 1;` — remains a documented idiom.
+  Enforcing declared types and forbidding undeclared fields are separate
+  questions, and only the first has been decided.
+
+Until 10.0.0 the annotation was a default that was never checked again.
+
 ### A name may not be declared twice in one scope
 
 Two `class`, two `interface`, two `enum` or two `fn` declarations of the same

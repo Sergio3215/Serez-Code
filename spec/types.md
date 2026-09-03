@@ -137,14 +137,44 @@ Annotations are checked at the boundaries above. They are **not** checked here:
 | --- | --- |
 | `let x = 5; x = "s";` | accepted — a binding has no type to violate |
 | `[int]` passed to a `[int]` parameter | accepted, and so is `[string]` |
-| A class field's declared type, on assignment | accepted — `c.timeout = "str"` works |
-| An interface field's type, on assignment | accepted — checked only at construction |
+| A field with a default and no annotation | accepted — `bare = 2` promises nothing |
 | A new field added by assignment | accepted — `c.brandNew = 1` creates it |
 
-A declared class field (`timeout: int = 30;`) supplies a **default value**. Its
-type is not enforced after construction, from inside the class or outside it.
-Interface fields are checked when the instance is built and never again. See
-`classes.md`.
+A declared field type **is** enforced on assignment, and has been since
+Unreleased; see the section below. What is not enforced is a field that carries
+a default and no annotation, and the creation of a field that was never
+declared.
+
+## A declared field type is a constraint, not a default
+
+`timeout: int = 30;` supplies a default value **and** a constraint that holds for
+the object's whole life. Every later write is checked, from inside the class and
+outside it, and an off-type write is a catchable `TypeError` (`SZ4002`) that
+leaves the field with the value it had.
+
+The rule applied is the same matching table as everywhere else on this page —
+nullable, `[T]`, `array`, `any`, enum variants and `DateField`-satisfies-`int`
+all behave at a field exactly as they do at a parameter. It is not a comparison
+of type names.
+
+It applies to inherited fields: a parent's `count: int` constrains a write
+through a subclass. It applies to **interface** fields on every write, not only
+at construction.
+
+Until Unreleased the annotation was a default only, and `c.timeout = "str"` was
+accepted from inside the class and outside it. The sweep `compatibility.md`
+requires found **2** affected sites across 1,070 corpus and ecosystem files, and
+both were the fixtures documenting the old behaviour. See `classes.md`.
+
+### What the static checker says about this
+
+Nothing. `type_checker` does not inspect field assignment, so this rule is
+enforced by the runtime alone. That is a gap in reach rather than a
+disagreement: the checker reports nothing here, so it cannot contradict the
+runtime, and `tests/type_agreement.rs` carries the case so the gap is visible
+rather than assumed. Closing it needs the checker to know each class's field
+schema and the static type of the assigned expression, which is its own piece of
+work.
 
 ## `type_of` and `is`
 
