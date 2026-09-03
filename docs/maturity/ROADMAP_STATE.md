@@ -17,19 +17,20 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M7 — Semantics Frozen.** M6 closed PARTIAL (§9K), M5 COMPLETE (§9I), M4 PARTIAL (§9G). |
+| **Current milestone** | **M8 — Conformance Complete.** M7 PARTIAL (§9M), M6 PARTIAL (§9K), M5 COMPLETE (§9I), M4 PARTIAL (§9G). |
 | Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, corpus-validated (§9F.3) · **M4.7.1–M4.7.2** the scope model and the measurement (§9F.6) · **audit** (§9G) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
 | Last completed milestone | **M5 — Type System Stable** (§9I). M4 and M6 are **PARTIAL** by decision, not by omission |
+| Goals done in M7 | **M7.0** the spec sweep (§9L.0) · **M7.1** six decisions registered · **M7.2** `frozen_semantics.rs` (§9L.2) · **audit** (§9M) |
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | 10 OPEN — **DEC-M4-001**…**-004**, **DEC-M5-001**…**-005**, **DEC-M6-001**. All in §7A with measured evidence and a marked recommendation |
+| **Open decisions** | 16 OPEN — **DEC-M4-001**…**-004**, **DEC-M5-001**…**-005**, **DEC-M6-001**, **DEC-M7-001**…**-006**. All in §7A with measured evidence and a marked recommendation |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — M6 closed PARTIAL (§9K) |
+| Last state update | 2026-09-03 — M7 closed PARTIAL (§9M) |
 
 Milestone ledger:
 
@@ -42,8 +43,8 @@ Milestone ledger:
 | M4 — Semantic Layer Established | **PARTIAL** (2026-09-02, §9G) — 3 of 6 DoD items met. Layer established, validated, **unadopted**; adoption held by DEC-M4-001/002/004 |
 | M5 — Type System Stable | **COMPLETE** (2026-09-03, §9I) — 4 checker/runtime divergences fixed, §5.29 closed, 5 decisions registered |
 | M6 — Runtime Molecular | **PARTIAL** (2026-09-03, §9K) — `Evaluator` 48 fields -> 38; dispatch still on the evaluator, held by DEC-M6-001 |
-| M7 — Semantics Frozen | **IN PROGRESS** |
-| M8 — Conformance Complete | NOT STARTED |
+| M7 — Semantics Frozen | **PARTIAL** (2026-09-03, §9M) — everything settled is specified; 6 decisions open and pinned |
+| M8 — Conformance Complete | **IN PROGRESS** |
 | M9 — Robustness & Security Hardened | NOT STARTED (partially pre-empted; see §6) |
 | M10 — Stable Language Platform | NOT STARTED |
 
@@ -4649,6 +4650,90 @@ someone making a red test green.
 
 ---
 
+## 9M. M7 MILESTONE AUDIT
+
+Charter: *important observable behaviour should exist because it was decided, not
+because the implementation happens to do it.*
+
+### Definition of Done, item by item
+
+| Item | Status | Evidence |
+|---|---|---|
+| Every behaviour on the charter's list probed and classified | **met** | §9L.0 - the sweep covers all 14 categories the plan names |
+| Behaviour that is settled, is specified | **met** | generators, overflow, module cycles, task cancellation, process semantics, platform differences and null are each covered by a `spec/` document |
+| Behaviour that is not settled, is decided | **NOT met** | six open decisions, DEC-M7-001 through -006 |
+| Nothing important is undocumented | **nearly met** | one gap found: handle/free has no spec. Behaviour is correct and deliberate; assigned to M8 |
+| Undecided behaviour cannot drift | **met** | `tests/frozen_semantics.rs`, 7 pins, verified load-bearing |
+
+**Four of five. M7 is PARTIAL**, and the unmet item is the milestone's whole
+subject: freezing semantics *is* deciding them.
+
+### 1. What M7 found, and why it changes the milestone's shape
+
+M7 expected to find accidental behaviour and to have to distinguish it from
+intended behaviour. It found something better and more awkward: **`spec/` already
+makes that distinction, explicitly, in its own words.** Five separate documents
+say a version of "this is recorded as an inconsistency, not defended".
+
+So there was no accidental semantics to discover. There is decided semantics,
+which is specified, and undecided semantics, which is specified **as undecided**.
+The milestone's remaining work is not engineering; it is six answers.
+
+That is the same result M5 reached from a different direction, and the pattern is
+worth naming for M8 through M10: **this project's documentation is ahead of its
+decisions.** A roadmap that assumes the reverse will keep discovering that the
+audit has already been done.
+
+### 2. What M7 changed
+
+No source file. One test file, seven pins, and six decision records. That is the
+correct output for a milestone whose charter is to decide and whose decisions are
+not its to take - and it is worth stating plainly rather than padding.
+
+### 3. The one gap that is not a decision
+
+Memory handles have no `spec/` document. Probed: a freed handle's id is never
+reissued, and use-after-free is refused and catchable. Correct, deliberate
+(`handles.rs` states the rule), and unwritten. **M8 owns writing it down**;
+M7 pinned it so it cannot be optimised away by someone who does not know it is a
+guarantee.
+
+### 4. Semantic drift
+
+None possible - no source changed. The point of the milestone is the opposite: the
+seven pins mean that from here, drift in any of these six behaviours fails a test
+that names the decision it belongs to.
+
+### 5. Gates at close
+
+fmt **PASS** · check **PASS** · clippy **PASS**, per-site list **180**, unchanged ·
+`cargo test --all-targets` **440 / 0** · `run_tests.sh` **499 / 0 / 0** ·
+`run_tests.ps1` **499 / 0 / 0** · ecosystem **8 / 8**.
+
+### 6. What M7 hands forward
+
+| To | What |
+|---|---|
+| The decision owner | DEC-M7-001…006, and the ordering constraint that DEC-M7-005 should precede DEC-M7-003, and DEC-M7-004 should ship with DEC-M5-005 |
+| M8 | `spec/memory.md` does not exist; handle/free is unwritten |
+| M9 | DEC-M7-006 (`fetch` under lockdown) is half of the `fetch` question; the response-size ceiling is the other half and is independent |
+| Whoever answers DEC-M7-002 | the measurement wants a resolver, which is the same walk DEC-M4-002 needs - two decisions, one piece of infrastructure |
+
+### 7. Commits
+
+`2cc1d46` M7.1-M7.2 (six decisions registered, seven pins).
+
+---
+
+## MILESTONE STATUS: **PARTIAL**
+
+Everything settled is specified; everything unsettled is registered, measured
+where measurement was possible, and pinned so it cannot move before it is
+answered. The milestone cannot close further without six answers, and taking them
+to reach COMPLETE is exactly what the protocol forbids.
+
+---
+
 ## 9K. M6 MILESTONE AUDIT
 
 Charter: *"Evaluator debe evaluar lenguaje"* — not simultaneously be a filesystem,
@@ -4913,6 +4998,8 @@ and each is registered with evidence rather than absorbed.
 | M6.1 | `b84393c` | `the autodiff tape stops being five fields of the evaluator` |
 | M6.2 | `503d5f6` | `the module context stops being three fields of the evaluator` |
 | M6.3 | `be7fb96` | `security, task context and dispatch caches stop being seven fields` |
+| **M6 checkpoint** | `c946d36` | `M6 closes PARTIAL — the state moved, the behaviour did not` |
+| M7.1-M7.2 | `2cc1d46` | `pin six undecided behaviours so none of them moves by accident` |
 | M6.4 | `139911d` | `two services stop being data and start answering questions` |
 | M5.4 | `df6a0b8` | `two checker findings that pointed at nothing now point at the code` |
 | **Re-entry checkpoint** | the commit that added §1.5 — `git log -1 --format=%h -S'1.5 Baseline re-verified' -- docs/maturity/ROADMAP_STATE.md` | `re-verify the baseline, and correct a header three milestones out of date`. Documentation only; no behaviour change. Seven gates plus the canary re-measured green at `9ca4d22`; §0 corrected; §5.30 recorded. Same self-naming problem as the M1 row, resolved the same way. |
