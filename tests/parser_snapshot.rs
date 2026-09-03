@@ -103,15 +103,13 @@ fn crate_root() -> PathBuf {
 /// disk, and including either would make this test fail on whichever machine
 /// had most recently run the suite.
 ///
-/// The `~` rule also excludes exactly one file that *is* committed:
-/// `tests/~tmp_test.sz`. It is not a test. It is a captured runner temp file
-/// from 2026-06-19 — `framework.sz` with the body of what is now
-/// `unit_dict_advanced.sz` appended — that no runner, script or document
-/// references, and that two commits have "restored" after glob cleanups removed
-/// it, on the assumption it was needed. Pinning the parse of an artifact nobody
-/// runs would only mean a spurious failure the day somebody finally deletes it.
-/// So the corpus is 490 files rather than the 491 `git ls-files '*.sz'` reports,
-/// and the missing one is that.
+/// The `~` rule used to exclude one file that *was* committed:
+/// `tests/~tmp_test.sz`, a captured runner temp file from 2026-06-19 that no
+/// runner, script or document referenced and that two commits had "restored"
+/// after glob cleanups removed it, on the assumption it was needed. §5.14
+/// deleted it — it was `framework.sz` plus a blank line plus
+/// `unit_dict_advanced.sz`, byte for byte, so it covered nothing that file does
+/// not. `git ls-files '*.sz'` and the corpus now agree.
 fn is_corpus_file(path: &Path) -> bool {
     if path.extension().and_then(|e| e.to_str()) != Some("sz") {
         return false;
