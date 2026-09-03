@@ -32,6 +32,8 @@
 //! answer on its own — `is_reserved_name` covers 7 of 22 namespaces, and
 //! changing that is breaking (§5.20).
 
+pub mod scopes;
+
 use crate::ast::{Program, Statement};
 use crate::span::Span;
 

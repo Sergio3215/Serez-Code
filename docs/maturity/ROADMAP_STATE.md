@@ -953,6 +953,158 @@ building. A post-parse phase would parse the class normally, report one error
 against a complete node, and emit nothing else. Option (a) does not merely move
 the check — **it deletes this finding as a side effect.**
 
+### 5.33 — how much code relies on dynamic name resolution, measured — **the number DEC-M4-002 needed**
+
+`src/semantic/scopes.rs` (M4.7.1) models lexical scope without reporting
+anything; `tests/scope_resolution.rs` (M4.7.2) runs it over the corpus. Both are
+leaves: no product consumer, no diagnostic, nothing rejected.
+
+The model matches the runtime where it matters, and each rule was probed against
+the 10.0.0 binary rather than assumed:
+
+| Probe | Runtime | Model |
+|---|---|---|
+| Forward call to a function declared later | resolves | top-level names are position-independent |
+| Local read before its own `let` | `SZ4001` | not bound |
+| Nested `fn` called before its declaration | `SZ4001` | not bound |
+| Closure reading the enclosing function's local | resolves | bound |
+| **Function reading its caller's local** | **resolves — prints 42** | **free** |
+
+**Results.** In-repo corpus, 486 files conclusively analysed (28 excluded for
+containing `import`, since a name may legitimately come from another module):
+
+| | In-repo | With the 8 ecosystem packages |
+|---|---|---|
+| Files conclusively analysed | 486 | 583 |
+| Files with an unaccounted use | 24 (4.9%) | 31 (5.3%) |
+| Uses **inside a function or method** | **4** | **38** |
+| Uses at a file's top level | 52 | 52 |
+
+**The four in-repo uses inside a function are all deliberate.** They are the
+fixtures written to contain an undefined name — `ghost_variable`, `Fantasma`,
+`PhantomClass`, `CatchMissing`, `MissingParent`, `InheritanceCycleB`. The model
+finding exactly the names those fixtures exist to hold, and nothing else, is the
+validation: 486 real files produced no unexplained result.
+
+**So the corpus does not rely on dynamic resolution at all.** That is the answer
+DEC-M4-002 was waiting for, and it points strongly at option B — advisory
+reporting would be silent on every legitimate file in this repository.
+
+**The ecosystem's 34 additional uses split into two kinds**, and the split
+matters more than the total:
+
+  * **Cross-file references inside one package.** `serez-ui/src/renderer_gui.sz`
+    calls `cssIndexOf`, declared `export fn` in `css.sz`, without importing it;
+    the file is consumed by one that does. A *per-file* resolver flags these; a
+    module-aware one would not. This is a constraint on how a resolver must be
+    built, not evidence of reliance — recorded so it is not double-counted.
+  * **A name that does not exist anywhere.** See §5.35.
+
+**Why the figure is a floor.** Files with `import` are excluded rather than
+guessed at, and every remaining ambiguity in the model resolves toward "bound".
+Under-reporting is the safe direction for a measurement whose conclusion is that
+a change is affordable.
+
+### 5.34 — three security fixtures assert nothing, and pass — *test deficiency*, **high** (found in M4.7.2)
+
+`tests/sec_crypto.sz`, `tests/sec_crypto_ed25519.sz` and `tests/sec_tensor.sz`
+are written in framework style — `test("…", () => { … assert(…) })` — but the
+runner **does not prepend `framework.sz` to `sec_*.sz`**. It prepends it to
+`unit_*.sz` and `ai_*.sz` only (`run_tests.ps1:388, 633-637, 664, 676`).
+
+So each of the three fails on its first line:
+
+```
+$ sz tests/sec_crypto.sz
+❌ ERROR [SZ4001]: Variable not found: test
+```
+
+These are registered as **error tests**, whose contract is "exit non-zero and
+print a `❌` line". A missing `test` function satisfies both. All three have
+passed every run, for the wrong reason, and **23 assertions across them have
+never executed**:
+
+| Fixture | `test` blocks | `assert` calls | What it claims to cover |
+|---|---|---|---|
+| `sec_crypto.sz` | 7 | 7 | sha256/md5/base64/hex/hmac argument validation |
+| `sec_crypto_ed25519.sz` | 8 | 8 | malformed key and signature handling |
+| `sec_tensor.sz` | 8 | 8 | index arity, non-uniform and non-numeric input |
+
+**This is the same failure mode the runner's own integrity guard exists to catch**
+— a suite passing for a reason unrelated to what it tests — and `MATURITY_AUDIT.md`
+already records one instance of it (the bash runner accepting any non-zero exit).
+It caught that one and not this one, because the guard checks the *runner*, not
+whether a fixture's category matches the way it is written.
+
+**Not a security regression.** Run correctly, with the framework prepended, all
+23 assertions **pass**. Nothing was broken and hidden; the coverage was simply
+fictional. There is no `unit_sec_crypto` or `unit_sec_tensor`, so this coverage
+exists nowhere else in the suite.
+
+Found by M4.7.2, whose corpus walk reported `test` as an unaccounted name in
+exactly these three files after the framework composition was modelled correctly
+for the categories that do receive it. **Fixed separately** — see §5.37.
+
+### 5.35 — `serez-ui` calls `Int.parse`, and `Int` does not exist — *confirmed bug, ecosystem*, medium (found in M4.7.2)
+
+`serez-ui/src/layout.sz` calls `Int.parse(...)` at six sites (lines 65, 70, 85,
+96, 99 and one more), and `Int` is not a runtime namespace, not declared in the
+package, and not imported:
+
+```
+$ sz -e 'out Int.parse("42");'
+❌ ERROR [SZ4001]: Variable not found: Int
+```
+
+The namespace is `Math`; there are 22 and `Int` is not among them. Every one of
+those six call sites raises `SZ4001` when reached.
+
+**serez-ui's 36 tests pass**, and the ecosystem canary reports the package green,
+because no test exercises those paths. The two copies bundled under
+`serez-pack/dist/` carry the same code, so the same defect ships three times in
+the measured tree.
+
+**This is the single most direct piece of evidence for DEC-M4-002 in the whole
+register.** A static resolver — even an advisory one, option B, breaking nothing
+— would have printed six diagnostics naming these lines. Thirty-six passing tests
+and a green canary did not. The finding was produced by a resolver written for a
+completely different purpose, on its first run.
+
+**Not fixed here.** It is a defect in a separate repository, outside this
+roadmap's tree, and fixing another project's source from a language-milestone
+molecule is exactly the scope creep the protocol forbids. Recorded for the
+ecosystem owner, and assigned to **M10**, which owns ecosystem compatibility.
+
+### 5.36 — the measurement got two things wrong before it got them right — *method note*
+
+Recorded because both errors are the kind a later measurement will repeat, and
+both were caught only by reading the output rather than trusting it.
+
+**A unit test file is not a program.** The first run reported `test` as an
+unaccounted name **2,003 times** and `summary` 162 times — 39.5% of the corpus
+"affected". Every one was an artefact: the runner composes `framework.sz` with
+each `unit_*.sz` and `ai_*.sz` before running it, so those files are fragments,
+and analysing a fragment as a whole program measures the analysis rather than the
+code. Modelling the composition dropped the figure from 39.5% to 4.9%.
+
+**`x is int` is not a read of `int`.** The parser lowers the `is` operator to
+`Infix("is", x, Identifier("type_name"))` (`parser/expressions.rs:555`), so a
+naive expression walk sees `int`, `string`, `bool`, `decimal`, `array`, `dec`,
+`any` and `null` as free names. Both fixes carry a regression test.
+
+**The lesson is the ratio.** The uncorrected measurement said a fifth to two
+fifths of the corpus depended on dynamic resolution; the corrected one says
+effectively none of it does. Those two numbers argue for opposite decisions on
+DEC-M4-002. §9F.4 refused to produce this number from a half-correct model on the
+grounds that a confident wrong number is worse than none — and the first two runs
+of the correct model are what that warning looks like in practice.
+
+**Also:** the measurement rediscovered §5.15's stack ceiling on its first run,
+`STATUS_STACK_OVERFLOW` on the corpus depth fixtures. §5.15 was written so the
+next frontend test would not have to. It did anyway — a note in a roadmap does not
+reach the person opening a new file, so the constant now carries the explanation
+at its definition site, where a reader of that file will meet it.
+
 ---
 
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
@@ -1109,8 +1261,12 @@ nothing resolves names before running. `MATURITY_AUDIT.md` records this as
 **critical, open**, undocumented in the README, and needing an explicit product
 decision under `spec/compatibility.md`.
 
-**Measured evidence.** See §5.33 — measured by M4.7.2 once the scope model of
-M4.7.1 existed. Producing that number required a model handling closures, `this`,
+**Measured evidence — §5.33, and it is decisive.** Of 486 in-repo files
+conclusively analysed, **four** uses inside a function are unaccounted for, and
+all four are the fixtures written to hold an undefined name. The corpus does not
+rely on dynamic resolution at all. And §5.35: the resolver's first run found six
+call sites in `serez-ui` to a namespace that does not exist, which 36 passing
+tests and a green ecosystem canary had not. Producing that number required a model handling closures, `this`,
 class bodies, `for`-in bindings, `catch` bindings, destructuring and generators;
 a half-correct model yields a *confident wrong number*, which is worse input than
 none. Building and measuring commit to nothing, so both were **independent of
@@ -1147,10 +1303,17 @@ entry. B changes stderr only. C changes nothing but requires a spec statement.
 | Runtime | Unchanged under B; under A the resolver must agree with `ScopeStack` exactly, or the checker and the runtime disagree about the same program |
 | Ecosystem | See §5.33 |
 
-**Recommendation — this is a recommendation, not a decision.** **B first.**
-Advisory reporting delivers the diagnostic value with no break, and makes A's
-cost visible in real usage before anyone pays it. A belongs to a major, if at
-all, and only once B has been shipped long enough to show what it finds.
+**Recommendation — this is a recommendation, not a decision.** **B first**, and
+the measurement strengthens rather than merely permits it. Advisory reporting
+would be silent on every legitimate file in the corpus, so the "it would break
+things" objection has a number against it now: zero. §5.35 is the other half —
+the value is not hypothetical, since the first run of a resolver written for
+another purpose found a real defect in an official package. A belongs to a major,
+if at all, and only once B has shipped long enough to show what it finds.
+
+One constraint the measurement puts on *any* implementation: a resolver must be
+**module-aware**, not per-file. `serez-ui` legitimately calls across files within
+a package without importing, and a per-file resolver flags those (§5.33).
 
 **Blocked by this decision:** M4.7.3 and everything downstream — resolver
 reporting, `--check` behaviour, and the M7 entry for scope semantics. **Not
@@ -3066,6 +3229,42 @@ has no product consumers, so there is no partial state to unwind.
 > when the useful move while blocked is almost always **to make the decision
 > cheaper**. The free-variable judgement itself still stands — a half-correct
 > scope model produces a confident wrong number, and that is worse than none.
+
+### §9F.6 — M4.7.1-M4.7.2: the scope model, and the number it produced
+
+Both molecules are **COMPLETE**, and both were independent of every open
+decision — building a model and measuring with it commits to nothing.
+
+**M4.7.1 — `src/semantic/scopes.rs`.** A lexical scope model over the AST, 12
+unit tests, **no product consumers**, no diagnostics, nothing rejected: the shape
+`span`, `diagnostic` and `semantic::declarations` were each introduced in. It
+answers one question — *walking only lexical structure, which identifier uses
+cannot be accounted for?* Every rule in it was probed against the 10.0.0 binary
+first, and the probe table is in §5.33; the model is deliberately biased toward
+"bound", so its output is a floor rather than an estimate.
+
+**M4.7.2 — `tests/scope_resolution.rs`.** Runs it over 486 conclusively
+analysable corpus files, and optionally over out-of-repo roots through
+`SEREZ_SCOPE_EXTRA_ROOTS`, which is how the 8 ecosystem packages were included
+without hard-coding one machine's layout. Following M4.1's method, it **asserts**
+the properties that are correctness — no panic on any file including the 23 that
+do not parse, every reported span inside its own file, the corpus not silently
+collapsing — and **reports** the measurement, which moves whenever a fixture is
+added.
+
+**The result, in one line: the corpus does not rely on dynamic name resolution.**
+Four unaccounted uses inside a function across 486 files, and all four are the
+fixtures written to contain an undefined name. §5.33 has the tables.
+
+**Three findings came out of it**, none of which the molecule went looking for:
+§5.34, three security fixtures that assert nothing and pass; §5.35, six calls in
+`serez-ui` to a namespace that does not exist; §5.36, the two method errors the
+measurement made before it was trustworthy.
+
+**What this does not do.** It does not answer DEC-M4-002 — it supplies the
+evidence the decision was missing, and sharpens the recommendation from "measure
+first" to "B, and here is the number". M4.7.3 remains blocked, because reporting
+is the part that changes which programs the language accepts.
 
 ### §9F.5 — M4's remaining molecules, conditioned on the decisions
 
