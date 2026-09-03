@@ -10,6 +10,8 @@
 use crate::evaluator;
 use crate::lexer;
 use crate::parser;
+use crate::render;
+use crate::semantic;
 use crate::type_checker;
 
 /// Everything the pipeline needs that used to be implied by "there is a file".
@@ -116,9 +118,27 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
     let program = parser.parse_program();
     let parse_failed = parser.has_errors();
 
+    // The semantic phase (DEC-M4-001). Rules about *meaning* that reject a
+    // program, between the parser and the advisory type checker.
+    //
+    // Only on a tree the parser accepted: validating a broken tree reports
+    // consequences of the syntax error rather than problems of its own. And
+    // before the checker, because this is fatal and the checker is not — a
+    // program rejected here must not reach a stage whose findings may be ignored.
+    //
+    // It has no rules yet, on purpose. Introducing the stage and introducing a
+    // rule are separate changes, and the first has to be provably invisible
+    // before the second is trusted. See `semantic::validate`.
+    let semantic_findings = if parse_failed {
+        Vec::new()
+    } else {
+        semantic::validate::validate(&program)
+    };
+
     let mut checker = type_checker::TypeChecker::new(&program);
     checker.check();
 
+    let render_lines = source_lines.clone();
     let mut evaluator = evaluator::Evaluator::new();
     evaluator.set_source(source_lines);
     evaluator.set_permissions(opts.permissions);
@@ -132,6 +152,22 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
         // broken one would execute against missing definitions.
         eprintln!("❌ Aborted: fix the parse errors above before running.");
         Some(RunFailure::Frontend(parser.take_errors()))
+    } else if !semantic_findings.is_empty() {
+        // Same reason, one phase later: a program whose meaning is rejected must
+        // not run. Rendered here rather than at the producer, because
+        // `semantic::validate` is a pure function over the tree and returns its
+        // findings instead of printing them — the data/rendering split M3
+        // established. They print after every parser diagnostic, which is the
+        // phase order, and D6 (§9D.7) governs nothing else about it.
+        let context = render::Context {
+            source_name: Some(name),
+            source_lines: &render_lines,
+        };
+        for finding in &semantic_findings {
+            eprintln!("{}", render::render(finding, &context));
+        }
+        eprintln!("❌ Aborted: fix the errors above before running.");
+        Some(RunFailure::Frontend(semantic_findings))
     } else if opts.check_only {
         evaluator.check_program(&program);
         None

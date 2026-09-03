@@ -4542,6 +4542,56 @@ evidence the decision was missing, and sharpens the recommendation from "measure
 first" to "B, and here is the number". M4.7.3 remains blocked, because reporting
 is the part that changes which programs the language accepts.
 
+### §9F.7 — M4.5.2-M4.5.3: the phase exists, and reports nothing
+
+`src/semantic/validate.rs`, wired into `run::run_source_detailed` between the
+parser and the type checker. It has **no rules**, and that is the molecule.
+
+**Introducing the stage and introducing a rule are separate changes**, because
+only the first can be proved invisible. A phase that arrived with its first rule
+attached would have moved manifests for two reasons at once, and no one could
+have said which.
+
+**Where it sits, and why each side of it is forced:**
+
+  * **After the parser**, because it needs a *complete tree*. That is the entire
+    point: the reserved-name cascade (§5.32) exists because the parser abandons a
+    half-built declaration, and a phase that sees finished nodes cannot.
+  * **Before the type checker**, because this phase is **fatal** and the checker
+    is not. `spec/types.md` makes checker findings advisory, so a program rejected
+    on meaning must not reach a stage whose findings may be ignored.
+  * **Only on a tree the parser accepted.** Validating a broken tree reports
+    consequences of the syntax error rather than problems of its own.
+
+**Findings are returned, not printed.** `validate` is a pure function over the
+tree; `run.rs` renders. That is M3's data/rendering split, and it differs from the
+parser, which prints eagerly at the producer. The consequence for ordering is
+benign: semantic findings print after every parser diagnostic, which is the phase
+order, and D6 (§9D.7) governs nothing beyond the lexer/parser interleaving it was
+about.
+
+**M4.5.3 — proving the net sees it.** `validate` was perturbed to report once,
+unconditionally:
+
+```
+135 of 156 error fixtures now produce different output
+❌ PARSER ERROR [SZ2000] [tests/unit_classes.sz 1:1]: perturbation…
+❌ Aborted: fix the errors above before running.
+```
+
+So the wiring reaches rendering, the abort path works, and `diagnostic_render`
+sees it. Reverted immediately. This is the M1.0.2 method, and it matters more than
+usual here: **a no-op is indistinguishable from a component that is not connected
+at all**, and every gate stays green in both cases.
+
+**Behaviour: unchanged, measured.** No manifest row moved. 447 Rust tests,
+501/0/0 in both runners, ecosystem 8/8, clippy per-site list 180.
+
+**What is deliberately still missing:** the phase's public surface — the rendered
+label and the diagnostic code. The perturbation borrowed `PARSER`/`SZ2000` because
+it was temporary. Choosing the real ones is **DEC-M4-005**, and M4.5.4 cannot
+proceed without it.
+
 ### §9F.5 — M4's remaining molecules, conditioned on the decisions
 
 Nothing here is authorized. This is the decomposition each answer unlocks, so

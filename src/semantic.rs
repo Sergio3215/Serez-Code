@@ -33,6 +33,7 @@
 //! changing that is breaking (§5.20).
 
 pub mod scopes;
+pub mod validate;
 
 use crate::ast::{Program, Statement};
 use crate::span::Span;
