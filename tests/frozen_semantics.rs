@@ -189,9 +189,12 @@ fn a_freed_handle_is_never_reissued_and_cannot_be_used_again() {
          \x20   Memory.free(a);\n\
          \x20   let b = Memory.alloc(8);\n\
          \x20   assert((a == b) == false, \"a freed handle id is never reissued\");\n\
-         \x20   let refused = false;\n\
-         \x20   try { Memory.write(a, 0, 65); } catch (e) { refused = true; }\n\
-         \x20   assert(refused, \"use-after-free is refused, and catchable\");\n\
+         \x20   let dead = false;\n\
+         \x20   try { Memory.write(a, 0, \"byte\", 65); } catch (e) { dead = true; }\n\
+         \x20   assert(dead, \"use-after-free is refused, and catchable\");\n\
+         \x20   let live = true;\n\
+         \x20   try { Memory.write(b, 0, \"byte\", 65); } catch (e) { live = false; }\n\
+         \x20   assert(live, \"and a live handle still accepts the identical call\");\n\
          }\n",
     );
 }

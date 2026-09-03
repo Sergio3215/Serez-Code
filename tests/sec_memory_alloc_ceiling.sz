@@ -1,0 +1,13 @@
+// Security: an allocation above the 256 MiB ceiling is a fatal ResourceError.
+// A `try` must not consume it — the program stops.
+// conformance: MEM-007
+
+unsafe {
+    try {
+        let h = Memory.alloc(268435457);
+        out "allocated past the ceiling";
+    } catch (e) {
+        out "caught — the ceiling is not fatal, and MEM-007 is wrong";
+    }
+}
+out "reached the end";

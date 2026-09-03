@@ -1,2 +1,3 @@
+// conformance: MEM-004
 // Security test: Memory.free outside unsafe must be rejected
 Memory.free(1);

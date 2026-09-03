@@ -1,7 +1,7 @@
 # serez-parser-snapshot/1
 # Parser output for every .sz file under tests, benchmarks, std, apps.
 # path<TAB>tree-bytes<TAB>diagnostics<TAB>fnv1a64(tree)<TAB>fnv1a64(diagnostics)
-# files: 499
+# files: 501
 apps/01_task_manager.sz	62318	0	a3f338cdf17155ce	cbf29ce484222325
 apps/02_statistics.sz	67295	0	fc1fbbf98d0d7329	cbf29ce484222325
 apps/03_text_analyzer.sz	53830	0	2c9ae7ec03fdc6ba	cbf29ce484222325
@@ -261,10 +261,11 @@ tests/sec_import.sz	84	0	4b8fc292ea639e22	cbf29ce484222325
 tests/sec_integer_overflow.sz	812	0	74b995d29b6383ed	cbf29ce484222325
 tests/sec_json_invalid.sz	454	0	a9b77ade302dbba0	cbf29ce484222325
 tests/sec_media_no_permission.sz	1430	0	88a535c48ddaae18	cbf29ce484222325
-tests/sec_memory_free_requires_unsafe.sz	361	0	925edc7709a45453	cbf29ce484222325
-tests/sec_memory_read_requires_unsafe.sz	522	0	e28bc66e472a9f55	cbf29ce484222325
-tests/sec_memory_requires_unsafe.sz	369	0	bfe09db427fc16bb	cbf29ce484222325
-tests/sec_memory_write_requires_unsafe.sz	799	0	f81c1fa96e8992a3	cbf29ce484222325
+tests/sec_memory_alloc_ceiling.sz	1503	0	ec5f3b0106d7d16c	cbf29ce484222325
+tests/sec_memory_free_requires_unsafe.sz	362	0	bb5c9a69b7d9693e	cbf29ce484222325
+tests/sec_memory_read_requires_unsafe.sz	527	0	54f066efea6ecb63	cbf29ce484222325
+tests/sec_memory_requires_unsafe.sz	369	0	4a76cdbf3265308d	cbf29ce484222325
+tests/sec_memory_write_requires_unsafe.sz	806	0	947c297470eea094	cbf29ce484222325
 tests/sec_modulo_zero.sz	759	0	8dfccd79505c8ac4	cbf29ce484222325
 tests/sec_negative_shift.sz	656	0	eb7803113d59b905	cbf29ce484222325
 tests/sec_notcatch_permission.sz	1371	0	0568217fda654911	cbf29ce484222325
@@ -404,6 +405,7 @@ tests/unit_math_trig.sz	41458	0	0ce48199c3b501c0	cbf29ce484222325
 tests/unit_media.sz	14244	0	4ecced28e4ae0c5e	cbf29ce484222325
 tests/unit_member_dispatch_errors.sz	26827	0	1952b9b6a43710dd	cbf29ce484222325
 tests/unit_memory.sz	46809	0	bd732212bdb04d63	cbf29ce484222325
+tests/unit_memory_conformance.sz	67570	0	4e31f4b1f8b9d409	cbf29ce484222325
 tests/unit_memory_offsetof.sz	18458	0	5124bb7b93760c70	cbf29ce484222325
 tests/unit_method_chaining.sz	88059	0	e041fc93766f941c	cbf29ce484222325
 tests/unit_method_ref.sz	31244	0	6118851968e6c3d6	cbf29ce484222325

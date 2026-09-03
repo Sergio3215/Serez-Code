@@ -4650,6 +4650,106 @@ someone making a red test green.
 
 ---
 
+## 9N. M8 - Conformance Complete
+
+Charter: *"Poder demostrar automaticamente que la implementacion cumple la
+specification."*
+
+### 9N.0 The audit: two good things, unconnected
+
+30 specification documents, 4,672 lines, and **zero normative identifiers** -
+§5.8 predicted this and it held. The documents reference tests in prose
+(`classes.md` names 21, `modules.md` 12, `values.md` and `syntax.md` none), but a
+prose mention is not a mapping. Nothing in the repository could answer *"which
+test proves this sentence?"* or, more usefully, *"which sentences does nothing
+prove?"*
+
+So M8's problem is not that the spec is bad or that tests are missing. It is that
+`spec/` and `tests/` are two good artefacts with no edge between them.
+
+### 9N.1 - M8.1: the scheme, and the checker that makes it real
+
+`spec/conformance.md` defines it. A normative rule carries an identifier at its
+definition site - `**[MEM-002]**` - and a test declares coverage with a
+`conformance: MEM-002` marker in a comment, in either language.
+
+The marker was chosen over a mapping table on purpose: it needs no build step,
+works identically in `.sz` and `.rs`, and puts the claim **next to the assertion**
+rather than in a file someone has to remember to update.
+
+`tests/conformance_map.rs` enforces three properties, each failing for a different
+reason:
+
+1. **defined exactly once** - a duplicate is a numbering mistake, caught when it
+   is made rather than the first time someone follows the wrong one;
+2. **no claim to a rule that does not exist** - a stale marker *reads as coverage*,
+   which is worse than no marker;
+3. **every rule has at least one test** - the property worth having, because it
+   makes it impossible to add a rule and forget to prove it.
+
+Property 3 is also why identifiers are assigned **as an area is covered** rather
+than all at once. An identifier is a commitment that something verifies the rule;
+numbering an unproved rule would record the gap in a second place instead of
+closing it. It is the difference between a coverage scheme and a coverage report.
+
+**The checker caught itself on its first run.** `spec/conformance.md` illustrates
+the scheme by *showing* a definition inside a code fence, and that example was
+read as a real definition and reported as a duplicate of the rule it was
+illustrating. Fixed by stripping fenced blocks - a specification that cannot show
+its own syntax would be the wrong trade - and pinned by a unit test.
+
+### 9N.2 - M8.2: `spec/memory.md`, the first area and the worked example
+
+M7 handed over one documentation gap: memory handles had **no specification at
+all**, while having a real safety property. Fifteen rules, `MEM-001` to `MEM-015`,
+every one derived by probing the running binary rather than by reading source.
+
+**Two things the probing found that source-reading had got wrong**, and both are
+the argument for the method:
+
+  * **MEM-007 was written as "catchable" and is not.** Exceeding the 256 MiB
+    ceiling raises a **fatal** `ResourceError` / `SZ6002`; a `try` does not consume
+    it and the program stops. The corrected rule now also states the asymmetry
+    that makes the pair confusing: `alloc(0)` is a *caller mistake* and catchable,
+    while exceeding the ceiling is a *resource limit* and fatal. A program can be
+    written to handle the first and cannot be written to handle the second.
+  * **§9L.2's memory pin was proving the wrong thing.** It used
+    `Memory.write(handle, 0, 65)` - three arguments, where `write` takes four - so
+    the "use-after-free is refused" assertion was actually observing an **arity**
+    rejection. A change that removed use-after-free protection would not have
+    failed it. Corrected to the 4-argument form, with a live-handle control
+    alongside so it cannot pass for the wrong reason again.
+
+That second one is worth naming plainly: it is **exactly the failure mode §5.34
+found in three security fixtures**, committed by this roadmap, one milestone after
+finding it in someone else's work. The lesson generalises past both instances - a
+negative assertion needs a positive control, or it proves only that *something*
+refused.
+
+### 9N.3 What is covered, and what is not
+
+| | |
+|---|---|
+| Specification documents | **32** (30 + `memory.md` + `conformance.md`) |
+| Carrying identifiers | **1** |
+| Normative rules defined | **15** |
+| Rules proved | **15** - asserted, not reported |
+| Test files claiming rules | 6 |
+
+**One area of thirty.** That is the honest figure and it is the point of stating
+it: the machinery is complete and the coverage is a beginning. Four of the six
+claiming files are pre-existing `sec_memory_*` fixtures that already proved
+MEM-004 and needed only a marker - reuse over duplication, as
+`spec/conformance.md` prescribes.
+
+**Suggested order for the rest**, by value rather than by size: `errors.md` and
+`limits.md` first, because every other document refers to them and their rules are
+already heavily tested; then `types.md`, `values.md` and `operators.md`, the
+semantic core; then the namespaces. `syntax.md` and `lexical-grammar.md` last -
+`parser_snapshot` already pins the grammar far more tightly than identifiers would.
+
+---
+
 ## 9M. M7 MILESTONE AUDIT
 
 Charter: *important observable behaviour should exist because it was decided, not

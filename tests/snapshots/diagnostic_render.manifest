@@ -1,7 +1,7 @@
 # serez-diagnostic-render/1
 # stderr and exit code of every err_*.sz / sec_*.sz fixture.
 # name<TAB>exit<TAB>stderr-bytes<TAB>fnv1a64(stderr)
-# fixtures: 155
+# fixtures: 156
 err_arity.sz	1	205	52665bc115254ed6
 err_array_unknown_method.sz	1	59	1dc964c13a6629af
 err_bool_plus_int.sz	1	104	344fe7325b982d2a
@@ -109,6 +109,7 @@ sec_import.sz	1	110	dd1c38ed18b21260
 sec_integer_overflow.sz	1	38	2fd5a7e7fb3dece7
 sec_json_invalid.sz	1	58	799d8c7b523074ff
 sec_media_no_permission.sz	1	154	84c944db63b3c5ed
+sec_memory_alloc_ceiling.sz	1	83	f6cbba70e8b6dee5
 sec_memory_free_requires_unsafe.sz	1	93	8a3d38cbff1f5b19
 sec_memory_read_requires_unsafe.sz	1	90	ec81d1914063d182
 sec_memory_requires_unsafe.sz	1	95	9eccc771ffe31e44

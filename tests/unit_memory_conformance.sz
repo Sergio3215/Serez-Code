@@ -1,0 +1,198 @@
+// Conformance tests for spec/memory.md.
+//
+// Each test names the rules it proves with a `conformance:` marker, which
+// tests/conformance_map.rs reads. See spec/conformance.md.
+
+// conformance: MEM-001
+test("MEM-001 — a handle is an int", () => {
+    unsafe {
+        let h = Memory.alloc(8);
+        assert(type_of(h) == "int", "a handle is an int");
+        assert(h is int, "and `is int` agrees");
+        Memory.free(h);
+    }
+});
+
+// conformance: MEM-002
+test("MEM-002 — a freed handle is never reissued", () => {
+    unsafe {
+        let a = Memory.alloc(8);
+        Memory.free(a);
+        let b = Memory.alloc(8);
+        assert((a == b) == false, "the freed id did not come back");
+        Memory.free(b);
+    }
+});
+
+// conformance: MEM-003
+test("MEM-003 — every operation on an unallocated handle raises, catchably", () => {
+    unsafe {
+        let h = Memory.alloc(8);
+        Memory.free(h);
+
+        let freed = false;
+        try { Memory.free(h); } catch (e) { freed = true; }
+        assert(freed, "free on a freed handle");
+
+        let sized = false;
+        try { let n = Memory.size(h); } catch (e) { sized = true; }
+        assert(sized, "size on a freed handle");
+
+        let read = false;
+        try { let v = Memory.read(h, 0, "byte"); } catch (e) { read = true; }
+        assert(read, "read on a freed handle");
+
+        let wrote = false;
+        try { Memory.write(h, 0, "byte", 1); } catch (e) { wrote = true; }
+        assert(wrote, "write on a freed handle");
+
+        let never = false;
+        try { let n = Memory.size(999999); } catch (e) { never = true; }
+        assert(never, "a handle that was never issued");
+    }
+});
+
+// MEM-003 is only meaningful if the identical call succeeds on a live handle.
+// Without this, every assertion above could pass for an unrelated reason —
+// wrong arity, a bad type name — and prove nothing about liveness.
+// conformance: MEM-003
+test("MEM-003 — the identical calls succeed on a live handle", () => {
+    unsafe {
+        let h = Memory.alloc(8);
+        assert(Memory.size(h) == 8, "size works");
+        Memory.write(h, 0, "byte", 65);
+        assert(Memory.read(h, 0, "byte") == 65, "write then read works");
+        Memory.free(h);
+    }
+});
+
+// conformance: MEM-005
+test("MEM-005 — sizeof, size and offsetOf need no unsafe", () => {
+    assert(Memory.sizeof("int") == 8, "sizeof outside unsafe");
+    assert(Memory.sizeof("int32") == 4, "and it reports the layout");
+});
+
+// conformance: MEM-006
+test("MEM-006 — alloc(n) needs n >= 1 and zeroes the buffer", () => {
+    unsafe {
+        let refused = false;
+        try { let z = Memory.alloc(0); } catch (e) { refused = true; }
+        assert(refused, "alloc(0) is refused");
+
+        let h = Memory.alloc(4);
+        assert(Memory.read(h, 0, "byte") == 0, "byte 0 is zero");
+        assert(Memory.read(h, 3, "byte") == 0, "and so is the last one");
+        Memory.free(h);
+    }
+});
+
+// The boundary itself is allowed, which is what makes MEM-007 a ceiling rather
+// than an approximation. The *other* side of the rule — that exceeding it is
+// fatal rather than catchable — cannot be tested from here: a fatal error is not
+// consumable by `try`, so it would abort this file rather than fail one case.
+// It lives in tests/sec_memory_alloc_ceiling.sz, which is the category for
+// fixtures whose contract is that the program stops.
+// conformance: MEM-007
+test("MEM-007 — the 256 MiB boundary itself allocates", () => {
+    unsafe {
+        let h = Memory.alloc(268435456);
+        assert(Memory.size(h) == 268435456, "at the ceiling");
+        Memory.free(h);
+    }
+});
+
+// conformance: MEM-008, MEM-009
+test("MEM-008/009 — free releases, size reports what alloc was given", () => {
+    unsafe {
+        let h = Memory.alloc(17);
+        assert(Memory.size(h) == 17, "size is the requested length");
+        Memory.free(h);
+        let twice = false;
+        try { Memory.free(h); } catch (e) { twice = true; }
+        assert(twice, "freeing twice raises, via MEM-003");
+    }
+});
+
+// conformance: MEM-010
+test("MEM-010 — read takes 3 arguments and write takes 4", () => {
+    unsafe {
+        let h = Memory.alloc(8);
+
+        let badRead = false;
+        try { let v = Memory.read(h, 0); } catch (e) { badRead = true; }
+        assert(badRead, "read with 2 arguments");
+
+        let badWrite = false;
+        try { Memory.write(h, 0, 65); } catch (e) { badWrite = true; }
+        assert(badWrite, "write with 3 arguments");
+
+        Memory.free(h);
+    }
+});
+
+// conformance: MEM-011, MEM-012
+test("MEM-011/012 — an access outside [0, size) raises and writes nothing", () => {
+    unsafe {
+        let h = Memory.alloc(4);
+        Memory.write(h, 0, "byte", 7);
+
+        let oobWrite = false;
+        try { Memory.write(h, 100, "byte", 65); } catch (e) { oobWrite = true; }
+        assert(oobWrite, "write past the end");
+
+        let oobRead = false;
+        try { let v = Memory.read(h, 100, "byte"); } catch (e) { oobRead = true; }
+        assert(oobRead, "read past the end");
+
+        assert(Memory.read(h, 0, "byte") == 7, "and the buffer is untouched");
+        Memory.free(h);
+    }
+});
+
+// conformance: MEM-013
+test("MEM-013 — copy and fill are bounds-checked the same way", () => {
+    unsafe {
+        let a = Memory.alloc(4);
+        let b = Memory.alloc(4);
+
+        let badFill = false;
+        try { Memory.fill(a, 0, 100, 1); } catch (e) { badFill = true; }
+        assert(badFill, "fill past the end");
+
+        let badCopy = false;
+        try { Memory.copy(a, 0, b, 0, 100); } catch (e) { badCopy = true; }
+        assert(badCopy, "copy past the end");
+
+        Memory.free(a);
+        Memory.free(b);
+    }
+});
+
+// conformance: MEM-014
+test("MEM-014 — sizeof reports the documented layout widths", () => {
+    assert(Memory.sizeof("bool") == 1, "bool");
+    assert(Memory.sizeof("byte") == 1, "byte");
+    assert(Memory.sizeof("int8") == 1, "int8");
+    assert(Memory.sizeof("int16") == 2, "int16");
+    assert(Memory.sizeof("int32") == 4, "int32");
+    assert(Memory.sizeof("int64") == 8, "int64");
+    assert(Memory.sizeof("int") == 8, "int is int64");
+    assert(Memory.sizeof("uint8") == 1, "uint8");
+    assert(Memory.sizeof("uint16") == 2, "uint16");
+    assert(Memory.sizeof("uint32") == 4, "uint32");
+    assert(Memory.sizeof("uint64") == 8, "uint64");
+    assert(Memory.sizeof("float32") == 4, "float32");
+    assert(Memory.sizeof("float64") == 8, "float64");
+    assert(Memory.sizeof("decimal") == 8, "decimal is float64");
+    assert(Memory.sizeof("ptr") == 8, "ptr is a machine word");
+    assert(Memory.sizeof("str") == 8, "and so is str");
+});
+
+// conformance: MEM-015
+test("MEM-015 — offsetOf takes exactly 2 arguments", () => {
+    let refused = false;
+    try { let o = Memory.offsetOf("int"); } catch (e) { refused = true; }
+    assert(refused, "one argument is refused");
+});
+
+summary();

@@ -1,3 +1,4 @@
+// conformance: MEM-004
 // Security test: Memory namespace operations require unsafe { } block
 // Any direct call outside unsafe must produce an error
 Memory.alloc(64);

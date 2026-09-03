@@ -1,2 +1,3 @@
+// conformance: MEM-004
 // Security test: Memory.read outside unsafe must be rejected
 Memory.read(1, 0, "int64");
