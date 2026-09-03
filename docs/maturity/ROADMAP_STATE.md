@@ -17,12 +17,12 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M4 — Semantic Layer Established. PARTIAL.** The layer exists and is validated; three items are held by open decisions **DEC-M4-001/002/003** (§7A). Work independent of them continues. |
-| Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, delivered and corpus-validated (§9F.3) |
+| **Current milestone** | **M5 — Type System Stable.** M4 closed PARTIAL (§9G) with four decisions registered and every independent item done. |
+| Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, corpus-validated (§9F.3) · **M4.7.1–M4.7.2** the scope model and the measurement (§9F.6) · **audit** (§9G) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
-| Last completed milestone | **M3 — Diagnostics Unified** (M0, M1, M2 before it) |
+| Last completed milestone | **M3 — Diagnostics Unified** (M0, M1, M2 before it). M4 is **PARTIAL** by decision, not by omission |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **DEC-M4-001**, **DEC-M4-002**, **DEC-M4-003** — all OPEN, all in §7A with evidence and a marked recommendation |
+| **Open decisions** | **DEC-M4-001**, **-002**, **-003**, **-004** — all OPEN, all in §7A with measured evidence and a marked recommendation |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
@@ -37,8 +37,8 @@ Milestone ledger:
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
 | M2 — AST + Spans Stable | **COMPLETE** (2026-09-02) — all 28 `Expression` variants and 39 of 40 structs carry a span |
 | M3 — Diagnostics Unified | **COMPLETE** (2026-09-02) — 5 diagnostic types -> 1, 4 rendered formats -> 1 renderer, §5.17 fixed |
-| M4 — Semantic Layer Established | **PARTIAL** — the layer is established and corpus-validated (§9F.2-9F.3); adoption is held by DEC-M4-001/002/003 |
-| M5 — Type System Stable | NOT STARTED |
+| M4 — Semantic Layer Established | **PARTIAL** (2026-09-02, §9G) — 3 of 6 DoD items met. Layer established, validated, **unadopted**; adoption held by DEC-M4-001/002/004 |
+| M5 — Type System Stable | **IN PROGRESS** — inherits §5.29 from M4 |
 | M6 — Runtime Molecular | NOT STARTED (partially pre-empted; see §6) |
 | M7 — Semantics Frozen | NOT STARTED |
 | M8 — Conformance Complete | NOT STARTED |
@@ -1207,6 +1207,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M4-001** | Where the reserved-name check runs | **OPEN** | M4.5.* (the semantic phase); the landing site for DEC-M4-003 |
 | **DEC-M4-002** | Whether an unresolved free variable is a diagnostic | **OPEN** | M4.7.3+ (resolver reporting); the M7 entry for scope semantics |
 | **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
+| **DEC-M4-004** | What the editor's outline should show | **OPEN** | the LSP's migration onto `semantic::declarations` |
 
 ---
 
@@ -1416,6 +1417,92 @@ once. If third-party adoption is wider than this machine can see, B is the
 defensible hold — and that is the question the recommendation cannot answer.
 
 **Blocked by this decision:** M4.6.1, ordered after DEC-M4-001.
+
+---
+
+### DEC-M4-004 — What should the editor's outline show?
+
+**Problem.** `analyze` parses a `.sz` file, hands the `Program` to the type
+checker, and then **throws the parse tree away**: it builds the outline with
+`scan_symbols(text, &lines)`, a second lex of the same source
+(`lsp/analysis.rs:95,163,243`). The outline, hover, go-to-definition, references
+and rename a user sees therefore have no structural relationship to the tree the
+compiler built. Migrating them onto `semantic::declarations` is the substance of
+M4's charter — and it cannot be done without deciding what the outline is *for*,
+because the two derivations do not merely differ in accuracy, they answer
+different questions.
+
+**Current behaviour.** The token scanner is not nesting-aware. A `fn` declared
+inside a lambda — `test("…", () => { fn int double(int n) { … } })` — is reported
+with `container: None`, as though it were a top-level symbol.
+
+**Measured evidence (M4.1, §9F.2).** Over 483 corpus files, comparing the two
+derivations on the four declaration kinds both report:
+
+| Direction | Meaning | Count |
+|---|---|---|
+| `scan - tree` | outline shows a top-level symbol the tree does not have | **95 files (~20%)** |
+| `tree - scan` | outline **omits** a declaration the tree has | **0** |
+
+The asymmetry is the useful part. Nothing is currently hidden from the user —
+go-to-definition does not fail on code that compiles — so this is not a
+correctness emergency. What the outline does is *over-report*, in a fifth of the
+corpus, always in the same direction.
+
+**Why the scanner exists.** `.szx` documents contain JSX, which the parser does
+not understand. Tolerating arbitrary broken regions means not relying on
+structure, and the token scan is how `.szx` still gets an outline at all. That
+justification is sound for `.szx` and does not transfer to `.sz`, where a correct
+AST has already been built and discarded.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **Top-level only**, from the AST | Honest and simple. A user editing a unit-test file **loses** the nested `fn`s currently listed — 95 files' worth of outline entries disappear |
+| B | **All declarations, correctly nested**, from the AST | Nothing is lost and the nesting lie is fixed. Requires deciding a `container` for a declaration inside an *anonymous* lambda, which has no name to be contained by |
+| C | **Leave the token scan** | No change. The outline keeps disagreeing with the compiler by construction, and M4's central finding goes unaddressed |
+
+**Trade-offs.** B is the only option that strictly improves on today, and it is
+also the only one with an unsolved sub-question: LSP `documentSymbol` is a tree,
+and an anonymous lambda is a node with no name. Synthesising one (`"(lambda)"`,
+the enclosing call's callee, a line number) is a user-visible naming choice, not
+an implementation detail. A is cheap and takes something away from users who have
+it today.
+
+**Architectural impact.** A or B removes the fourth independent derivation of
+what a program declares — the one §9F.0 identified as the most surprising, since
+it re-lexes source the compiler has already parsed. This is the largest single
+step remaining in M4's charter.
+
+**Semantic impact.** None. The language is unaffected; this is tooling.
+
+**Compatibility.** Not governed by SemVer for the language. It **is** a visible
+change to an editor experience, and `spec/compatibility.md` has no clause for
+tooling behaviour — which is itself a gap worth noting for M10.
+
+**Impact by area.**
+
+| Area | Under A or B |
+|---|---|
+| Tests | `semantic_divergence` becomes trivially satisfied and should be replaced by an equivalence assertion rather than deleted |
+| Specs | None today; `spec/` has no LSP document |
+| LSP | `scan_symbols` stays for `.szx` and stops being used for `.sz`. `SymbolInfo.detail` is a source slice the AST does not carry and must be derived from spans |
+| Runtime | None |
+| Ecosystem | None |
+
+**Recommendation — this is a recommendation, not a decision.** Option **B**, with
+a lambda's container synthesised from the enclosing call when there is one
+(`test("name", …)` -> `test`) and omitted otherwise. It removes the divergence
+without taking anything away from users. **A** is the acceptable cheaper answer if
+the naming question is not worth settling now. **C** should be rejected explicitly
+rather than by default — leaving it is a choice, and after M4.1 measured it, an
+informed one.
+
+**Blocked by this decision:** the LSP's migration onto `semantic::declarations`,
+which is M4's last unblocked-in-principle goal. **Not blocked:** nothing else —
+`semantic::declarations` and `semantic::scopes` are complete and validated
+without it.
 
 ---
 
@@ -3338,6 +3425,149 @@ records that the layer was established but not adopted. That is a legitimate
 outcome and should be written down as one, not left ambiguous.
 
 ---
+
+## 9G. M4 MILESTONE AUDIT
+
+Charter: *"Resolver, symbols, scopes y validaciones semánticas fuera del parser."*
+
+### Definition of Done, item by item
+
+The plan states M4's DoD as: *the parser answers "is this syntactically valid?"
+and the semantic layer answers "what does this reference mean inside the
+program?"*
+
+| Item | Status | Evidence |
+|---|---|---|
+| A semantic layer exists, separate from the parser | **met** | `src/semantic.rs` (declarations) + `src/semantic/scopes.rs` (lexical scope), both leaves over `ast`/`span` |
+| Symbols extracted | **met** | `declarations` / `top_level`, validated on all 483 corpus files (§9F.3) |
+| Scopes extracted | **met as a model** | §9F.6; 12 unit tests, every rule probed against the 10.0.0 binary |
+| Name resolution moved out of run time | **NOT met** | held by **DEC-M4-002**. A resolver that reports changes which programs are accepted |
+| Semantic validation moved out of the parser | **NOT met** | held by **DEC-M4-001**. No behaviour-preserving route exists |
+| Consumers migrated onto the layer | **NOT met** | held by **DEC-M4-004**. The LSP still re-lexes and discards the parse tree |
+
+**Three of six met. M4 is PARTIAL, and the three unmet items are unmet because
+they are held by registered decisions, not because they were skipped.**
+
+### 1. What M4 was for, and what actually happened
+
+M4 was chartered as an extraction — move semantic work *out of the parser*. The
+M4.0 audit found the premise wrong: the parser holds exactly **one** semantic
+check, and the responsibility was not misplaced but **absent and quadruply
+improvised** — evaluator, type checker, LSP and parser each deriving what a
+program declares, from three different inputs (§9F.0).
+
+So M4 became an establishment rather than an extraction, and what it established
+is real: two modules, no product consumers, validated against the whole corpus.
+What it could not do is *adopt* them, and every one of those adoptions turns out
+to change something a user can see.
+
+### 2. Responsibilities not actually extracted
+
+Named honestly, since "PARTIAL" is only useful if it says which part:
+
+  * `is_reserved_name` is **still in the parser** (`parser/classes.rs:55`), and
+    still the only semantic rule there. DEC-M4-001.
+  * `ScopeStack::lookup` is **still the only name resolution in the language**.
+    `semantic::scopes` models the same question statically and reports nothing.
+    DEC-M4-002.
+  * The LSP **still re-lexes** and discards the parse tree. DEC-M4-004.
+
+### 3. Circular or new dependencies
+
+None. `semantic` depends on `ast` and `span` and is depended on by nothing in the
+product — `crate::semantic::top_level` appears once outside the module, inside a
+`#[cfg(test)]` block in `lsp/analysis.rs`. `src/semantic/scopes.rs` is reached
+only from `tests/scope_resolution.rs`. Both are leaves by construction, which is
+what makes each future adoption a separately reviewable step.
+
+### 4. Duplication introduced
+
+One deliberate instance. `semantic::scopes` lists the 21 builtin globals and 22
+namespaces that `evaluator/expr.rs` and `lsp/builtins_gen.rs` also know. Both
+lists are transcribed with their source cited at the definition site. This is
+duplication and is recorded as such: generating them from one source is the right
+answer and is part of DEC-M4-003's option A, which is where it belongs rather
+than in a measurement module.
+
+### 5. Semantic drift
+
+**None.** No product source file was modified in M4. `git diff` across the
+milestone touches `src/semantic.rs` (one `pub mod` line), the two new files, test
+fixtures, manifests and documentation. The parser, evaluator, type checker and
+LSP are byte-identical to where M3 left them.
+
+The one behaviour change in the milestone's commits is in **tests**: three
+security fixtures now execute their assertions (§5.34, §5.37). No program's
+behaviour moved.
+
+### 6. Gates, at close
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --check` | **PASS** |
+| `cargo check --all-targets` | **PASS**, no warnings |
+| `cargo clippy --all-targets` | **PASS**, 0 errors |
+| Clippy per-site list (§5.26) | **181 lines — unchanged across all of M4** |
+| `cargo test --all-targets` | **PASS**, 424 / 0 failed |
+| `run_tests.ps1` | **PASS**, 499 / 0 / 0 |
+| `run_tests.sh` | **PASS**, 499 / 0 / 0 |
+| Runner parity | **identical per category** |
+| Ecosystem canary | **PASS**, 8 / 8 |
+
+### 7. What M4 found that nothing else would have
+
+Worth separating from what it built, because the findings came from measurement
+rather than from construction, and three of the five were not what the molecule
+was looking for:
+
+  * **§5.33** — the corpus does not rely on dynamic name resolution. Four
+    unaccounted uses inside a function across 486 files, all four in fixtures
+    written to hold an undefined name. This is the number DEC-M4-002 was
+    registered without.
+  * **§5.35** — `serez-ui` calls `Int.parse` at six sites and `Int` does not
+    exist. Thirty-six passing tests and a green ecosystem canary never saw it; a
+    resolver written for a different purpose found it on its first run. The
+    strongest single argument in the register for DEC-M4-002.
+  * **§5.34 / §5.37** — three security fixtures asserting nothing and passing,
+    23 assertions that had never executed. Fixed, with a guard that was verified
+    to fail before being trusted.
+  * **§5.36** — the measurement's own two method errors, which moved the headline
+    figure from 39.5% to 4.9%. Recorded because those two numbers argue for
+    opposite decisions, and because §9F.4's refusal to guess is what that warning
+    looks like when it comes true.
+  * **§5.31 / §5.32** — `class Math` coexisting with the `Math` namespace, and
+    the reserved-name guard's two spurious cascade errors.
+
+### 8. Documentation and `MATURITY_AUDIT.md`
+
+`ROADMAP_STATE.md` carries §7A (the decisions register), §9F.6 and §§5.30–5.37.
+`MATURITY_AUDIT.md`'s "free variables resolve dynamically" row is still open and
+still correct; §5.33 now supplies its missing measurement, and §6 points at it.
+
+### 9. Commits
+
+`53518e7` M4.0 · `6a32ade` M4.1 · `795d94f` M4.2 · `c2775bd` M4.3 · `de485e9`
+re-entry checkpoint · `75d5f69` decision measurements · `6ae8b38` the register ·
+`69f9553` M4.7.1-M4.7.2 · `8e67150` the security fixtures.
+
+### 10. What M4 hands forward
+
+| To | What |
+|---|---|
+| The decision owner | DEC-M4-001, -002, -003, -004, all with evidence and a marked recommendation |
+| M5 | §5.29 — the type checker cannot see through `export` |
+| M7 | scope semantics, once DEC-M4-002 is answered |
+| M10 | §5.35 (an ecosystem defect) and the absence of any compatibility clause for tooling behaviour, noted under DEC-M4-004 |
+
+---
+
+## MILESTONE STATUS: **PARTIAL**
+
+Three of six DoD items met. The layer is established, validated and unadopted.
+Every unmet item is held by a registered decision — DEC-M4-001, DEC-M4-002,
+DEC-M4-004 — and none of them is unmet through omission. The repository is green
+and nothing is half-migrated: both modules are leaves, so there is no partial
+state to unwind if a decision goes the other way.
 
 ## 10. Commits and checkpoints
 
