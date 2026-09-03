@@ -782,6 +782,45 @@ Evaluation then goes in `eval_infix()` (`evaluator/ops.rs`).
 4. Add the eval handler in `evaluator/stmt.rs`, inside `eval_statement()`.
 5. Add a `.sz` test that demonstrates the feature.
 
+### Branches, and who may write into the working tree
+
+There is exactly one flow, and it has three branches:
+
+```
+improve  ->  integration  ->  main
+```
+
+| Branch | What it is |
+|---|---|
+| `improve` | active development. Work lands here first. |
+| `integration` | integration and validation before a release. |
+| `main` | production. Promoting here is what bumps `version` in `Cargo.toml`. |
+
+**Do not create auxiliary branches or worktrees for automated sessions.** No
+`worktree-agent-*`, no `git worktree add` for a helper, no scratch branch that
+exists only so two things can run at once. A session that needs to change the
+core changes it on `improve`, in commits, like everything else.
+
+The reason is measured rather than theoretical, and it is
+`docs/maturity/ROADMAP_STATE.md` §5.16: a second session wrote
+`audit/2026-09-01_14-52-03.md` into this working tree, untracked, in the middle
+of the M0 baseline being frozen. It happened to change no tracked file, so the
+baseline survived — but that was luck, and every later milestone that treats a
+clean `git status` as a precondition is exposed to the same thing. Parallel
+writers into one tree make "what is the state of the repository" unanswerable,
+and this project's entire method depends on being able to answer it.
+
+The rule is a convention, not a lock. There is deliberately no hook or wrapper
+blocking `git worktree` — a guard that only exists on one developer's machine
+enforces nothing and hides the convention from everyone else.
+
+**One historical exception exists and is not to be tidied away.**
+`.claude/worktrees/agent-ae7aff06bbe3f1d73`, on branch
+`worktree-agent-ae7aff06bbe3f1d73` at commit `6e62276`, predates this rule and
+holds work that will be audited on its own. Do not delete it, modify it, merge
+it, cherry-pick from it, or build on it. It is kept for that audit and for
+nothing else; no new worktree joins it.
+
 ### Pull requests
 
 - One logical change per commit.
