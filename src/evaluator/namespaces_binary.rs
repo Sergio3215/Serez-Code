@@ -16,15 +16,28 @@ use super::ExecutionFlow;
 // Binary.concat(a, b)          → [int]   concatenate two byte arrays
 
 use super::EvalResult;
+use super::binary_ops;
 use crate::ast;
 use crate::region::{ObjectData, OwnedValue};
 
 impl super::Evaluator {
+    /// `Binary.*` — argument evaluation, then the operation.
+    ///
+    /// **DEC-M6-001.** What is left here is what only the evaluator can do: read
+    /// the call, run its argument expressions, and check arity. Everything after
+    /// that is in [`super::binary_ops`], behind [`ValueSink`], where it depends
+    /// on four operations instead of on this struct's thirty-eight fields.
+    ///
+    /// The messages, kinds and arity rules are unchanged, including the ones that
+    /// read oddly — `require_one_int` says `{ctx}(n) requires 1 argument, got N`
+    /// while the inline checks say `Binary.toHex(bytes) requires 1 argument`.
+    /// Making those consistent is a diagnostic change and this is a refactor.
     pub(super) fn eval_binary_namespace(
         &mut self,
         dot_call: &ast::DotCallExpression,
     ) -> EvalResult {
-        match dot_call.method.as_str() {
+        let method = dot_call.method.as_str();
+        match method {
             "fromHex" => {
                 if dot_call.arguments.len() != 1 {
                     return self
@@ -34,63 +47,27 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                if hex.len() % 2 != 0 {
-                    return self.rt_err_kind(
-                        "BinaryError",
-                        "Binary.fromHex: hex string must have even length",
-                    );
-                }
-                let mut bytes: Vec<OwnedValue> = Vec::with_capacity(hex.len() / 2);
-                for i in (0..hex.len()).step_by(2) {
-                    match u8::from_str_radix(&hex[i..i + 2], 16) {
-                        Ok(b) => {
-                            bytes.push(OwnedValue::Integer(b as i64));
-                        }
-                        Err(_) => {
-                            return self.rt_err_kind(
-                                "BinaryError",
-                                format!("Binary.fromHex: invalid hex pair '{}'", &hex[i..i + 2]),
-                            );
-                        }
-                    }
-                }
-                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
-                    element_type: Some("int".to_string()),
-                    elements: bytes,
-                })))
+                binary_ops::from_hex(self, &hex)
             }
 
-            "toHex" => {
+            "toHex" | "toUtf8" => {
+                let label = if method == "toHex" {
+                    "Binary.toHex(bytes) requires 1 argument"
+                } else {
+                    "Binary.toUtf8(bytes) requires 1 argument"
+                };
                 if dot_call.arguments.len() != 1 {
-                    return self
-                        .rt_err_kind("TypeError", "Binary.toHex(bytes) requires 1 argument");
+                    return self.rt_err_kind("TypeError", label);
                 }
-                let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    Ok(ExecutionFlow::Value(r)) => r,
-                    other => return other,
+                let elements = match self.eval_to_elements(&dot_call.arguments[0], method) {
+                    Ok(v) => v,
+                    Err(e) => return e,
                 };
-                let elems = match self.resolve(arr_ref) {
-                    Some(ObjectData::Array { elements, .. }) => elements.clone(),
-                    _ => {
-                        return self
-                            .rt_err_kind("TypeError", "Binary.toHex: argument must be an array");
-                    }
-                };
-                let mut hex = String::with_capacity(elems.len() * 2);
-                for r in elems {
-                    match r {
-                        OwnedValue::Integer(b) => {
-                            hex.push_str(&format!("{:02x}", (b as u8)));
-                        }
-                        _ => {
-                            return self.rt_err_kind(
-                                "TypeError",
-                                "Binary.toHex: all elements must be integers",
-                            );
-                        }
-                    }
+                if method == "toHex" {
+                    binary_ops::to_hex(self, &elements)
+                } else {
+                    binary_ops::to_utf8(self, &elements)
                 }
-                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(hex))))
             }
 
             "fromUtf8" => {
@@ -101,136 +78,37 @@ impl super::Evaluator {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                let owned: Vec<OwnedValue> = s
-                    .as_bytes()
-                    .iter()
-                    .map(|&b| OwnedValue::Integer(b as i64))
-                    .collect();
-                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
-                    element_type: Some("int".to_string()),
-                    elements: owned,
-                })))
+                binary_ops::from_utf8(self, &s)
             }
 
-            "toUtf8" => {
+            "packInt32Le" | "packInt32Be" | "packInt64Le" => {
+                let ctx = format!("Binary.{method}");
+                let n = match self.require_one_int(&dot_call.arguments, &ctx) {
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
+                match method {
+                    "packInt32Le" => binary_ops::pack_i32_le(self, n),
+                    "packInt32Be" => binary_ops::pack_i32_be(self, n),
+                    _ => binary_ops::pack_i64_le(self, n),
+                }
+            }
+
+            "unpackInt32Le" | "unpackInt32Be" | "unpackInt64Le" => {
+                let ctx = format!("Binary.{method}");
                 if dot_call.arguments.len() != 1 {
                     return self
-                        .rt_err_kind("TypeError", "Binary.toUtf8(bytes) requires 1 argument");
+                        .rt_err_kind("TypeError", format!("{ctx}(bytes) requires 1 argument"));
                 }
-                let arr_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    Ok(ExecutionFlow::Value(r)) => r,
-                    other => return other,
-                };
-                let elems = match self.resolve(arr_ref) {
-                    Some(ObjectData::Array { elements, .. }) => elements.clone(),
-                    _ => {
-                        return self
-                            .rt_err_kind("TypeError", "Binary.toUtf8: argument must be an array");
-                    }
-                };
-                let bytes: Result<Vec<u8>, _> = elems
-                    .iter()
-                    .map(|r| match r {
-                        OwnedValue::Integer(b) => Ok(*b as u8),
-                        _ => Err(()),
-                    })
-                    .collect();
-                match bytes {
-                    Ok(bs) => {
-                        let s = String::from_utf8_lossy(&bs).into_owned();
-                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
-                    }
-                    Err(_) => self
-                        .rt_err_kind("TypeError", "Binary.toUtf8: all elements must be integers"),
-                }
-            }
-
-            "packInt32Le" => {
-                let n = match self.require_one_int(&dot_call.arguments, "Binary.packInt32Le") {
+                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], &ctx) {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                let b = (n as u32).to_le_bytes();
-                self.alloc_byte_array(&b)
-            }
-
-            "packInt32Be" => {
-                let n = match self.require_one_int(&dot_call.arguments, "Binary.packInt32Be") {
-                    Ok(v) => v,
-                    Err(e) => return e,
-                };
-                let b = (n as u32).to_be_bytes();
-                self.alloc_byte_array(&b)
-            }
-
-            "unpackInt32Le" => {
-                if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind(
-                        "TypeError",
-                        "Binary.unpackInt32Le(bytes) requires 1 argument",
-                    );
+                match method {
+                    "unpackInt32Le" => binary_ops::unpack_i32_le(self, &bytes),
+                    "unpackInt32Be" => binary_ops::unpack_i32_be(self, &bytes),
+                    _ => binary_ops::unpack_i64_le(self, &bytes),
                 }
-                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], "Binary.unpackInt32Le")
-                {
-                    Ok(v) => v,
-                    Err(e) => return e,
-                };
-                if bytes.len() < 4 {
-                    return self
-                        .rt_err_kind("BinaryError", "Binary.unpackInt32Le: need at least 4 bytes");
-                }
-                let n = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as i64;
-                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
-            }
-
-            "unpackInt32Be" => {
-                if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind(
-                        "TypeError",
-                        "Binary.unpackInt32Be(bytes) requires 1 argument",
-                    );
-                }
-                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], "Binary.unpackInt32Be")
-                {
-                    Ok(v) => v,
-                    Err(e) => return e,
-                };
-                if bytes.len() < 4 {
-                    return self
-                        .rt_err_kind("BinaryError", "Binary.unpackInt32Be: need at least 4 bytes");
-                }
-                let n = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as i64;
-                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
-            }
-
-            "packInt64Le" => {
-                let n = match self.require_one_int(&dot_call.arguments, "Binary.packInt64Le") {
-                    Ok(v) => v,
-                    Err(e) => return e,
-                };
-                let b = n.to_le_bytes();
-                self.alloc_byte_array(&b)
-            }
-
-            "unpackInt64Le" => {
-                if dot_call.arguments.len() != 1 {
-                    return self.rt_err_kind(
-                        "TypeError",
-                        "Binary.unpackInt64Le(bytes) requires 1 argument",
-                    );
-                }
-                let bytes = match self.eval_to_bytes(&dot_call.arguments[0], "Binary.unpackInt64Le")
-                {
-                    Ok(v) => v,
-                    Err(e) => return e,
-                };
-                if bytes.len() < 8 {
-                    return self
-                        .rt_err_kind("BinaryError", "Binary.unpackInt64Le: need at least 8 bytes");
-                }
-                let arr: [u8; 8] = bytes[..8].try_into().unwrap();
-                let n = i64::from_le_bytes(arr);
-                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))))
             }
 
             "concat" => {
@@ -238,38 +116,15 @@ impl super::Evaluator {
                     return self
                         .rt_err_kind("TypeError", "Binary.concat(a, b) requires 2 arguments");
                 }
-                let a_ref = match self.eval_expression(&dot_call.arguments[0]) {
-                    Ok(ExecutionFlow::Value(r)) => r,
-                    other => return other,
+                let first = match self.eval_to_elements(&dot_call.arguments[0], "concat-first") {
+                    Ok(v) => v,
+                    Err(e) => return e,
                 };
-                let b_ref = match self.eval_expression(&dot_call.arguments[1]) {
-                    Ok(ExecutionFlow::Value(r)) => r,
-                    other => return other,
+                let second = match self.eval_to_elements(&dot_call.arguments[1], "concat-second") {
+                    Ok(v) => v,
+                    Err(e) => return e,
                 };
-                let a_elems = match self.resolve(a_ref) {
-                    Some(ObjectData::Array { elements, .. }) => elements.clone(),
-                    _ => {
-                        return self.rt_err_kind(
-                            "TypeError",
-                            "Binary.concat: first argument must be an array",
-                        );
-                    }
-                };
-                let b_elems = match self.resolve(b_ref) {
-                    Some(ObjectData::Array { elements, .. }) => elements.clone(),
-                    _ => {
-                        return self.rt_err_kind(
-                            "TypeError",
-                            "Binary.concat: second argument must be an array",
-                        );
-                    }
-                };
-                let mut combined = a_elems;
-                combined.extend(b_elems);
-                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
-                    element_type: Some("int".to_string()),
-                    elements: combined,
-                })))
+                binary_ops::concat(self, &first, &second)
             }
 
             _ => self.rt_err_kind(
@@ -279,17 +134,36 @@ impl super::Evaluator {
         }
     }
 
-    // ── Binary helpers ────────────────────────────────────────────────────────
+    // ── Argument evaluation ───────────────────────────────────────────────────
+    //
+    // These stay on the evaluator: each one runs an expression, which is the one
+    // capability `ValueSink` deliberately does not offer.
 
-    fn alloc_byte_array(&mut self, bytes: &[u8]) -> EvalResult {
-        let owned: Vec<OwnedValue> = bytes
-            .iter()
-            .map(|&b| OwnedValue::Integer(b as i64))
-            .collect();
-        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Array {
-            element_type: Some("int".to_string()),
-            elements: owned,
-        })))
+    /// Evaluate an argument that must be an array, and hand back its elements.
+    ///
+    /// `context` selects the message, because the four call sites word it
+    /// differently and this is a refactor rather than a rewording.
+    fn eval_to_elements(
+        &mut self,
+        expr: &ast::Expression,
+        context: &str,
+    ) -> Result<Vec<OwnedValue>, EvalResult> {
+        let r = match self.eval_expression(expr) {
+            Ok(ExecutionFlow::Value(r)) => r,
+            other => return Err(other),
+        };
+        match self.resolve(r) {
+            Some(ObjectData::Array { elements, .. }) => Ok(elements.clone()),
+            _ => {
+                let message = match context {
+                    "toHex" => "Binary.toHex: argument must be an array".to_string(),
+                    "toUtf8" => "Binary.toUtf8: argument must be an array".to_string(),
+                    "concat-first" => "Binary.concat: first argument must be an array".to_string(),
+                    _ => "Binary.concat: second argument must be an array".to_string(),
+                };
+                Err(self.rt_err_kind("TypeError", message))
+            }
+        }
     }
 
     fn require_one_int(&mut self, args: &[ast::Expression], ctx: &str) -> Result<i64, EvalResult> {

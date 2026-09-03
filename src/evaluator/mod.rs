@@ -1,3 +1,4 @@
+mod binary_ops;
 mod builtins;
 mod check;
 mod classes;
@@ -21,6 +22,7 @@ mod namespaces_os;
 mod namespaces_random;
 mod namespaces_socket;
 mod ops;
+mod service;
 mod stmt;
 // `pub`, not `pub(crate)`: the `sz` binary is a separate crate now and has to
 // reach GuiHost/gui_host_main_loop — winit requires the event loop to own the
