@@ -17,18 +17,19 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M6 — Runtime Molecular.** M5 closed COMPLETE (§9I); M4 closed PARTIAL (§9G). |
+| **Current milestone** | **M7 — Semantics Frozen.** M6 closed PARTIAL (§9K), M5 COMPLETE (§9I), M4 PARTIAL (§9G). |
 | Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, corpus-validated (§9F.3) · **M4.7.1–M4.7.2** the scope model and the measurement (§9F.6) · **audit** (§9G) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
-| Last completed milestone | **M5 — Type System Stable** (§9I). M4 is **PARTIAL** by decision, not by omission |
+| Last completed milestone | **M5 — Type System Stable** (§9I). M4 and M6 are **PARTIAL** by decision, not by omission |
+| Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | 9 OPEN — **DEC-M4-001**…**-004**, **DEC-M5-001**…**-005**. All in §7A with measured evidence and a marked recommendation. Only the M4 four block work |
+| **Open decisions** | 10 OPEN — **DEC-M4-001**…**-004**, **DEC-M5-001**…**-005**, **DEC-M6-001**. All in §7A with measured evidence and a marked recommendation |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — M5 closed COMPLETE (§9I) |
+| Last state update | 2026-09-03 — M6 closed PARTIAL (§9K) |
 
 Milestone ledger:
 
@@ -40,8 +41,8 @@ Milestone ledger:
 | M3 — Diagnostics Unified | **COMPLETE** (2026-09-02) — 5 diagnostic types -> 1, 4 rendered formats -> 1 renderer, §5.17 fixed |
 | M4 — Semantic Layer Established | **PARTIAL** (2026-09-02, §9G) — 3 of 6 DoD items met. Layer established, validated, **unadopted**; adoption held by DEC-M4-001/002/004 |
 | M5 — Type System Stable | **COMPLETE** (2026-09-03, §9I) — 4 checker/runtime divergences fixed, §5.29 closed, 5 decisions registered |
-| M6 — Runtime Molecular | **IN PROGRESS** (partially pre-empted; see §6) |
-| M7 — Semantics Frozen | NOT STARTED |
+| M6 — Runtime Molecular | **PARTIAL** (2026-09-03, §9K) — `Evaluator` 48 fields -> 38; dispatch still on the evaluator, held by DEC-M6-001 |
+| M7 — Semantics Frozen | **IN PROGRESS** |
 | M8 — Conformance Complete | NOT STARTED |
 | M9 — Robustness & Security Hardened | NOT STARTED (partially pre-empted; see §6) |
 | M10 — Stable Language Platform | NOT STARTED |
@@ -1214,6 +1215,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M5-003** | Whether an unknown type name is diagnosed | **OPEN** | nothing; option B depends on DEC-M4-001 |
 | **DEC-M5-004** | Whether a declared field type is a constraint or a default | **OPEN** | nothing |
 | **DEC-M5-005** | Whether a declared class type accepts a subclass | **OPEN** | nothing |
+| **DEC-M6-001** | How a runtime service raises an error and allocates a value | **OPEN** | the rest of M6 — moving namespace dispatch off `Evaluator` |
 
 ---
 
@@ -1803,6 +1805,70 @@ A language with `class X : Y` whose type system cannot see the `: Y` is teaching
 users a rule that exists for no reason they can find. But this is the single
 largest semantic change in the register and should be its own project, with
 differential testing over the corpus, not a milestone item.
+
+---
+
+### DEC-M6-001 — How should a runtime service raise an error and allocate a value?
+
+**Problem.** M6 gave five services their own state and two of them their own
+operations. It could not give any of them their **dispatch** — the code that
+answers `Autodiff.backward(...)` or `Socket.connect(...)` — because every one of
+those needs three things that live on the evaluator: `alloc` to make a value,
+`rt_err_kind` to raise one, and `null_ref` to return nothing. So
+`eval_autodiff_namespace` and its fifteen siblings remain `impl super::Evaluator`.
+
+This is the boundary between M6 as done and M6 as chartered, and crossing it needs
+a choice about what a service is allowed to depend on.
+
+**Current behaviour.** Every namespace's dispatch is a method on `Evaluator`,
+taking `&mut self` and returning `EvalResult`. The service structs hold state; the
+evaluator holds the behaviour.
+
+**Measured evidence.** Sixteen namespace dispatch functions across
+`evaluator/namespaces_*.rs`, 12,000+ lines. `eval_autodiff_namespace` alone is
+~2,300 lines and touches `self.alloc`, `self.rt_err_kind`, `self.null_ref` and
+`self.resolve` throughout. This is the largest single body of work left in the
+runtime, which is why the choice of mechanism matters more than the mechanism.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **Pass `&mut Evaluator`** to service methods | Smallest change; the dependency becomes explicit in signatures instead of implicit in `self`. But a service that takes the whole evaluator is not decoupled from it — it is the same coupling, written down |
+| B | **A narrow trait** — `ValueSink`, or similar, with `alloc`, `raise`, `null` | A real boundary: a service depends on three operations rather than on 38 fields, and becomes testable with a stub. Costs a trait object or a generic parameter on every dispatch, and a design pass on what the minimal surface actually is |
+| C | **Services return plain Rust `Result`**, and the evaluator adapts at the edge | The cleanest and the largest. Services stop knowing about `EvalResult`, `ObjectRef` and the arena entirely; the evaluator translates. Every one of the 16 dispatches changes shape |
+
+**Trade-offs.** A is cheap and buys little — the plan warns against introducing
+abstractions that do not represent a real contract, and A is the opposite failure:
+keeping a real dependency while calling the move an extraction. C is the right
+architecture and is a project, not a milestone item. B is the middle, and its risk
+is that the "minimal surface" is decided by what the first service happens to
+need rather than by what services need.
+
+**Architectural impact.** This decides whether Serez's runtime services are
+*modules of the evaluator* (A) or *components the evaluator drives* (B, C). It is
+the largest open architectural question in the register.
+
+**Semantic impact.** None under any option, if done correctly — this is a
+refactor. That is also its risk: 12,000 lines of behaviour-preserving change with
+no semantic net beyond the conformance suite.
+
+**Compatibility.** None. No public surface moves.
+
+**Impact by area.** Tests: the existing suite is the only net, and it asserts what
+programs print rather than how the runtime is structured — the same gap M1 met and
+answered with a differential harness. Specs: none. LSP, runtime, ecosystem: none
+if behaviour is preserved.
+
+**Recommendation — this is a recommendation, not a decision.** **B**, and only
+after a differential harness exists for runtime behaviour the way
+`parser_snapshot` exists for the frontend. The order matters more than the option:
+attempting any of these across 12,000 lines without a net that can see a changed
+value or a changed error is the highest-risk work in the whole roadmap.
+
+**Blocked by this decision:** the rest of M6 — moving namespace dispatch off
+`Evaluator`. **Not blocked:** everything M6.1–M6.4 did, which is why the milestone
+is PARTIAL rather than stopped.
 
 ---
 
@@ -4203,6 +4269,106 @@ services own their state and a little of their logic, not their dispatch. Moving
 that is a much larger change than M6 has done here, and calling it done would be
 the false COMPLETE §12 warns about.
 
+## 9K. M6 MILESTONE AUDIT
+
+Charter: *"Evaluator debe evaluar lenguaje"* — not simultaneously be a filesystem,
+a process manager, a socket manager, a GPU manager, a GUI runtime, a media
+runtime, a task scheduler, a memory manager and an autodiff runtime.
+
+### Definition of Done, item by item
+
+| Item | Status | Evidence |
+|---|---|---|
+| Ownership explicit | **met** | 5 new types, each grouping on a stated invariant rather than a name prefix; the invariant is written at the type |
+| `Evaluator` reduced | **met** | **48 fields -> 38**, -21%. The 24 language- and execution-state fields are not targets — they are what an evaluator is |
+| Services independently testable | **partially met** | `AutodiffTape` and `SecurityPolicy` have operations and 7 unit tests. `ModuleContext`, `TaskContext` and `DispatchCaches` are still data |
+| No extraction changes behaviour | **met** | four molecules, full gates green after each, no manifest row moved anywhere |
+
+**Three of four met. M6 is PARTIAL**, and the unmet item is unmet because of
+**DEC-M6-001**, not because it was skipped.
+
+### 1. What M6 could and could not reach
+
+M6 reduced the evaluator's *state* and left its *behaviour* where it was. Every
+namespace's dispatch is still `impl super::Evaluator`, because each needs `alloc`,
+`rt_err_kind` and `null_ref`. The services own their data and, in two cases, the
+operations over that data — they do not own their dispatch.
+
+That is a real limit and it is stated rather than dressed up: an evaluator that
+holds an `AutodiffTape` instead of five autodiff fields is better structured, but
+it is still the thing that differentiates. The charter's phrase — *the evaluator
+should evaluate the language* — is not yet true.
+
+### 2. Field regrouping has reached its floor, and here is why
+
+38 fields, and the remaining ones were each considered:
+
+  * **24 are language state and execution state.** Arenas, bindings, scopes, the
+    class and enum registries, the call stack, the error slot. Not targets.
+  * **`sockets`, `gpu`, `memory`** are three `HandleRegistry`s. Grouping them
+    would group by *implementation type* — three things that share a generic — and
+    not by responsibility. A socket table and a raw-memory table answer unrelated
+    questions. Declined.
+  * **`lcg_state` and `tensor_id_counter`** are one `u64` each with no second
+    field to be cohesive with. Wrapping either produces a file, not a boundary
+    (rule 3). Declined.
+  * **`gui`, `spawned`, `media`** are already single fields holding their own
+    types.
+
+Recorded so a later reader knows these were weighed and declined, rather than
+missed. Further reduction needs DEC-M6-001, because it means moving behaviour.
+
+### 3. Semantic drift
+
+**None.** Four molecules, and every gate green after each: 433 Rust tests, both
+Serez runners at 499/0/0 with identical per-category totals, the ecosystem canary
+at 8/8, and no row moved in either manifest. The changes are field regroupings and
+three call-site collapses that were byte-identical to the methods replacing them.
+
+Two rename slips were caught, both by the compiler and neither by a test: a
+multi-line `self\n.ad_grads` in M6.1, and four non-`self` accesses inside
+`#[cfg(test)]` code in M6.3. Worth recording together, because they make the same
+point from two angles — **a textual rename is a proposal; the type system is what
+checks it** — and because a language without that check would have shipped both.
+
+### 4. Duplication introduced, and removed
+
+None introduced. Removed: `Autodiff.tape()` and `Autodiff.clear()` were five
+identical lines each, and are now two calls.
+
+### 5. Circular or new dependencies
+
+None. `permissions` and `modules` gained types and no dependencies;
+`namespaces_task` and `namespaces_autodiff` already lived under `evaluator`.
+`DispatchCaches` is private to `evaluator/mod.rs`, because nothing outside needs
+it — the smallest visibility that works, rather than the most convenient.
+
+### 6. Gates at close
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --check` | **PASS** |
+| `cargo check --all-targets` | **PASS**, no warnings |
+| `cargo clippy --all-targets` | **PASS**, 0 errors; per-site list **180**, unchanged across all of M6 |
+| `cargo test --all-targets` | **PASS**, 433 / 0 failed |
+| `run_tests.ps1` / `run_tests.sh` | **PASS**, 499 / 0 / 0 each, identical per category |
+| Ecosystem canary | **PASS**, 8 / 8 |
+
+### 7. Commits
+
+`b84393c` M6.1 autodiff · `503d5f6` M6.2 modules · `be7fb96` M6.3 security, task,
+caches · `139911d` M6.4 service operations.
+
+---
+
+## MILESTONE STATUS: **PARTIAL**
+
+The evaluator is 21% narrower and every field it still holds has a reason that is
+written down. What it does *not* have is services that own their dispatch, and
+that is one decision — **DEC-M6-001** — plus, on the recommendation recorded
+there, a differential runtime harness before anyone attempts 12,000 lines of
+behaviour-preserving change.
+
 ---
 
 ## 9I. M5 MILESTONE AUDIT
@@ -4363,6 +4529,11 @@ and each is registered with evidence rather than absorbed.
 | **M4 checkpoint** | `a622e84` | `M4 closes PARTIAL — three of six, and the reason for each of the other three` |
 | M5.0-M5.2 | `83dfef5` | `the checker stops reporting three programs the runtime accepts` — **behaviour change**, stderr |
 | M5.3 | `b17cedd` | `the checker sees through export, and §5.29 closes` — **behaviour change**, stderr |
+| **M5 checkpoint** | `38850d0` | `M5 closes COMPLETE — the rules were fine, the table had two implementations` |
+| M6.1 | `b84393c` | `the autodiff tape stops being five fields of the evaluator` |
+| M6.2 | `503d5f6` | `the module context stops being three fields of the evaluator` |
+| M6.3 | `be7fb96` | `security, task context and dispatch caches stop being seven fields` |
+| M6.4 | `139911d` | `two services stop being data and start answering questions` |
 | M5.4 | `df6a0b8` | `two checker findings that pointed at nothing now point at the code` |
 | **Re-entry checkpoint** | the commit that added §1.5 — `git log -1 --format=%h -S'1.5 Baseline re-verified' -- docs/maturity/ROADMAP_STATE.md` | `re-verify the baseline, and correct a header three milestones out of date`. Documentation only; no behaviour change. Seven gates plus the canary re-measured green at `9ca4d22`; §0 corrected; §5.30 recorded. Same self-naming problem as the M1 row, resolved the same way. |
 
