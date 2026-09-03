@@ -170,7 +170,7 @@ impl super::Evaluator {
                 }
                 for p in perms {
                     self.warn_about_grant(p);
-                    self.security.granted.insert(p.clone());
+                    self.security.grant(p.clone());
                 }
                 EvalResult::Value(self.null_ref)
             }

@@ -641,7 +641,7 @@ impl Evaluator {
     pub fn set_permissions(&mut self, perms: Vec<String>) {
         for p in perms {
             self.warn_about_grant(&p);
-            self.security.granted.insert(p);
+            self.security.grant(p);
         }
     }
 
@@ -756,7 +756,7 @@ impl Evaluator {
         operation: &str,
         permission: &str,
     ) -> Option<EvalResult> {
-        if self.security.granted.contains(permission) {
+        if self.security.allows(permission) {
             return None;
         }
         Some(self.fatal_err_kind(
@@ -846,7 +846,7 @@ impl Evaluator {
         self.task.id = Some(id);
         self.task.arg = Some(arg);
         // Por defecto, dale permiso de "Task" a sí mismo para que los workers puedan usar Task.reply / Task.message
-        self.security.granted.insert("Task".to_string());
+        self.security.grant("Task".to_string());
     }
 
     fn set_task_runtime_context(

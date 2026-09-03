@@ -355,6 +355,87 @@ impl AutodiffTape {
             ..Default::default()
         }
     }
+
+    /// `Autodiff.tape()` — start recording, from nothing.
+    pub fn begin(&mut self) {
+        self.clear();
+        self.recording = true;
+    }
+
+    /// `Autodiff.clear()` — stop recording and throw the tape away.
+    pub fn discard(&mut self) {
+        self.clear();
+        self.recording = false;
+    }
+
+    /// End of `Autodiff.backward()` — stop recording and **keep the gradients**.
+    ///
+    /// This is the one that is not [`discard`](Self::discard), and the difference
+    /// mattered enough to name: `backward` fills `grads` and then stops, because
+    /// the gradients are its result and a caller is about to read them. At the
+    /// call site the two used to be one line and five lines of the same shape,
+    /// which made the distinction something you had to count lines to notice.
+    pub fn stop_recording(&mut self) {
+        self.recording = false;
+    }
+
+    /// Back to nothing recorded. `next_id` returns to 1, so node ids restart
+    /// with the tape rather than growing across sessions.
+    fn clear(&mut self) {
+        self.tape.clear();
+        self.grads.clear();
+        self.tensor_ids.clear();
+        self.next_id = 1;
+    }
+}
+
+#[cfg(test)]
+mod tape_tests {
+    use super::AutodiffTape;
+
+    fn recorded() -> AutodiffTape {
+        let mut tape = AutodiffTape::new();
+        tape.begin();
+        tape.grads.insert(7, vec![1.0]);
+        tape.tensor_ids.insert(3, 9);
+        tape.next_id = 42;
+        tape
+    }
+
+    #[test]
+    fn begin_starts_from_nothing_and_restarts_ids() {
+        let mut tape = recorded();
+        tape.begin();
+        assert!(tape.recording);
+        assert!(tape.grads.is_empty());
+        assert!(tape.tensor_ids.is_empty());
+        assert_eq!(tape.next_id, 1, "node ids restart with the tape");
+    }
+
+    #[test]
+    fn discard_stops_and_keeps_nothing() {
+        let mut tape = recorded();
+        tape.discard();
+        assert!(!tape.recording);
+        assert!(tape.grads.is_empty());
+        assert_eq!(tape.next_id, 1);
+    }
+
+    #[test]
+    fn stop_recording_keeps_the_gradients() {
+        // The distinction this method exists to make explicit: `backward` stops
+        // recording and its results have to survive.
+        let mut tape = recorded();
+        tape.stop_recording();
+        assert!(!tape.recording);
+        assert_eq!(tape.grads.get(&7), Some(&vec![1.0]));
+    }
+
+    #[test]
+    fn a_fresh_tape_issues_node_ids_from_one() {
+        // 0 is never a valid node id, which callers rely on.
+        assert_eq!(AutodiffTape::new().next_id, 1);
+    }
 }
 
 // ── Evaluator methods ─────────────────────────────────────────────────────────
@@ -369,11 +450,7 @@ impl super::Evaluator {
                 if !dot_call.arguments.is_empty() {
                     return self.rt_err_kind("TypeError", "Autodiff.tape() takes no arguments");
                 }
-                self.autodiff.recording = true;
-                self.autodiff.tape.clear();
-                self.autodiff.grads.clear();
-                self.autodiff.tensor_ids.clear();
-                self.autodiff.next_id = 1;
+                self.autodiff.begin();
                 EvalResult::Value(self.null_ref)
             }
 
@@ -381,11 +458,7 @@ impl super::Evaluator {
                 if let Some(error) = self.reject_arguments(dot_call, "Autodiff") {
                     return error;
                 }
-                self.autodiff.recording = false;
-                self.autodiff.tape.clear();
-                self.autodiff.grads.clear();
-                self.autodiff.tensor_ids.clear();
-                self.autodiff.next_id = 1;
+                self.autodiff.discard();
                 EvalResult::Value(self.null_ref)
             }
 
@@ -1433,7 +1506,7 @@ impl super::Evaluator {
                         }
                     }
                 }
-                self.autodiff.recording = false;
+                self.autodiff.stop_recording();
                 EvalResult::Value(self.null_ref)
             }
 

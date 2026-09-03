@@ -51,6 +51,61 @@ pub struct SecurityPolicy {
     pub lockdown: bool,
 }
 
+impl SecurityPolicy {
+    /// Is `permission` granted?
+    ///
+    /// Named rather than reaching into `granted`, so that every gate asks the
+    /// policy instead of inspecting it. That matters if the answer ever stops
+    /// being a set lookup — a wildcard, a scope, an inherited grant — because
+    /// then it changes in one place rather than at every call site.
+    pub fn allows(&self, permission: &str) -> bool {
+        self.granted.contains(permission)
+    }
+
+    /// Record a grant. Returns whether it was new, which callers use to warn
+    /// once about a redundant declaration.
+    pub fn grant(&mut self, permission: impl Into<String>) -> bool {
+        self.granted.insert(permission.into())
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::SecurityPolicy;
+
+    #[test]
+    fn a_fresh_policy_grants_nothing_and_is_not_locked_down() {
+        let policy = SecurityPolicy::default();
+        assert!(!policy.allows("Terminal"));
+        assert!(!policy.lockdown, "lockdown is opt-in; see run::RunOpts");
+    }
+
+    #[test]
+    fn a_grant_is_exact_and_reports_whether_it_was_new() {
+        let mut policy = SecurityPolicy::default();
+        assert!(policy.grant("OS"));
+        assert!(!policy.grant("OS"), "a repeated grant is not new");
+        assert!(policy.allows("OS"));
+        assert!(
+            !policy.allows("OS.exec"),
+            "a grant does not imply a narrower one"
+        );
+        assert!(!policy.allows("os"), "and it is case-sensitive");
+    }
+
+    #[test]
+    fn lockdown_is_independent_of_what_is_granted() {
+        // The pair is counter-intuitive and worth pinning: granted is a manifest
+        // a program can write itself, and lockdown closes paths the manifest
+        // does not cover. Neither implies anything about the other.
+        let mut policy = SecurityPolicy::default();
+        policy.grant("File");
+        policy.lockdown = true;
+        assert!(policy.allows("File"));
+        assert!(policy.lockdown);
+    }
+}
+
 pub const ENFORCED: &[&str] = &[
     "Env", "Gui", "Media", "OS", "Socket", "System", "Task", "Terminal", "Time",
 ];

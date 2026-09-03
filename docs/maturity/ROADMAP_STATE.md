@@ -4163,6 +4163,46 @@ textual rename is a proposal, and the type system is what checks it.
 
 `Evaluator`: **42 fields -> 38**, and 48 -> 38 across M6 so far.
 
+### 9J.4 — M6.4: the services answer questions instead of exposing fields
+
+M6.1-M6.3 grouped 15 fields into 5. That is ownership, not yet a *service*: the
+types were data, and every operation on them was still spelled out at the call
+site. The charter also asks for services that are **independently testable**, and
+a plain data struct is not one. This molecule gives two of them the operations
+that were already implicit in their callers.
+
+**`AutodiffTape`.** `Autodiff.tape()` and `Autodiff.clear()` were **five
+identical lines each**, differing only in `recording = true` versus `false`. They
+become `begin()` and `discard()`. The third site — the tail of
+`Autodiff.backward()` — was **one** line, `recording = false`, and it is now
+`stop_recording()`.
+
+That third method is the point of the molecule. `backward` stops recording and
+**keeps `grads`**, because the gradients are its result and a caller is about to
+read them. `discard` throws them away. At the call sites those two were one line
+and five lines of the same shape, so telling them apart meant counting lines and
+inferring intent. Now the difference has a name, and the name says which one is
+which.
+
+**`SecurityPolicy`** gains `allows()` and `grant()`. The point is not the two
+lines saved: it is that a gate now *asks the policy* rather than inspecting its
+set. If the answer ever stops being a set lookup — a wildcard, a scope, an
+inherited grant — it changes in one place instead of at every call site.
+
+**Seven unit tests**, and they test the services rather than the evaluator, which
+is what "independently testable" means. Three of them pin things that were
+previously only true by inspection: node ids restart at 1 with each tape, a
+repeated grant reports itself as not-new, and `granted` and `lockdown` are
+independent — the counter-intuitive pair whose distinction M6.3 wrote onto the
+type.
+
+**What M6 did not do, stated plainly.** The *behaviour* of each namespace still
+lives in `impl super::Evaluator` in the same files. `eval_autodiff_namespace`
+still needs `&mut Evaluator` for `alloc`, `rt_err_kind` and `null_ref`, so the
+services own their state and a little of their logic, not their dispatch. Moving
+that is a much larger change than M6 has done here, and calling it done would be
+the false COMPLETE §12 warns about.
+
 ---
 
 ## 9I. M5 MILESTONE AUDIT
