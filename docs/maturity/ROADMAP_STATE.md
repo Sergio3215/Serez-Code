@@ -17,22 +17,24 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M10 — Stable Language Platform.** M9 PARTIAL (§9Q), M8 PARTIAL (§9O), M7 PARTIAL (§9M), M6 PARTIAL (§9K), M5 COMPLETE (§9I), M4 PARTIAL (§9G). |
+| **Where to start** | **§0A — the final M0→M10 audit.** Every milestone's status, all 19 open decisions, what blocks what, and the order to answer them in. |
+| **Current milestone** | The autonomous run reached M10. Four COMPLETE, seven PARTIAL, none BLOCKED. |
 | Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, corpus-validated (§9F.3) · **M4.7.1–M4.7.2** the scope model and the measurement (§9F.6) · **audit** (§9G) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
 | Last completed milestone | **M5 — Type System Stable** (§9I). M4 and M6 are **PARTIAL** by decision, not by omission |
+| Goals done in M10 | **M10.0** the audit (§9R.0) · **M10.1** the DAG as a gate, finding §5.38 (§9R.1) · **audit** (§9S) · **final M0→M10 audit** (§0A) |
 | Goals done in M9 | **M9.0** the audit (§9P.0) · **M9.1** the `OS.spawn` deadlock, verified and fixed (§9P.1) · **M9.2** frontend property testing (§9P.2) · **audit** (§9Q) |
 | Goals done in M8 | **M8.0** the audit (§9N.0) · **M8.1** scheme + checker (§9N.1) · **M8.2** `spec/memory.md`, 15 rules proved (§9N.2) · **audit** (§9O) |
 | Goals done in M7 | **M7.0** the spec sweep (§9L.0) · **M7.1** six decisions registered · **M7.2** `frozen_semantics.rs` (§9L.2) · **audit** (§9M) |
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | 16 OPEN — **DEC-M4-001**…**-004**, **DEC-M5-001**…**-005**, **DEC-M6-001**, **DEC-M7-001**…**-006**. All in §7A with measured evidence and a marked recommendation |
+| **Open decisions** | **19 OPEN**, all in §7A with measured evidence and a marked recommendation. Only **four** block queued work: DEC-M4-001, -002, -004 and DEC-M6-001. See §0A.C |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — M9 closed PARTIAL (§9Q) |
+| Last state update | 2026-09-03 — M10 closed PARTIAL (§9S); **final audit in §0A** |
 
 Milestone ledger:
 
@@ -48,7 +50,171 @@ Milestone ledger:
 | M7 — Semantics Frozen | **PARTIAL** (2026-09-03, §9M) — everything settled is specified; 6 decisions open and pinned |
 | M8 — Conformance Complete | **PARTIAL** (2026-09-03, §9O) — scheme + checker complete and enforced; 1 area of 30 covered |
 | M9 — Robustness & Security Hardened | **PARTIAL** (2026-09-03, §9Q) — frontend property-tested; runtime not; `OS.spawn` deadlock fixed |
-| M10 — Stable Language Platform | **IN PROGRESS** |
+| M10 — Stable Language Platform | **PARTIAL** (2026-09-03, §9S) — DAG enforced and a cycle found (§5.38); release gates are DEC-M10-001/-002 |
+
+---
+
+## 0A. FINAL AUDIT — M0 through M10
+
+Written at the end of the autonomous run, 2026-09-03. **This is the section to
+read first.** It says where every milestone stands, what every open decision is,
+which of them block what, and the order they should be answered in.
+
+Nothing below resolves a decision. The roadmap's rule is that a choice with
+several defensible answers is registered rather than taken, and reaching a green
+tick by answering one quietly is the single failure this whole structure exists
+to prevent.
+
+### A. Milestone status
+
+| Milestone | Status | Why it is not COMPLETE |
+|---|---|---|
+| **M0** Baseline Frozen | **COMPLETE** | — re-verified at `9ca4d22` (§1.5) |
+| **M1** Parser Molecular | **COMPLETE** | — |
+| **M2** AST + Spans Stable | **COMPLETE** | — |
+| **M3** Diagnostics Unified | **COMPLETE** | — |
+| **M4** Semantic Layer | **PARTIAL** | layer built and validated; **adoption** blocked by DEC-M4-001, -002, -004 |
+| **M5** Type System Stable | **COMPLETE** | — every consumer agrees; the 5 open decisions are about what the rules *should be*, not whether the implementation is coherent about them |
+| **M6** Runtime Molecular | **PARTIAL** | 48 fields → 38; **dispatch** still on `Evaluator`, blocked by DEC-M6-001 |
+| **M7** Semantics Frozen | **PARTIAL** | everything settled is specified; freezing the unsettled *is* deciding it — 6 decisions |
+| **M8** Conformance Complete | **PARTIAL** | machinery complete and enforced; **1 area of 30** carries identifiers. Blocked by nothing — this one closes with work |
+| **M9** Robustness & Security | **PARTIAL** | frontend property-tested; **runtime, package and JSON boundaries** are not. Blocked by nothing |
+| **M10** Stable Platform | **PARTIAL** | DAG enforced; release-gate questions are DEC-M10-001/-002, and the LLVM backend is unproven |
+
+**Four COMPLETE, seven PARTIAL, none BLOCKED.** Nothing is stopped: every PARTIAL
+either waits on an answer or waits on work, and both are named.
+
+### B. Every open decision, by identifier
+
+19 decisions. **What each blocks** is the column that matters — most block
+nothing, and treating them as one undifferentiated backlog would hide the four
+that actually gate a milestone.
+
+| ID | Question | Blocks | Evidence available | Recommendation |
+|---|---|---|---|---|
+| **DEC-M4-001** | Where the reserved-name check runs | **M4.5.\*** — the semantic phase | 1 corpus file affected; 2 manifest rows; fixes §5.32's cascade for free | **New fatal phase** |
+| **DEC-M4-002** | Is an unresolved free variable a diagnostic | M4.7.3+; the M7 scope entry | **0 of 486 corpus files rely on dynamic resolution**; a resolver found 6 real defects in `serez-ui` on its first run (§5.35) | **Advisory first**, never fatal without it |
+| **DEC-M4-003** | Reserved-name guard: 7 names or 22 | M4.6.1; ordered after -001 | breaking with **0 measured victims**, corpus and all 8 packages | **Extend to 22** |
+| **DEC-M4-004** | What the editor's outline shows | the LSP's migration onto `semantic` | 95 of 483 files over-report, 0 under-report | **All declarations, correctly nested** |
+| **DEC-M5-001** | Nullable value at a non-nullable parameter | nothing | 0 corpus occurrences | **Keep reporting**, add narrowing later |
+| **DEC-M5-002** | Numeric widening at a parameter | nothing | 15 `decimal` params in corpus, **0 in the ecosystem** | **Widen `int`→`decimal`**, in a major |
+| **DEC-M5-003** | Diagnose an unknown type name | nothing | exactly **1** in corpus — the fixture documenting the behaviour — and 0 in the ecosystem | **Advisory now**; gives `semantic` its first product consumer |
+| **DEC-M5-004** | Field type: constraint or default | nothing | 68 typed fields in corpus, **0 in the ecosystem** | **Enforce**, in a major; measure off-type assignment first |
+| **DEC-M5-005** | Does a class type accept a subclass | nothing | not measurable; the `is` half changes working programs **silently** | **Accept subclasses**, in a major, with `is` called out separately |
+| **DEC-M6-001** | How a service raises and allocates | **the rest of M6** | 16 dispatches, 12,000+ lines | **A narrow trait** — and a differential runtime harness *first* |
+| **DEC-M7-001** | `remove` on an empty array | nothing | `remove` in 12 files | **Add `tryRemove`, then make `remove` raise** |
+| **DEC-M7-002** | Subclass reaching an inherited private | nothing | unmeasured — wants the same resolver as DEC-M4-002 | **Key to the declaring class**, in a major, *after* measuring |
+| **DEC-M7-003** | `match` with no matching arm | nothing | 107 matches, **50** without a catch-all; runtime error affects 0 today, static exhaustiveness affects all 50 | **Warn now, raise in a major**, never a hard static requirement |
+| **DEC-M7-004** | Structural container equality | nothing | 0 direct comparisons found, and the search is weak | **Structural for containers**, with DEC-M5-005, in one release |
+| **DEC-M7-005** | A pattern that fails to evaluate | nothing | not measurable by construction — it produces no signal | **Propagate the error**, and **before** DEC-M7-003 |
+| **DEC-M7-006** | `fetch` under lockdown | part of M9's `fetch` work | one conformance test pins the current behaviour; the external audit calls it SSRF | **Gate it, with an opt-in** |
+| **DEC-M9-001** | Ceiling for three unbounded reads | the ceiling | not measured against real usage, and said so | **One fixed fatal ceiling** for all three |
+| **DEC-M10-001** | Ecosystem canary in CI | the canary's place in the release gate | 8 packages, 56 tests, 8/8 every run of M0–M10 | **Scheduled daily**, not per-commit |
+| **DEC-M10-002** | Clippy as a gate | nothing | per-site list moved **twice in eleven milestones**, both caught by hand | **Gate new sites** against a committed baseline |
+
+### C. What blocks what
+
+Only **four** decisions gate a milestone:
+
+```
+DEC-M4-001 ──> M4.5.*  (the semantic phase)
+     └────────> DEC-M4-003 must land after it, so the rule changes once
+DEC-M4-002 ──> M4.7.3+ (resolver reporting), and M7's scope entry
+DEC-M4-004 ──> the LSP's migration onto semantic::declarations
+DEC-M6-001 ──> the rest of M6 (namespace dispatch)
+```
+
+The other fifteen change the language or the pipeline and block no queued work.
+**M8 and M9 are blocked by nothing at all** — they are unfinished for want of
+hours, not answers.
+
+### D. Recommended order
+
+Ordered by *what unblocks the most* and *what is cheapest to get wrong*, not by
+identifier.
+
+**1. DEC-M7-005** — a pattern that fails to evaluate should raise. Cheapest to
+implement, hardest current behaviour to defend (documented nowhere), and it must
+precede DEC-M7-003: a `match` that raises when nothing matches is far less useful
+while a misspelled arm silently is not the thing that matched.
+
+**2. DEC-M4-001** — the semantic phase. Unblocks six molecules, costs two
+manifest rows on the guard's own fixture, and deletes §5.32 as a side effect. It
+is also the *slot* every later semantic validation needs, so deciding it late
+means deciding it under pressure.
+
+**3. DEC-M4-003** — extend the guard to 22, immediately after, so the rule changes
+once and in its final home.
+
+**4. DEC-M4-002 (advisory) and DEC-M5-003** together — both make the checker
+consume `semantic`, both are stderr-only, and both have measured exposure near
+zero. This is where M4's layer finally acquires a product consumer.
+
+**5. DEC-M6-001**, and **build the differential runtime harness before acting on
+it**. 12,000 lines of behaviour-preserving change against a suite that asserts
+what programs print is the highest-risk work in the roadmap.
+
+**6. DEC-M10-002 and DEC-M10-001** — cheap, independent, and they convert two
+disciplines this roadmap performed by hand into gates.
+
+**7. The major-version cluster: DEC-M5-002, -004, -005, DEC-M7-001, -003, -004,
+-002.** Every one is breaking; several change working programs *silently*
+(subtyping's effect on `is`, structural equality). They belong in one deliberate
+major with `spec/compatibility.md` staging, not spread across releases where users
+learn the same lesson repeatedly.
+
+**8. DEC-M9-001 and DEC-M7-006** — the two `fetch`-adjacent questions, decided
+together since they are one capability.
+
+**9. DEC-M5-001 and DEC-M4-004** — real, and neither blocks nor breaks anything.
+
+### E. What the run produced
+
+| | Before (`9ca4d22`) | After |
+|---|---|---|
+| Rust tests | 398 | **447** |
+| Serez conformance | 499 | **501**, identical in both runners |
+| Ecosystem | 8/8 | **8/8** |
+| Clippy sites (§5.26) | 181 | **180** |
+| `Evaluator` fields | 48 | **38** |
+| Spec documents | 30 | **32** |
+| Normative rules | 0 | **15**, all proved |
+| Registered decisions | 0 | **19** |
+
+**New test files, each closing a gap nothing else could see:** `type_agreement`
+(checker vs runtime), `frozen_semantics` (undecided behaviour), `scope_resolution`
+(dynamic name resolution), `conformance_map` (spec ↔ test), `frontend_properties`
+(generated input), `architecture` (the DAG).
+
+**Behaviour changed four times, each declared:** three checker false positives
+removed, `export` no longer hides declarations from the checker, two diagnostics
+gained positions, and a child filling the stderr pipe now completes instead of
+hanging.
+
+### F. The pattern worth carrying forward
+
+Three times, in three different milestones, a verification agreed with its author:
+
+  * **§5.34** — three security fixtures asserted nothing and passed, because the
+    error they produced satisfied the contract for the wrong reason;
+  * **§9N.2** — a pin proved *arity* rather than use-after-free, and would have
+    passed unchanged if the protection were removed;
+  * **§5.38** — a cycle detector that could only see mutual pairs reported the
+    graph clean, while a three-module cycle existed.
+
+The first was someone else's. The second and third were this run's own, committed
+*after* finding the first. The discipline that catches all three is the same and
+it is not attention: **a negative assertion needs a positive control, and a
+checker needs to be run against the failure it claims to detect.** Where that was
+done — the perturbed pin in `frozen_semantics`, the deliberately-bad fixture for
+the `sec_*` guard, the before/after deadlock measurement — the test is worth
+something. Where it was skipped, three tests were worth nothing and looked fine.
+
+The second pattern, from M5 and M7 both: **this project's documentation is ahead
+of its decisions.** `spec/` repeatedly says "this is recorded as an inconsistency,
+not defended", and is right to. A roadmap that assumes it will find undocumented
+chaos will keep rediscovering that the audit was already done, and that what is
+missing is someone choosing.
 
 ---
 
@@ -5107,6 +5273,38 @@ half true, and which half is known.
 absent from the CLI (`MATURITY_AUDIT.md`, high); there is still no benchmark
 regression budget; §5.18's double compilation of the frontend stands; and §5.35's
 `serez-ui` defect is unfixed in a repository this roadmap does not own.
+
+---
+
+## 9S. M10 MILESTONE AUDIT
+
+Charter: *close the architecture — a comprehensible DAG, tooling reusing real
+components, compatibility and release policy.*
+
+| Item | Status | Evidence |
+|---|---|---|
+| The dependency DAG is comprehensible | **met** | §3.1's claims checked; all true |
+| It is enforced, not described | **met** | `tests/architecture.rs`, and it found §5.38 |
+| Cross-platform CI | **met** | 3 platforms, both runners, already in place |
+| Tooling reuses real components | **partially met** | the LSP shares the type checker (M5.4) and re-derives symbols (M4) — DEC-M4-004 |
+| Compiler and interpreter share semantics | **NOT met** | the LLVM backend is feature-gated, unwired, parity unproven |
+| Release gates settled | **NOT met** | DEC-M10-001, DEC-M10-002 |
+
+**Three of six. M10 is PARTIAL.**
+
+The milestone's most useful output is not the gate but what the gate found: a
+three-module cycle §3.1 described edge by edge without ever naming (§5.38), found
+only because the first version of the checker was written to look for the shape
+that was expected. That is recorded in §0A.F alongside its two siblings, because
+the pattern outlives all three instances.
+
+Gates at close: fmt **PASS** · check **PASS** · clippy **PASS**, per-site **180**
+unchanged across the whole run · `cargo test --all-targets` **447 / 0** · both
+Serez runners **501 / 0 / 0**, categories identical · ecosystem **8 / 8**.
+
+---
+
+## MILESTONE STATUS: **PARTIAL**
 
 ---
 
