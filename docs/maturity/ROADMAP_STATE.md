@@ -1224,6 +1224,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M7-004** | Whether `==` compares containers structurally | **OPEN** | nothing; ships with DEC-M5-005 |
 | **DEC-M7-005** | What a `match` pattern that fails to evaluate does | **OPEN** | nothing; should precede DEC-M7-003 |
 | **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **OPEN** | part of M9's treatment of `fetch` |
+| **DEC-M9-001** | What ceiling an unbounded read has, and what happens at it | **OPEN** | the ceiling; three call sites share one policy |
 
 ---
 
@@ -2164,6 +2165,70 @@ recorded with its evidence rather than folded into M9's hardening pass.
 
 **Blocked by this decision:** M9's treatment of `fetch`, in part — the size
 ceiling is independent and can proceed either way.
+
+---
+
+### DEC-M9-001 — What ceiling should an unbounded read have, and what happens at it?
+
+**Problem.** Three paths read an unbounded amount from a source the program does
+not control, into memory:
+
+| Path | Where | What it reads |
+|---|---|---|
+| `fetch` | `evaluator/builtins.rs` | the whole HTTP response body, via `read_to_end` |
+| HTTP `import` | `evaluator/stmt.rs` | the whole remote module, via `into_string`, then caches it to disk |
+| `OS.spawn` stderr | `evaluator/namespaces_os.rs` | everything the child writes, now into a drained buffer |
+
+A server, a module host or a child process can therefore exhaust the interpreter's
+memory. The independent audit in `audit/2026-09-01_14-52-03.md` raises the first
+two as **high** and recommends a configurable limit read through
+`take(limit + 1)`.
+
+**Current behaviour.** No ceiling on any of the three. `OS.spawn`'s case changed
+shape in M9.1 — it used to *deadlock* instead of growing, which is worse and is
+now fixed — so all three are now genuinely unbounded rather than two unbounded
+and one stuck.
+
+**Measured evidence.** Not measured against real usage, and that is the honest
+state: nothing in the corpus or the ecosystem fetches a large body, so a
+measurement here would only confirm that the test suite does not do the dangerous
+thing. The exposure is to *deployed* programs, which this repository cannot see.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **A fixed ceiling, fatal** — like `Memory.alloc`'s 256 MiB / `SZ6002` | Consistent with every other resource limit in `limits.md`. A program legitimately fetching something large stops working, with no way to ask for more |
+| B | **A fixed ceiling, catchable** | The program can react — retry smaller, stream instead — but a `try` around a memory-exhaustion guard is a strange shape, and it differs from every other ceiling |
+| C | **Configurable, with a default** | What the audit recommends. Needs a place to configure it: `serez.json`, an environment variable, or a runtime API, and each is a different public surface |
+| D | **Streaming APIs** instead of a ceiling | Solves the real problem rather than capping it, and is a language feature, not a limit |
+
+**Trade-offs.** A is the smallest change and matches the existing convention,
+which is worth a lot — `limits.md` currently reads as one policy, and adding a
+second kind of ceiling makes it two. C is more flexible and introduces a
+configuration surface that does not exist today. D is correct and out of scope for
+a hardening milestone.
+
+**Architectural impact.** A and B are three call sites. C adds configuration
+plumbing to the evaluator. **Semantic impact.** All of A-C make some currently-
+working programs fail. **Compatibility.** Breaking for any program that reads more
+than the ceiling; `spec/compatibility.md` governs, and `spec/limits.md` must state
+whichever is chosen.
+
+**Impact by area.** Tests: new fixtures per path; the ceiling itself needs a
+fixture at the boundary, as `MEM-007` has. Specs: `spec/limits.md`,
+`spec/security.md`. Runtime: three call sites. Ecosystem: `serez-http` is the
+package most likely to notice, and it is not measured.
+
+**Recommendation — a recommendation, not a decision.** **A**, at a generous
+ceiling (64 MiB is the audit's upper suggestion), *fatal*, and stated in
+`spec/limits.md` beside the others. Consistency with the existing resource policy
+is worth more here than flexibility nobody has asked for, and C can follow if
+anyone does. Do **not** pick a different answer per path: one policy, three call
+sites.
+
+**Blocked by this decision:** the ceiling itself. **Not blocked, and done:** the
+`OS.spawn` deadlock (§9P.1), which was a bug rather than a policy question.
 
 ---
 
@@ -4748,6 +4813,111 @@ MEM-004 and needed only a marker - reuse over duplication, as
 already heavily tested; then `types.md`, `values.md` and `operators.md`, the
 semantic core; then the namespaces. `syntax.md` and `lexical-grammar.md` last -
 `parser_snapshot` already pins the grammar far more tightly than identifiers would.
+
+---
+
+## 9P. M9 - Robustness & Security Hardened
+
+Charter: *hostile or unexpected input must not be able to destroy the language's
+guarantees.*
+
+### 9P.0 The audit: the ceilings exist, the generators do not
+
+§6 already recorded the shape and it held: depth ceilings, string/crypto/tensor/
+allocation caps, ZIP traversal checks, JSON-RPC body bounds and a panic-site
+classification **all exist**. `spec/limits.md` is 187 lines of them.
+`tests/frontend_robustness.rs` covers malformed input in 16 tests.
+
+What does not exist is **fuzzing or property testing of any kind**. Everything
+above is a list of cases somebody thought of, which is the right instrument for
+predictable shapes and the wrong one for the shapes nobody predicted - which is
+where crashes live.
+
+There is also an **independent external audit** in
+`audit/2026-09-01_14-52-03.md`, written by another session against 10.0.0 and
+untouched by this roadmap until now. It raises four findings. M9 treats it as
+evidence to verify rather than as conclusions to accept.
+
+### 9P.1 - M9.1: the `OS.spawn` deadlock, confirmed and fixed
+
+The audit's second finding, **verified**:
+
+```
+~600 KB written to stderr : never harvested, 200 polls over 10 seconds
+3 lines written to stderr : harvested on the 2nd poll
+```
+
+Same command, same code path, only the volume differs - which isolates the pipe
+buffer as the cause exactly as the audit predicted. The mechanism, confirmed by
+reading `tick`: `try_wait()` is called *first*, and stderr is only read after the
+child has exited. A child that fills the pipe blocks on the write, so it never
+exits, so `try_wait` never reports it, so nothing ever drains the pipe. A program
+polling `OS.tick()` for completion loops forever.
+
+**Fixed** by draining stderr concurrently: a reader thread per child, started at
+spawn, writing into an `Arc<Mutex<String>>` that `tick` reads after harvest. A
+reader thread is the portable answer; non-blocking pipe reads are
+platform-specific in three different ways. The thread ends when the pipe closes,
+which is when the child exits.
+
+**After the fix the same program harvests in 10 rounds.** The regression is
+`unit_os_spawn.sz`, and the before/after measurement above is what makes it
+load-bearing - a test that would have failed by *hanging* is not one that could
+have been written first.
+
+**This was a bug, not a policy question**, which is why it was fixed rather than
+registered. What the child's stderr should be *capped* at is a policy question,
+and that is **DEC-M9-001**.
+
+### 9P.2 - M9.2: property testing, which did not exist
+
+`tests/frontend_properties.rs`. Three properties, 1,021 generated inputs:
+
+  * **P1** - the frontend never panics. A panic is not a diagnostic: no line
+    number, no chosen exit code, nothing for the LSP to underline.
+  * **P2** - every diagnostic points inside its own source. M2 spent a milestone
+    giving nodes real spans; this keeps them honest on input M2 never saw.
+  * **P3** - parsing is deterministic. Otherwise the frontend depends on something
+    it should not, and every manifest in `tests/snapshots/` is a coin flip.
+
+**No new dependency.** `proptest` and `arbitrary` are declined for the reason
+`parser_snapshot` declines `DefaultHasher`: this repository keeps its test
+infrastructure free of crates whose behaviour it does not control. The PRNG is
+xorshift64* in ten lines, seeded by a constant, so **a failure reproduces by
+re-running the test** rather than by copying a seed out of a log - the only
+reproduction instruction anyone reliably follows.
+
+**The generators that matter start from real source and damage it.** Random bytes
+find shallow bugs quickly and then stop, because almost nothing random is
+nearly-valid. A truncation is what a half-saved file looks like; a
+single-character mutation is what a typo looks like. Both reach deep parser paths
+that soup does not, and both are what the corpus makes possible.
+
+**A fuzzer that rejects nothing tests nothing**, so that is asserted too: of 1,021
+inputs, **688 are rejected**, producing **8,157 diagnostics**. Without that check,
+P1-P3 could hold over a generator that emitted only valid programs and the test
+would report success for having tried nothing.
+
+**Result: all three properties hold.** No panic, no span outside its source, no
+non-determinism. That is a real negative result rather than a vacuous one,
+because the rejection count shows the error paths were exercised.
+
+### 9P.3 What M9 did not do
+
+  * **The audit's other three findings are not fixed.** `fetch`'s unbounded read
+    and SSRF reach, HTTP `import`'s unbounded read, and the GUI's image-decode
+    limits. The first two are **DEC-M9-001**; `fetch`'s reachability under
+    lockdown is already **DEC-M7-006**; the GUI's `checked_mul` arithmetic is
+    genuine and is the one item left neither fixed nor registered, because it
+    needs a probe against a real decode path this session did not build.
+  * **Property testing covers the frontend only.** The evaluator, the package
+    manager's ZIP extraction, and the JSON and binary boundaries have none. The
+    frontend went first because it is the only surface that takes arbitrary input
+    by design.
+  * **No resource-boundary sweep.** The charter asks for a per-resource table -
+    can it grow without limit, should it, what error, fatal or recoverable,
+    specified, tested. `spec/limits.md` answers much of it already; a
+    reconciliation of that document against the code was not done.
 
 ---
 

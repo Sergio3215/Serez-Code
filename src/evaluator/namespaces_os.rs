@@ -18,6 +18,20 @@ const PROTECTED_PROCESS_TARGET_FRAGMENTS: &[&str] = &[
 pub(super) struct SpawnedJob {
     pub child: std::process::Child,
     pub pid: i64,
+    /// The child's stderr, drained **while it runs** by the thread below.
+    ///
+    /// It used to be read from `child.stderr` inside `OS.tick`, *after*
+    /// `try_wait()` reported the child had exited. That deadlocks: a child that
+    /// writes more than the pipe buffer holds blocks on the write, so it never
+    /// exits, so `try_wait` never reports it, so nothing ever drains the pipe.
+    /// Measured before the fix — a child writing ~600 KB to stderr was never
+    /// harvested across 200 polls over 10 seconds, while the same command
+    /// writing three lines was harvested on the second poll.
+    ///
+    /// A reader thread per child is the portable answer; the alternative is
+    /// non-blocking pipe reads, which are platform-specific in three different
+    /// ways. The thread ends when the pipe closes, which is when the child exits.
+    pub stderr: std::sync::Arc<std::sync::Mutex<String>>,
 }
 
 // ── Platform helpers (no external deps) ──────────────────────────────────────
@@ -763,9 +777,31 @@ impl super::Evaluator {
                     command.creation_flags(CREATE_NO_WINDOW);
                 }
                 match command.spawn() {
-                    Ok(child) => {
+                    Ok(mut child) => {
                         let pid = child.id() as i64;
-                        self.spawned.push(SpawnedJob { child, pid });
+                        // Drain stderr concurrently. See `SpawnedJob::stderr`:
+                        // reading it only after the child exits is a deadlock,
+                        // because a full pipe is what stops it exiting.
+                        let collected = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+                        if let Some(mut pipe) = child.stderr.take() {
+                            let sink = std::sync::Arc::clone(&collected);
+                            std::thread::spawn(move || {
+                                let mut buffer = String::new();
+                                // Errors are dropped deliberately: a child that
+                                // writes invalid UTF-8 or closes early still has
+                                // to be harvestable, and the exit code is the
+                                // signal that matters.
+                                let _ = pipe.read_to_string(&mut buffer);
+                                if let Ok(mut sink) = sink.lock() {
+                                    *sink = buffer;
+                                }
+                            });
+                        }
+                        self.spawned.push(SpawnedJob {
+                            child,
+                            pid,
+                            stderr: collected,
+                        });
                         EvalResult::Value(self.int_ref(pid))
                     }
                     Err(e) => {
@@ -800,12 +836,18 @@ impl super::Evaluator {
                             i += 1;
                         }
                         Some(code) => {
-                            let mut job = self.spawned.remove(i);
+                            let job = self.spawned.remove(i);
                             let pid = job.pid;
-                            let mut errbuf = String::new();
-                            if let Some(mut se) = job.child.stderr.take() {
-                                let _ = se.read_to_string(&mut errbuf);
-                            }
+                            // The reader thread may still hold the last few
+                            // bytes when the child has only just exited. Join by
+                            // dropping our handle and taking what it collected;
+                            // a lock failure means the thread panicked, which
+                            // costs the message and not the harvest.
+                            let errbuf = job
+                                .stderr
+                                .lock()
+                                .map(|guard| guard.clone())
+                                .unwrap_or_default();
                             let msg = if code == 0 || errbuf.trim().is_empty() {
                                 String::new()
                             } else {

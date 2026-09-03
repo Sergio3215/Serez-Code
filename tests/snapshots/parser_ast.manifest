@@ -427,7 +427,7 @@ tests/unit_operators.sz	46015	0	393a1d384d3a53c1	cbf29ce484222325
 tests/unit_optional_chain.sz	29442	0	4c2e840a79ecea12	cbf29ce484222325
 tests/unit_optional_chaining.sz	22570	0	ca624f89f7fc0fa8	cbf29ce484222325
 tests/unit_os_namespaces.sz	44079	0	b0bfa4114c523677	cbf29ce484222325
-tests/unit_os_spawn.sz	39878	0	1f083aed8cc9afaf	cbf29ce484222325
+tests/unit_os_spawn.sz	45909	0	00a2e1d9b9156e12	cbf29ce484222325
 tests/unit_packages.sz	24841	0	ed52350cf5945ede	cbf29ce484222325
 tests/unit_paren_lambda.sz	11628	0	8e878d96e2e26051	cbf29ce484222325
 tests/unit_permissions.sz	17555	0	47cae7046419cdc1	cbf29ce484222325

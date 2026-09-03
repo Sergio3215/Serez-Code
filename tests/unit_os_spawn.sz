@@ -39,6 +39,32 @@ fn [any] collectN(int want, int maxTries) {
     return acc;
 }
 
+// Regresion: un hijo que escribe mas de lo que entra en el buffer de la tuberia
+// se colgaba para siempre. `OS.tick` leia stderr *despues* de que `try_wait()`
+// dijera que el hijo habia terminado, y un hijo bloqueado escribiendo nunca
+// termina. Medido antes del arreglo: ~600 KB a stderr, nunca cosechado en 200
+// sondeos durante 10 segundos; el mismo comando con tres lineas, cosechado en el
+// segundo sondeo. Ahora un hilo lector drena la tuberia mientras el hijo corre.
+//
+// El control de tres lineas vive en los tests de abajo: sin el, "cosechado" aqui
+// podria significar que el comando ni siquiera arranco.
+let FLOOD_ARGS [string] = [];
+if (PLAT == "windows") {
+    FLOOD_ARGS.push("/c");
+    FLOOD_ARGS.push("for /L %i in (1,1,10000) do @echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA 1>&2");
+} else {
+    FLOOD_ARGS.push("-c");
+    FLOOD_ARGS.push("i=0; while [ $i -lt 10000 ]; do echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA 1>&2; i=$((i+1)); done");
+}
+
+test("OS.spawn — un hijo que llena la tuberia de stderr igual se cosecha", () => {
+    let pid = -999;
+    unsafe { pid = OS.spawn(SHCMD, FLOOD_ARGS); }
+    assert(pid > 0, "el hijo arranco");
+    let jobs = collectN(1, 300);
+    assert(jobs.length() == 1, "cosechado pese a los ~600 KB en stderr");
+});
+
 test("OS.tick returns an empty array when nothing was spawned", () => {
     let batch = OS.tick();
     assert(batch.length() == 0, "tick should be empty with no spawned procs");
