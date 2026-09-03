@@ -1601,31 +1601,19 @@ impl super::Evaluator {
             return EvalResult::Value(self.null_ref); // already imported — skip
         }
 
-        // A `.szx` module is JSX — translate it to `.sz` source before parsing (the
-        // interpreter only understands `.sz`). Its relative imports are preserved
-        // verbatim and resolve against the `.szx`'s own directory (current_dir below).
-        let is_szx = canonical.extension().map(|e| e == "szx").unwrap_or(false);
-        let source = if is_szx {
-            match crate::szx::translate_szx_to_string(&canonical) {
-                Some(s) => s,
-                None => {
-                    let module = canonical.display().to_string();
-                    let message = format!(
-                        "Could not translate JSX module '{module}' \
-                         (is serez-ui's translator present?)"
-                    );
-                    return self.rt_err_kind("ImportError", message);
-                }
-            }
-        } else {
-            match std::fs::read_to_string(&canonical) {
-                Ok(s) => s,
-                Err(e) => {
-                    let module = canonical.display().to_string();
-                    let message = format!("Cannot read module '{module}': {e}");
-                    return self.rt_err_kind("ImportError", message);
-                }
-            }
+        // What the module *says* is `crate::modules`' question, not the
+        // evaluator's: `.sz` is read from disk, `.szx` is JSX and is translated
+        // to `.sz` first (its relative imports are preserved verbatim and
+        // resolve against the `.szx`'s own directory — `current_dir`, below).
+        //
+        // This used to call `crate::szx::translate_szx_to_string` from here,
+        // which is what made the evaluator depend on `szx`, which depends on
+        // the entry point that constructs an `Evaluator` — §5.38's three-module
+        // cycle. The two messages moved to `modules::LoadError` without a
+        // character changing.
+        let source = match crate::modules::load_source(&canonical) {
+            Ok(source) => source,
+            Err(error) => return self.rt_err_kind("ImportError", error.message()),
         };
 
         // Save and update current_dir for nested imports

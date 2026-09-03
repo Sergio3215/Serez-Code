@@ -1,9 +1,29 @@
-//! Running and importing `.szx` (serez-ui JSX) sources.
+//! Translating `.szx` (serez-ui JSX) sources into `.sz`.
 //!
 //! Translation is delegated to serez-ui's own translator, which is written in `.sz`
 //! — so this shells out to a second `sz` process rather than linking a translator
 //! in. Native only: the wasm build has no process to spawn, and the playground runs
 //! a single file with no packages.
+//!
+//! # What this module is, and what it stopped being (§5.38, §5.6)
+//!
+//! This is a **translator bridge** and nothing else: given a `.szx` path, produce
+//! `.sz` source, either as a string or in a file beside the source. It knows
+//! nothing about running a program.
+//!
+//! It used to also own `run_szx_file` — find the translator, translate, and then
+//! call `run::run_file` on the result. That one call made `szx` depend on the
+//! entry point, and it was the middle link of two cycles:
+//!
+//! ```text
+//! run -> szx -> run                         (§5.6)
+//! evaluator -> szx -> run -> evaluator      (§5.38)
+//! ```
+//!
+//! Deciding *which door a file extension goes through* is entry-point work, so
+//! it lives in `run` now. Deciding *what a `.szx` file says* is this module's
+//! work, and stays. `run` calls in; nothing here calls out to `run`, and nothing
+//! here builds an `Evaluator`.
 
 /// Locate serez-ui's `.szx → .sz` translator (`tools/translate.sz`), searching
 /// the local project packages, the source file's packages, the global store, and
@@ -63,32 +83,39 @@ fn translated_path(szx: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
-/// Run a `.szx` (serez-ui JSX) file directly: translate it to `.sz` with
-/// serez-ui's translator, run the result, then clean up. This is what the old
-/// `szx.ps1` / `szx.sh` wrappers did — now the runtime does it itself, so
-/// `sz app.szx` just works (and opens the UI).
-pub fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
+/// Translate a `.szx` file into a `.sz` file **beside the source**, and return
+/// where it was written.
+///
+/// Beside the source, not in a temp directory, because the translator's output
+/// contains the app's relative imports verbatim: `import "comp/Chip"` only
+/// resolves from the `.szx`'s own directory. The caller owns the returned file
+/// and is responsible for deleting it.
+///
+/// On failure the error is already reported to stderr — the translator runs
+/// detached from the console on Windows (`CREATE_NO_WINDOW`), so its own message
+/// would otherwise be lost — and the returned `Err` carries the line the caller
+/// should print after it.
+///
+/// This is the first half of what `run_szx_file` used to do here. The second
+/// half, running the result, is `run::run_szx_file`; see the module header for
+/// why the two are no longer in one place.
+pub fn translate_szx_beside_source(szx_path: &str) -> Result<std::path::PathBuf, String> {
     let szx = std::path::Path::new(szx_path);
     if !szx.exists() {
-        eprintln!("❌ ERROR reading file '{}': not found", szx_path);
-        return 1;
+        return Err(format!("❌ ERROR reading file '{}': not found", szx_path));
     }
     let translator = match find_szx_translator(szx) {
         Some(t) => t,
         None => {
-            eprintln!(
+            return Err(format!(
                 "❌ ERROR: cannot run '{}': serez-ui not found. Install it with `sz install serez-ui` to run .szx files.",
                 szx_path
-            );
-            return 1;
+            ));
         }
     };
     let sz_exe = match std::env::current_exe() {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("❌ ERROR: cannot locate the sz executable: {}", e);
-            return 1;
-        }
+        Err(e) => return Err(format!("❌ ERROR: cannot locate the sz executable: {}", e)),
     };
     let out_sz = translated_path(szx);
     let mut cmd = std::process::Command::new(&sz_exe);
@@ -117,24 +144,12 @@ pub fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
                 eprintln!("{}", msg.replace("UNCAUGHT EXCEPTION:", "TRANSLATE ERROR:"));
             }
         }
-        eprintln!(
+        return Err(format!(
             "❌ ERROR: could not translate '{}' (is it valid .szx, and is serez-ui's translator present?)",
             szx_path
-        );
-        return 1;
+        ));
     }
-    let code = crate::run::run_file(out_sz.to_string_lossy().as_ref(), is_check);
-    if code != 0 {
-        // Diagnostics from a translated program carry the translated file's
-        // name, line numbers and source snippet, and that file is removed a
-        // line below — so the message named a path the reader could not open
-        // and quoted a line they never wrote. Say so.
-        eprintln!(
-            "\u{2139}\u{fe0f}  the diagnostics above refer to the translated form of '{szx_path}', not to the source as written."
-        );
-    }
-    let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
-    code
+    Ok(out_sz)
 }
 
 /// Translate a `.szx` (serez-ui JSX) module to `.sz` source and return the

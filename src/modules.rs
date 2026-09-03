@@ -1,16 +1,51 @@
-//! Module resolution and load tracking.
+//! Module resolution, source loading, and load tracking.
 //!
-//! `import` does two separable things: it decides **which file** a path string
-//! means, and it **executes** that file. Only the second needs the evaluator.
+//! `import` does three separable things: it decides **which file** a path string
+//! means, it gets that file's **Serez source**, and it **executes** that source.
+//! Only the third needs the evaluator.
+//!
 //! The first is a pure function of the path, the importing file's directory and
-//! the environment — so it lives here, where it can be tested without building
-//! an interpreter and where the search order is one readable list instead of a
-//! `flat_map` buried in a 200-line statement handler.
+//! the environment. The second is a question about a file extension: `.sz` is
+//! read, `.szx` is JSX and has to be translated first. Both live here, where
+//! they can be tested without building an interpreter and where the search order
+//! is one readable list instead of a `flat_map` buried in a 200-line statement
+//! handler.
 //!
 //! Execution stays in the evaluator, because running a module means evaluating
 //! statements against its arenas, registries and export tracking. This is the
 //! seam, not a rewrite: the evaluator still owns everything it owned before
-//! except the two questions answered here.
+//! except the three questions answered here.
+//!
+//! # The loader belongs to neither side (§5.38)
+//!
+//! [`load_source`] is the piece this module gained last, and the reason is a
+//! dependency cycle rather than tidiness. `eval_import` used to call
+//! `crate::szx::translate_szx_to_string` itself, and `szx` called back into
+//! `run`, which builds an `Evaluator`:
+//!
+//! ```text
+//! evaluator -> szx -> run -> evaluator
+//! ```
+//!
+//! Three modules, mutually dependent, with the entry point and the thing it
+//! enters unable to be reasoned about apart. `tests/architecture.rs` carried it
+//! in `KNOWN_CYCLES`.
+//!
+//! Loading a module is owned by neither `run` nor `Evaluator` now — it is owned
+//! here, and both reach *down* into it:
+//!
+//! ```text
+//! run       -----//!                  ---> modules ---> szx
+//! evaluator -----/
+//! ```
+//!
+//! **This is deliberately not a `ModuleLoader` object.** There is no state to
+//! hold: resolution is a function of its arguments, and the loaded-set already
+//! has a home in [`LoadedModules`], saved and restored by the evaluator as part
+//! of [`ModuleContext`]. A struct here would be a namespace with a `new()`, and
+//! the next thing it acquired would be the evaluator's arenas. The
+//! responsibility is one question — *what does this module say* — and it is one
+//! function.
 //!
 //! The contract these functions implement is frozen in `spec/modules.md`.
 
@@ -82,6 +117,63 @@ pub fn resolve(spec: &str, current_dir: Option<&Path>) -> Option<PathBuf> {
                 None
             }
         })
+}
+
+/// Why a module's source could not be read.
+///
+/// Two variants because the two failures are different to a user and were
+/// already reported differently: a `.szx` that the translator could not handle
+/// is not the same event as a `.sz` the filesystem refused. Both carry the
+/// message the evaluator raises as an `ImportError`, unchanged from when the
+/// text was built inline in `eval_import`.
+#[derive(Debug)]
+pub enum LoadError {
+    /// serez-ui's translator is absent, or it rejected the `.szx`.
+    Translation { module: String },
+    /// The file could not be read.
+    Read { module: String, cause: String },
+}
+
+impl LoadError {
+    /// The `ImportError` message for this failure.
+    pub fn message(&self) -> String {
+        match self {
+            LoadError::Translation { module } => format!(
+                "Could not translate JSX module '{module}'                  (is serez-ui's translator present?)"
+            ),
+            LoadError::Read { module, cause } => {
+                format!("Cannot read module '{module}': {cause}")
+            }
+        }
+    }
+}
+
+/// The Serez source of an already-resolved module.
+///
+/// `.szx` is serez-ui's JSX and the interpreter only understands `.sz`, so a
+/// `.szx` module is translated first — the same translation `sz app.szx` uses,
+/// through [`crate::szx`]. Everything else is read from disk.
+///
+/// The extension is taken from the resolved path rather than from the import
+/// string, because [`resolve`] is what decided which of `<spec>.sz`,
+/// `<stem>.szx`, `<stem>/index.sz` and `<stem>/index.szx` this path is.
+///
+/// Takes a resolved path, not an import spec: resolution has its own function
+/// and its own tests, and folding the two together would make either untestable
+/// without the other.
+pub fn load_source(canonical: &Path) -> Result<String, LoadError> {
+    let module = canonical.display().to_string();
+    let is_szx = canonical.extension().map(|e| e == "szx").unwrap_or(false);
+
+    if is_szx {
+        return crate::szx::translate_szx_to_string(canonical)
+            .ok_or(LoadError::Translation { module });
+    }
+
+    std::fs::read_to_string(canonical).map_err(|e| LoadError::Read {
+        module,
+        cause: e.to_string(),
+    })
 }
 
 /// The set of modules already executed in this process.
@@ -257,5 +349,90 @@ mod tests {
         assert!(loaded.mark(path), "the first mark says: go execute it");
         assert!(!loaded.mark(path), "the second says: already done");
         assert!(loaded.contains(path));
+    }
+
+    #[test]
+    fn a_sz_module_loads_its_text_verbatim() {
+        let dir = temp_dir("load_sz");
+        let file = dir.join("m.sz");
+        write(
+            &file, "out 1;
+",
+        );
+
+        let source = load_source(&file).expect("a readable .sz must load");
+        assert_eq!(
+            source,
+            "out 1;
+"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_file_is_a_read_error_with_the_message_the_evaluator_raises() {
+        let dir = temp_dir("load_missing");
+        let file = dir.join("gone.sz");
+
+        let error = load_source(&file).expect_err("a file that is not there cannot load");
+        assert!(
+            matches!(error, LoadError::Read { .. }),
+            "expected a Read error, got {error:?}"
+        );
+        // The wording is the contract, not a detail: `eval_import` turns this
+        // straight into an `ImportError`, and it is the text that used to be
+        // built inline there.
+        let message = error.message();
+        assert!(
+            message.starts_with("Cannot read module '"),
+            "message was {message:?}"
+        );
+        assert!(
+            message.contains("gone.sz"),
+            "the message must name the module: {message:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_translation_failure_message_names_the_module_and_the_translator() {
+        // Built directly rather than by loading a `.szx`, because whether
+        // serez-ui's translator is installed is a property of the machine and
+        // this assertion is about the wording either way. The `.szx` path itself
+        // is exercised end to end by `unit_import` and by the ecosystem canary,
+        // which runs serez-ui.
+        let error = LoadError::Translation {
+            module: "comp/Chip.szx".to_string(),
+        };
+        let message = error.message();
+        assert!(
+            message.starts_with("Could not translate JSX module 'comp/Chip.szx'"),
+            "message was {message:?}"
+        );
+        assert!(
+            message.contains("serez-ui's translator"),
+            "the message must say what is missing: {message:?}"
+        );
+    }
+
+    #[test]
+    fn the_extension_that_decides_translation_comes_from_the_resolved_path() {
+        // `resolve` picks between `<spec>.sz`, `<stem>.szx`, `<stem>/index.sz`
+        // and `<stem>/index.szx`, so the import string does not say which of
+        // them a module is — the resolved path does. A loader keying off the
+        // spec would translate the wrong files.
+        let dir = temp_dir("load_ext");
+        write(
+            &dir.join("only.szx"),
+            "// jsx
+",
+        );
+
+        let found = resolve("only", Some(&dir)).expect("must resolve to the .szx");
+        assert_eq!(found.extension().unwrap(), "szx");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

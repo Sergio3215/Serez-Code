@@ -217,7 +217,7 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
 pub fn run_file(file_path: &str, is_check: bool) -> i32 {
     // .szx files (serez-ui JSX) are translated to .sz first, then run.
     if file_path.ends_with(".szx") {
-        return crate::szx::run_szx_file(file_path, is_check);
+        return run_szx_file(file_path, is_check);
     }
 
     let input = match std::fs::read_to_string(file_path) {
@@ -265,6 +265,41 @@ pub fn run_file(file_path: &str, is_check: bool) -> i32 {
         },
     )
     .exit_code
+}
+
+/// Run a `.szx` (serez-ui JSX) file: translate it to `.sz` with serez-ui's
+/// translator, run the result, then clean up. This is what the old `szx.ps1` /
+/// `szx.sh` wrappers did — now the runtime does it itself, so `sz app.szx` just
+/// works (and opens the UI).
+///
+/// This lived in `szx.rs` and moved here to break two dependency cycles
+/// (ROADMAP_STATE.md §5.6 and §5.38): the call to [`run_file`] on the last line
+/// made the translator module depend on the entry point, and the entry point
+/// already depended on the translator. Which door a file extension goes through
+/// is an entry-point question; `szx` answers what a `.szx` file *says*, and
+/// [`crate::szx::translate_szx_beside_source`] is the half of the old function
+/// that stayed there.
+fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
+    let out_sz = match crate::szx::translate_szx_beside_source(szx_path) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("{message}");
+            return 1;
+        }
+    };
+
+    let code = run_file(out_sz.to_string_lossy().as_ref(), is_check);
+    if code != 0 {
+        // Diagnostics from a translated program carry the translated file's
+        // name, line numbers and source snippet, and that file is removed a
+        // line below — so the message named a path the reader could not open
+        // and quoted a line they never wrote. Say so.
+        eprintln!(
+            "\u{2139}\u{fe0f}  the diagnostics above refer to the translated form of '{szx_path}', not to the source as written."
+        );
+    }
+    let _ = std::fs::remove_file(&out_sz); // best-effort cleanup
+    code
 }
 
 /// Run a snippet handed in as a string (`sz --eval`). No file, so no `serez.json`

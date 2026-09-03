@@ -123,22 +123,29 @@ const FORBIDDEN: &[(&str, &str, &str)] = &[
 ///
 /// Members are listed sorted, because a cycle has no first element and the test
 /// compares sorted sets.
-const KNOWN_CYCLES: &[(&[&str], &str)] = &[
-    (
-        &["run", "szx"],
-        "§5.6 — `run.rs` calls `szx::run_szx_file` and `szx.rs` calls \
-         `run::run_file`. Architectural debt, low, recorded as an M10 input: two \
-         entry points for two file extensions, each needing the other's dispatch.",
-    ),
-    (
-        &["evaluator", "run", "szx"],
-        "§5.38 — the evaluator depends on the entry point that drives it, because \
-         `import` re-enters the whole pipeline: evaluator -> szx -> run -> \
-         evaluator. §3.1 named all three edges and did not name the cycle they \
-         form, which is why this test looks for cycles of any length rather than \
-         only for mutual pairs.",
-    ),
-];
+/// **Empty, and that is the assertion.** Both entries this list used to carry
+/// are fixed:
+///
+///   * **§5.6** — `run <-> szx`. `run.rs` dispatched `.szx` to
+///     `szx::run_szx_file`, and that function ended by calling `run::run_file`.
+///     Two entry points for two file extensions, each needing the other's
+///     dispatch.
+///   * **§5.38** — `evaluator -> szx -> run -> evaluator`. `import` re-entered
+///     the whole pipeline: `eval_import` called `szx::translate_szx_to_string`
+///     for a `.szx` module, `szx` reached `run`, and `run` constructed an
+///     `Evaluator`. §3.1 named all three edges and did not name the cycle they
+///     formed, which is why this test looks for cycles of any length rather than
+///     only for mutual pairs.
+///
+/// Both were the same knot: `szx.rs` owned two responsibilities — translating a
+/// `.szx` file, and *running* one. Moving the second into `run`, and putting
+/// module source loading in `modules::load_source` where neither `run` nor the
+/// evaluator owns it, left every edge pointing one way.
+///
+/// The staleness check below is what made that safe to do: it fails on a listed
+/// cycle that no longer exists, so this list cannot quietly outlive the problem
+/// it describes. It named both, the moment they were gone.
+const KNOWN_CYCLES: &[(&[&str], &str)] = &[];
 
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -399,5 +406,71 @@ fn the_graph_is_measured_rather_than_assumed() {
             .get("evaluator")
             .is_some_and(|t| t.contains_key("ast")),
         "evaluator -> ast is in §3.1's table and must be visible to the scan"
+    );
+}
+
+/// The cycle finder, run against cycles — because `KNOWN_CYCLES` is now empty.
+///
+/// While the list held two entries, `the_only_cycles_are_the_ones_on_record`
+/// proved on every run that `cycles()` could find something. It cannot any more:
+/// an empty found-set and an empty known-set agree just as well when the search
+/// is broken as when the graph is clean, and §5.38 exists precisely because a
+/// checker that could only see the shape its author expected reported the graph
+/// clean while a three-module cycle sat in it.
+///
+/// So the detector gets its own positive control, on hand-built graphs rather
+/// than on `src/`: a mutual pair, a three-cycle, a four-cycle, a self-edge that
+/// is not a cycle between modules, and a diamond that has none.
+#[test]
+fn the_cycle_finder_finds_cycles() {
+    fn graph_of(edges: &[(&str, &str)]) -> BTreeMap<String, BTreeMap<String, String>> {
+        let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        for (from, to) in edges {
+            out.entry((*from).to_string())
+                .or_default()
+                .insert((*to).to_string(), "test".to_string());
+        }
+        out
+    }
+    fn members(found: &BTreeSet<Vec<String>>) -> Vec<String> {
+        found.iter().map(|m| m.join("<->")).collect()
+    }
+
+    // A mutual pair — the shape the first version of this checker could see.
+    assert_eq!(
+        members(&cycles(&graph_of(&[("a", "b"), ("b", "a")]))),
+        vec!["a<->b"]
+    );
+
+    // A three-cycle — the shape it could not, and the shape §5.38 was.
+    assert_eq!(
+        members(&cycles(&graph_of(&[("a", "b"), ("b", "c"), ("c", "a")]))),
+        vec!["a<->b<->c"]
+    );
+
+    // A four-cycle, at MAX_CYCLE.
+    assert_eq!(
+        members(&cycles(&graph_of(&[
+            ("a", "b"),
+            ("b", "c"),
+            ("c", "d"),
+            ("d", "a"),
+        ]))),
+        vec!["a<->b<->c<->d"]
+    );
+
+    // A diamond: two paths from a to d, no way back. Not a cycle.
+    assert!(
+        cycles(&graph_of(&[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")])).is_empty(),
+        "a diamond is not a cycle"
+    );
+
+    // The real graph, for the record: this is the assertion
+    // `the_only_cycles_are_the_ones_on_record` makes, stated once more here so
+    // that a reader of this test can see the finder is being pointed at src/ as
+    // well as at fixtures.
+    assert!(
+        cycles(&graph()).is_empty(),
+        "src/ has a dependency cycle; the other test says which"
     );
 }
