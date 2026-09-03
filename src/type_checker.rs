@@ -397,17 +397,52 @@ impl<'a> TypeChecker<'a> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Does a value whose inferred type is named `actual` satisfy a declared
+/// `expected`?
+///
+/// This is the **name-level** half of the rule `evaluator::type_matches`
+/// implements over values, and `spec/types.md` is normative for both. Where the
+/// two disagreed, the checker was the one at fault every time: it is advisory,
+/// so a finding on a program that runs correctly is noise printed over correct
+/// code, and noise is how a linter teaches people to ignore it.
+///
+/// `tests/type_agreement.rs` holds the two matchers to each other, case by case.
+///
+/// What it still cannot express, and why that is not a divergence: the checker
+/// reasons about type *names*, so the arms of `type_matches` that inspect a
+/// value — a class instance's name, an enum variant's enum, a `DateField`
+/// behaving as an `int` — have no name-level counterpart. `infer_type` never
+/// produces those names either, so the two never actually meet on them.
 fn types_compatible(expected: &str, actual: &str) -> bool {
-    if expected == actual {
+    if expected == actual || expected == "any" {
         return true;
     }
-    if expected == "any" {
+    // `void` accepts `null`. `spec/types.md` lists this in the matching table
+    // and `type_matches` implements it; the checker used to report
+    // `fn void f() { return null; }` — the most ordinary way to write a void
+    // function — as a return-type mismatch.
+    if expected == "void" && actual == "null" {
+        return true;
+    }
+    // A `[T]` parameter accepts **any** array, whatever its elements, and so
+    // does `array`. Both are `spec/types.md`'s wording and `type_matches`'s
+    // behaviour; the checker used to compare the two annotations as strings, so
+    // `[string]` at a `[int]` parameter was reported even though it runs.
+    //
+    // This does not loosen `check_array_literal`, which is the check that gives
+    // `[T]` its meaning: there, `expected` is the element type — a keyword —
+    // and never an array annotation.
+    if is_array_type(expected) && is_array_type(actual) {
         return true;
     }
     // Nullable: "int?" accepts "int" or "null"
-    if expected.ends_with('?') {
-        let base = &expected[..expected.len() - 1];
+    if let Some(base) = expected.strip_suffix('?') {
         return actual == base || actual == "null";
     }
     false
+}
+
+/// Whether a type name denotes "an array", in either spelling the language has.
+fn is_array_type(name: &str) -> bool {
+    name == "array" || (name.starts_with('[') && name.ends_with(']'))
 }

@@ -22,7 +22,7 @@ Read before starting any milestone, in this order:
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
 | Last completed milestone | **M3 — Diagnostics Unified** (M0, M1, M2 before it). M4 is **PARTIAL** by decision, not by omission |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **DEC-M4-001**, **-002**, **-003**, **-004** — all OPEN, all in §7A with measured evidence and a marked recommendation |
+| **Open decisions** | **DEC-M4-001**, **-002**, **-003**, **-004**, **DEC-M5-001** — all OPEN, all in §7A with measured evidence and a marked recommendation |
 | Branch | `improve` |
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
@@ -1208,6 +1208,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M4-002** | Whether an unresolved free variable is a diagnostic | **OPEN** | M4.7.3+ (resolver reporting); the M7 entry for scope semantics |
 | **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
 | **DEC-M4-004** | What the editor's outline should show | **OPEN** | the LSP's migration onto `semantic::declarations` |
+| **DEC-M5-001** | Whether a nullable value at a non-nullable parameter is reported | **OPEN** | nothing — a question to answer, not a gate |
 
 ---
 
@@ -1503,6 +1504,79 @@ informed one.
 which is M4's last unblocked-in-principle goal. **Not blocked:** nothing else —
 `semantic::declarations` and `semantic::scopes` are complete and validated
 without it.
+
+---
+
+### DEC-M5-001 — Should the checker report a nullable value at a non-nullable parameter?
+
+**Problem.** The checker infers `int?` for a value returned by `fn int? maybe()`.
+Passed to a parameter declared `int`, it reports. The runtime accepts, because
+the value at run time is an `int`. Whether that report is a defect or the correct
+behaviour of a null-aware checker is a design question, and unlike the other four
+divergences in §9H.0, **`spec/types.md` takes no position on it**.
+
+**Current behaviour.**
+
+```serez
+fn int? maybe() { return 5; }
+fn int wants(int n) { return n; }
+let m = maybe();
+out wants(m);      // ❌ TYPE ERROR [SZ3000] … expected 'int' but received 'int?'
+                   // prints 5, exit 0
+```
+
+**Measured evidence.** Zero occurrences in the corpus. The whole tracked corpus
+emits **3** `SZ3000` findings and all three are ordinary type mismatches; nothing
+triggers this path today. So the decision is about what the language should do
+for code not yet written, not about existing code — which is the cheapest moment
+to take it.
+
+**Alternatives.**
+
+| # | Option | Consequence |
+|---|---|---|
+| A | **Keep reporting** — a `T?` may be null, so passing it where `T` is required is a real risk | Strict-null behaviour. Without flow analysis it fires on *every* such call, including where the value is provably non-null, so users would learn to ignore it — the exact failure §9H.0 argues against |
+| B | **Stop reporting** — match the runtime, which accepts when the value is not null | Removes the false-positive risk; loses the only null-safety signal the checker has |
+| C | **Keep reporting, add narrowing** — report only where the value is not provably non-null | The correct answer in a mature checker, and much the largest: it needs flow analysis the checker has no other use for today |
+
+**Trade-offs.** A and C differ only in precision, and the precision is the whole
+question: a warning that cannot be silenced by writing correct code is noise
+wearing a useful label. B is honest about what this checker is — `spec/types.md`
+calls it "a linter that occasionally catches a top-level mistake early" — and
+gives up a genuine class of bug.
+
+**Architectural impact.** C introduces flow-sensitivity, which nothing in the
+checker has today and which would be its largest structural change. A and B are
+each a line.
+
+**Semantic impact.** None under any option. Findings are advisory; the set of
+accepted programs does not move.
+
+**Compatibility.** stderr only, under every option.
+
+**Impact by area.**
+
+| Area | Note |
+|---|---|
+| Tests | `tests/type_agreement.rs` holds the case; under B its `KNOWN_DIVERGENCES` entry is deleted, and the staleness check enforces that |
+| Specs | `spec/types.md` must state the rule under any option — it is silent today, which is the underlying defect |
+| LSP | Consumes checker findings directly; whatever is decided is what an editor underlines |
+| Runtime | Unchanged |
+| Ecosystem | No occurrences measured |
+
+**Recommendation — this is a recommendation, not a decision.** **A now, C later,
+never B.** The signal is real — a null reaching a non-nullable parameter is a
+genuine bug class, and this is the only place the checker can see it. Keeping it
+costs nothing today, since nothing in the corpus triggers it. C is where it
+should end up, and it should be scheduled as its own project rather than folded
+into a milestone about consistency. **Whatever is chosen, `spec/types.md` must
+say so** — the real defect is that the document is silent, not that the checker
+reports.
+
+**Blocked by this decision:** nothing. The case is recorded in the net with this
+identifier, so the behaviour is pinned and documented either way. This is the
+first decision in the register that blocks **no** work — it is a question the
+roadmap should answer, not a gate.
 
 ---
 
@@ -3423,6 +3497,97 @@ rather than by omission: `src/semantic.rs` stays a validated leaf, §5.31 and th
 free-variable resolution stay recorded as accepted debt, and the milestone audit
 records that the layer was established but not adopted. That is a legitimate
 outcome and should be written down as one, not left ambiguous.
+
+---
+
+## 9H. M5 — Type System Stable
+
+Charter: *"Reglas de tipos coherentes, normativas y consistentes entre
+checker/runtime/tooling."*
+
+### 9H.0 The audit: the spec is good, and the checker does not implement it
+
+M5's premise is that type rules might be incoherent. `spec/types.md` turns out to
+be the strongest document in `spec/` — 230 lines, every rule derived by probing
+the running implementation, with a "Known gaps" section that names its own
+limitations rather than hiding them. It is not the problem.
+
+**The problem is that there are two implementations of its matching table.**
+
+| | Implements | Size | Authority |
+|---|---|---|---|
+| `evaluator::type_matches` (`mod.rs:2229`) | values -> declared type | 25 arms | **authoritative** — enforces the contract |
+| `type_checker::types_compatible` | type *names* -> declared type | **8 lines** | advisory — prints and does not stop anything |
+
+The checker's version was not a subset of the runtime's. It disagreed, and every
+disagreement found is one where **`spec/types.md` sides with the runtime**, which
+is what makes these fixes ordinary work rather than product decisions.
+
+**Four divergences, all probed against the 10.0.0 binary:**
+
+| # | Program | Runtime | Checker | Spec says |
+|---|---|---|---|---|
+| 1 | `fn void nothing() { return null; }` | accepts | **reports** | "`void` \| `null`" — the checker is wrong |
+| 2 | `[string]` passed to a `[int]` parameter | accepts | **reports** | "`[T]` \| **any array**, whatever its elements" — the checker is wrong |
+| 3 | `[int]` passed to an `array` parameter | accepts | **reports** | "`array` … recognized as a type name by the runtime matcher" — the checker is wrong |
+| 4 | an `int?`-typed value passed to an `int` parameter | accepts | **reports** | nothing — **DEC-M5-001** |
+| 5 | `export fn int f(int a)` called with a string | rejects | **silent** | nothing makes `export` change what is checked — §5.29 |
+
+The first three are **false positives**: the checker printing an error over a
+program that runs correctly. That is the serious direction for an advisory tool.
+Its findings change neither the exit code nor whether the program runs, so a
+finding on correct code is pure noise, and noise on correct code is how a linter
+teaches people to ignore it. `fn void f() { return null; }` is the most ordinary
+way to write a void function.
+
+The fifth is a **false negative** and is §5.29, inherited from M4.
+
+### 9H.1 — M5.1: the net
+
+`tests/type_agreement.rs` runs each case through **both** halves — the real
+`TypeChecker` and the real `Evaluator` — and holds them to each other:
+
+  * **asserted**: the checker reports nothing about a program the runtime
+    accepts, unless the case is in `KNOWN_DIVERGENCES` *with a stated reason*;
+  * **asserted**: a case marked `checker_must_catch` is caught. That flag is only
+    legitimate where the checker demonstrably handles the same shape written
+    differently — so the pair `a_plain_function_is_checked` /
+    `an_exported_function_is_checked_like_any_other` is what makes §5.29 a defect
+    rather than the documented partiality;
+  * **reported**: every other miss, because `spec/types.md` says the checker is
+    deliberately partial and reaching further is an improvement, not a contract.
+
+`KNOWN_DIVERGENCES` is also checked for **staleness**: an entry that no longer
+diverges fails the test. A list of intended divergences that outlives the
+divergence becomes a place where a fixed defect is recorded as intended, and this
+one cannot.
+
+Verified load-bearing before being trusted: the net was run against the
+unmodified checker and reported exactly the three false positives and both
+symptoms of §5.29, naming each.
+
+### 9H.2 — M5.2: the checker's matcher, corrected
+
+`types_compatible` now implements the name-level half of `type_matches`:
+`void` accepts `null`, and an array annotation in either spelling (`[T]` or
+`array`) accepts an array in either spelling. What it still cannot express is not
+a divergence: the arms of `type_matches` that inspect a *value* — a class
+instance's name, an enum variant's enum, a `DateField` behaving as an `int` —
+have no name-level counterpart, and `infer_type` never produces those names, so
+the two never meet on them.
+
+**Measured impact on the corpus: zero, and that is the finding.** The committed
+binary and the fixed one both emit exactly **3** `SZ3000` findings across every
+tracked `.sz` file — `err_arity.sz`, `err_type_param.sz`, `sec_type_violation.sz`
+— and all three are legitimate. So no true positive was lost, and no corpus file
+was suffering a false positive.
+
+The corpus is silent on this for a reason worth recording: **nothing pins stderr
+for a program that succeeds.** `diagnostic_render.manifest` covers `err_*` and
+`sec_*` — failing programs. The e2e fixtures compare **stdout**. So a spurious
+`TYPE ERROR` printed over a correct program is invisible to every existing gate,
+which is precisely why these three survived. `tests/type_agreement.rs` is now the
+gate that sees them.
 
 ---
 
