@@ -129,6 +129,8 @@ serez-code/
 ├── wix/main.wxs                — MSI installer configuration (used by cargo-dist)
 ├── dist-workspace.toml         — cargo-dist configuration for releases
 ├── .github/
+│   ├── workflows/ci.yml        — fmt, check, clippy baseline, tests, conformance, canary
+│   ├── workflows/ecosystem-daily.yml — the canary against package HEADs, daily
 │   ├── workflows/release.yml   — Release CI/CD pipeline
 │   └── dependabot.yml          — Weekly automatic updates
 │
@@ -612,6 +614,36 @@ The `.vsix` is in `.gitignore` — it is a build artifact, not source code.
 ---
 
 ## 10. CI/CD — release pipeline
+
+### `ci.yml` — what has to be green
+
+| Gate | Where | What fails it |
+|---|---|---|
+| `cargo fmt --check` | 3 OS | any unformatted file |
+| `cargo check` | 3 OS | any compile error |
+| **Clippy baseline** | 3 OS | a lint/file pair that grew, or one not in `clippy-baseline.txt` |
+| `cargo test --all-targets` | 3 OS | any failing Rust test |
+| Serez conformance | 3 OS | any failing `.sz` fixture, per runner |
+| **Ecosystem canary** | Linux | any official package failing against the core built here |
+
+**Clippy is a baseline, not `-D warnings`.** The 180 existing warnings are known
+debt; the gate is `current <= baseline`, keyed per lint and per file so that
+fixing one warning and introducing another cannot cancel out in a total. Fixing
+warnings is always allowed — `python tools/clippy_baseline.py --write` banks the
+reduction so it cannot come back. Refreshing the baseline to silence a real
+regression is the one thing the gate exists to stop, and doing it deliberately
+belongs in the commit message.
+
+**The canary is pinned.** `ecosystem-pins.txt` names a commit per package, so the
+only thing that can turn the gate red is a change in *this* repository — a
+compatibility signal that someone else's push can break is not a gate. The core
+under test is always built from the checkout, never a released `sz`.
+
+`ecosystem-daily.yml` runs the same canary against each package's default branch,
+once a day, and cannot block a PR. The two answer different questions: the gate
+asks whether this change broke the packages as pinned, the daily run asks whether
+the packages have moved away from the pins. Neither replaces the other, and a
+stale pin is exactly what the daily run exists to surface.
 
 ### `release.yml` — GitHub Actions
 

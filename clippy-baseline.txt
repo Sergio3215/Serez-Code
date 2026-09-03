@@ -1,0 +1,71 @@
+# serez-clippy-baseline/1
+# Known Clippy debt, as `<lint>\t<file>\t<count>`, sorted.
+#
+# The gate is `current <= baseline` per line: a pair that grows, or a pair
+# that is not here at all, fails CI. Fixing warnings is always allowed and
+# is what `tools/clippy_baseline.py --write` is for.
+#
+# Sites are deduplicated by (lint, file, line, column) before counting, and
+# paths use forward slashes, so this file is identical on all three runners.
+# total sites: 180
+clippy::derivable_impls	src/run.rs	1
+clippy::doc_lazy_continuation	src/evaluator/namespaces_gui/render.rs	2
+clippy::doc_lazy_continuation	src/package_manager.rs	1
+clippy::double_ended_iterator_last	src/lsp/analysis.rs	1
+clippy::double_ended_iterator_last	src/lsp/server.rs	1
+clippy::excessive_precision	src/evaluator/svg.rs	1
+clippy::explicit_counter_loop	src/evaluator/namespaces_gui/render.rs	1
+clippy::field_reassign_with_default	src/evaluator/svg.rs	2
+clippy::get_first	src/evaluator/methods_tensor.rs	1
+clippy::if_same_then_else	src/evaluator/namespaces_autodiff.rs	1
+clippy::iter_cloned_collect	src/evaluator/classes.rs	4
+clippy::iter_cloned_collect	src/evaluator/methods_array.rs	3
+clippy::iter_cloned_collect	src/evaluator/mod.rs	1
+clippy::iter_cloned_collect	src/evaluator/stmt.rs	4
+clippy::manual_contains	src/evaluator/namespaces_crypto.rs	1
+clippy::manual_div_ceil	src/evaluator/namespaces_crypto.rs	1
+clippy::manual_flatten	src/evaluator/stmt.rs	1
+clippy::manual_memcpy	src/evaluator/methods_tensor.rs	3
+clippy::manual_range_contains	src/evaluator/mod.rs	1
+clippy::manual_range_contains	src/evaluator/namespaces.rs	1
+clippy::manual_range_contains	src/evaluator/namespaces_crypto.rs	2
+clippy::manual_range_contains	src/evaluator/namespaces_gui.rs	1
+clippy::manual_range_contains	src/evaluator/namespaces_memory.rs	1
+clippy::manual_range_contains	src/evaluator/namespaces_os.rs	1
+clippy::map_clone	src/evaluator/stmt.rs	1
+clippy::match_like_matches_macro	src/parser/expressions.rs	1
+clippy::needless_borrow	src/evaluator/svg.rs	1
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	14
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	6
+clippy::needless_borrows_for_generic_args	tests/filesystem_reach.rs	1
+clippy::needless_late_init	src/evaluator/namespaces_regex.rs	1
+clippy::needless_range_loop	src/evaluator/methods_tensor.rs	7
+clippy::needless_range_loop	src/evaluator/mod.rs	1
+clippy::needless_range_loop	src/evaluator/namespaces_crypto.rs	1
+clippy::needless_range_loop	src/evaluator/namespaces_gui.rs	2
+clippy::needless_range_loop	src/lsp/analysis.rs	1
+clippy::needless_return	src/evaluator/namespaces_gui.rs	2
+clippy::needless_return	src/evaluator/ops.rs	59
+clippy::new_without_default	src/compiler/hir_lower.rs	1
+clippy::new_without_default	src/compiler/llvm_emit.rs	1
+clippy::new_without_default	src/compiler/mir_lower.rs	1
+clippy::new_without_default	src/evaluator/mod.rs	1
+clippy::new_without_default	src/evaluator/namespaces_gui.rs	1
+clippy::new_without_default	src/region.rs	1
+clippy::new_without_default	src/scope.rs	1
+clippy::nonminimal_bool	src/evaluator/namespaces_gui/render.rs	1
+clippy::only_used_in_recursion	src/evaluator/check.rs	1
+clippy::ptr_arg	src/evaluator/namespaces_memory.rs	1
+clippy::question_mark	src/evaluator/namespaces_datetime.rs	1
+clippy::question_mark	src/parser/expressions.rs	2
+clippy::redundant_closure	src/evaluator/namespaces_os.rs	1
+clippy::redundant_closure	src/lsp/server.rs	2
+clippy::too_many_arguments	src/evaluator/namespaces_gui.rs	6
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	9
+clippy::type_complexity	src/evaluator/namespaces_autodiff.rs	2
+clippy::type_complexity	src/lsp/server.rs	1
+clippy::unnecessary_map_or	src/evaluator/methods_set.rs	1
+clippy::unnecessary_map_or	src/evaluator/namespaces_regex.rs	1
+clippy::unnecessary_map_or	src/package_manager.rs	7
+clippy::useless_format	src/evaluator/mod.rs	1
+clippy::while_let_loop	src/evaluator/svg.rs	1

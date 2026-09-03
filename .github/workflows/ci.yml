@@ -47,8 +47,14 @@ jobs:
       - name: Check
         run: cargo check
 
-      - name: Clippy
-        run: cargo clippy --all-targets
+      # DEC-M10-002. `cargo clippy` alone fails nothing — CI has never passed
+      # `-D warnings`, so a warning introduced by a change was invisible and this
+      # roadmap compared the per-site list by hand at every milestone boundary.
+      # The gate is `current <= baseline`, keyed per lint and per file, so debt
+      # cannot grow while a total stays still by cancelling out. Reducing it is
+      # always allowed; `tools/clippy_baseline.py --write` banks the reduction.
+      - name: Clippy (must not exceed the committed baseline)
+        run: python tools/clippy_baseline.py --check
 
       - name: Rust tests
         run: cargo test --all-targets
@@ -72,3 +78,39 @@ jobs:
           name: conformance-${{ matrix.os }}
           path: conformance-${{ matrix.os }}.json
           if-no-files-found: warn
+
+  # ── DEC-M10-001: the ecosystem canary as a gate ──────────────────────────
+  #
+  # Eight official packages, run against the core built from *this* checkout —
+  # never against a released `sz`, which is the failure mode that would make the
+  # signal meaningless.
+  #
+  # Pinned, per `ecosystem-pins.txt`. §7A's objection to running the canary
+  # per-commit was that it makes every PR depend on repositories this one does
+  # not control; a pin answers that, because the only thing that can turn this
+  # red is a change here. `.github/workflows/ecosystem-daily.yml` runs the same
+  # canary unpinned once a day, which is the other half and cannot block a PR.
+  #
+  # One OS: the packages are Serez source and the canary is a compatibility
+  # signal about the *language*, not about the host. Cross-platform parity is
+  # what the matrix above is for.
+  ecosystem:
+    name: Ecosystem canary (gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install ALSA
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+
+      - name: Fetch the official packages at their pinned commits
+        run: bash tools/fetch_ecosystem.sh
+
+      # Builds the core from this checkout; `run_ecosystem.sh` does it without
+      # `--skip-build`, so the binary under test is always the one this commit
+      # produces.
+      - name: Run the canary
+        run: bash run_ecosystem.sh

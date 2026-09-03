@@ -1,0 +1,59 @@
+# The ecosystem canary against the packages as they actually are, once a day.
+#
+# The **other half** of DEC-M10-001, and the reconciliation the approved
+# decisions require. `ci.yml`'s `ecosystem` job is the blocking gate and runs the
+# packages at the commits in `ecosystem-pins.txt`, so only a change in this
+# repository can turn it red. That is what makes it a usable gate, and it is also
+# what makes it go stale: it stops testing the packages as they are the moment
+# one of them moves.
+#
+# This runs the same canary against each package's **default branch**. It cannot
+# block a PR, and it is not a replacement for the gate — the two answer different
+# questions:
+#
+#   gate   — did this change break the packages as pinned?
+#   daily  — have the packages moved away from the pins?
+#
+# A red run here means the pins need looking at, not that the language broke.
+name: Ecosystem canary (daily)
+
+on:
+  schedule:
+    # 05:00 UTC. Nothing depends on the hour; it is early enough that a failure
+    # is waiting at the start of a working day rather than arriving mid-afternoon.
+    - cron: "0 5 * * *"
+  # So the drift check can be run on demand without waiting for the schedule —
+  # the first thing anyone wants after moving a pin.
+  workflow_dispatch:
+
+jobs:
+  drift:
+    name: Official packages at HEAD
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install ALSA
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+
+      - name: Fetch the official packages at their default branches
+        run: bash tools/fetch_ecosystem.sh --latest
+
+      - name: Run the canary
+        run: bash run_ecosystem.sh
+
+      # The pins are the gate's contract with the packages, so a reader of a
+      # failed run needs to know how far the two have drifted before deciding
+      # whether the gate or a package is wrong.
+      - name: Report where each package actually is
+        if: always()
+        run: |
+          echo "package             pinned                                    HEAD"
+          while IFS=$'\t' read -r pkg pin; do
+            case "$pkg" in ''|\#*) continue ;; esac
+            head=$(git -C "../$pkg" rev-parse HEAD 2>/dev/null || echo "unavailable")
+            printf '%-20s %-42s %s\n' "$pkg" "$pin" "$head"
+          done < ecosystem-pins.txt

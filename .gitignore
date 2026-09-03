@@ -14,6 +14,12 @@ ANALISIS_MEMORIA_RENDIMIENTO.md
 *.vsix
 /.claude/
 !tests/*.sz
+
+# Versioned gate inputs. `*.txt` above is a broad ignore for scratch output, and
+# these two are the opposite of scratch: CI reads them, and a change to either is
+# a deliberate act that belongs in a diff someone reviews.
+!clippy-baseline.txt
+!ecosystem-pins.txt
 # Fixture trees the conformance runners load. `!tests/*.sz` only un-ignores the
 # top level, so these stayed untracked: a fresh clone had no tests/lib, and the
 # import, export, package and runner-integrity tests failed with ModuleNotFound.

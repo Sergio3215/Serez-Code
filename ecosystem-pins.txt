@@ -1,0 +1,39 @@
+# serez-ecosystem-pins/1
+# The official packages the ecosystem canary runs as a CI gate, as
+# `<package>\t<commit>`.
+#
+# WHY PINNED
+#
+# DEC-M10-001 makes the canary a blocking gate: if a change here breaks an
+# official package, CI fails. §7A's objection to running it per-commit was that
+# it "makes every PR's result depend on repositories this one does not control,
+# which is how a compatibility signal turns into flakiness". A pin answers that:
+# the gate reads a fixed commit of each package, so the only thing that can turn
+# it red is a change *in this repository*, which is what a gate is for.
+#
+# It is also what makes the signal readable. A red gate means "this change broke
+# serez-ui at this commit" and never "someone pushed to serez-ui an hour ago".
+#
+# THE OTHER HALF
+#
+# A pin goes stale, and a stale pin is a gate that stops testing the packages as
+# they actually are. `.github/workflows/ecosystem-daily.yml` runs the same canary
+# against each package's **default branch**, once a day, and cannot block a PR.
+# The gate asks "did this change break the packages as pinned?"; the daily run
+# asks "have the packages moved away from the pins?". They are different
+# questions and neither replaces the other.
+#
+# UPDATING
+#
+# Move a pin deliberately, in its own commit, with the canary green at the new
+# commit. A pin bumped in the same change as a language fix hides which of the
+# two made the suite pass.
+
+serez-ui	af4523d893892cb93deadc2fed1dc3f5bcd90355
+serez-http	9c72676eca5f11b8aa4ccd2ed072247f3a8d4d8e
+serez-ai	c924a114b40f21ed7eb00d4174a4c8156347a592
+serez-agentai	a0d69648f54ae391fe9507afa408ccd9c203582b
+serez-pack	54b07ec4bfd5a701c5c8c9721815a8a971722061
+serez-apipack	219119faa83e7c9fb4b6aeacd943deb6242c4444
+serez-dotenv	d0e022b90624933e5707b6347d0ba7cf5f1634c1
+serez-graph	08a6e277c66bf6776b5d05fcd7b1be3c25fdd8a0
