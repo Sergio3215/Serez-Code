@@ -4101,6 +4101,31 @@ no initialisation moved: `next_id` still starts at 1, expressed as
 
 `Evaluator`: **48 fields -> 44.**
 
+### 9J.2 — M6.2: the module context
+
+Three fields become one: `modules::ModuleContext`, owning `loaded`,
+`current_dir` and `exports`, held by `Evaluator` as `modules`.
+
+The evidence that they belong together is again in the code that uses them, not
+in their names: `eval_import` **saves `current_dir` and `exports`, runs the
+module, and restores both**. It is a push and a pop of one context, spelled as two
+independent fields on a 44-field struct — which is precisely the shape that makes
+it possible to save one and forget the other.
+
+**`loaded` is in the struct but is *not* saved and restored, and that asymmetry is
+deliberate.** A module runs once per *program*, not once per importing scope, so
+the set has to outlive the context switch the other two take part in. That is the
+mechanism that makes import cycles terminate: the path is marked before the body
+runs, so a second import of a file already on the stack is a no-op. Grouping the
+three without saying this would leave the next reader to assume all three are
+scoped, and to "fix" the asymmetry.
+
+Behaviour unchanged: 25 sites renamed, no logic moved, and the import path is
+covered end-to-end by the `import` and `package-manager` categories plus the
+ecosystem canary — all green.
+
+`Evaluator`: **44 fields -> 42.**
+
 ---
 
 ## 9I. M5 MILESTONE AUDIT

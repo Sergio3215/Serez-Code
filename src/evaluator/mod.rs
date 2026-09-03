@@ -209,13 +209,10 @@ pub struct Evaluator {
     in_unsafe_block: bool,
     // registered native function names
     native_fns: HashSet<String>,
-    // set of already-imported canonical paths (prevents re-import and cycles)
-    imported_files: crate::modules::LoadedModules,
-    // the directory of the currently executing file (for relative import resolution)
-    current_dir: Option<PathBuf>,
-    // Some(set) while executing an imported module — tracks exported names.
-    // None at top level (main file) or when no export statements were used yet.
-    current_module_exports: Option<HashSet<String>>,
+    // Three fields until M6.2. Where the evaluator is in module terms: what has
+    // been loaded, which directory relative imports resolve against, and what the
+    // module being executed exports. See `modules::ModuleContext`.
+    modules: crate::modules::ModuleContext,
     // Collects yielded values while executing a generator function body.
     // None = not inside a generator; Some(vec) = collecting yields.
     yield_collector: Option<Vec<OwnedValue>>,
@@ -512,9 +509,7 @@ impl Evaluator {
             source_lines: Vec::new(),
             in_unsafe_block: false,
             native_fns: HashSet::new(),
-            imported_files: crate::modules::LoadedModules::new(),
-            current_dir: None,
-            current_module_exports: None,
+            modules: crate::modules::ModuleContext::default(),
             yield_collector: None,
             sockets: crate::handles::SocketTable::new(),
             gpu: crate::handles::HandleRegistry::new(),
@@ -871,10 +866,10 @@ impl Evaluator {
 
     pub fn set_current_file(&mut self, path: &std::path::Path) {
         if let Some(dir) = path.parent() {
-            self.current_dir = Some(dir.to_path_buf());
+            self.modules.current_dir = Some(dir.to_path_buf());
         }
         if let Ok(canonical) = path.canonicalize() {
-            self.imported_files.mark(&canonical);
+            self.modules.loaded.mark(&canonical);
         }
     }
 

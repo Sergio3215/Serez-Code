@@ -110,6 +110,30 @@ impl LoadedModules {
     }
 }
 
+/// Where the evaluator is, in module terms, right now.
+///
+/// Three fields of `Evaluator` until M6.2. They belong together because the
+/// import path treats them as one: `eval_import` saves `current_dir` and
+/// `exports`, runs the module, and restores both — a push and a pop of the same
+/// context. Splitting a saved-and-restored pair across a 44-field struct is what
+/// made it possible to forget one.
+///
+/// `loaded` is not saved and restored, and that asymmetry is deliberate: a module
+/// runs once *per program*, not once per importing scope, so the set has to
+/// outlive the context switch that the other two participate in. Recorded here so
+/// the difference reads as intentional.
+#[derive(Debug, Default)]
+pub struct ModuleContext {
+    /// Canonical paths already loaded. Marked *before* a body runs, which is what
+    /// makes import cycles terminate.
+    pub loaded: LoadedModules,
+    /// Directory of the file currently executing, for relative import resolution.
+    pub current_dir: Option<PathBuf>,
+    /// `Some` while executing an imported module, tracking the names it exports.
+    /// `None` at the top level, where `export` has nothing to report to.
+    pub exports: Option<HashSet<String>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

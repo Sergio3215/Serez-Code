@@ -1472,12 +1472,12 @@ impl super::Evaluator {
 
         // Use the cache_file path as canonical ID to prevent re-imports
         // Recorded before the body runs, which is what makes a cycle terminate.
-        if !self.imported_files.mark(&cache_file) {
+        if !self.modules.loaded.mark(&cache_file) {
             return EvalResult::Value(self.null_ref);
         }
 
-        let prev_dir = self.current_dir.clone();
-        self.current_dir = Some(
+        let prev_dir = self.modules.current_dir.clone();
+        self.modules.current_dir = Some(
             cache_file
                 .parent()
                 .unwrap_or(std::path::Path::new("."))
@@ -1489,8 +1489,8 @@ impl super::Evaluator {
         let before_interfaces: HashSet<String> = self.interface_registry.keys().cloned().collect();
         let before_enums: HashSet<String> = self.enum_registry.keys().cloned().collect();
 
-        let prev_exports = self.current_module_exports.take();
-        self.current_module_exports = Some(HashSet::new());
+        let prev_exports = self.modules.exports.take();
+        self.modules.exports = Some(HashSet::new());
 
         let lexer = crate::lexer::Lexer::new(source.clone());
         let mut parser = crate::parser::Parser::new(lexer);
@@ -1501,16 +1501,16 @@ impl super::Evaluator {
         parser.set_source_name(module_name);
         let program = parser.parse_program();
         if parser.has_errors() {
-            self.current_module_exports = prev_exports;
-            self.current_dir = prev_dir;
+            self.modules.exports = prev_exports;
+            self.modules.current_dir = prev_dir;
             let message = format!("Import aborted: fix the parse errors in '{module_name}' first");
             return self.rt_err_kind("ImportError", message);
         }
         let result = self.eval_program(&program);
 
-        let exports = self.current_module_exports.take().unwrap_or_default();
-        self.current_module_exports = prev_exports;
-        self.current_dir = prev_dir;
+        let exports = self.modules.exports.take().unwrap_or_default();
+        self.modules.exports = prev_exports;
+        self.modules.current_dir = prev_dir;
 
         if result.is_none() {
             return EvalResult::Error;
@@ -1553,9 +1553,9 @@ impl super::Evaluator {
         let result = self.eval_statement(inner);
 
         // If we're inside a module being imported, register the exported name
-        if self.current_module_exports.is_some() {
+        if self.modules.exports.is_some() {
             if let Some(name) = declaration_name(inner) {
-                if let Some(ref mut exports) = self.current_module_exports {
+                if let Some(ref mut exports) = self.modules.exports {
                     exports.insert(name);
                 }
             }
@@ -1585,7 +1585,7 @@ impl super::Evaluator {
         // `crate::modules`, where it is unit-tested without an evaluator. What
         // stays here is the part that genuinely needs one: executing the module
         // against these arenas, registries and export tracking.
-        let canonical = match crate::modules::resolve(path, self.current_dir.as_deref()) {
+        let canonical = match crate::modules::resolve(path, self.modules.current_dir.as_deref()) {
             Some(canonical) => canonical,
             None => {
                 let msg = format!("ModuleNotFound: Cannot find module '{}'", path);
@@ -1597,7 +1597,7 @@ impl super::Evaluator {
         // Recorded before the body runs: that is what makes an import cycle
         // terminate instead of recursing, and what makes a second import of the
         // same file a no-op. See spec/modules.md.
-        if !self.imported_files.mark(&canonical) {
+        if !self.modules.loaded.mark(&canonical) {
             return EvalResult::Value(self.null_ref); // already imported — skip
         }
 
@@ -1629,9 +1629,9 @@ impl super::Evaluator {
         };
 
         // Save and update current_dir for nested imports
-        let prev_dir = self.current_dir.clone();
+        let prev_dir = self.modules.current_dir.clone();
         if let Some(parent) = canonical.parent() {
-            self.current_dir = Some(parent.to_path_buf());
+            self.modules.current_dir = Some(parent.to_path_buf());
         }
 
         // Snapshot existing names before loading the module
@@ -1641,8 +1641,8 @@ impl super::Evaluator {
         let before_enums: HashSet<String> = self.enum_registry.keys().cloned().collect();
 
         // Activate export tracking for this module
-        let prev_exports = self.current_module_exports.take();
-        self.current_module_exports = Some(HashSet::new());
+        let prev_exports = self.modules.exports.take();
+        self.modules.exports = Some(HashSet::new());
 
         let lexer = crate::lexer::Lexer::new(source.clone());
         let mut parser = crate::parser::Parser::new(lexer);
@@ -1653,8 +1653,8 @@ impl super::Evaluator {
         parser.set_source_name(module_name);
         let program = parser.parse_program();
         if parser.has_errors() {
-            self.current_module_exports = prev_exports;
-            self.current_dir = prev_dir;
+            self.modules.exports = prev_exports;
+            self.modules.current_dir = prev_dir;
             let message = format!("Import aborted: fix the parse errors in '{module_name}' first");
             return self.rt_err_kind("ImportError", message);
         }
@@ -1662,9 +1662,9 @@ impl super::Evaluator {
         let result = self.eval_program(&program);
 
         // Collect the exports declared by this module
-        let exports = self.current_module_exports.take().unwrap_or_default();
-        self.current_module_exports = prev_exports;
-        self.current_dir = prev_dir;
+        let exports = self.modules.exports.take().unwrap_or_default();
+        self.modules.exports = prev_exports;
+        self.modules.current_dir = prev_dir;
 
         if result.is_none() {
             return EvalResult::Error;
