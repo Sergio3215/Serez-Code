@@ -1,7 +1,7 @@
 # serez-parser-snapshot/1
 # Parser output for every .sz file under tests, benchmarks, std, apps.
 # path<TAB>tree-bytes<TAB>diagnostics<TAB>fnv1a64(tree)<TAB>fnv1a64(diagnostics)
-# files: 504
+# files: 505
 apps/01_task_manager.sz	62318	0	a3f338cdf17155ce	cbf29ce484222325
 apps/02_statistics.sz	67295	0	fc1fbbf98d0d7329	cbf29ce484222325
 apps/03_text_analyzer.sz	53830	0	2c9ae7ec03fdc6ba	cbf29ce484222325
@@ -190,6 +190,7 @@ tests/err_parsedecimal_invalid.sz	385	0	9794afe01b28df8a	cbf29ce484222325
 tests/err_parseint_invalid.sz	381	0	14dd0050f9bf18e5	cbf29ce484222325
 tests/err_pop_empty.sz	509	0	9c14a4d2c51be621	cbf29ce484222325
 tests/err_private.sz	2607	0	13d1e6afff64f5da	cbf29ce484222325
+tests/err_private_inherited.sz	6024	0	9a72d481a0459350	cbf29ce484222325
 tests/err_random_unknown_method.sz	296	0	a19075bfee719421	cbf29ce484222325
 tests/err_return_toplevel.sz	194	0	796ea81a219d6628	cbf29ce484222325
 tests/err_return_type_mismatch.sz	595	0	4005ac39eb3a6e98	cbf29ce484222325

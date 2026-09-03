@@ -52,6 +52,12 @@ useless:
   release — but only after a sweep of every official package found zero
   occurrences of the affected form, which the changelog entry records by name.
 
+- **Unreleased** made `private` private to the declaring class. A subclass
+  method reaching an inherited private member now raises catchable `TypeError`
+  (`SZ4002`) where it used to succeed. The sweep found **27** private
+  declarations across the corpus and **0** in the ecosystem — the one match in an
+  official package is a string literal in serez-ui's translator — and no file
+  reaches a parent's private from a subclass. See `classes.md`.
 - **Unreleased** made an off-type write to a declared field a catchable
   `TypeError` where it used to be accepted. The sweep found **2** affected sites
   across 1,070 corpus and ecosystem files, and both were the conformance
@@ -173,6 +179,15 @@ unchanged, the exit code is unchanged at `1`, and the message text is unchanged.
 What moved is the phase word, the code and — because the declaration is now
 parsed before being rejected — the caret, which points at the declaration rather
 than at the name.
+
+**Unreleased — the private-access message names the declaring class.**
+`Method 'm' is private and cannot be called externally` becomes `Method 'm' is
+private to 'Base' and cannot be called from here`, and the bound-reference
+variant changes the same way. The old wording said "externally", which is no
+longer what the rule refuses: an access from inside the hierarchy but outside the
+declaring class is refused too, and it is not external. The code (`SZ4002`), the
+kind (`TypeError`), the catchability and the exit code are unchanged. Three
+conformance fixtures pin the text and were regenerated.
 
 It also **removes** diagnostics: a rejected class with a body used to produce two
 spurious `Unexpected token '}'` errors, and now produces none.

@@ -379,13 +379,13 @@ fn member_dispatch_errors_are_structured_and_catchable() {
             "class PrivateCall { private int secret() { return 1; } } new PrivateCall().secret();",
             "SZ4002",
             "TypeError",
-            "private and cannot be called externally",
+            "is private to 'PrivateCall'",
         ),
         (
             "class PrivateReference { private int secret() { return 1; } } let callback = new PrivateReference().secret;",
             "SZ4002",
             "TypeError",
-            "private and cannot be referenced externally",
+            "is private to 'PrivateReference'",
         ),
         (
             "class BadReturn { public int read() { return \"wrong\"; } } new BadReturn().read();",
@@ -458,11 +458,11 @@ fn property_dispatch_errors_are_structured_and_catchable() {
         ),
         (
             "class PrivateGetter { public PrivateGetter() {} private get int value() { return 1; } } let item = new PrivateGetter(); out item.value;",
-            "private and cannot be called externally",
+            "is private to 'PrivateGetter'",
         ),
         (
             "class PrivateSetter { public PrivateSetter() {} private set value(int next) {} } let item = new PrivateSetter(); item.value = 1;",
-            "private and cannot be called externally",
+            "is private to 'PrivateSetter'",
         ),
         (
             "class GetterArity { public GetterArity() {} public get int value(int extra) { return extra; } } let item = new GetterArity(); out item.value;",

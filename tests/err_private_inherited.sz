@@ -1,0 +1,25 @@
+// DEC-M7-002: `private` is private to the class that DECLARES the member.
+//
+// Until 10.0.0 privacy was keyed to the receiver's runtime class, so this
+// program printed 42: `Derived::reach` ran with `executing_class == "Derived"`,
+// the receiver was a `Derived`, and the two matched. `private` therefore meant
+// "not reachable from outside the hierarchy" rather than what the word says.
+//
+// `legit()` is the other half of the rule and must keep working: `viaParent` is
+// declared on `Base`, so it reaches `Base`'s private member even though `this`
+// is a `Derived`. It runs before the refused call, so this fixture fails only if
+// the refusal is missing — not if the permitted access broke.
+class Base {
+    public Base() { this.secret = 42; }
+    private int hidden() { return this.secret; }
+    private get int peek() { return this.secret; }
+    public int viaParent() { return this.hidden() + this.peek; }
+}
+class Derived : Base {
+    public Derived() { super(); }
+    public int legit() { return this.viaParent(); }
+    public int reach() { return this.hidden(); }
+}
+let d = new Derived();
+out d.legit();
+out d.reach();

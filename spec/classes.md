@@ -325,13 +325,33 @@ as a method remains allowed only when that field contains a callable value. The
 universal `toString()` fallback is unchanged. If none of those routes resolve,
 the access raises catchable `ReferenceError` (`SZ4001`).
 
-A private method remains callable from an internal class context. Calling it or
-taking its bound reference from outside remains refused and raises catchable
-`TypeError` (`SZ4002`); catchability does not grant access. The current inherited
-privacy caveat is recorded below rather than silently described as stronger than
-the implementation. If a method returns a value incompatible with its declared
+A private method is private **to the class that declares it**. Calling it, or
+taking its bound reference, is allowed only from inside that class's own methods;
+everywhere else it raises catchable `TypeError` (`SZ4002`), and catchability does
+not grant access. If a method returns a value incompatible with its declared
 return type, the completed call raises the same error after its call scope is
 unwound.
+
+### What `private` means, exactly
+
+| Access | Allowed |
+| --- | --- |
+| A method of `Base` uses `Base`'s private member | yes |
+| ...including when the receiver is a `Derived` instance | yes |
+| A method of `Derived` uses `Base`'s private member | **no** |
+| An unrelated class uses `Base`'s private member | no |
+| Code outside any class uses `Base`'s private member | no |
+
+**Inheritance does not widen `private`.** A subclass may call an accessible
+parent method that itself uses the private member — that is the parent's own
+access, and it keeps working. What the subclass may not do is reach the member
+directly.
+
+The check is keyed to the declaring class, and so is the execution context: a
+method body runs as the class that declared it, which is what makes row two of
+the table true. Until 10.0.0 both were keyed to the *receiver's runtime class*,
+so a subclass reached an inherited private and `private` in practice meant "not
+reachable from outside the hierarchy".
 
 `ClassName.method(...)` requires a static method declared for the named class.
 A missing static method raises catchable `ReferenceError` (`SZ4001`) identifying
@@ -379,14 +399,9 @@ raw field fallback.
 
 The following observed behaviors are not frozen as desired semantics:
 
-- A class-field type annotation is used while parsing/initializing the field but
-  is not checked by later direct writes. A declared `value: int` can currently be
-  replaced with a string.
-- Interface construction is exact, but a later direct assignment can add an
-  undeclared field or replace a field with a value of another type.
-- Internal privacy is keyed to the receiver's runtime class rather than the
-  member's declaring class. A subclass method can therefore reach an inherited
-  private method/getter/setter even though external access is rejected.
+- Interface construction is exact, and a later direct assignment can still add
+  an *undeclared* field. Replacing a *declared* field with a value of another
+  type is refused; see "A declared field type holds for the object's whole life".
 - Simple and nested field assignment evaluate the right-hand side before fully
   validating the receiver/path.
 

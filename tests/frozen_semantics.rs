@@ -72,6 +72,36 @@ fn pins(label: &str, source: &str) {
     }
 }
 
+/// Run a Serez program; panic unless it is **refused** with a runtime error.
+///
+/// The negative half of [`pins`], and it exists because a pin that only ever
+/// asserts "this completes" cannot express a rule that says "this must not". A
+/// user `throw` is not accepted as a refusal: the program has to fail the way
+/// the language fails, not the way a fixture chooses to.
+fn refuses(label: &str, source: &str) {
+    let mut parser = Parser::new(Lexer::new(source.to_string()));
+    parser.set_source(source.lines().map(str::to_string).collect());
+    let program = parser.parse_program();
+    assert!(
+        !parser.has_errors(),
+        "{label}: fixture must parse cleanly, got {:?}",
+        parser.take_errors()
+    );
+
+    let mut evaluator = Evaluator::new();
+    evaluator.set_source(source.lines().map(str::to_string).collect());
+    match evaluator.eval_program_outcome(&program) {
+        ProgramOutcome::RuntimeError(_) => {}
+        other => panic!(
+            "{label}: this program must be refused and it was not.\n\
+             Outcome: {other:?}\n\n\
+             Do not edit this test to match. Find the decision it belongs to in \
+             ROADMAP_STATE.md §7A, confirm the decision was actually taken, and say \
+             so in the commit."
+        ),
+    }
+}
+
 /// DEC-M7-003 — a `match` with no matching arm yields `null`, silently.
 ///
 /// `spec/control-flow.md` states this and calls it "a hazard, not a design
@@ -104,15 +134,43 @@ fn a_pattern_that_fails_to_evaluate_falls_through_silently() {
     );
 }
 
-/// DEC-M7-002 — privacy is keyed to the receiver's runtime class.
+/// **DEC-M7-002 — DECIDED: `private` is private to the declaring class.**
 ///
-/// A subclass method reaches an inherited private member; the same access from
-/// outside is refused. `spec/classes.md` records it under caveats "rather than
-/// silently describing it as stronger than the implementation".
+/// This entry used to pin the opposite. Privacy was keyed to the *receiver's*
+/// runtime class, so a subclass method reached an inherited private member while
+/// the same access from outside was refused, and `spec/classes.md` recorded that
+/// under caveats "rather than silently describing it as stronger than the
+/// implementation".
+///
+/// The pin did its job: it failed on the commit that changed the rule, which is
+/// what forced the decision to be stated rather than absorbed. It is kept here,
+/// inverted, because the *other* half of the rule is the half that can regress
+/// silently — a `Base` method reaching `Base`'s own private members has to keep
+/// working when it is called through a `Derived` instance, and nothing else
+/// asserts that.
 #[test]
-fn a_subclass_reaches_an_inherited_private_method() {
+fn private_is_keyed_to_the_declaring_class_and_not_the_receiver() {
+    // Still allowed, and this is the part that would break if the fix had been
+    // written as "compare against the parent" instead of "compare against the
+    // declaring class": `viaParent` is declared on `Base`, so it reaches
+    // `Base::hidden`, even though `this` is a `Derived`.
     pins(
-        "DEC-M7-002 private is reachable within the hierarchy",
+        "DEC-M7-002 a parent method reaches its own private through a subclass receiver",
+        "public class Base {\n\
+         \x20   public Base() { this.secret = 42; }\n\
+         \x20   private int hidden() { return this.secret; }\n\
+         \x20   public int viaParent() { return this.hidden(); }\n\
+         }\n\
+         public class Derived : Base {\n\
+         \x20   public Derived() { super(); }\n\
+         \x20   public int legit() { return this.viaParent(); }\n\
+         }\n\
+         assert(new Derived().legit() == 42, \"an accessible parent method still works\");\n",
+    );
+
+    // No longer allowed: the subclass reaching the private member itself.
+    refuses(
+        "DEC-M7-002 a subclass may not reach an inherited private",
         "public class Base {\n\
          \x20   public Base() { this.secret = 42; }\n\
          \x20   private int hidden() { return this.secret; }\n\
@@ -121,7 +179,7 @@ fn a_subclass_reaches_an_inherited_private_method() {
          \x20   public Derived() { super(); }\n\
          \x20   public int reach() { return this.hidden(); }\n\
          }\n\
-         assert(new Derived().reach() == 42, \"a subclass reaches an inherited private\");\n",
+         out new Derived().reach();\n",
     );
 }
 

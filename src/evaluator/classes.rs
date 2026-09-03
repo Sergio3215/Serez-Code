@@ -885,11 +885,14 @@ impl super::Evaluator {
             // Antes caía al despacho de abajo y lo invocaba con cero argumentos, así que
             // pasar un handler como dato (`onClick={this.handler}`) lo ejecutaba en cada
             // lectura y guardaba su valor de retorno en lugar de la función.
-            if let Some(m) = self.find_method(&class_name, method_name) {
-                if !m.is_public && self.executing_class.as_deref() != Some(class_name.as_str()) {
+            if let Some((m, declaring_class)) = self.find_method_owner(&class_name, method_name) {
+                // DEC-M7-002: keyed to the class that DECLARED the method, not
+                // to the receiver's runtime class.
+                if !m.is_public && self.executing_class.as_deref() != Some(declaring_class.as_str())
+                {
                     let message = format!(
-                        "Method '{}' is private and cannot be referenced externally",
-                        method_name
+                        "Method '{}' is private to '{}' and cannot be referenced from here",
+                        method_name, declaring_class
                     );
                     return self.rt_err_kind("TypeError", message);
                 }
@@ -899,7 +902,11 @@ impl super::Evaluator {
                     body: Rc::new(m.body.clone()),
                     captured: Rc::new(vec![("this".to_string(), obj_ref)]),
                     is_generator: false,
-                    bound_class: Some(class_name.clone()),
+                    // The body runs as its declaring class, so a `Parent` method
+                    // called through a `Derived` reference still reaches
+                    // `Parent`'s private members. Binding the receiver's class
+                    // here would take that away.
+                    bound_class: Some(declaring_class),
                 })));
             }
         }
@@ -973,11 +980,32 @@ impl super::Evaluator {
         class_name: &str,
         method_name: &str,
     ) -> Option<ast::ClassMethod> {
+        self.find_method_owner(class_name, method_name)
+            .map(|(m, _)| m)
+    }
+
+    /// The method, and **the class that declared it**.
+    ///
+    /// The second half is what `private` is keyed to (DEC-M7-002). Looking the
+    /// method up from the receiver's class and then asking whether the receiver's
+    /// class may see it answers a different question: a subclass method calling
+    /// an inherited private one found `executing_class == class_name` and was
+    /// allowed through, so `private` meant "not reachable from outside the
+    /// hierarchy" rather than what the word says.
+    ///
+    /// Also what `executing_class` should be set to while the body runs, for the
+    /// same reason in the other direction: a `Parent` method invoked on a
+    /// `Derived` instance must still reach `Parent`'s own private members.
+    pub(super) fn find_method_owner(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(ast::ClassMethod, String)> {
         let mut current = class_name.to_string();
         for _ in 0..self.class_registry.len() {
             let class = self.class_registry.get(&current)?;
             if let Some(m) = class.methods.get(method_name) {
-                return Some(m.clone());
+                return Some((m.clone(), current));
             }
             match &class.parent {
                 Some(parent) => current = parent.clone(),
@@ -985,6 +1013,41 @@ impl super::Evaluator {
             }
         }
         None
+    }
+
+    /// The class that declared this member, whatever shape it has.
+    ///
+    /// `find_method_owner` searches `methods`, and a getter or setter is in
+    /// neither — they have their own maps, which is why `find_getter` and
+    /// `find_setter` exist. A privacy check that only consulted `methods` would
+    /// therefore key a private *getter* to the receiver's class and leave half
+    /// of DEC-M7-002 unfixed, which is exactly the shape of gap the decision is
+    /// about. The member's own `is_getter` / `is_setter` says which map to walk.
+    pub(super) fn declaring_class_of(&self, class_name: &str, m: &ast::ClassMethod) -> String {
+        let mut current = class_name.to_string();
+        for _ in 0..self.class_registry.len() {
+            let Some(class) = self.class_registry.get(&current) else {
+                break;
+            };
+            let declared_here = if m.is_getter {
+                class.getters.contains_key(&m.name)
+            } else if m.is_setter {
+                class.setters.contains_key(&m.name)
+            } else {
+                class.methods.contains_key(&m.name)
+            };
+            if declared_here {
+                return current;
+            }
+            match &class.parent {
+                Some(parent) => current = parent.clone(),
+                None => break,
+            }
+        }
+        // Not in the registry at all — `invoke_method` is also reached with a
+        // synthesised receiver for static dispatch. Falling back to the name
+        // given is the behaviour that was there before DEC-M7-002.
+        class_name.to_string()
     }
 
     pub(super) fn find_getter(
@@ -1066,10 +1129,30 @@ impl super::Evaluator {
             return self.rt_err_kind("TypeError", message);
         }
 
-        if !m.is_public && self.executing_class.as_deref() != Some(class_name) {
+        // DEC-M7-002 — `private` is private to the class that DECLARES it.
+        //
+        // `class_name` is the *receiver's* class, which is what this used to
+        // compare against. On a `Derived` instance that made `executing_class`
+        // and `class_name` both `"Derived"` while calling a method `Base`
+        // declared private, so the call was allowed and `private` meant "not
+        // reachable from outside the hierarchy".
+        //
+        // The declaring class is the right key in both directions. It refuses a
+        // subclass reaching a parent's private member, and — because
+        // `executing_class` is set to it below rather than to the receiver's
+        // class — it still lets a `Base` method reach `Base`'s own private
+        // members when it was called through a `Derived` instance. A subclass
+        // calling an accessible parent method that internally uses the private
+        // one keeps working; that was never the thing being forbidden.
+        //
+        // Getters and setters go through here too and live in their own maps,
+        // so the lookup is by the member's shape rather than by name alone.
+        let declaring_class = self.declaring_class_of(class_name, m);
+
+        if !m.is_public && self.executing_class.as_deref() != Some(declaring_class.as_str()) {
             let message = format!(
-                "Method '{}' is private and cannot be called externally",
-                method_name
+                "Method '{}' is private to '{}' and cannot be called from here",
+                method_name, declaring_class
             );
             return self.rt_err_kind("TypeError", message);
         }
@@ -1078,9 +1161,16 @@ impl super::Evaluator {
             return error;
         }
 
+        // The body runs as the class that declared it, not as the receiver's
+        // class. This is the half of DEC-M7-002 that keeps working code working:
+        // a `Base` method reached through a `Derived` instance must still see
+        // `Base`'s own private members.
         let old_executing_class = self.executing_class.take();
-        self.executing_class = Some(class_name.to_string());
+        self.executing_class = Some(declaring_class);
 
+        // The frame keeps naming the *receiver's* class, because a stack trace
+        // answers "what was called on what", and that is the question a reader
+        // of the trace is asking.
         self.call_stack.push(CallFrame {
             name: format!("{}::{}", class_name, method_name),
             line: call_line,

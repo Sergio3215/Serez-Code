@@ -1,7 +1,7 @@
 # serez-diagnostic-render/1
 # stderr and exit code of every err_*.sz / sec_*.sz fixture.
 # name<TAB>exit<TAB>stderr-bytes<TAB>fnv1a64(stderr)
-# fixtures: 159
+# fixtures: 160
 err_arity.sz	1	205	52665bc115254ed6
 err_array_unknown_method.sz	1	59	1dc964c13a6629af
 err_bool_plus_int.sz	1	104	344fe7325b982d2a
@@ -59,7 +59,8 @@ err_parse_visibility_not_class.sz	1	220	073513552b4933d5
 err_parsedecimal_invalid.sz	1	65	4cd537d0cdb98f41
 err_parseint_invalid.sz	1	57	cc6ef30580ef29d2
 err_pop_empty.sz	1	52	de64b3683c5838f5
-err_private.sz	1	81	e3c26ea97ba342d0
+err_private.sz	1	90	d94df2c6f681cb6c
+err_private_inherited.sz	1	174	95e8bc6914db5c27
 err_random_unknown_method.sz	1	60	f28532a303c255bd
 err_return_toplevel.sz	1	94	dc3ce07a6ebb8b73
 err_return_type_mismatch.sz	1	75	6b26fe571e1a962a
@@ -136,8 +137,8 @@ sec_path_traversal_abs.sz	1	145	870dffda191fe74d
 sec_pop_empty_array.sz	1	52	de64b3683c5838f5
 sec_power_2_63.sz	1	56	928b5bed08abc619
 sec_power_overflow.sz	1	56	928b5bed08abc619
-sec_private_field_read.sz	1	80	6806b076a35f47b2
-sec_private_method_call.sz	1	89	a60e902d7f570452
+sec_private_field_read.sz	1	90	7a1be7c0dfef7543
+sec_private_method_call.sz	1	105	12285cc7be77ec32
 sec_return_toplevel.sz	1	94	dc3ce07a6ebb8b73
 sec_runtime_not_catchable.sz	1	95	9eccc771ffe31e44
 sec_sealed_inherit.sz	1	62	a09bd98ea7968649
