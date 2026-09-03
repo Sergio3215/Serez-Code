@@ -1140,6 +1140,34 @@ next frontend test would not have to. It did anyway — a note in a roadmap does
 reach the person opening a new file, so the constant now carries the explanation
 at its definition site, where a reader of that file will meet it.
 
+### 5.38 — the evaluator depends on the entry point that drives it — *architectural debt*, medium (found in M10.1)
+
+`evaluator -> szx -> run -> evaluator`. A three-module cycle, and §3.1 names all
+three edges without naming the cycle they form.
+
+The mechanism is `import`: `evaluator::stmt` re-enters the frontend to load a
+module, which means reaching `szx` for `.szx` files, which reaches `run` for
+dispatch, which constructs an `Evaluator`. The entry point and the thing it
+enters are mutually dependent.
+
+**Found by writing the checker wrong first.** `tests/architecture.rs` was written
+to detect *mutual pairs*, which found `run <-> szx` (§5.6, already on record) and
+reported the graph otherwise clean. A separate scan for longer cycles found this
+one. The pair-only version would have licensed exactly the claim M10 exists to
+test — that the dependency graph is understood.
+
+**The lesson generalises past this cycle.** A checker that can only see the shape
+you expected is a checker that confirms what you expected. It is the same failure
+as §5.34's fixtures passing for the wrong reason and §9N.2's pin proving arity
+instead of liveness: three instances now, in three different milestones, of a
+verification that agreed with its author. The checker now searches any cycle up
+to four modules.
+
+**Not fixed.** Breaking it means deciding where module loading belongs — a
+loader that neither `run` nor `evaluator` owns — which is an architectural change
+with no forced answer. Recorded, and both cycles are now in `KNOWN_CYCLES` where a
+third one would fail the build.
+
 ---
 
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
@@ -1226,6 +1254,8 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M7-005** | What a `match` pattern that fails to evaluate does | **OPEN** | nothing; should precede DEC-M7-003 |
 | **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **OPEN** | part of M9's treatment of `fetch` |
 | **DEC-M9-001** | What ceiling an unbounded read has, and what happens at it | **OPEN** | the ceiling; three call sites share one policy |
+| **DEC-M10-001** | Whether CI runs the ecosystem canary | **OPEN** | the canary's place in the release pipeline |
+| **DEC-M10-002** | Whether clippy is a gate | **OPEN** | nothing; the manual comparison works |
 
 ---
 
@@ -2230,6 +2260,100 @@ sites.
 
 **Blocked by this decision:** the ceiling itself. **Not blocked, and done:** the
 `OS.spawn` deadlock (§9P.1), which was a bug rather than a policy question.
+
+---
+
+### DEC-M10-001 — Should CI run the ecosystem canary?
+
+**Problem.** The ecosystem canary is the strongest compatibility signal this
+repository has: eight official packages, 56 tests, run against a freshly built
+`sz`. It runs **only locally**, because it needs the eight packages as sibling
+checkouts, and CI has none. `MATURITY_AUDIT.md` records this as **high, open**.
+
+Every milestone in this roadmap ran it by hand at each boundary. That worked and
+does not scale: it depends on whoever is working remembering, and on their machine
+having eight checkouts in the right place.
+
+**Current behaviour.** `.github/workflows/ci.yml` runs `fmt`, `check`, `clippy`
+and both Serez runners on `ubuntu-latest`, `windows-latest` and `macos-latest`.
+Cross-platform parity is genuinely covered. The canary is absent.
+
+**Measured evidence.** 8 packages, 56 tests, and the canary caught nothing during
+M0-M10 — every run was 8/8. That is weak evidence for its value and strong
+evidence that it is cheap: it is a signal that has not yet fired, not one that
+fires noisily.
+
+**Alternatives.** A: **clone the eight repositories in CI**, pinned to a ref —
+straightforward, and CI now depends on eight external repositories being
+reachable and green. B: **vendor a snapshot** of each package's tests into this
+repository — hermetic, and a snapshot drifts from what the packages actually ship.
+C: **a separate scheduled workflow** rather than per-commit — catches drift within
+a day without making every PR depend on eight repositories. D: **leave it local**
+and write down that it is a release gate rather than a CI gate.
+
+**Trade-offs.** A makes every PR's result depend on repositories this one does not
+control, which is how a compatibility signal turns into flakiness. C keeps the
+signal and moves the failure out of the PR path. D is honest and keeps the
+dependency on a person remembering.
+
+**Architectural impact.** None on the language. It is a question about what the
+release gate is, which is M10's subject.
+
+**Semantic impact.** None. **Compatibility.** None.
+
+**Impact by area.** CI: a new job or workflow. Ecosystem: the eight packages
+acquire a contract with this repository's CI — under A that contract is
+per-commit, and their breakage becomes this repository's red build.
+
+**Recommendation — a recommendation, not a decision.** **C**, scheduled daily,
+plus **D**'s documentation: the canary is a release gate and a daily signal, not a
+per-commit one. A compatibility signal that can be broken by someone else's
+repository should not be able to block a PR that did not touch the language.
+
+**Blocked by this decision:** the canary's place in the release pipeline.
+
+---
+
+### DEC-M10-002 — Should clippy be a gate?
+
+**Problem.** CI runs `cargo clippy --all-targets` **without** `-D warnings`, so
+its 180 warnings fail nothing. A new warning introduced by a change is invisible
+to CI. This roadmap worked around it by comparing the per-site list at every
+milestone boundary (§5.26) — a discipline that exists because the gate does not.
+
+**Current behaviour.** 180 distinct warning sites, stable across all of M0-M10;
+59 in `evaluator/ops.rs`, 26 in `namespaces_gui.rs`, 13 in `render.rs`. Every one
+is pre-existing.
+
+**Measured evidence.** The per-site list moved **twice** in eleven milestones:
+down one when M5 replaced a manual suffix strip, and up one when M9 added a hex
+literal with uneven digit groups — caught by the manual comparison, fixed, and
+back to 180. So the number of times a real regression was caught by the manual
+discipline is one, and it would have been caught by a gate instead.
+
+**Alternatives.** A: **`-D warnings` now** — fails until all 180 are fixed, which
+is a large mechanical change touching files no milestone has otherwise needed to
+open. B: **baseline them** with `#[allow]` at each site and turn the gate on —
+the gate works immediately and 180 `allow`s are their own debt. C: **`-D warnings`
+for new code only**, by comparing the per-site list in CI as this roadmap did by
+hand — no cleanup needed, and it needs a committed baseline file. D: **leave it**
+and keep the manual comparison.
+
+**Trade-offs.** A is the clean end state and the largest immediate cost. C is what
+this roadmap actually did, and automating it turns a discipline into a gate, which
+is the whole difference. B trades one kind of noise for another.
+
+**Architectural impact.** None. **Semantic impact.** None.
+
+**Impact by area.** CI: one step. Source: none under C or D, 180 sites under A.
+
+**Recommendation — a recommendation, not a decision.** **C**, then **A** when
+someone wants to spend the afternoon. C is the option that makes the property
+already being enforced by hand enforced by the build, which is exactly the
+transition M10 is about — and §5.26's snapshot command is already written down.
+
+**Blocked by this decision:** nothing; the manual comparison works and is
+documented.
 
 ---
 
@@ -4919,6 +5043,70 @@ because the rejection count shows the error paths were exercised.
     can it grow without limit, should it, what error, fatal or recoverable,
     specified, tested. `spec/limits.md` answers much of it already; a
     reconciliation of that document against the code was not done.
+
+---
+
+## 9R. M10 - Stable Language Platform
+
+Charter: *close the architecture — a comprehensible DAG, tooling that reuses real
+components, and a compatibility and release story.*
+
+### 9R.0 The audit: the description was right and unenforced
+
+§3.1 describes the module graph in prose: *"mostly a clean DAG"*, a table of the
+edges worth naming, and a sentence listing the inversions that are absent — no
+`parser -> evaluator`, no `ast -> gui`, no `lexer -> package_manager`.
+
+Checked: **the sentence is true.** None of those edges exists.
+
+It is also unenforced. An architecture description a compiler never reads
+describes the architecture someone *intended*, and it drifts one convenient `use
+crate::` at a time. That is M10's actual problem: not that the shape is wrong, but
+that nothing holds it.
+
+### 9R.1 - M10.1: the DAG becomes a gate
+
+`tests/architecture.rs` reads `src/` and asserts what §3.1 claims:
+
+  * **A1** — no forbidden edge. Ten inversions, each with *what it would mean*
+    written beside it, because a rule whose reason is not recorded gets deleted by
+    whoever first finds it inconvenient.
+  * **A2** — no cycle except the ones on record, with `KNOWN_CYCLES` checked for
+    staleness in both directions, so a fixed cycle cannot stay recorded as
+    permanent.
+
+**Writing it wrong first is what made it useful.** The first version looked for
+mutual pairs, found `run <-> szx` (§5.6, on record) and reported the graph
+otherwise clean. A separate scan for longer cycles found
+`evaluator -> szx -> run -> evaluator` — three edges §3.1 names individually
+without naming the cycle they form. That is **§5.38**, and the pair-only checker
+would have licensed precisely the claim this milestone exists to test.
+
+Both cycles are now on record and a third would fail the build.
+
+### 9R.2 What M10 checked and did not change
+
+**Cross-platform parity: covered.** `.github/workflows/ci.yml` runs `fmt`,
+`check`, `clippy` and **both** Serez runners on `ubuntu-latest`,
+`windows-latest` and `macos-latest`. §6's concern here is met.
+
+**Two CI gaps confirmed, both registered rather than closed:** the ecosystem
+canary does not run in CI (**DEC-M10-001**) and clippy is not a gate
+(**DEC-M10-002**). Both are decisions about what a release gate *is*, and both
+have a recommendation with the measurement behind it — including the honest one
+for clippy, that the manual per-site discipline caught exactly one real regression
+in eleven milestones and a gate would have caught it instead.
+
+**Tooling reuse: already true, and measured in earlier milestones.** M5.4 found
+the LSP constructs the same `TypeChecker` the CLI does, so type findings cannot
+diverge. M4 found the opposite for symbols — the LSP re-lexes and discards the
+parse tree — which is **DEC-M4-004**. So the charter's *"LSP shares frontend"* is
+half true, and which half is known.
+
+**Not addressed:** the LLVM backend's parity is still unproven and it is still
+absent from the CLI (`MATURITY_AUDIT.md`, high); there is still no benchmark
+regression budget; §5.18's double compilation of the frontend stands; and §5.35's
+`serez-ui` defect is unfixed in a repository this roadmap does not own.
 
 ---
 
