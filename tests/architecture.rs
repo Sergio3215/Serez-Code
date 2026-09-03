@@ -223,6 +223,51 @@ fn graph() -> BTreeMap<String, BTreeMap<String, String>> {
     edges
 }
 
+/// §5.18 — one crate root for the frontend, not two.
+///
+/// `src/lsp_main.rs` used to open with `mod ast; mod diagnostic; mod lexer; mod
+/// lsp; mod parser; mod render; mod semantic; mod span; mod token; mod
+/// type_checker;`. Ten modules, declared a second time, so the `sz-lsp` binary
+/// compiled its own copy of the frontend instead of depending on the library the
+/// `sz` binary uses. The two copies were the same source and therefore agreed by
+/// luck: every `pub`/`pub(crate)` decision in the frontend had to be right under
+/// two different module roots at once, and nothing but the build enforced that.
+///
+/// The measurement that named the size of it: `cargo test --bin sz-lsp` ran 73
+/// tests, and 42 of them were `lexer::`, `render::`, `span::`, `diagnostic::` and
+/// `semantic::` tests with the same names as tests in the library — the same
+/// assertions, compiled twice, run twice, against two builds of one file.
+///
+/// This asserts the fix rather than trusting it: the LSP binary declares no
+/// modules at all.
+#[test]
+fn the_lsp_binary_declares_no_modules_of_its_own() {
+    let path = crate_root().join("src").join("lsp_main.rs");
+    let text = std::fs::read_to_string(&path).expect("src/lsp_main.rs must exist");
+
+    let declarations: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("mod ") || line.starts_with("pub mod "))
+        .collect();
+
+    assert!(
+        declarations.is_empty(),
+        "src/lsp_main.rs declares {} module(s) of its own:
+  {}
+
+         Every one of them is a second compilation of a file the library already          owns (§5.18). The binary should reach the frontend through          `serez_code::`, the way `src/main.rs` does.",
+        declarations.len(),
+        declarations.join("
+  ")
+    );
+
+    assert!(
+        text.contains("serez_code"),
+        "src/lsp_main.rs declares no modules and does not name `serez_code`          either, so it cannot be reaching the shared frontend at all. If the          binary was restructured, this test needs to be told how."
+    );
+}
+
 #[test]
 fn no_layer_depends_on_one_that_should_come_after_it() {
     let edges = graph();

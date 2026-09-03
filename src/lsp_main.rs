@@ -1,25 +1,20 @@
 // sz-lsp — Language Server Protocol server for serez-code (.sz).
 //
-// A second binary target that reuses the interpreter's frontend modules
-// (lexer/parser/type_checker) directly; the `sz` interpreter binary is not
-// affected. Editors launch it with stdio transport:
+// A second binary target over the same library the `sz` interpreter uses. It
+// declares no modules of its own: the server and everything under it live in
+// `serez_code::lsp`, so the lexer, parser, semantic layer and type checker an
+// editor sees are the same code, compiled once, that runs a program.
+//
+// It used to declare `mod ast; mod lexer; mod parser; …` and compile ten
+// frontend modules into a second crate — ROADMAP_STATE.md §5.18. Editors launch
+// it with stdio transport:
 //
 //   sz-lsp
 //
 // Capabilities: live diagnostics (parser + type checker), completion
 // (keywords, namespaces + native methods, document symbols), hover,
 // go-to-definition and document symbols.
-#![allow(dead_code)]
-mod ast;
-mod diagnostic;
-mod lexer;
-mod lsp;
-mod parser;
-mod render;
-mod semantic;
-mod span;
-mod token;
-mod type_checker;
+use serez_code::lsp;
 
 fn main() {
     // Anything a server logs must go to stderr — stdout carries the protocol.

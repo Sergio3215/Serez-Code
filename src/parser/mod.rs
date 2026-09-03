@@ -46,21 +46,17 @@ mod variables;
 
 use crate::span::Span;
 use depth::DepthGuard;
-#[allow(unused_imports)]
 pub use expressions::{Precedence, token_precedence};
 
 // Re-exported so `serez_code::parser::MAX_PARSE_DEPTH` keeps meaning what it
 // meant when the constant lived in this file: `tests/frontend_robustness.rs`
 // and `tests/parser_facade.rs` both name that path.
 //
-// The `allow` is not cosmetic. `src/lsp_main.rs` declares `mod parser;` of its
-// own, so this file is compiled a second time as part of the `sz-lsp` binary —
-// where `parser` is a private module of a binary crate and the re-export really
-// does reach nobody. One target needs it and the other cannot use it; see
-// ROADMAP_STATE.md §5.18.
-#[allow(unused_imports)]
+// The `#[allow(unused_imports)]` that used to be here is gone with §5.18. It
+// existed because `src/lsp_main.rs` declared a `mod parser;` of its own, so this
+// file was compiled a second time into the `sz-lsp` binary, where the re-export
+// reached nobody. There is one `parser` module now, in one crate.
 pub use depth::{MAX_PARSE_DEPTH, SZ_PARSE_DEPTH_EXCEEDED};
-#[allow(unused_imports)]
 pub use diagnostics::{ParseError, SZ_PARSE_ERROR};
 
 use crate::ast::*;

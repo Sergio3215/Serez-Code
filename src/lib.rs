@@ -17,6 +17,7 @@ pub mod diagnostic;
 pub mod evaluator;
 pub mod handles;
 pub mod lexer;
+pub mod lsp;
 pub mod modules;
 pub mod package_manager;
 pub mod parser;
