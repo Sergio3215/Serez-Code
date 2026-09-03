@@ -5,7 +5,77 @@ Order: most recent to oldest.
 
 ---
 
-## [Unreleased] — maturity hardening
+## [Unreleased]
+
+Everything below landed **after** `v10.0.0` (`d8662c2`, 2026-08-31). The
+boundary is the tag, not a memory of it: `CHANGELOG.md` was byte-identical at
+`d8662c2` and at the time this section was opened, so the whole of what was
+filed under `[Unreleased] — maturity hardening` is the 10.0.0 release and is now
+under its own heading below.
+
+Most of the work in this window is the M0–M10 maturity roadmap — a parser split
+into fourteen files, spans on every AST node, five diagnostic types collapsed to
+one, a semantic layer, and ten fields off the evaluator — and it is deliberately
+**not** listed here, because none of it changes what a program does. What
+follows is only what a user can observe. Each entry names the commit that
+carries the evidence.
+
+### The pipeline gains a semantic phase, and the reserved-name rule moves into it
+
+- `9d91f3c`. The parser performed exactly one semantic validation — rejecting a
+  class named after a runtime namespace. It now runs in a phase of its own,
+  between parsing and type checking, and the parser has no opinion about the
+  program at all.
+- **What changes for a user.** The phase word and the code: `PARSER ERROR
+  [SZ2000]` becomes `SEMANTIC ERROR [SZ8000]`. The caret moves from the name to
+  the declaration. And a rejected class with a body used to emit **three**
+  diagnostics — the real one plus two invented `Unexpected token '}'`, because
+  the parser abandoned a half-built declaration and re-parsed its body as
+  expressions. It now emits one.
+- **What does not change.** The set of accepted programs, and the exit code — a
+  program rejected before is rejected now, still with exit 1.
+- A program rejected by the semantic phase is no longer type-checked, so
+  findings that could only be noise are not printed.
+
+### Nine rejected programs stop failing without saying why
+
+- `e77aec0`. Nine grammar sites reported by hand — `had_error.set(true)` plus a
+  bare `eprintln!` — instead of going through `parser_error`. Nothing reached
+  the error list, so `take_errors()` came back **empty** for a program the parser
+  had just rejected: the LSP underlined nothing, and the line printed carried no
+  code, no file, no line and no column, under a `PARSE ERROR` prefix that appears
+  nowhere in the spec.
+- All ten sites (a tenth turned up in `parse_interpolated_string` while fixing
+  the nine) now report `PARSER ERROR [SZ2000] [file line:col]` with a caret, as
+  `spec/errors.md` already required.
+- The exit code does not move: `has_errors()` was already true, so all nine
+  already exited 1.
+- The nine paths had **zero** fixture coverage, which is why the defect survived
+  to be found by reading the code. Nine fixtures were added, one per site.
+
+### `OS.spawn` no longer hangs when the child fills the stderr pipe
+
+- `30e02e4`. `stderr` was read after the child exited, so a child that filled the
+  pipe blocked on the write while the parent blocked on the wait. A program that
+  used to hang forever now completes.
+- Every other path is unchanged: the harvest shape, the `[pid, code, errMsg]`
+  triple, and the message content for children that do not fill the pipe.
+
+### The type checker stops warning about programs the runtime accepts
+
+Three fixes, all **stderr only** — no change to which programs run, to any exit
+code, or to any diagnostic on a failing program.
+
+- `83dfef5` — three false positives removed. The checker was reporting programs
+  the runtime accepts, and `spec/types.md` agreed with the runtime.
+- `b17cedd` — the checker sees through `export`. Passes 1 and 2 did not unwrap
+  `Statement::Export`, so an exported declaration was invisible to them and its
+  body was never checked.
+- `df6a0b8` — two findings that reported no position now carry one.
+
+---
+
+## [10.0.0] — 2026-08-31 — maturity hardening
 
 ### GUI handles stop being hand-rolled arithmetic, and an unchecked index goes with them
 
