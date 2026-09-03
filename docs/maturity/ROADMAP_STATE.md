@@ -17,10 +17,11 @@ Read before starting any milestone, in this order:
 
 | | |
 |---|---|
-| **Current milestone** | **M9 — Robustness & Security Hardened.** M8 PARTIAL (§9O), M7 PARTIAL (§9M), M6 PARTIAL (§9K), M5 COMPLETE (§9I), M4 PARTIAL (§9G). |
+| **Current milestone** | **M10 — Stable Language Platform.** M9 PARTIAL (§9Q), M8 PARTIAL (§9O), M7 PARTIAL (§9M), M6 PARTIAL (§9K), M5 COMPLETE (§9I), M4 PARTIAL (§9G). |
 | Goals done in M4 | **M4.0** audit (§9F.0) · **M4.1** the divergence, measured (§9F.2) · **M4.2–M4.3** the symbol layer, corpus-validated (§9F.3) · **M4.7.1–M4.7.2** the scope model and the measurement (§9F.6) · **audit** (§9G) |
 | Goals done in M3 | **M3.0** audit · **M3.1** the rendering net · **M3.2–M3.3** the model, and the frontend onto it · **M3.4–M3.5** checker and runtime · **M3.6** one renderer (D5) · **M3.7** the nine silent errors (**behaviour change**) · **M3.8** ordering (D6) |
 | Last completed milestone | **M5 — Type System Stable** (§9I). M4 and M6 are **PARTIAL** by decision, not by omission |
+| Goals done in M9 | **M9.0** the audit (§9P.0) · **M9.1** the `OS.spawn` deadlock, verified and fixed (§9P.1) · **M9.2** frontend property testing (§9P.2) · **audit** (§9Q) |
 | Goals done in M8 | **M8.0** the audit (§9N.0) · **M8.1** scheme + checker (§9N.1) · **M8.2** `spec/memory.md`, 15 rules proved (§9N.2) · **audit** (§9O) |
 | Goals done in M7 | **M7.0** the spec sweep (§9L.0) · **M7.1** six decisions registered · **M7.2** `frozen_semantics.rs` (§9L.2) · **audit** (§9M) |
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
@@ -31,7 +32,7 @@ Read before starting any milestone, in this order:
 | HEAD | `9ca4d22` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — M8 closed PARTIAL (§9O) |
+| Last state update | 2026-09-03 — M9 closed PARTIAL (§9Q) |
 
 Milestone ledger:
 
@@ -46,8 +47,8 @@ Milestone ledger:
 | M6 — Runtime Molecular | **PARTIAL** (2026-09-03, §9K) — `Evaluator` 48 fields -> 38; dispatch still on the evaluator, held by DEC-M6-001 |
 | M7 — Semantics Frozen | **PARTIAL** (2026-09-03, §9M) — everything settled is specified; 6 decisions open and pinned |
 | M8 — Conformance Complete | **PARTIAL** (2026-09-03, §9O) — scheme + checker complete and enforced; 1 area of 30 covered |
-| M9 — Robustness & Security Hardened | **IN PROGRESS** (partially pre-empted; see §6) |
-| M10 — Stable Language Platform | NOT STARTED |
+| M9 — Robustness & Security Hardened | **PARTIAL** (2026-09-03, §9Q) — frontend property-tested; runtime not; `OS.spawn` deadlock fixed |
+| M10 — Stable Language Platform | **IN PROGRESS** |
 
 ---
 
@@ -4921,6 +4922,99 @@ because the rejection count shows the error paths were exercised.
 
 ---
 
+## 9Q. M9 MILESTONE AUDIT
+
+Charter: *hostile or unexpected input must not be able to destroy the language's
+guarantees.*
+
+### Definition of Done, item by item
+
+The plan's DoD: *untrusted Serez input should not produce a panic, crash or
+corruption outside conditions explicitly classified as fatal host failure.*
+
+| Item | Status | Evidence |
+|---|---|---|
+| Fuzzing / property testing exists | **met, for the frontend** | 1,021 generated inputs, 3 properties, 688 rejections |
+| The frontend cannot be crashed by input | **met, as far as measured** | P1 holds across every generator |
+| Diagnostics stay honest under hostile input | **met** | P2, which is what M2's spans are worth on input M2 never saw |
+| The runtime cannot be crashed by input | **NOT met** | no property testing beyond the frontend |
+| Resource boundaries audited per resource | **NOT met** | `spec/limits.md` answers much of it; not reconciled against the code |
+| Known security findings addressed | **partially** | 1 of 4 fixed, 2 registered, 1 neither |
+
+**Three and a half of six. M9 is PARTIAL.**
+
+### 1. The one thing M9 proves, and its limit
+
+It proves the **frontend** holds three properties on input nobody wrote — and the
+rejection count is what makes that a real result rather than a vacuous one. 688 of
+1,021 inputs were rejected and 8,157 diagnostics were produced, so the error paths
+the properties are about were genuinely exercised.
+
+What it does not prove is anything about the evaluator, the package manager's ZIP
+extraction, or the JSON and binary boundaries. The frontend went first because it
+is the only surface that takes arbitrary input **by design**; the others take it
+by accident, which is a weaker reason to start there and not a reason to stop.
+
+### 2. What the external audit was worth
+
+`audit/2026-09-01_14-52-03.md` was written by another session and sat untouched
+until M9. Treating it as evidence to verify rather than conclusions to accept was
+the right call in both directions:
+
+  * its `OS.spawn` finding was **correct**, and the verification produced the
+    before/after measurement that makes the fix's regression test meaningful;
+  * its remaining findings are real but are **policy**, not defects — and folding
+    them into a hardening pass would have taken three decisions silently.
+
+That split — one bug fixed, two registered, one left explicitly unaddressed — is
+M9's actual output, and it is more honest than a milestone that "addressed the
+audit".
+
+### 3. The one item neither fixed nor registered
+
+The GUI's image-decode path (`namespaces_gui.rs`, `render.rs`) does `i32`
+arithmetic such as `req_w * nh` before reserving, which can overflow. It is
+recorded here rather than registered because a decision record with no measured
+evidence is a worse artefact than an honest gap: verifying it needs a probe
+against a real decode path, and this session did not build one. **Assigned to
+whoever continues M9**, with the audit entry as the starting point.
+
+### 4. Semantic drift
+
+One deliberate observable change, declared: a program whose child fills the stderr
+pipe used to hang and now completes. Every other path is unchanged — the harvest
+shape, the `[pid, code, errMsg]` triple, and the message content for children that
+do not fill the pipe. No manifest row moved except for the new test fixture.
+
+### 5. Gates at close
+
+fmt **PASS** · check **PASS** · clippy **PASS**, per-site **180** unchanged ·
+`cargo test --all-targets` **444 / 0** · both Serez runners **501 / 0 / 0**,
+categories identical · ecosystem **8 / 8**.
+
+### 6. What M9 hands forward
+
+| To | What |
+|---|---|
+| Whoever continues M9 | property testing beyond the frontend; the GUI overflow probe; a per-resource reconciliation of `spec/limits.md` against the code |
+| The decision owner | **DEC-M9-001** — one ceiling policy for three unbounded reads. **DEC-M7-006** is the other half of the `fetch` question |
+| M8 | `spec/limits.md` is the document most worth identifiers next, and M9 is why |
+
+### 7. Commits
+
+`30e02e4`: `a child that fills the stderr pipe no longer hangs forever, and
+the frontend gets property tests`.
+
+---
+
+## MILESTONE STATUS: **PARTIAL**
+
+The frontend is measurably robust and the runtime is untested against generated
+input. One real bug was found, verified and fixed; two policy questions were
+registered rather than answered; one gap is named rather than papered over.
+
+---
+
 ## 9O. M8 MILESTONE AUDIT
 
 Charter: *demonstrate automatically that the implementation satisfies the
@@ -5352,6 +5446,8 @@ and each is registered with evidence rather than absorbed.
 | M6.3 | `be7fb96` | `security, task context and dispatch caches stop being seven fields` |
 | **M6 checkpoint** | `c946d36` | `M6 closes PARTIAL — the state moved, the behaviour did not` |
 | **M7 checkpoint** | `acd6054` | `M7 closes PARTIAL — the documentation was ahead of the decisions` |
+| **M8 checkpoint** | `b1387ad` | `M8 closes PARTIAL — the machinery is complete, the coverage is one area` |
+| M9.1-M9.2 | `30e02e4` | `a child that fills the stderr pipe no longer hangs forever, and the frontend gets property tests` — **behaviour change**, a hang becomes a completion |
 | M8.1-M8.2 | `1535a6e` | `normative identifiers, a checker that enforces them, and the first area` |
 | M7.1-M7.2 | `2cc1d46` | `pin six undecided behaviours so none of them moves by accident` |
 | M6.4 | `139911d` | `two services stop being data and start answering questions` |
