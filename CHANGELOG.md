@@ -13,12 +13,102 @@ boundary is the tag, not a memory of it: `CHANGELOG.md` was byte-identical at
 filed under `[Unreleased] — maturity hardening` is the 10.0.0 release and is now
 under its own heading below.
 
-Most of the work in this window is the M0–M10 maturity roadmap — a parser split
-into fourteen files, spans on every AST node, five diagnostic types collapsed to
-one, a semantic layer, and ten fields off the evaluator — and it is deliberately
-**not** listed here, because none of it changes what a program does. What
-follows is only what a user can observe. Each entry names the commit that
-carries the evidence.
+Most of the work in this window is internal — the M0–M10 maturity roadmap (a
+parser split into fourteen files, spans on every AST node, five diagnostic types
+collapsed to one, a semantic layer, ten fields off the evaluator) and the
+findings pass after it (the LSP consuming the shared frontend instead of
+recompiling it, module loading leaving the evaluator↔entry-point cycle,
+`EvalResult` splitting into execution flow and runtime failure). None of that
+changes what a program does and none of it is listed here.
+
+What follows is only what a user can observe, and each entry names the commit
+that carries the evidence. **Four of them are breaking** and are marked as such;
+each was measured against the corpus and all eight official packages before it
+landed, and the count is in the entry.
+
+### BREAKING — `fetch` is closed under lockdown, and opened only by an allowlist
+
+- `649ba49`. Lockdown is the profile for source you did not write — `sz --eval`,
+  the playground. It closed `File`, `import`, URL import and Autodiff's weight
+  files and left `fetch` open, on the reasoning that the network was a separate
+  question. The request goes out from the host's network position, which is the
+  usual SSRF shape: cloud metadata endpoints, services bound to localhost, the
+  host as an open relay.
+- A `fetch` under lockdown is now refused with fatal `PermissionError`
+  (`SZ6001`) before any request leaves the process, and `try/catch` cannot
+  consume it.
+- It is opened by an allowlist of **hostnames** that the *embedder* sets and a
+  program cannot: `sz --eval "…" --allow-fetch a.example,b.example`,
+  `run::RunOpts::fetch_allowlist`, or `Evaluator::allow_fetch_hosts`.
+- Matching is case-insensitive and exact. No wildcards, no suffix matching, no
+  port matching — `sub.allowed.test` is not `allowed.test`. Userinfo does not
+  disguise a host: `http://allowed.test@evil.test/` is `evil.test`. A URL whose
+  host cannot be read is refused rather than guessed at.
+- **Redirects are checked at every hop.** `allowed.example → 302 →
+  forbidden.internal` is refused and names the host it stopped at; a redirect
+  that stays on an allowed host still follows. A `Location` the runtime will not
+  resolve — protocol-relative, path-relative, a different scheme — is refused.
+- **`sz file.sz` is unaffected.** Outside lockdown nothing is consulted and
+  redirects behave exactly as before.
+
+### BREAKING — a declared field type is a constraint for the object's whole life
+
+- `89395b3`. `timeout: int = 30` looked like a typed field and was a default with
+  an annotation nothing checked again: `c.timeout = "str"` was accepted from
+  inside the class and outside it, and interface fields were checked when the
+  instance was built and never after.
+- Every write is now validated first. An off-type write is a catchable
+  `TypeError` (`SZ4002`) and the field keeps the value it had.
+- The rule is the runtime's own matching table, not a comparison of type names,
+  so nullable, `[T]`, `array`, `any`, enum variants and `DateField`-satisfies-
+  `int` behave at a field exactly as at a parameter. A declared class type still
+  matches exactly and not a subclass — that is a separate open question.
+- Inherited fields count: a parent's `count: int` constrains a write made
+  through a subclass. Interface fields are checked on every write too.
+- **Not constrained**, on purpose: a field declared with a default and no
+  annotation (`bare = 2`), and a field created by assignment (`c.brandNew = 1`),
+  which remains a documented idiom.
+- Sweep before the change: 2 affected sites in 1,070 corpus and ecosystem files,
+  both of them the fixtures documenting the old behaviour. No official package
+  declares a typed field.
+
+### BREAKING — `private` is private to the class that declares it
+
+- `5f78f4e`. Privacy was keyed to the **receiver's runtime class**, so a subclass
+  method reached an inherited private member while the same access from outside
+  was refused. `private` meant "not reachable from outside the hierarchy".
+- A `Derived` method using `Base`'s private member is now a catchable
+  `TypeError` (`SZ4002`).
+- **Inheritance does not narrow it either.** A `Base` method still reaches
+  `Base`'s own private members when it is called through a `Derived` instance, so
+  a subclass calling an accessible parent method that uses the private one keeps
+  working. Private getters and setters follow the same rule.
+- The message changed with it: `Method 'm' is private and cannot be called
+  externally` becomes `Method 'm' is private to 'Base' and cannot be called from
+  here`. "Externally" is no longer what the rule refuses. Code, kind,
+  catchability and exit code are unchanged.
+- Sweep: 27 private declarations in the corpus, 0 in the ecosystem, and no file
+  reaching a parent's private from a subclass.
+
+### BREAKING — a duplicate declaration, and an unresolvable parent class, are rejected
+
+- `d20b64d`. Two silent gaps, both now fatal `SZ8000` from the semantic phase.
+- **A duplicate declaration.** `class A {…} class A {…}` was accepted with the
+  second silently replacing the first, and the same held for `fn`. The second
+  declaration is reported, naming the first one's line, and every collision in a
+  file is reported. Shadowing between different scopes is unaffected; a `class`
+  and an `interface` of one name are still both accepted.
+- **An unresolvable parent.** `class Child : Missing {…}` ran to completion as
+  long as nothing constructed it, so `--check` could not tell you that you
+  inherit from something that does not exist.
+- **"Not declared in this file" is not "does not exist".** A parent declared
+  anywhere at the top level resolves in either order; one in an enclosing scope
+  resolves; `Error`, `Set` and `Tensor` resolve; and **a file containing any
+  `import` is never reported against**, because a module may legitimately supply
+  the name. An `import` that in fact fails to supply it is not caught.
+- Sweep: 0 duplicate declarations and 0 unresolvable top-level parents across
+  1,070 corpus and ecosystem files — the one exception being the fixture that
+  documents the defect, which already exited 1.
 
 ### The pipeline gains a semantic phase, and the reserved-name rule moves into it
 
