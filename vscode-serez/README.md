@@ -39,6 +39,15 @@ Syntax highlighting, formatter, **language server client** and a dedicated **col
 
 Files with `.sz`, `.szx` or `.szs` are detected automatically and formatted on save.
 
+The formatter is an **indenter**: it sets the indentation of each line, removes
+trailing whitespace and normalises blank lines. It does not change spacing
+inside a line, does not wrap, and never edits the contents of a string or a
+comment. It honours the editor's `tabSize` and `insertSpaces`, and preserves
+the file's existing line endings.
+
+[`FORMATTER.md`](FORMATTER.md) is the full contract, including what happens to
+incomplete code and the two open decisions. Run its test suite with `npm test`.
+
 ## Installation
 
 ### Open VSX / Antigravity IDE
