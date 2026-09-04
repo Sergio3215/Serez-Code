@@ -100,20 +100,38 @@ def normalise(text: str) -> str:
     return _WHITESPACE.sub(" ", text).strip()
 
 
+# How much of a warning's source text its identity is taken from.
+#
+# A whole span is too much for an item-level lint. `derivable_impls` points at an
+# entire `impl Default for RunOpts { ... }`, so **adding a field to the struct**
+# changed the fingerprint and the gate reported a years-old warning as new. That
+# is the noise this design set out not to create, and it was caught by the gate
+# firing on the very next commit.
+#
+# A span's first line is enough to tell warnings apart and stable against edits
+# inside the item: `impl Default for RunOpts {` survives a new field and still
+# differs from `impl Default for Anything Else`. For the single-line spans most
+# lints produce — `return Ok(self.false_ref)` — it is the whole thing, so the
+# discrimination the gate exists for is untouched.
+FINGERPRINT_CHARS = 120
+
+
 def highlighted(span: dict) -> str:
     """The source the warning points at, from clippy's own rendering data.
 
     A span carries the lines it covers with the columns highlighted in each.
     Taking the highlighted part rather than the whole line keeps a warning's
-    identity from depending on an unrelated edit elsewhere on the same line.
+    identity from depending on an unrelated edit elsewhere on the same line, and
+    taking only the first line keeps it from depending on the item's body.
     """
-    pieces = []
     for line in span.get("text") or []:
         text = line.get("text", "")
         start = max(int(line.get("highlight_start", 1)) - 1, 0)
         end = int(line.get("highlight_end", len(text) + 1)) - 1
-        pieces.append(text[start:end])
-    return normalise(" ".join(pieces))
+        piece = normalise(text[start:end])
+        if piece:
+            return piece[:FINGERPRINT_CHARS]
+    return ""
 
 
 def fingerprint(lint: str, path: str, snippet: str, message: str) -> str:
@@ -281,8 +299,14 @@ def check(current: Counter, baseline: Counter, excerpts: dict | None = None) -> 
 # ── the gate's own test ──────────────────────────────────────────────────────
 
 
-def _warning(lint: str, path: str, line: int, snippet: str, message: str) -> dict:
-    """One clippy JSON warning, as the real `--message-format=json` emits it."""
+def _warning(lint: str, path: str, line: int, snippet, message: str) -> dict:
+    """One clippy JSON warning, as the real `--message-format=json` emits it.
+
+    `snippet` may be a string or a list of lines. A list models an item-level
+    lint, whose span covers a whole `impl` or `fn` — the case that showed the
+    fingerprint had to stop at the first line.
+    """
+    lines = [snippet] if isinstance(snippet, str) else list(snippet)
     return {
         "level": "warning",
         "code": {"code": lint},
@@ -295,10 +319,11 @@ def _warning(lint: str, path: str, line: int, snippet: str, message: str) -> dic
                 "column_start": 13,
                 "text": [
                     {
-                        "text": " " * 12 + snippet,
+                        "text": " " * 12 + text,
                         "highlight_start": 13,
-                        "highlight_end": 13 + len(snippet),
+                        "highlight_end": 13 + len(text),
                     }
+                    for text in lines
                 ],
             }
         ],
@@ -368,6 +393,44 @@ def self_test() -> int:
         "line numbers are not part of the identity, so an unrelated edit above "
         "these lines is invisible",
     )
+
+    # And a warning whose *item* changed while the warning did not. This is the
+    # near-miss that shaped the fingerprint: `derivable_impls` spans a whole
+    # `impl` block, so adding a field to the struct rewrote the span and the gate
+    # called a long-standing warning new.
+    ITEM = "clippy::derivable_impls"
+    RUN = "src/run.rs"
+    DERIVABLE = "this `impl` can be derived"
+    before = _warning(
+        ITEM,
+        RUN,
+        61,
+        ["impl Default for RunOpts {", "fn default() -> Self {", "permissions: vec![],", "}", "}"],
+        DERIVABLE,
+    )
+    after = _warning(
+        ITEM,
+        RUN,
+        61,
+        [
+            "impl Default for RunOpts {",
+            "fn default() -> Self {",
+            "permissions: vec![],",
+            "resolve_imports: false,",
+            "}",
+            "}",
+        ],
+        DERIVABLE,
+    )
+    item_baseline, _ = sites_from_messages([before])
+    current, excerpts = sites_from_messages([after])
+    got = check(current, item_baseline, excerpts)
+    verdict = "FAIL" if got else "PASS"
+    ok = got == 0
+    print(f"  {'6. an item edited around an unchanged warning':<44} {verdict}   (want PASS)  {'ok' if ok else 'WRONG'}")
+    print("     adding a struct field must not re-report the impl's own lint\n")
+    if not ok:
+        failures.append("6. an item edited around an unchanged warning")
 
     if failures:
         print(f"SELF-TEST FAILED at: {', '.join(failures)}")

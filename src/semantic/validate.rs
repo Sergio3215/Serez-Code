@@ -104,6 +104,29 @@ fn reserved(name: &str) -> bool {
 /// A caller treats a non-empty result as **fatal**: the program does not run. That
 /// is the distinction from `TypeChecker`, whose findings are advisory.
 pub fn validate(program: &Program) -> Vec<Diagnostic> {
+    validate_in(program, None, None)
+}
+
+/// The same rules, with the entry file's location so `import` can be followed.
+///
+/// Without a directory, a file containing any `import` has its names left
+/// unchecked — a genuinely undefined name escapes to a runtime error, after
+/// whatever ran before it has already run. With one, the imported modules are
+/// read and their contributed names are known, so a name is *local*, *imported*
+/// or *unresolved* rather than "there were imports, so never mind". §5.50.
+///
+/// `current_dir` is the entry file's parent and `entry` is the file itself,
+/// which is what `Evaluator::set_current_file` gives the runtime. Passing the
+/// same pair makes the two resolve the same files.
+///
+/// A caller that cannot read the filesystem — a locked-down run, an unsaved
+/// editor buffer — passes `None` and gets exactly the behaviour this phase had
+/// before: conclusive for a file with no imports, silent for one with any.
+pub fn validate_in(
+    program: &Program,
+    current_dir: Option<&std::path::Path>,
+    entry: Option<&std::path::Path>,
+) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     let mut declared: HashMap<(DeclKind, String), Span> = HashMap::new();
     for statement in &program.statements {
@@ -112,7 +135,11 @@ pub fn validate(program: &Program) -> Vec<Diagnostic> {
 
     // One lexical walk, shared. Both name rules ask `semantic::scopes` the same
     // question and the walk is the expensive part of this phase.
-    let scopes = scopes::analyze(program);
+    let mut scopes = scopes::analyze(program);
+    if let Some(dir) = current_dir {
+        let imported = crate::semantic::imports::resolve(&scopes.import_specs, Some(dir), entry);
+        scopes.resolve(&imported);
+    }
     check_inheritance(program, &scopes, &mut findings);
     check_names(&scopes, &mut findings);
 

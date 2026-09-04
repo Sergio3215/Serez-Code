@@ -22,6 +22,24 @@ pub struct RunOpts {
     /// Base for resolving relative `import`s. `None` means there is no file to be
     /// relative to, so imports have nothing to resolve against.
     pub current_file: Option<std::path::PathBuf>,
+    /// Whether the semantic phase follows `import` to see what a module declares.
+    ///
+    /// **Off, because this is DEC-M4-007 and it is open.** The machinery is
+    /// built, tested and measured — `semantic::imports` — and this is the switch
+    /// that takes the decision. It is not taken here.
+    ///
+    /// With it off, a file containing any `import` has its names left unchecked,
+    /// so a genuinely undefined name escapes to a runtime error after whatever
+    /// ran before it has already run. With it on, a name is *local*, *imported*
+    /// or *unresolved*, and only the third is excused.
+    ///
+    /// What the decision costs, now measured rather than estimated: one corpus
+    /// fixture and one pinned ecosystem package stop running, and **both are
+    /// right to be rejected** — `unit_modules.sz` names an identifier it knows is
+    /// unbound in order to observe the runtime error, and `serez-apipack`'s
+    /// `sec_apipack.sz` writes `"{ name: inner }"`, which Serez reads as string
+    /// interpolation of an undeclared `name`. See §5.50.
+    pub resolve_imports: bool,
     /// Treat the source as untrusted. Closes `use permissions { .. }` (which
     /// otherwise inserts straight into the evaluator's permission set at runtime,
     /// so any program can grant itself everything) plus the three capabilities that
@@ -58,6 +76,7 @@ impl Default for RunOpts {
         RunOpts {
             permissions: Vec::new(),
             current_file: None,
+            resolve_imports: false,
             lockdown: false,
             check_only: false,
             fetch_allowlist: Vec::new(),
@@ -147,10 +166,27 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
     //
     // See `semantic::validate` for what it checks and what it deliberately
     // does not.
+    // The entry file's directory, so the phase can follow `import` and tell a
+    // name that comes from a module from one that comes from nowhere. Withheld
+    // under lockdown: `import` is denied there anyway, and reading module files
+    // to analyse a locked-down program would be the filesystem access lockdown
+    // exists to prevent. Withheld with no entry file too — `--eval` has no
+    // directory to be relative to.
+    // DEC-M4-007, and off unless the caller asks. Withheld under lockdown
+    // whatever the caller asks: `import` is denied there, and reading module
+    // files to analyse a locked-down program would be exactly the filesystem
+    // access lockdown exists to prevent — the question §7A said this decision
+    // had to answer before it could be taken. That is the answer.
+    let module_root = if opts.lockdown || !opts.resolve_imports {
+        None
+    } else {
+        opts.current_file.as_deref()
+    };
+
     let semantic_findings = if parse_failed {
         Vec::new()
     } else {
-        semantic::validate::validate(&program)
+        semantic::validate::validate_in(&program, module_root.and_then(|p| p.parent()), module_root)
     };
 
     // The checker is skipped when the semantic phase rejected the program, which
@@ -285,6 +321,10 @@ pub fn run_file(file_path: &str, is_check: bool) -> i32 {
             current_file: Some(file_path_obj.to_path_buf()),
             lockdown: false,
             check_only: is_check,
+            // DEC-M4-007 is open, so `sz file.sz` keeps the behaviour it has:
+            // a file with any `import` has its names left unchecked. Flipping
+            // this is what taking that decision means.
+            resolve_imports: false,
             // Not consulted: `lockdown` is off for a file the user handed us, so
             // `fetch` is unrestricted here exactly as it always was.
             fetch_allowlist: Vec::new(),

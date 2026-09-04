@@ -2341,6 +2341,69 @@ hole was.
 
 ---
 
+### 5.50 — one `import` switched off name checking for a whole file — *implemented, off, under DEC-M4-007*, high (found in the Core-defects pass, 2026-09-03)
+
+`check_names` returns early whenever `ScopeReport::has_imports`, so a file with
+any `import` had **no** name checked. Measured, the same undefined name in two
+files:
+
+```text
+$ sz no_import.sz
+❌ SEMANTIC ERROR [SZ8000] [no_import.sz 1:5]: 'totallyUndefined' is not declared
+   in this scope or any enclosing one
+
+$ sz with_import.sz
+4
+❌ ERROR [SZ4001]: Variable not found: totallyUndefined
+```
+
+Rejected before execution in one; in the other, only after `out helper(2)` had
+already printed `4`. The escape is not a heuristic that fires too rarely — it is
+the whole check turning off for the file.
+
+**This is resolvable, not a guess.** Serez has no named imports, no aliases and
+no namespaces: `import "path"` executes the module in the same evaluator and its
+top-level declarations land in the importer's global scope. `eval_import`'s rule
+is exact, and `semantic::imports` mirrors it — exports win where a module has
+any, everything is visible where it has none, and what a module's *own* imports
+brought in survives either way, because `eval_import` only removes names the
+module itself declared. Measured against the runtime:
+
+```text
+$ sz vis.sz
+1
+❌ ERROR [SZ4001]: Variable not found: notExported
+```
+
+So a name is now **local**, **imported**, or **unresolved**, and only the third
+excuses it — per file, for a stated reason, rather than for every file
+containing the word `import`. Five kinds of unreadable module (URL, missing,
+unreadable, unparseable, `.szx`) report *less* confidence and never a
+diagnostic: a module that does not resolve is already a runtime
+`ModuleNotFound`, and a second diagnostic for it would be a new rule.
+
+**It is switched off, because it is DEC-M4-007.** That entry has been open since
+this cycle began, its option A is exactly this, and §7A recommended B "until an
+explicit answer for lockdown and a measured cost". Both now exist and are
+recorded there. `RunOpts::resolve_imports` is `false` at every call site;
+`sz file.sz` behaves exactly as before.
+
+**Found while building it, and worth keeping separately.** The first version
+walked only top-level statements. That cost three corpus failures and one
+ecosystem failure, because `import` is an ordinary statement and
+`tests/unit_export.sz` writes one **inside a lambda**:
+`test("...", () => { import "lib/greet_noexport"; ... })`. It still lands in the
+global scope when it runs. The resolver now takes its list from
+`ScopeReport::import_specs`, filled by the walker that already visits every
+statement and every expression — one rule, one traversal, no second walker to
+drift.
+
+**Also found:** an interpolated expression's diagnostic carries the *statement's*
+span rather than the expression's, so `let s = "{ name: inner }";` reports at
+column 1. Cosmetic, pre-existing, and not touched here.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of
@@ -2492,7 +2555,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M4-004** | What the editor's outline should show | **DECIDED** 2026-09-03 — **B, all declarations correctly nested**; implemented in `ec3cd81` | — |
 | **DEC-M4-005** | The semantic phase's code and label | **DECIDED** 2026-09-03 — **A, `SZ8xxx` + `SEMANTIC`** | unblocked M4.5.4–M4.5.6 |
 | **DEC-M4-006** | Whether the LSP reports the fatal semantic phase | **OPEN** | nothing; §5.41 is the finding |
-| **DEC-M4-007** | Whether the semantic phase resolves through `import` | **OPEN** | the other half of §5.39's parent rule |
+| **DEC-M4-007** | Whether the semantic phase resolves through `import` | **OPEN** — option A is now implemented, measured and switched off; see the update in its entry | §5.39's parent rule, and §5.50's free-name rule |
 | **DEC-M4-008** | Whether a `class` and an `interface` may share a name | **OPEN** | nothing; 0 measured occurrences |
 | **DEC-M4-009** | Whether the `.sz` outline falls back to a token scan on a file that does not parse | **OPEN** | nothing; the fallback preserves today's behaviour |
 | **DEC-M5-001** | Whether a nullable value at a non-nullable parameter is reported | **OPEN** | nothing — a question to answer, not a gate |
@@ -4040,7 +4103,54 @@ with an explicit answer for lockdown and a measured cost. The phase being a pure
 function of one tree is worth more than the marginal reach, and the uncaught case
 still fails at instantiation the way it always did.
 
-**Blocked by this decision:** the reach of §5.39's parent rule, and nothing else.
+**Blocked by this decision:** the reach of §5.39's parent rule, and the free-name
+rule's reach into files that import — see §5.50.
+
+#### Update, 2026-09-03 — A is implemented, measured, and switched off
+
+The two things this entry said A needed before it could be taken now exist. The
+decision is still open; what has changed is that taking it is one flag.
+
+**The lockdown answer.** The phase reads **nothing** under lockdown, whatever the
+caller asks. `import` is refused there at run time, so reading module files to
+analyse a locked-down program would be exactly the capability leak this entry
+named. `lockdown_never_reads_modules` pins it.
+
+**The measured cost.** Turning A on rejects **one** corpus fixture and **one**
+pinned ecosystem package, and neither is a false positive:
+
+| What | Why it is rejected | Is it right? |
+|---|---|---|
+| `tests/unit_modules.sz` | names `mod_exports_secret` on purpose, to observe the `SZ4001` a non-exported name raises | yes — the name genuinely is not declared |
+| `serez-apipack` `sec_apipack.sz` | writes `"{ name: inner }"`, which Serez reads as **string interpolation** of an undeclared `name` | yes — and it is a real bug in that package |
+
+The second is worth reading twice. The author meant a literal JSON-ish string;
+Serez interpolated it, and `name` resolved *dynamically* to the enclosing
+`test(string name, ...)` parameter, so the test passed for a reason that has
+nothing to do with what it asserts. Measured directly:
+
+```text
+$ sz interp.sz          # let s = "{ name: inner }";
+❌ ERROR [SZ4001]: Variable not found: name
+```
+
+That is `MATURITY_AUDIT.md`'s standing **critical** entry — "free variables
+resolve dynamically" — showing up in shipped code. A widens the reach of a rule
+that already rejects this pattern in any file without an `import`; it does not
+invent one.
+
+**The scope this does not settle.** Because the canary is pinned, taking A means
+either fixing `serez-apipack` and moving its pin in its own commit — which the
+pins file requires — or accepting a red gate. That sequencing is part of the
+decision and is not started here.
+
+**What exists now.** `src/semantic/imports.rs` resolves an import graph the way
+`eval_import` does: exports win where there are any, everything is visible where
+there are none, nested imports survive either way, cycles terminate on a
+mark-before-read, and five kinds of unreadable module (URL, missing, unreadable,
+unparseable, `.szx`) make the file *unresolved* rather than producing a
+diagnostic. 13 tests in `tests/semantic_imports.rs`, and
+`RunOpts::resolve_imports` — `false` at every call site — is the switch.
 
 ---
 

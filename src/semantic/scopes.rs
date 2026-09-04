@@ -61,6 +61,7 @@
 //!   * A closure **does** see the locals of the function enclosing it.
 
 use crate::ast::*;
+use crate::semantic::imports;
 use crate::span::Span;
 use std::collections::HashSet;
 
@@ -109,16 +110,101 @@ pub struct FreeUse {
 pub struct ScopeReport {
     /// Uses no enclosing lexical scope accounts for, in source order.
     pub free: Vec<FreeUse>,
-    /// The file contains at least one `import`, so names may legitimately come
-    /// from another module and `free` is not trustworthy for it. Callers
-    /// measuring a corpus should exclude these rather than count them.
+    /// The file contains at least one `import`.
+    ///
+    /// Informational now rather than disqualifying: what decides whether `free`
+    /// can be trusted is [`Self::unresolved_imports`], because an import whose
+    /// module was read contributes names this walk already knows.
     pub has_imports: bool,
+    /// At least one `import` could not be read, so a name in `free` may still
+    /// exist at runtime.
+    ///
+    /// True whenever the file has any import until [`ScopeReport::resolve`] is
+    /// called, which is the behaviour every caller had before imports could be
+    /// resolved at all.
+    pub unresolved_imports: bool,
+    /// Every module specifier the file imports, wherever it appears.
+    ///
+    /// Wherever, not just at the top level: `import` is an ordinary statement
+    /// and the corpus puts one inside a lambda —
+    /// `test("...", () => { import "lib/x"; ... })` in `unit_export.sz`. It
+    /// still lands in the global scope when it runs, so a resolver that only
+    /// looked at top-level statements would miss the names and report them as
+    /// undeclared. That was measured as three corpus failures and one ecosystem
+    /// failure before this list replaced a top-level walk.
+    pub import_specs: Vec<String>,
 }
 
 impl ScopeReport {
-    /// Whether this file's result can be counted. See `has_imports`.
+    /// Whether this file's result can be trusted. See `unresolved_imports`.
     pub fn is_conclusive(&self) -> bool {
-        !self.has_imports
+        !self.unresolved_imports
+    }
+
+    /// Account for what the file's imports actually contribute.
+    ///
+    /// Removing a resolved name from `free` is the same answer as having bound
+    /// it in frame 0 before the walk — a free use is reported exactly when the
+    /// name is in no frame — and it costs one pass over the tree instead of two.
+    pub fn resolve(&mut self, imported: &imports::ImportedNames) {
+        self.free.retain(|use_| !imported.contains(&use_.name));
+        self.unresolved_imports = !imported.is_complete();
+    }
+}
+
+/// Every name a run of top-level statements binds.
+///
+/// One rule, used twice: [`Walker::seed_globals`] binds a file's own
+/// declarations with it, and [`crate::semantic::imports`] works out what a
+/// module contributes with it. If the two disagreed, a name would be local in
+/// one file and unknown in the file that imported it.
+pub fn declared_names(statements: &[Statement]) -> Vec<String> {
+    let mut names = Vec::new();
+    for statement in statements {
+        collect_declared(statement, &mut names);
+    }
+    names
+}
+
+/// The single name a declaration binds, where it binds exactly one.
+///
+/// Destructuring binds several and has no single name, so it is `None` here —
+/// `export let [a, b] = ...` is not syntax, and this is only used for the
+/// contents of an `export`.
+pub fn declared_name(statement: &Statement) -> Option<String> {
+    match statement {
+        Statement::Export(inner) => declared_name(inner),
+        Statement::FunctionDeclaration(f) => Some(f.name.clone()),
+        Statement::NativeDeclaration(n) => Some(n.name.clone()),
+        Statement::ClassDeclaration(c) => Some(c.name.clone()),
+        Statement::InterfaceDeclaration(i) => Some(i.name.clone()),
+        Statement::EnumDeclaration(e) => Some(e.name.clone()),
+        Statement::Let(l) => Some(l.name.clone()),
+        _ => None,
+    }
+}
+
+fn collect_declared(statement: &Statement, out: &mut Vec<String>) {
+    match statement {
+        Statement::Export(inner) => collect_declared(inner, out),
+        Statement::LetDestructureArray(d) => {
+            for slot in d.names.iter().flatten() {
+                out.push(slot.clone());
+            }
+            if let Some(rest) = &d.rest {
+                out.push(rest.clone());
+            }
+        }
+        Statement::LetDestructureDict(d) => {
+            for (key, alias) in &d.fields {
+                out.push(alias.as_ref().unwrap_or(key).clone());
+            }
+        }
+        other => {
+            if let Some(name) = declared_name(other) {
+                out.push(name);
+            }
+        }
     }
 }
 
@@ -174,6 +260,12 @@ pub fn analyze(program: &Program) -> ScopeReport {
     ScopeReport {
         free: walker.free,
         has_imports: walker.has_imports,
+        // Until a caller resolves them, every import is an unread one. This is
+        // exactly what `is_conclusive` meant before `imports` existed, so a
+        // caller that cannot reach the filesystem keeps the old behaviour by
+        // doing nothing.
+        unresolved_imports: walker.has_imports,
+        import_specs: walker.import_specs,
     }
 }
 
@@ -186,6 +278,7 @@ struct Walker {
     enclosing: Vec<String>,
     free: Vec<FreeUse>,
     has_imports: bool,
+    import_specs: Vec<String>,
 }
 
 impl Walker {
@@ -203,6 +296,7 @@ impl Walker {
             enclosing: Vec::new(),
             free: Vec::new(),
             has_imports: false,
+            import_specs: Vec::new(),
         }
     }
 
@@ -212,34 +306,8 @@ impl Walker {
     /// declared further down the file resolves. Inside a body this does not
     /// hold, which is why it is done only here.
     fn seed_globals(&mut self, statements: &[Statement]) {
-        for statement in statements {
-            self.seed_one(statement);
-        }
-    }
-
-    fn seed_one(&mut self, statement: &Statement) {
-        match statement {
-            Statement::Export(inner) => self.seed_one(inner),
-            Statement::FunctionDeclaration(f) => self.bind(&f.name),
-            Statement::NativeDeclaration(n) => self.bind(&n.name),
-            Statement::ClassDeclaration(c) => self.bind(&c.name),
-            Statement::InterfaceDeclaration(i) => self.bind(&i.name),
-            Statement::EnumDeclaration(e) => self.bind(&e.name),
-            Statement::Let(l) => self.bind(&l.name),
-            Statement::LetDestructureArray(d) => {
-                for slot in d.names.iter().flatten() {
-                    self.bind(slot);
-                }
-                if let Some(rest) = &d.rest {
-                    self.bind(rest);
-                }
-            }
-            Statement::LetDestructureDict(d) => {
-                for (key, alias) in &d.fields {
-                    self.bind(alias.as_ref().unwrap_or(key));
-                }
-            }
-            _ => {}
+        for name in declared_names(statements) {
+            self.bind(&name);
         }
     }
 
@@ -383,7 +451,10 @@ impl Walker {
 
     fn statement(&mut self, statement: &Statement) {
         match statement {
-            Statement::Import(_) => self.has_imports = true,
+            Statement::Import(spec) => {
+                self.has_imports = true;
+                self.import_specs.push(spec.clone());
+            }
             Statement::UsePermissions(_) => {}
 
             Statement::Export(inner) => self.statement(inner),
