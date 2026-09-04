@@ -127,7 +127,7 @@ tests/74_dict_slot_e2e.sz	42170	0	6a49ece19e6f05a3	cbf29ce484222325
 tests/ai_attention_training.sz	82841	0	563b0f90cf83309a	cbf29ce484222325
 tests/ai_phase1_training.sz	93285	0	99984e738d4714ce	cbf29ce484222325
 tests/ai_phase2_layers.sz	101505	0	dc3d079d1c3e80d9	cbf29ce484222325
-tests/ai_phase3_ops.sz	103584	0	869e877143fd8a44	cbf29ce484222325
+tests/ai_phase3_ops.sz	129020	0	cf3fd1ebc1a1d2a2	cbf29ce484222325
 tests/ai_weights_persistence.sz	46535	0	22b9876935990589	cbf29ce484222325
 tests/demo_bank.sz	24848	0	00a5218f35692e65	cbf29ce484222325
 tests/demo_fibonacci.sz	9810	0	4a8dbf5870f16962	cbf29ce484222325

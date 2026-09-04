@@ -2506,6 +2506,68 @@ goes from 19 assertions passing to 22.
 
 ---
 
+### 5.53 — the `.szx` outline threw away nesting the scanner had already computed — **PARTLY FIXED 2026-09-03**, medium (found in the Core-defects pass, 2026-09-03)
+
+DEC-M4-004 moved the `.sz` outline onto `semantic::declarations`. `.szx` stayed
+on `scan_symbols`, a token walk, because this frontend does not parse JSX —
+`modules::load_source` translates it by running the serez-ui translator as a
+subprocess, which an editor cannot do per keystroke.
+
+**There was no `.szx` corpus at all**, so what the scan produced had never been
+measured. Four fixtures now exist in `tests/szx/`, shaped like the ecosystem's
+real files (`serez-ui/apps/counter.szx`, `serez-strike/app.szx`, the
+`proyecto03` demos): a component class, four levels of nesting, Serez
+expressions inside JSX braces, and one of each top-level declaration form.
+
+**Measured against them, before:**
+
+```text
+  depth=0 Function outer          container=None
+  depth=0 Variable insideFn       container=None
+  depth=0 Function inner          container=None      <- nested inside outer
+  depth=0 Variable insideInner    container=None      <- nested two deep
+  depth=0 Variable insideMethod   container=Panel     <- the class, not render
+```
+
+Three defects, all recoverable from the tokens the scan already had:
+
+  1. **`depth` was hard-coded `0`**, under a comment saying the token scan could
+     not see nesting — two lines below the counter that was tracking it.
+     `analysis` uses `depth == 0` to decide a symbol is top-level, so a `fn`
+     nested two levels down was offered as a top-level name.
+  2. **`container` was only ever a class.** A `fn` inside a `fn` had none, and a
+     method-local was attributed to the **class**, which puts it in the outline
+     beside the method rather than inside it.
+  3. **No class field appeared at all** — `count`, `label`, `name`, `agree`,
+     `id`, every field in the four fixtures.
+
+**Fixed within the scan, without a new frontend.** The brace counter feeds
+`depth`; a second stack tracks named callables so `container` is the innermost
+enclosing scope rather than the nearest class; and an `Ident Assign` at exactly
+a class's body depth is a field — safe to read from tokens because at that depth
+there is no statement position, so it cannot be an assignment.
+
+The kind and the container stay on separate stacks deliberately: a `fn` nested
+inside another is a **function**, not a method of whatever class happens to be
+open, and merging the two would have lost that.
+
+**What is still debt, and is not improvised here.** The scan has no idea it is
+inside JSX. It works on these fixtures because JSX expression braces balance —
+`{c}`, `onChange={(v) => { … }}` — and `jsx_expression_braces_leave_the_depth_balanced`
+pins that a top-level `let` after a render() full of them is still at depth 0.
+A JSX construct that does not balance braces, or one that puts a declaration
+somewhere the token order does not reflect, is out of reach. Closing that needs a
+**structural `.szx` frontend**, which is a real piece of work and a decision
+about where translation happens; the finding was explicit that it should be
+recorded rather than attempted inside this molecule.
+
+**Pinned by** `tests/szx_outline.rs`, 9 tests. Against a `depth` forced back to
+`0`, exactly the two depth tests fail and the seven others pass — the container,
+kind, field and survivability properties are independent of it, which is what
+says the suite is measuring more than one thing.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of

@@ -386,6 +386,13 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
     let mut depth: i32 = 0;
     // (class_name, brace depth at which its body opened)
     let mut class_stack: Vec<(String, i32)> = Vec::new();
+    // (callable_name, brace depth at which its body opened). A named `fn` or a
+    // class member, so a declaration inside one reports it as its container
+    // instead of `None`. Measured before: `fn inner` inside `fn outer` arrived
+    // with no container at all, and a `let` inside a method was attributed to
+    // the **class**, which put it in the outline beside the method rather than
+    // inside it.
+    let mut callable_stack: Vec<(String, i32)> = Vec::new();
     let mut i = 0;
 
     while i < tokens.len() {
@@ -398,6 +405,9 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                     if depth < *d {
                         class_stack.pop();
                     }
+                }
+                while callable_stack.last().is_some_and(|(_, d)| depth < *d) {
+                    callable_stack.pop();
                 }
             }
             TokenType::Let | TokenType::KwConst => {
@@ -441,8 +451,7 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                 }
                 for nt in names {
                     symbols.push(SymbolInfo {
-                        // The token scan cannot see nesting; `.szx` is the only caller now.
-                        depth: 0,
+                        depth: outline_depth(depth),
                         name: nt.literal.clone(),
                         kind,
                         line: nt.span.line,
@@ -451,7 +460,7 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                             .get(nt.span.line.saturating_sub(1))
                             .map(|l| l.trim().trim_end_matches('{').trim().to_string())
                             .unwrap_or_default(),
-                        container: class_stack.last().map(|(n, _)| n.clone()),
+                        container: innermost(&class_stack, &callable_stack),
                     });
                 }
             }
@@ -464,8 +473,7 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                             _ => SymbolKind::Enum,
                         };
                         symbols.push(SymbolInfo {
-                            // The token scan cannot see nesting; `.szx` is the only caller now.
-                            depth: 0,
+                            depth: outline_depth(depth),
                             name: nt.literal.clone(),
                             kind,
                             line: nt.span.line,
@@ -493,7 +501,15 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                             Some(TokenType::LParen)
                         )
                     {
-                        push_callable(&tokens, j, lines, &class_stack, &mut symbols);
+                        push_callable(
+                            &tokens,
+                            j,
+                            lines,
+                            &class_stack,
+                            &mut callable_stack,
+                            depth,
+                            &mut symbols,
+                        );
                         break;
                     }
                     if !is_type_token(&tokens[j].token_type)
@@ -515,6 +531,39 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                 }
             }
             TokenType::Ident => {
+                // NAME = … directly in a class body is a field. "Directly" is
+                // what makes it safe to read from tokens alone: at exactly the
+                // class's body depth there is no statement position, so an
+                // `Ident Assign` there cannot be an assignment. One level deeper
+                // it could be either, and is not claimed.
+                //
+                // Measured before this: `count`, `label`, `name`, `agree` and
+                // `id` — every field in the four `.szx` fixtures — were absent
+                // from the outline entirely.
+                if class_stack.last().is_some_and(|(_, d)| depth == *d)
+                    && matches!(
+                        tokens.get(i + 1).map(|t| &t.token_type),
+                        Some(TokenType::Assign)
+                    )
+                    && !matches!(
+                        i.checked_sub(1).map(|p| &tokens[p].token_type),
+                        Some(TokenType::Dot) | Some(TokenType::QuestionDot)
+                    )
+                {
+                    symbols.push(SymbolInfo {
+                        depth: outline_depth(depth),
+                        name: t.literal.clone(),
+                        kind: SymbolKind::Field,
+                        line: t.span.line,
+                        column: ident_start_col(t),
+                        detail: lines
+                            .get(t.span.line.saturating_sub(1))
+                            .map(|l| l.trim().to_string())
+                            .unwrap_or_default(),
+                        container: class_stack.last().map(|(n, _)| n.clone()),
+                    });
+                }
+
                 // NAME ( … ) => — a typed standalone function; inside a class,
                 // NAME ( … ) { is a method/constructor. Skip call syntax
                 // `obj.m(...)` (previous token is a dot).
@@ -540,7 +589,15 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                         let is_arrow_fn = matches!(after, Some(TokenType::Arrow));
                         let is_class_method = in_class && matches!(after, Some(TokenType::LBrace));
                         if is_arrow_fn || is_class_method {
-                            push_callable(&tokens, i, lines, &class_stack, &mut symbols);
+                            push_callable(
+                                &tokens,
+                                i,
+                                lines,
+                                &class_stack,
+                                &mut callable_stack,
+                                depth,
+                                &mut symbols,
+                            );
                         }
                     }
                 }
@@ -549,8 +606,7 @@ fn scan_symbols(_text: &str, lines: &[String]) -> Vec<SymbolInfo> {
                 if let Some(nt) = tokens.get(i + 1) {
                     if nt.token_type == TokenType::String {
                         symbols.push(SymbolInfo {
-                            // The token scan cannot see nesting; `.szx` is the only caller now.
-                            depth: 0,
+                            depth: outline_depth(depth),
                             name: nt.literal.clone(),
                             kind: SymbolKind::Import,
                             line: nt.span.line,
@@ -590,11 +646,38 @@ fn matching_paren(tokens: &[Token], open: usize) -> Option<usize> {
 /// Record a function/method whose name token is at `name_idx` (followed by
 /// `(`). The detail is the source from the start of the declaration line
 /// through the closing paren, e.g. `fn int suma(int a, int b)`.
+/// The nearest enclosing named scope: a class or a callable, whichever opened last.
+///
+/// The two stacks are kept apart because the *kind* of a callable depends on
+/// whether a class encloses it, and merging them would lose that. What an inner
+/// declaration wants is simply the innermost of the two.
+/// The scanner's brace counter as an outline depth.
+///
+/// The counter is `i32` because a file being typed can close more braces than it
+/// opened, and a signed counter that dips below zero recovers when the missing
+/// `{` is typed. An outline depth cannot be negative, so it clamps — which is
+/// also the right answer for the reader: a symbol in a file with unbalanced
+/// braces is shown at the top rather than not shown.
+fn outline_depth(depth: i32) -> usize {
+    depth.max(0) as usize
+}
+
+fn innermost(class_stack: &[(String, i32)], callable_stack: &[(String, i32)]) -> Option<String> {
+    match (class_stack.last(), callable_stack.last()) {
+        (Some((c, cd)), Some((f, fd))) => Some(if fd >= cd { f.clone() } else { c.clone() }),
+        (Some((c, _)), None) => Some(c.clone()),
+        (None, Some((f, _))) => Some(f.clone()),
+        (None, None) => None,
+    }
+}
+
 fn push_callable(
     tokens: &[Token],
     name_idx: usize,
     lines: &[String],
     class_stack: &[(String, i32)],
+    callable_stack: &mut Vec<(String, i32)>,
+    depth: i32,
     symbols: &mut Vec<SymbolInfo>,
 ) {
     let name_tok = &tokens[name_idx];
@@ -602,12 +685,15 @@ fn push_callable(
         Some(c) => c,
         None => return,
     };
-    let container = class_stack.last().map(|(n, _)| n.clone());
-    let kind = match &container {
+    // The *kind* is decided by the class stack alone: a `fn` nested inside
+    // another `fn` is a function, not a method.
+    let kind = match class_stack.last().map(|(n, _)| n) {
         Some(class_name) if *class_name == name_tok.literal => SymbolKind::Constructor,
         Some(_) => SymbolKind::Method,
         None => SymbolKind::Function,
     };
+    // The *container* is whatever encloses it, class or callable.
+    let container = innermost(class_stack, callable_stack);
     let close_tok = &tokens[close];
     let detail = source_slice(
         lines,
@@ -615,8 +701,7 @@ fn push_callable(
         (close_tok.span.line, close_tok.span.column + 1),
     );
     symbols.push(SymbolInfo {
-        // The token scan cannot see nesting; `.szx` is the only caller now.
-        depth: 0,
+        depth: outline_depth(depth),
         name: name_tok.literal.clone(),
         kind,
         line: name_tok.span.line,
@@ -624,6 +709,8 @@ fn push_callable(
         detail,
         container,
     });
+    // Its body opens at the next `{`, so anything declared inside is one deeper.
+    callable_stack.push((name_tok.literal.clone(), depth + 1));
 }
 
 // ── Cursor helpers (used by completion/hover/definition) ─────────────────────
