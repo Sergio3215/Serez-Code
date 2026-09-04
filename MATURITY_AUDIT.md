@@ -852,10 +852,8 @@ context `OS.exec` runs in — waives it. Same behaviour, now a contract.
 ### What this adds
 
 - **DEC-M11-001**, the `unsafe` context being dynamic where `spec/security.md`
-  said lexical. The spec was corrected to describe the runtime; the runtime was
-  not changed. Measured while registering it: **20 of 20** gated calls across the
-  ecosystem and **145 of 159** in the corpus are already lexical, so the usual
-  argument against a lexical rule is not supported by anything measurable here.
+  said lexical. Registered on 2026-09-04 and **decided the same day: lexical.**
+  See the section below.
 
 ### What is unchanged
 
@@ -863,3 +861,44 @@ No cross-process install lock (§5.45), LLVM parity, publisher signatures,
 runtime property testing, conformance coverage.
 
 
+
+
+---
+
+## Decision implemented on 2026-09-04 — DEC-M11-001, `unsafe` is lexical
+
+**`unsafe` authority does not cross a function-call boundary.** A block relaxes
+guarantees for what is written inside it; a called function starts under the
+runtime's ordinary guarantees. A function can be audited locally.
+
+| | Before | After |
+|---|---|---|
+| function called from a block | ran unsafe | `SZ6003` |
+| method called from a block | ran unsafe | `SZ6003` |
+| constructor from a block | ran unsafe | `SZ6003` |
+| lambda called from a block | ran unsafe | `SZ6003` |
+| callback two frames down | ran unsafe | `SZ6003` |
+| a callee's *own* block | ran | runs |
+| nesting inside one body | covered | covered |
+
+`ExecutionContext` records the call frame a block was opened in rather than a
+boolean; the gate compares frames. Nothing is reset at a call boundary, which
+matters because the evaluator has five entry points and twenty-seven exits — a
+reset-and-restore model would leak `unsafe` into ordinary code the first time one
+was missed.
+
+**Closed with it, same root cause:** a constructor was not a call frame. Besides
+inheriting its caller's block, constructor recursion overflowed the **native**
+stack — `thread '<unknown>' has overflowed its stack`, exit 127, no diagnostic,
+not catchable — where a function's recursion was refused at depth 512 with
+`SZ6002`. Constructors are frames now and are refused the same way.
+
+**Compatibility:** ecosystem canary **8/8**, corpus **508/0/0**, no package
+touched. The earlier measurement held: 20 of 20 ecosystem gated calls and 145 of
+159 corpus calls were already lexical.
+
+**Two specs were already right** and are now true: `spec/memory.md`'s MEM-004 and
+`spec/errors.md` both said "lexical". `spec/security.md`'s provisional dynamic
+wording is reverted.
+
+Commits: `966c568` (implementation, tests, spec) and this register update.

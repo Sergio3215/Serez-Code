@@ -29,7 +29,7 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **16 OPEN, 12 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M10-003** (does any phase timing block a build). **DEC-M9-002** and **DEC-M9-003** are now decided. New 2026-09-04: **DEC-M11-001** (is the `unsafe` context lexical or dynamic) |
+| **Open decisions** | **15 OPEN, 13 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M10-003** (does any phase timing block a build). **DEC-M9-002** and **DEC-M9-003** are now decided. **DEC-M11-001** (the `unsafe` context) was raised and decided on 2026-09-04: **lexical** |
 | Branch | `improve` |
 | HEAD | `807a0a5` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
@@ -2783,8 +2783,9 @@ deliberately absent from `Guarantee`.
 **A spec/implementation divergence, found by measuring.** `spec/security.md`
 said a gated call must "appear **lexically** inside an `unsafe { }` block". It
 need not: the context is **dynamic**, and a function called from inside a block
-runs with it in force. Registered as **DEC-M11-001** and *not* changed; the spec
-now describes the runtime.
+runs with it in force. Registered as **DEC-M11-001** — and **decided on
+2026-09-04: lexical**, so the runtime was changed to match what the spec had said
+all along. See §5.59.
 
 The evidence turned out to cut against the obvious recommendation. Every one of
 the **20** gated calls across the eight ecosystem packages is already lexical,
@@ -2886,6 +2887,100 @@ the two recovery tests fail and the other twelve pass.
 **Still not covered**, and recorded rather than glossed: two installs of the same
 package at once still race (§5.45). Neither the journal nor the staging directory
 makes that safe, and `spec/packages.md`'s missing-guarantees list says so.
+
+---
+
+### 5.59 — `unsafe` crossed every call boundary — **FIXED 2026-09-04**, high (closes DEC-M11-001)
+
+The owner's answer to DEC-M11-001 is **lexical**: `unsafe` authority does not
+cross a function-call boundary.
+
+**Reproduced first**, at every boundary. The state was one flag on the
+`Evaluator`, set on entering a block and restored on leaving it, with nothing at
+a call boundary at all:
+
+| Written | Before |
+|---|---|
+| `fn helper() { OS.exec(...) }` then `unsafe { helper() }` | `callee ran unsafe` |
+| a method called from a caller's block | `method ran unsafe` |
+| `unsafe { new C() }` with a gated op in the constructor | `ctor ran unsafe` |
+| a lambda called from a caller's block | `lambda ran unsafe` |
+| a callback reached through another function | `callback ran unsafe` |
+
+**The change is in the execution model, not in any namespace.**
+`ExecutionContext` records the **call frame** a block was opened in rather than a
+boolean, and the gate asks whether the frame asking is the frame that opened it.
+A callee runs one frame deeper, so it never is.
+
+That shape was chosen for a specific reason. The evaluator has **five**
+call-frame entry points and **twenty-seven** exits. A model that cleared the
+context on entry and restored it on exit would have to be correct at all
+twenty-seven, and would leak `unsafe` into ordinary code the first time one was
+missed — a security-relevant failure no test would obviously catch. Keying on the
+frame means nothing is restored on return: the caller's frame number comes back
+on its own and its block applies again.
+
+**Nesting is not a call.** A nested block, an `if`, a loop — all still inside the
+same frame's block. What ends the reach is a call.
+`nesting_inside_one_body_stays_inside_the_block` pins it, because confusing "a
+deeper block" with "a deeper frame" is the obvious way to get this wrong.
+
+**Pinned by** `tests/unsafe_contract.rs`, 37 tests. The positive control is the
+one that matters: `is_unsafe` was temporarily re-dynamicised and **exactly the
+seven** tests that distinguish the two models failed — the five boundaries, the
+"refused from anywhere" case, and the context type's own test. The other thirty
+passed under both, which is correct: they assert properties independent of
+propagation, and a test that passed under either model would prove nothing here.
+
+**Compatibility: none needed.** §5.56 had already measured that 20 of 20 gated
+calls across the eight ecosystem packages and 145 of 159 in the corpus were
+already lexical. The canary is **8/8** after the change with no package touched,
+and the corpus is 508/0/0.
+
+**Two specs were already right.** `spec/memory.md`'s MEM-004 and `spec/errors.md`
+both said "lexical". The implementation was the thing that diverged, and §5.56's
+provisional correction to `spec/security.md` — which described the dynamic
+behaviour — is reverted to say lexical, with a negative and a positive example
+that the spec-example harness executes.
+
+### 5.60 — a constructor was not a call frame, and the native stack paid for it — **FIXED 2026-09-04**, high (found while implementing §5.59)
+
+Making `unsafe` lexical needs every way of entering a body to be a call frame.
+Four of the five already were. The constructor was not: `eval_new_class` pushed a
+scope and nothing else — no `CallFrame`, no `call_depth`.
+
+That is why `unsafe { new C() }` reached into the constructor's body. It is also
+why this killed the process:
+
+```text
+$ sz rec.sz          # public class R { public R() { let x = new R(); } }
+before
+thread '<unknown>' has overflowed its stack
+exit=127
+```
+
+No diagnostic, nothing catchable, exit 127 — while the identical recursion
+through a function was refused cleanly:
+
+```text
+$ sz rec2.sz         # fn int f(int n) { return f(n+1); }
+ERROR [SZ6002]: Stack overflow - maximum call depth (512) exceeded
+```
+
+One cause, two symptoms. The constructor now takes a call frame, checks
+`require_call_capacity` before its body, and is refused the same way a function
+is. `ordinary_constructor_nesting_is_unaffected` is the control: a limit that
+refused every constructor would satisfy the other test.
+
+**Fixed here rather than registered** because the lexical semantics cannot be
+correct without it — a constructor that is not a frame cannot be a guarantee
+boundary. The stack overflow was the same defect showing its other face.
+
+**A note on the test.** It drives the binary rather than running in-process: 512
+nested `eval_new_class` frames need more Rust stack than a test-harness thread
+has, so an in-process run overflows the *harness* before the interpreter's guard
+can refuse. That is a fact about the harness, and saying so in the test is better
+than quietly lowering the depth until it passes.
 
 ---
 
@@ -3034,7 +3129,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 
 | ID | Subject | Status | Blocks |
 |---|---|---|---|
-| **DEC-M11-001** | Whether the `unsafe` context is lexical or dynamic | **OPEN** | nothing; the measured behaviour is pinned and the spec now describes it |
+| **DEC-M11-001** | Whether the `unsafe` context is lexical or dynamic | **DECIDED** 2026-09-04 — **lexical**; `unsafe` authority does not cross a call boundary. Implemented in `966c568` | — |
 | **DEC-M4-001** | Where the reserved-name check runs | **DECIDED** 2026-09-03 — **A, a new fatal semantic phase** | unblocked M4.5.*; DEC-M4-003's landing site |
 | **DEC-M4-002** | Whether an unresolved free variable is a diagnostic | **DECIDED** 2026-09-03 — **A, fatal**; implemented in `1513b43` | — |
 | **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
@@ -3140,6 +3235,35 @@ migration.
 **Blocked by this decision:** nothing. `unsafe_propagates_dynamically_into_calls`
 pins the measured behaviour and says in its failure message that changing it is
 this decision.
+
+## RESOLUTION — **DECIDED 2026-09-04: lexical.**
+
+Option B. **`unsafe` authority does not cross a function-call boundary.** A block
+relaxes guarantees for what is written inside it; a function called from within
+one starts under the runtime's ordinary guarantees. The property bought is local
+auditability: whether a function relaxes a guarantee is visible in its own body
+and does not depend on its callers.
+
+The measurement in this entry supported it. Nothing in the corpus or the
+ecosystem relied on the dynamic reading, and the canary is 8/8 after the change
+with no package touched. `spec/memory.md`'s MEM-004 and `spec/errors.md` had
+said "lexical" all along; the implementation was the thing that was wrong.
+
+**How.** `ExecutionContext` records the **call frame** a block was opened in
+instead of a boolean, and the gate asks whether the frame asking is the frame
+that opened it. A callee is one frame deeper, so it never is. Recording the frame
+rather than resetting state at each boundary is what makes it safe: the evaluator
+has five call-frame entry points and **twenty-seven** exits, and a
+reset-and-restore model would leak the first time one of the twenty-seven was
+missed. Nothing is restored on return — the caller's frame number comes back on
+its own.
+
+**The closure question this entry said B would need** turned out not to arise. A
+lambda is entered through the same call path as a function, so it is a frame like
+any other and needs no separate rule; `a_lambda_does_not_inherit_its_callers_block`
+and `a_callback_does_not_inherit_the_block_two_frames_up` pin it.
+
+**One bug had to be fixed to get there** — §5.60.
 
 ---
 
