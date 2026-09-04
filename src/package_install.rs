@@ -47,9 +47,10 @@
 //! `tests/architecture.rs` refused. A package manager depending on the evaluator
 //! is the wrong direction, and the gate said so before the commit.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::hash::{sha256, to_hex};
+use crate::hash::{Sha256, to_hex};
 
 /// The lockfile's name, beside `serez.json`.
 pub const LOCKFILE: &str = "serez.lock";
@@ -157,21 +158,55 @@ impl Lockfile {
 /// length so that concatenation cannot be ambiguous between two different trees.
 /// Directories contribute nothing of their own; an empty one is invisible, which
 /// matches what a package is.
+/// How much of a file is read at a time while hashing it.
+const DIGEST_CHUNK_BYTES: usize = 64 * 1024;
+
 pub fn tree_digest(root: &Path) -> Result<String, String> {
     let mut files = Vec::new();
     collect(root, root, &mut files)?;
     files.sort();
 
-    let mut buffer: Vec<u8> = Vec::new();
+    // Streamed rather than concatenated. This built one `Vec<u8>` holding every
+    // file in the package, which for a tree at the 256 MiB install ceiling meant
+    // that much resident at once — and `sha256` copied its input, so twice that.
+    // The digest is unchanged: the same bytes reach the hasher in the same order.
+    let mut hasher = Sha256::new();
     for relative in &files {
-        let bytes = std::fs::read(root.join(relative))
+        let path = root.join(relative);
+        let length = std::fs::metadata(&path)
+            .map_err(|e| format!("Cannot stat '{}' while hashing: {}", relative, e))?
+            .len();
+
+        hasher.update(relative.as_bytes());
+        hasher.update(&[0]);
+        hasher.update(&length.to_le_bytes());
+
+        let mut file = std::fs::File::open(&path)
             .map_err(|e| format!("Cannot read '{}' while hashing: {}", relative, e))?;
-        buffer.extend_from_slice(relative.as_bytes());
-        buffer.push(0);
-        buffer.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-        buffer.extend_from_slice(&bytes);
+        let mut chunk = vec![0u8; DIGEST_CHUNK_BYTES];
+        let mut read_total: u64 = 0;
+        loop {
+            let n = file
+                .read(&mut chunk)
+                .map_err(|e| format!("Cannot read '{}' while hashing: {}", relative, e))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&chunk[..n]);
+            read_total += n as u64;
+        }
+
+        // The length went into the digest before the contents, so a file that
+        // changed size between the two would produce a digest describing a tree
+        // that never existed. Cheap to notice, and silent otherwise.
+        if read_total != length {
+            return Err(format!(
+                "'{}' changed size while being hashed: {} bytes declared, {} read",
+                relative, length, read_total
+            ));
+        }
     }
-    Ok(format!("sha256-{}", to_hex(&sha256(&buffer))))
+    Ok(format!("sha256-{}", to_hex(&hasher.finalize())))
 }
 
 fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
@@ -180,7 +215,24 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String>
     for entry in entries {
         let entry = entry.map_err(|e| format!("Cannot read a directory entry: {}", e))?;
         let path = entry.path();
-        if path.is_dir() {
+
+        // `symlink_metadata` rather than `is_dir`, which follows. A staged tree
+        // should contain no links at all — both install paths refuse them — but
+        // a digest that silently walks through one would describe a tree the
+        // package does not contain, and would differ between two machines whose
+        // link targets differ.
+        let kind = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("Cannot inspect '{}': {}", path.display(), e))?
+            .file_type();
+        if kind.is_symlink() {
+            return Err(format!(
+                "'{}' is a symbolic link; a package tree must contain only regular \
+                 files and directories",
+                path.display()
+            ));
+        }
+
+        if kind.is_dir() {
             collect(root, &path, out)?;
         } else {
             let relative = path
@@ -759,6 +811,40 @@ mod tests {
             first,
             tree_digest(&root).expect("digest"),
             "content ignored"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The digest of a fixed tree, pinned to the value it had before it streamed.
+    ///
+    /// `tree_digest` used to concatenate every file into one `Vec<u8>` and hash
+    /// that; it now feeds the hasher in 64 KiB chunks so a package at the
+    /// 256 MiB ceiling is not held in memory twice. The bytes reaching the
+    /// hasher are the same, and this is what says so — every `serez.lock` in
+    /// existence records digests produced by the old path, and a change here
+    /// would make all of them fail verification against an unmodified package.
+    ///
+    /// Captured from the release binary before the change, installing a
+    /// two-file registry package:
+    ///
+    /// ```text
+    /// dig <TAB> 1.0.0 <TAB> sha256-f5f721c49174e9b09eb43d6947ea24e5775afb34ed1b502904c0ef35f3d0a625
+    /// ```
+    #[test]
+    fn the_digest_is_the_one_existing_lockfiles_recorded() {
+        let root = temp("digest_pinned");
+        write(
+            &root.join("index.sz"),
+            "alpha
+",
+        );
+        write(&root.join("sub/b.sz"), "beta");
+
+        assert_eq!(
+            tree_digest(&root).expect("digest"),
+            "sha256-f5f721c49174e9b09eb43d6947ea24e5775afb34ed1b502904c0ef35f3d0a625",
+            "the tree digest changed; every existing serez.lock now fails on an              unmodified package"
         );
 
         let _ = std::fs::remove_dir_all(&root);

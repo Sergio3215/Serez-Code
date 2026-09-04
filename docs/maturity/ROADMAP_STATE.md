@@ -2132,6 +2132,94 @@ documented workflow runs two installs at once.
 
 ---
 
+### 5.46 — a local-registry package could name any file on the host and have it installed — **FIXED 2026-09-03**, high (found in the Core-defects pass, 2026-09-03)
+
+A **remote** install validates every archive path, refuses more than 10,000
+entries, stops at 256 MiB extracted, and refuses to traverse a symbolic link. A
+**local-registry** install called `copy_dir_recursive`, which did none of that —
+and `Path::is_dir` follows links, so a link was walked through rather than seen.
+
+**Measured** against the release binary, with a registry holding a package that
+links out of itself:
+
+| The package contained | What happened |
+|---|---|
+| `leak.txt -> ../../../outside/id_rsa` | exit 0, and `packages/pkg/leak.txt` held `PRIVATE KEY MATERIAL` |
+| `out -> ../../../outside` (directory symlink) | exit 0, the whole outside subtree copied in |
+| `junc -> …\outside` (junction) | exit 0, the same — **and a junction needs no privilege on Windows** |
+| a directory link back to an ancestor | `Access is denied. (os error 5)` |
+| 20,000 files | exit 0, 20,001 entries installed |
+
+The first three are a read primitive: a registry entry names a path on the host
+and its contents land inside the project, silently. The junction row is the one
+that matters most in practice — a symbolic link on Windows needs Developer Mode
+or elevation, and a junction needs neither.
+
+The fourth did not loop forever only because the OS gave up at some depth. That
+is the platform refusing, not the code, and it produced a message that said
+nothing about what the package had done. The fifth is the limits simply not
+existing on this path.
+
+**The fix is one policy rather than two.** `copy_registry_tree` walks with
+`symlink_metadata`, which does not follow, and refuses any reparse point;
+validates every path with `validate_package_relative_path`, the archive path's
+own validator; and charges entries and bytes against
+`MAX_PACKAGE_ARCHIVE_ENTRIES` and `MAX_PACKAGE_EXTRACTED_BYTES`, the archive
+path's own ceilings. Nothing new was invented — the local door now asks what the
+remote door already asked.
+
+Links are **refused**, not resolved. Canonicalising each target and checking it
+stays under the registry root is racy — the target can change between the check
+and the copy — and it would still admit something the archive path would never
+have accepted. `create_package_directories` already refuses symlink traversal
+remotely, so this makes the two consistent.
+
+**Two related fixes came with it.** `package_install::collect` walked with
+`is_dir`, which follows, so a digest could describe a tree the package does not
+contain and differ between two machines whose link targets differ; it now refuses
+a link outright. And `tree_digest` concatenated every file in a package into one
+`Vec<u8>` before hashing — at the 256 MiB ceiling that is that much resident, and
+`sha256` copied its input, so twice that. It now streams in 64 KiB chunks through
+an incremental `hash::Sha256`.
+
+**The digest is unchanged**, which is the compatibility requirement: every
+existing `serez.lock` records digests from the old path.
+`the_digest_is_the_one_existing_lockfiles_recorded` pins the exact value
+captured from the release binary before the change.
+
+**Pinned by** `tests/registry_containment.rs`, 8 tests over the real binary, and
+5 new unit tests. Five of the eight fail against the old copy; the two controls —
+an ordinary nested package installing as itself, and the entry ceiling *accepting*
+10,000 — pass either way, which is what stops "refuse everything" from passing
+the suite. The ceilings are tested at the boundary, 10,000 and 10,001, not at 10×.
+
+### 5.47 — the incremental hasher discarded every update that did not fill a block — *caught by tests, never shipped*, 2026-09-03
+
+Recorded because of how it was found rather than because it reached anyone.
+
+`Sha256::update` filled a partial block and then fell through to code that
+reset `pending_len` from the remainder of an already-consumed slice, throwing
+away everything buffered before it. One-shot `sha256` calls `update` exactly
+once, so **`tests/unit_crypto.sz`'s published vectors could not see it** — all
+six passed. `tree_digest` calls it four times per file, and its own two tests
+failed on the next run:
+
+```text
+assertion `left != right` failed: content ignored
+  left:  sha256-807effff00d801ad698fbb1ae55e742e3c7e0febf762c9369f8241b454201cff
+  right: sha256-807effff00d801ad698fbb1ae55e742e3c7e0febf762c9369f8241b454201cff
+```
+
+Two files with different contents hashing identically — the integrity check
+silently accepting anything.
+
+The lesson is about coverage shape, not about the bug: a vector suite tests one
+call pattern, and the API had grown a second. `a_split_stream_hashes_like_a_whole_one`
+now feeds the same bytes at eight different split sizes around the 64-byte block
+and requires one digest, which is the property vectors cannot express.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of

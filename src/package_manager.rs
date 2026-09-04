@@ -196,11 +196,6 @@ pub fn registry_url() -> String {
         .unwrap_or_else(|_| "https://packages.serezcode.org".to_string())
 }
 
-/// Install a package from the local registry or HTTP registry into ./packages/.
-/// pkg_spec = "name" or "name@version".
-/// When `record` is true, the resolved dependency is written back into the
-/// project's serez.json (used by `sz install <pkg>`; skipped by `sz install`
-/// which already reads its list from the manifest).
 /// Whether an install adds the dependency to `serez.json`.
 ///
 /// This used to be a `record: bool` that gated **both** the manifest and the
@@ -224,6 +219,13 @@ pub enum ManifestPolicy {
     Keep,
 }
 
+/// Install a package from the local registry or the HTTP registry into
+/// `./packages/`, where `pkg_spec` is `"name"` or `"name@version"`.
+///
+/// The install itself is a [`package_install::Transaction`]: staged beside the
+/// destination, verified against the lockfile, and made visible in a rename.
+/// `manifest` says only whether `serez.json` gains a line; the lockfile is
+/// written either way.
 pub fn install_package(
     pkg_spec: &str,
     manifest: ManifestPolicy,
@@ -277,7 +279,7 @@ pub fn install_package(
     // Try local registry first, fall back to HTTP
     let src = registry.join(&pkg_name).join(&version);
     if src.exists() {
-        copy_dir_recursive(&src, transaction.staging_dir())
+        copy_registry_tree(&src, transaction.staging_dir())
             .map_err(|e| format!("Failed to install '{}@{}': {}", pkg_name, version, e))?;
     } else {
         download_package(&pkg_name, &version, transaction.staging_dir())?;
@@ -2114,15 +2116,143 @@ fn find_latest_version(pkg_reg_dir: &Path) -> Option<String> {
         .max()
 }
 
-fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dest)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let dest_path = dest.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_dir_recursive(&entry.path(), &dest_path)?;
+/// How deep a package tree may nest.
+///
+/// Not a security boundary on its own — links are refused, and without a link a
+/// real filesystem cannot produce a cycle. It is the guard that keeps a
+/// pathological tree from recursing until the stack runs out, and it is well
+/// past anything a package plausibly contains.
+const MAX_PACKAGE_TREE_DEPTH: usize = 64;
+
+/// Copy a package out of the local registry, under the same limits as an archive.
+///
+/// # What the local path was missing
+///
+/// A remote install validates every path in the archive, refuses more than
+/// `MAX_PACKAGE_ARCHIVE_ENTRIES` entries, stops at `MAX_PACKAGE_EXTRACTED_BYTES`,
+/// and refuses to traverse a symbolic link. A local-registry install called a
+/// plain recursive copy that did none of that, and `Path::is_dir` follows links.
+///
+/// **Measured**, with a local registry containing a package that links out of it:
+///
+/// | The package contains | What was installed |
+/// |---|---|
+/// | `leak.txt -> ../../../outside/id_rsa` | `packages/evil/leak.txt`, contents `PRIVATE KEY MATERIAL` |
+/// | `out -> ../../../outside` (dir symlink) | the whole outside subtree, copied in |
+/// | `junc -> …\outside` (junction) | the same, and a junction needs no privilege on Windows |
+/// | a link back to an ancestor | `Access is denied. (os error 5)` — the OS gave up, not the code |
+/// | 20,000 files | 20,001 entries installed; the archive path stops at 10,000 |
+///
+/// The first three are a read primitive: a registry entry chooses a path on the
+/// host and its contents land inside the project, silently, exit 0. The fourth
+/// only stopped because Windows refused at some depth; nothing here recognised a
+/// cycle. The fifth is the limits simply not existing.
+///
+/// # Why links are refused rather than resolved
+///
+/// Containment by canonicalising each target and checking it stays under the
+/// registry root is racy — the target can change between the check and the copy —
+/// and it would still let a package smuggle in a link the archive path would
+/// never have accepted. `create_package_directories` already refuses to traverse
+/// a symlink on the remote side, so refusing them here makes one policy out of
+/// two rather than inventing a second one. A package that wants a file twice can
+/// contain it twice.
+fn copy_registry_tree(src: &Path, dest: &Path) -> Result<(), String> {
+    let mut budget = CopyBudget {
+        entries: 0,
+        bytes: 0,
+    };
+    copy_registry_dir(src, dest, Path::new(""), 0, &mut budget)
+}
+
+/// What a single registry copy has spent, shared across the recursion.
+struct CopyBudget {
+    entries: usize,
+    bytes: u64,
+}
+
+fn copy_registry_dir(
+    src: &Path,
+    dest: &Path,
+    relative: &Path,
+    depth: usize,
+    budget: &mut CopyBudget,
+) -> Result<(), String> {
+    if depth > MAX_PACKAGE_TREE_DEPTH {
+        return Err(format!(
+            "Package tree nests deeper than {} directories at '{}'",
+            MAX_PACKAGE_TREE_DEPTH,
+            relative.display()
+        ));
+    }
+
+    std::fs::create_dir_all(dest)
+        .map_err(|e| format!("Cannot create '{}': {}", dest.display(), e))?;
+
+    let entries =
+        std::fs::read_dir(src).map_err(|e| format!("Cannot read '{}': {}", src.display(), e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Cannot read a directory entry: {}", e))?;
+        let name = entry.file_name();
+        let child_relative = relative.join(&name);
+
+        // The same rules an archive path goes through, so a package cannot enter
+        // by the local door carrying something the remote door would refuse.
+        let printable = child_relative.to_string_lossy().replace('\\', "/");
+        validate_package_relative_path(&printable, "registry path")?;
+
+        budget.entries += 1;
+        if budget.entries > MAX_PACKAGE_ARCHIVE_ENTRIES {
+            return Err(format!(
+                "Package has more than {} entries",
+                MAX_PACKAGE_ARCHIVE_ENTRIES
+            ));
+        }
+
+        // `symlink_metadata` does not follow. This is the whole fix: every
+        // reparse point — symlink or junction — is seen as itself.
+        let metadata = std::fs::symlink_metadata(entry.path())
+            .map_err(|e| format!("Cannot inspect '{}': {}", entry.path().display(), e))?;
+        let kind = metadata.file_type();
+
+        if kind.is_symlink() {
+            return Err(format!(
+                "Package path '{}' is a link. A package may contain only regular files \
+                 and directories, so that what is installed is what the registry holds \
+                 and nothing the link happens to point at.",
+                printable
+            ));
+        }
+
+        let dest_path = dest.join(&name);
+        if kind.is_dir() {
+            copy_registry_dir(
+                &entry.path(),
+                &dest_path,
+                &child_relative,
+                depth + 1,
+                budget,
+            )?;
+        } else if kind.is_file() {
+            budget.bytes = budget
+                .bytes
+                .checked_add(metadata.len())
+                .ok_or_else(|| "Package size overflows the runtime counter".to_string())?;
+            if budget.bytes > MAX_PACKAGE_EXTRACTED_BYTES {
+                return Err(format!(
+                    "Package expands beyond the {} byte limit",
+                    MAX_PACKAGE_EXTRACTED_BYTES
+                ));
+            }
+            std::fs::copy(entry.path(), &dest_path)
+                .map_err(|e| format!("Cannot copy into '{}': {}", dest_path.display(), e))?;
         } else {
-            std::fs::copy(entry.path(), dest_path)?;
+            // A fifo, socket or device node. Not something a package contains,
+            // and copying one would either block or produce nonsense.
+            return Err(format!(
+                "Package path '{}' is neither a regular file nor a directory",
+                printable
+            ));
         }
     }
     Ok(())
