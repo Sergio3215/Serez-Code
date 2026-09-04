@@ -2467,6 +2467,45 @@ functions to the measured rule for every form, with the five legitimate cases.
 
 ---
 
+### 5.52 — a `stopGrad` test that asserted only that nothing crashed — **FIXED 2026-09-03**, low (found in the Core-defects pass, 2026-09-03)
+
+`tests/ai_phase3_ops.sz` built a detached tensor, ran a backward pass, and
+finished with:
+
+```serez
+    // Just verify it doesn't crash
+    assert(true, "stopGrad should not crash")
+```
+
+The comment above it explained what *should* happen and nothing checked it. The
+same assertion passes against a `stopGrad` that returns its argument untouched,
+which is the one behaviour worth testing for.
+
+**Semantics unchanged.** This is a test-quality fix: `stopGrad` is not touched.
+
+**What replaced it**, four tests where there was one, measured against the
+release binary first:
+
+  * **the gradient is there when it should be** — `Autodiff.gradient(w).norm()`
+    is `2.7386` for a live tensor. The positive control, because every other
+    assertion is about a gradient being *absent* and all of them would pass if
+    gradients never flowed.
+  * **the detached source is off the tape** — `Autodiff.gradient(w)` *throws*
+    `SZ4000, tensor was not recorded during tape`. Not a small gradient: none.
+  * **the quantitative control** — the same tensor in three graphs: one live
+    branch `2.7386`, a live branch plus a **detached** branch `2.7386`
+    (unchanged), two live branches `5.4772` (exactly double). A `stopGrad` that
+    zeroed the whole tape would satisfy the first two tests and fail this one.
+  * **values survive detaching** — without it, returning a tensor of zeros would
+    pass everything above.
+
+**The control that says it works.** With `stopGrad` reduced to `return t_ref`,
+exactly the two detachment tests fail and the other two pass — correctly, since
+a passthrough does preserve values and does let gradients flow. `ai_phase3_ops`
+goes from 19 assertions passing to 22.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of

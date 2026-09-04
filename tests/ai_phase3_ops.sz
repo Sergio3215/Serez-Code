@@ -149,16 +149,79 @@ test("reduceMean axis=0 on [4,2] → [2]", () => {
 
 // ── stopGrad / detach ─────────────────────────────────────────────────────────
 
-test("stopGrad detaches tensor from tape", () => {
-    let w = Autodiff.xavierNormal([2, 2])
+// This block used to be one test ending in `assert(true, "stopGrad should not
+// crash")`. Not crashing is not detaching: the same assertion passes against a
+// `stopGrad` that returns its argument untouched, which is the one behaviour
+// worth testing for. What follows measures the gradient instead.
+//
+// Nothing about `stopGrad` changes here — only what is claimed about it.
+
+test("a gradient reaches a tensor that is not detached", () => {
+    // The positive control, first. Every assertion below is about a gradient
+    // being absent, and all of them would pass if gradients never flowed at all.
+    let w = Tensor.from([[1.0, 2.0], [3.0, 4.0]])
+    Autodiff.tape()
+    let loss = Autodiff.mseLoss(w, Tensor.zeros([2, 2]))
+    Autodiff.backward(loss)
+    assert(Autodiff.gradient(w).norm() > 0.0, "a live tensor has a gradient")
+})
+
+test("stopGrad leaves its source off the tape entirely", () => {
+    // Reading the gradient of a tensor the tape never recorded throws, which is
+    // the strongest available evidence of detachment: not a small gradient, no
+    // gradient. Measured: SZ4000, "tensor was not recorded during tape".
+    let w = Tensor.from([[1.0, 2.0], [3.0, 4.0]])
     Autodiff.tape()
     let detached = Autodiff.stopGrad(w)
     let loss = Autodiff.mseLoss(detached, Tensor.zeros([2, 2]))
     Autodiff.backward(loss)
-    // Gradient should NOT flow to w through detached
-    // (detached is a new tensor not connected to w on the tape)
-    // Just verify it doesn't crash
-    assert(true, "stopGrad should not crash")
+
+    let caught = false
+    try { Autodiff.gradient(w) } catch (e) { caught = true }
+    assert(caught, "the detached source must have no recorded gradient")
+})
+
+test("a detached branch contributes nothing, and a live one doubles", () => {
+    // The quantitative control, and the reason the two above are not enough:
+    // a `stopGrad` that silently zeroed the whole tape would satisfy both.
+    //
+    // The same tensor, three graphs. Measured norms: 2.7386, 2.7386, 5.4772.
+    let zero = Tensor.zeros([2, 2])
+
+    let w1 = Tensor.from([[1.0, 2.0], [3.0, 4.0]])
+    Autodiff.tape()
+    Autodiff.backward(Autodiff.mseLoss(w1, zero))
+    let one = Autodiff.gradient(w1).norm()
+
+    let w2 = Tensor.from([[1.0, 2.0], [3.0, 4.0]])
+    Autodiff.tape()
+    let live = Autodiff.mseLoss(w2, zero)
+    let cut = Autodiff.mseLoss(Autodiff.stopGrad(w2), zero)
+    Autodiff.backward(live.add(cut))
+    let withCut = Autodiff.gradient(w2).norm()
+
+    let w3 = Tensor.from([[1.0, 2.0], [3.0, 4.0]])
+    Autodiff.tape()
+    let a = Autodiff.mseLoss(w3, zero)
+    let b = Autodiff.mseLoss(w3, zero)
+    Autodiff.backward(a.add(b))
+    let twoLive = Autodiff.gradient(w3).norm()
+
+    assert(one > 0.0, "the single live branch has a gradient")
+    assert(Math.abs(withCut - one) < 0.0001,
+           "adding a detached branch changed the gradient")
+    assert(Math.abs(twoLive - 2.0 * one) < 0.0001,
+           "adding a live branch did not double the gradient")
+})
+
+test("stopGrad preserves the values it detaches", () => {
+    // Detaching must cut the graph and nothing else. Without this, returning a
+    // tensor of zeros would pass every test above.
+    let t = Tensor.from([2.0, 4.0, 6.0])
+    let d = Autodiff.stopGrad(t).toArray()
+    assert(d[0] == 2.0, "entry 0 survives")
+    assert(d[1] == 4.0, "entry 1 survives")
+    assert(d[2] == 6.0, "entry 2 survives")
 })
 
 // ── Element-wise ops ──────────────────────────────────────────────────────────
