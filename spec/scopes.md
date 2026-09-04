@@ -126,9 +126,48 @@ bump(); bump();         // counter is 2
 
 ## No hoisting
 
-A function must be declared before the statement that calls it. Calling a
-function declared later in the file is `ReferenceError` / `SZ4001`, the same as
-any other unbound name.
+Nothing is hoisted. A name is bound when the statement that declares it
+executes, and using it before then is `ReferenceError` / `SZ4001` — for every
+declaration form, not only functions:
+
+```text
+out x;   let x = 1;              ReferenceError: Variable not found: x
+out f(); fn int f() { … }        ReferenceError: Variable not found: f
+let c = new C(); class C { … }   ReferenceError: Unknown class or interface 'C'
+out E.A; enum E { A, B }         ReferenceError: Variable not found: E
+out a;   let [a, b] = [1, 2];    ReferenceError: Variable not found: a
+out n;   native fn int n();      ReferenceError: Variable not found: n
+```
+
+The semantic phase reports this as `SZ8000` before the program runs, so the
+statements before it do not execute first.
+
+### What "before" means
+
+The rule is about when the use *runs*, not where it is written. A body that runs
+later may name a declaration that comes later in the file, and all of these are
+correct:
+
+```serez
+class Child : Parent { }        // a parent is resolved at instantiation
+class Parent { }
+
+fn int a() { return b(); }      // mutual recursion between top-level functions
+fn int b() { return 1; }
+out a();
+
+let f = () => { return later; };  // the lambda runs after `later` is bound
+let later = 1;
+out f();
+
+fn void h(Later p) { }          // an annotation evaluates nothing
+class Later { }
+```
+
+What is reported is a use that is evaluated **by its own statement** while the
+declaration's statement has not run: `out x;` above the `let x`, `new C()` above
+the `class C`. Inside a function, a block or a lambda the same rule applies to
+that scope's own declarations.
 
 ## Memory
 

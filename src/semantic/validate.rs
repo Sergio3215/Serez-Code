@@ -142,6 +142,7 @@ pub fn validate_in(
     }
     check_inheritance(program, &scopes, &mut findings);
     check_names(&scopes, &mut findings);
+    check_declaration_order(&scopes, &mut findings);
 
     findings.sort_by_key(|d| (d.span.line, d.span.column));
     findings
@@ -413,6 +414,60 @@ fn check_names(report: &scopes::ScopeReport, findings: &mut Vec<Diagnostic>) {
             // `Read` and `Call` read the same to a user, and splitting the
             // wording would imply a distinction the rule does not make.
             _ => format!("'{name}' is not declared in this scope or any enclosing one"),
+        };
+        findings.push(Diagnostic::frontend(
+            SZ_SEMANTIC_ERROR,
+            Phase::Semantic,
+            use_site.span,
+            message,
+        ));
+    }
+}
+
+/// A top-level name used, at top level, before its declaration has run.
+///
+/// # Why this is a separate rule from `check_names`
+///
+/// `check_names` asks whether a name is declared *anywhere*. This asks whether
+/// it is declared *yet*, and the two disagree on exactly the programs the
+/// runtime rejects:
+///
+/// ```text
+/// $ sz h.sz          # out x; let x = 1;
+/// ❌ ERROR [SZ4001]: Variable not found: x
+/// ```
+///
+/// The phase said nothing about that, because `seed_globals` binds every
+/// top-level declaration into frame 0 before the walk. Inside a block it
+/// reported the same thing correctly — `{ out z; let z = 1; }` is `SZ8000` — so
+/// the phase's answer depended on nesting rather than on the language.
+///
+/// # Not new hoisting rules
+///
+/// Nothing about what Serez hoists changes; this reports what it already does.
+/// `semantic::scopes::Walker::note_order` carries the measurements, including
+/// the five forward references that legitimately work and are not reported.
+///
+/// # Why it is not gated on `is_conclusive`
+///
+/// An unread module contributes its names *when the import runs*, so it cannot
+/// turn a use that precedes every declaration in the file into one that follows
+/// a declaration. The rule is about order within this file, and the order is
+/// visible whether or not the modules were read.
+fn check_declaration_order(report: &scopes::ScopeReport, findings: &mut Vec<Diagnostic>) {
+    for use_site in &report.used_before_declared {
+        let name = &use_site.name;
+        let message = match use_site.kind {
+            UseKind::Write => format!(
+                "cannot assign to '{name}' here: its declaration has not run yet. \
+                 Serez binds a name when its statement executes, so move the \
+                 assignment after the declaration."
+            ),
+            _ => format!(
+                "'{name}' is used before its declaration has run. Serez binds a name \
+                 when its statement executes, so move the use after the declaration \
+                 or the declaration before the use."
+            ),
         };
         findings.push(Diagnostic::frontend(
             SZ_SEMANTIC_ERROR,

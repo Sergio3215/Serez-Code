@@ -133,6 +133,18 @@ pub struct ScopeReport {
     /// undeclared. That was measured as three corpus failures and one ecosystem
     /// failure before this list replaced a top-level walk.
     pub import_specs: Vec<String>,
+    /// Top-level names used, at top level, before the statement that declares
+    /// them has run.
+    ///
+    /// Separate from `free` because it is a different fact. A name in `free` is
+    /// declared **nowhere**; a name here is declared, just not yet — and the
+    /// difference matters to whoever reads the report and to the message a user
+    /// sees. See [`Walker::note_order`] for what the runtime actually does.
+    ///
+    /// Unaffected by `unresolved_imports`: an import contributes its names
+    /// *when it runs*, so an unread module cannot turn a use that precedes every
+    /// declaration into a use that follows one.
+    pub used_before_declared: Vec<FreeUse>,
 }
 
 impl ScopeReport {
@@ -266,6 +278,7 @@ pub fn analyze(program: &Program) -> ScopeReport {
         // doing nothing.
         unresolved_imports: walker.has_imports,
         import_specs: walker.import_specs,
+        used_before_declared: walker.used_before_declared,
     }
 }
 
@@ -279,6 +292,14 @@ struct Walker {
     free: Vec<FreeUse>,
     has_imports: bool,
     import_specs: Vec<String>,
+    /// Top-level declarations whose statement the walk has already passed.
+    ///
+    /// Frame 0 holds *every* top-level declaration from the start, because a
+    /// function body or a lambda runs later and legitimately sees all of them.
+    /// This is the other half: what has actually been declared by the time a
+    /// statement at top level runs.
+    declared_so_far: HashSet<String>,
+    used_before_declared: Vec<FreeUse>,
 }
 
 impl Walker {
@@ -291,12 +312,20 @@ impl Walker {
         {
             root.insert((*name).to_string());
         }
+        // Builtins, namespaces and builtin classes exist before the first
+        // statement runs, so they are declared-so-far from the start. Without
+        // this, `out abs(5);` on line 1 reads as a use before a declaration —
+        // measured as 52 corpus failures, every one of them a builtin.
+        let declared_so_far = root.clone();
+
         Walker {
             frames: vec![root],
             enclosing: Vec::new(),
             free: Vec::new(),
             has_imports: false,
             import_specs: Vec::new(),
+            declared_so_far,
+            used_before_declared: Vec::new(),
         }
     }
 
@@ -332,10 +361,81 @@ impl Walker {
     }
 
     fn use_name(&mut self, name: &str, kind: UseKind, span: Span) {
+        self.note_order(name, kind, span);
         if self.is_bound(name) {
             return;
         }
         self.free.push(FreeUse {
+            name: name.to_string(),
+            kind,
+            span,
+            enclosing: self.enclosing.last().cloned(),
+        });
+    }
+
+    /// Record a top-level name used before its declaration has run.
+    ///
+    /// # What the runtime actually does, measured
+    ///
+    /// Nothing is hoisted. A binding exists from the moment its statement
+    /// executes, and every form fails the same way when used earlier:
+    ///
+    /// ```text
+    /// out x; let x = 1;                       ❌ SZ4001 Variable not found: x
+    /// out x; const x = 1;                     ❌ SZ4001 Variable not found: x
+    /// out f(); fn int f() { return 1; }       ❌ SZ4001 Variable not found: f
+    /// let c = new C(); public class C {…}     ❌ SZ4001 Unknown class 'C'
+    /// out E.A; enum E { A, B }                ❌ SZ4001 Variable not found: E
+    /// out a; let [a, b] = [1, 2];             ❌ SZ4001 Variable not found: a
+    /// out n; native fn int n();               ❌ SZ4001 Variable not found: n
+    /// ```
+    ///
+    /// The semantic phase said nothing about any of them, because
+    /// `seed_globals` binds every top-level declaration into frame 0 before the
+    /// walk starts. Inside a function or a block it reported them correctly —
+    /// `{ out z; let z = 1; }` is `SZ8000` — so the phase disagreed with itself
+    /// depending on nesting, and with the runtime at top level.
+    ///
+    /// # Why frame 0 still holds everything
+    ///
+    /// Because a use that runs *later* legitimately sees a declaration that
+    /// comes later in the file, and all of these work:
+    ///
+    /// ```text
+    /// class Child : Parent {…}  class Parent {…}     ok — parents resolve at instantiation
+    /// fn a() { return b(); }    fn b() {…}  a();     ok — mutual recursion
+    /// let f = () => later;      let later = 1; f();  ok — the lambda runs after
+    /// fn g() { return later; }  let later = 7; g();  ok — same
+    /// fn h(Later p) {}          class Later {…}      ok — an annotation names nothing yet
+    /// ```
+    ///
+    /// So the rule is not "declare before use". It is: a use that happens **when
+    /// its own statement runs** needs the declaration to have run. That is
+    /// exactly `frames.len() == 1` — every deferred context (`function_body`,
+    /// `block`, a lambda) goes through [`Self::scoped`] and is deeper.
+    ///
+    /// `Parent` is excluded, and only `Parent`: a declared parent is resolved at
+    /// instantiation, as the second block above measures. `Type` is **not** —
+    /// despite the name it means a construction site, `new Name(...)`, which is
+    /// evaluated exactly when its statement runs. Excluding it on the strength
+    /// of the name missed `let c = new C(); public class C {…}`, which the
+    /// runtime rejects with `Unknown class or interface 'C'`. Type
+    /// *annotations* are not walked at all, which is why `fn h(Later p) {}`
+    /// before `class Later` needs no exception.
+    fn note_order(&mut self, name: &str, kind: UseKind, span: Span) {
+        if self.frames.len() != 1 {
+            return;
+        }
+        if kind == UseKind::Parent {
+            return;
+        }
+        // Only a name this file declares at top level. Anything else is either a
+        // builtin, an import, or genuinely undeclared — and the last of those is
+        // `free`'s job, reported once rather than twice.
+        if self.declared_so_far.contains(name) || !self.frames[0].contains(name) {
+            return;
+        }
+        self.used_before_declared.push(FreeUse {
             name: name.to_string(),
             kind,
             span,
@@ -427,6 +527,11 @@ impl Walker {
     /// leaves the runtime to catch it exactly as before, while inventing one
     /// rejects a correct program.
     fn statements(&mut self, statements: &[Statement]) {
+        // Only the outermost list advances `declared_so_far`: a nested list is
+        // inside a scope that already reports order correctly, because its names
+        // are bound as the walk reaches them rather than seeded up front.
+        let top_level = self.frames.len() == 1;
+
         let mut deferred: Vec<&FunctionDeclaration> = Vec::new();
         for statement in statements {
             // `export fn` is the same declaration with a wrapper.
@@ -440,6 +545,13 @@ impl Walker {
                     deferred.push(f);
                 }
                 _ => self.statement(statement),
+            }
+            if top_level {
+                // After the statement, not before: `let x = x + 1;` reads `x`
+                // while it is still undeclared, which is what the runtime does.
+                for name in declared_names(std::slice::from_ref(statement)) {
+                    self.declared_so_far.insert(name);
+                }
             }
         }
         for f in deferred {

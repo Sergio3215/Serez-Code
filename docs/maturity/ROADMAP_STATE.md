@@ -2404,6 +2404,69 @@ column 1. Cosmetic, pre-existing, and not touched here.
 
 ---
 
+### 5.51 — the phase pre-seeded top-level bindings the runtime does not create — **FIXED 2026-09-03**, medium (found in the Core-defects pass, 2026-09-03)
+
+`seed_globals` binds every top-level declaration into frame 0 before the walk
+starts, so a use before its declaration was invisible at top level and reported
+correctly everywhere else. The phase disagreed with itself depending on nesting,
+and with the runtime at top level.
+
+**Measured first**, against the release binary. Serez hoists nothing:
+
+| Written | Runtime | Phase, before |
+|---|---|---|
+| `out x; let x = 1;` | `SZ4001 Variable not found: x` | silent |
+| `out f(); fn int f() {…}` | `SZ4001 Variable not found: f` | silent |
+| `let c = new C(); class C {…}` | `SZ4001 Unknown class 'C'` | silent |
+| `out E.A; enum E { A, B }` | `SZ4001 Variable not found: E` | silent |
+| `out a; let [a, b] = [1, 2];` | `SZ4001 Variable not found: a` | silent |
+| `out n; native fn int n();` | `SZ4001 Variable not found: n` | silent |
+| `{ out z; let z = 1; }` | `SZ4001` | **`SZ8000`** — correct |
+
+**No new hoisting rule was invented**, which the finding was explicit about.
+Frame 0 still holds every top-level declaration from the start, because five
+forward references legitimately work and none of them is now reported:
+
+```text
+class Child : Parent {…}  class Parent {…}     parents resolve at instantiation
+fn a() { return b(); }    fn b() {…}  a();     mutual recursion
+let f = () => later;      let later = 1; f();  the lambda runs afterwards
+fn g() { return later; }  let later = 7; g();  same
+fn h(Later p) {}          class Later {…}      an annotation evaluates nothing
+```
+
+So the rule is not "declare before use". It is: **a use evaluated when its own
+statement runs needs the declaration to have run** — which is exactly
+`frames.len() == 1`, because every deferred context (a function body, a block, a
+lambda) goes through `scoped` and is deeper.
+
+**Two things the first attempt got wrong**, both caught by the suites rather
+than by reading:
+
+  * `UseKind::Type` sounds like an annotation and was excluded on that reading.
+    It means a **construction site**, `new Name(...)`, evaluated where it stands
+    — and excluding it missed `let c = new C();` above `class C`, which the
+    runtime rejects. Annotations are not walked at all, so they never needed an
+    exception.
+  * `declared_so_far` started empty, so `out abs(5);` on line 1 read as a use
+    before a declaration. **52 corpus files failed**, every one of them on a
+    builtin. Builtins, namespaces and builtin classes exist before the first
+    statement runs and are seeded from the root frame.
+
+**Reported as its own finding, not folded into the free-name rule.** "Declared
+nowhere" and "not declared yet" are different facts and want different advice,
+and `a_name_declared_nowhere_keeps_its_own_message` pins that a name in one
+category never gets the other's wording.
+
+**Pinned by** `tests/declaration_order.rs`, 18 tests split evenly: 9 that must be
+reported and 9 that must not. Against a disabled rule exactly the first 9 fail
+and exactly the second 9 pass, which is the control that says the rule is doing
+what its name claims rather than rejecting forward references in general.
+`spec/scopes.md`'s "No hoisting" section is rewritten from one sentence about
+functions to the measured rule for every form, with the five legitimate cases.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of
