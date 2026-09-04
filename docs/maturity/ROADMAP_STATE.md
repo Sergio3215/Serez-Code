@@ -29,7 +29,7 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **16 OPEN, 10 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M9-003** (what ceiling `OS.exec` output has) |
+| **Open decisions** | **17 OPEN, 10 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M9-003** (what ceiling `OS.exec` output has), **DEC-M10-003** (does any phase timing block a build) |
 | Branch | `improve` |
 | HEAD | `2d4302f` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
@@ -2568,6 +2568,71 @@ says the suite is measuring more than one thing.
 
 ---
 
+### 5.54 — the phase timings measured the sampling order as much as the code — **FIXED 2026-09-04**, medium (found in the Core-defects pass, 2026-09-03)
+
+`tests/perf_budget.rs` ran each phase 15 times in a row before starting the
+next, with no warmup. Two consequences, both visible in the numbers:
+
+  * whatever else the machine did during a phase's block of runs landed on
+    **that phase**, entirely — which is how one phase acquires a 3× spread while
+    its neighbours look clean, and why the phases were not comparable to each
+    other;
+  * a phase's first run pays for cold caches and a heap that has not reached a
+    steady size. The minimum is immune to that; `max` is not, and `max` is what
+    the spread column reported.
+
+**Measured before**, three consecutive release runs:
+
+```text
+semantic.validate    136    190   1.40x   3.17x
+semantic.validate    136    192   1.41x   2.83x
+semantic.validate    136    200   1.47x   3.60x
+```
+
+A ratio of 1.40× with a spread of 3.17× is not evidence of anything, which is
+precisely what the finding said: observed above baseline, variance too high to
+call it a regression.
+
+**Fixed by changing how it samples**, not what it measures. Three warmup rounds
+discarded, then fifteen rounds running **every** phase once each. A slow stretch
+of wall-clock now touches every phase's sample for that round instead of one
+phase's whole distribution. The report gained the **median** and reports
+`max/median` beside `max/min`: a scheduling hiccup moves `max` and leaves the
+median alone, while `max/min` is also moved by an unusually *fast* run, which is
+evidence of nothing.
+
+| | before (`max/min`, consecutive) | after (`max/median`, interleaved) |
+|---|---|---|
+| spread across phases | 1.8× – 3.6× | **1.1× – 1.6×** |
+
+**The change invalidated the baseline, and that is recorded rather than
+presented as an improvement.** A phase measured after a *different* phase sees a
+colder cache than one measured after itself, so the minimum rises — most for the
+sub-100 µs phases. Isolated before concluding anything: with this cycle's new
+semantic work disabled, `semantic.validate` read **2.69×**, *higher* than with it
+enabled (2.40×). The jump was the harness, not the code. The baseline was
+re-recorded under the new regime, the file says so, and the two sets of numbers
+are not comparable.
+
+Against the new baseline, three consecutive runs put every phase between 0.91×
+and 1.13× — well inside the 1.5× budget.
+
+**The baseline now says which machine made it.** `# recorded on: windows/x86_64`,
+and a comparison against a different OS/arch prints a note saying the difference
+is between two machines as much as between two revisions. That was the half
+missing from "numbers are machine-specific" being merely written in a comment.
+
+**What this does not decide.** Whether any phase becomes a blocking gate is
+**DEC-M10-003**, registered with the ratio-stability table this produced:
+`runtime.execute` swings 0.02 across three runs, the two sub-100 µs phases swing
+0.20 and 0.21. Nothing is promoted here.
+
+**Found by the gate one commit later:** the interleaved harness needed a boxed
+closure per phase, and `clippy::type_complexity` fired twice on the tuple. Fixed
+with a `type Phase<'a>` alias rather than recorded as accepted debt.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of
@@ -2738,6 +2803,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M9-002** | Whether package, manifest and lockfile are one recoverable transaction | **OPEN** | nothing; the lockfile is written under either answer |
 | **DEC-M9-003** | What ceiling `OS.exec` output has, and what happens at it | **OPEN** | nothing; the risk is documented and the current behaviour pinned |
 | **DEC-M10-001** | Whether CI runs the ecosystem canary | **DECIDED** 2026-09-03 — **a pinned blocking gate, plus a daily unpinned run**; implemented in `1d61f5d` | — |
+| **DEC-M10-003** | Whether any phase timing blocks a build | **OPEN** | nothing; the timings are advisory and the stability evidence is collected on every run |
 | **DEC-M10-002** | Whether clippy is a gate | **DECIDED** 2026-09-03 — **a per-lint/file baseline** (§7A's C; the letter given was B — see §0B.B); implemented in `1d61f5d` | — |
 
 ---
@@ -4394,6 +4460,79 @@ of them. Extending that to files that do not compile is a promise the tree canno
 keep.
 
 **Blocked by this decision:** nothing. Pinned by `symbols_survive_parse_errors`.
+
+---
+
+### DEC-M10-003 — Should any phase timing block a build?
+
+*Also referred to as **DEC-PENDING-PERFORMANCE-GATE** in the request that raised
+it.*
+
+**Problem.** `tests/perf_budget.rs` measures five phases against a committed
+baseline and never fails on a timing. That was the right call while nobody knew
+what the runners did; the question it deferred is whether it stays that way.
+
+**Current behaviour.** Advisory. A phase more than `BUDGET` (1.5×) its baseline
+is printed loudly and the test passes. It fails on exactly two things, neither a
+timing: a missing baseline and a malformed one.
+
+**Measured evidence.** The measurement itself had to be fixed before the
+question could be asked honestly — see §5.54. Each phase used to run 15 times in
+a row with no warmup, so whatever else the machine did landed on one phase
+entirely. With three warmup rounds discarded and the phases **interleaved**, one
+round running each once:
+
+| | before (`max/min`, consecutive) | after (`max/median`, interleaved) |
+|---|---|---|
+| spread across phases | 1.8× – 3.6× | **1.1× – 1.6×** |
+
+And the number that decides gateability — how much a phase's *ratio to baseline*
+moves between three consecutive runs on an idle `windows/x86_64` machine:
+
+| Phase | ratios over three runs | swing | `max/median` |
+|---|---|---|---|
+| `runtime.execute` | 1.08, 1.10, 1.09 | **0.02** | 1.11 – 1.40 |
+| `types.check` | 0.99, 1.06, 1.00 | 0.07 | 1.41 – 1.90 |
+| `frontend.parse` | 1.02, 1.02, 1.07 | 0.05 | 1.27 – 1.65 |
+| `semantic.validate` | 0.93, 1.02, 1.13 | 0.20 | 1.50 – 3.12 |
+| `semantic.declarations` | 0.91, 1.12, 1.03 | 0.21 | 1.39 – 1.74 |
+
+`runtime.execute` is both the largest absolute number and by far the steadiest:
+a 2% swing against a 50% budget. The two sub-100 µs phases swing 20%, which is
+where a 1.5× budget starts to look like a coin toss on a busy runner.
+
+This is one machine. CI runs three operating systems and the same table is
+printed on each, which is the point of collecting it on every run.
+
+**Option A — keep every phase advisory.** One rule, no flakiness, and the
+numbers stay a prompt to look rather than a verdict. It also means a real 40%
+regression in `runtime.execute` merges with a warning nobody reads.
+
+**Option B — block on the phases whose variance supports it, per runner.** On
+this evidence that is `runtime.execute` first, and possibly `frontend.parse`,
+with a per-OS baseline so a Linux runner is not compared against a Windows
+recording. The two sub-100 µs phases stay advisory. It costs a baseline file per
+runner, a decision about who refreshes them, and the first flaky failure will
+still be argued about.
+
+**Trade-offs.** A is what exists and asks nothing of anyone. B turns the one
+measurement that is stable enough to mean something into a gate, and its cost is
+entirely in the per-runner baselines — three files that must be refreshed
+together, or a gate that fires on whichever platform drifted first.
+
+**Architectural impact.** B needs the baseline keyed by machine; the file already
+records which one produced it, which is the half that was missing.
+**Semantic impact.** None. **Compatibility.** None; this is CI.
+**Impact by area.** `perf-baseline.txt`, `.github/workflows/ci.yml`.
+
+**Recommendation — a recommendation, not a decision.** **B, for
+`runtime.execute` only**, at a budget no tighter than 1.3×, with a baseline per
+runner OS. It is the phase a user actually experiences, it is the steadiest by an
+order of magnitude, and gating one phase that means something beats gating five
+that half do. Everything else stays advisory until its own numbers say otherwise.
+
+**Blocked by this decision:** nothing. The timings run on every CI push and print
+the evidence either way.
 
 ---
 

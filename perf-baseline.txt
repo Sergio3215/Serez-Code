@@ -3,7 +3,13 @@
 #
 # The statistic is the MINIMUM of several runs: a process is only ever slowed by
 # its neighbours, never sped up, so the fastest run is the least-contaminated
-# estimate of the work itself.
+# estimate of the work itself. The runs are interleaved — every phase once per
+# round — after discarding warmup rounds, so a slow stretch of wall-clock lands
+# on every phase rather than on whichever one happened to be running.
+#
+# These numbers are NOT comparable with a baseline recorded before that change:
+# a phase measured after a different phase sees a colder cache than one measured
+# after itself. See tests/perf_budget.rs and ROADMAP_STATE.md §5.54.
 #
 # These are advisory. `tests/perf_budget.rs` flags a phase more than 1.5x its
 # baseline and does **not** fail: timing on a shared runner is noisy, and a flaky
@@ -16,8 +22,9 @@
 # a difference here is a prompt to look, not a verdict.
 #
 # Refresh with: SEREZ_PERF_UPDATE=1 cargo test --release --test perf_budget
-frontend.parse	1519
-runtime.execute	4242
-semantic.declarations	24
-semantic.validate	136
-types.check	56
+# recorded on: windows/x86_64
+frontend.parse	1461
+runtime.execute	4218
+semantic.declarations	34
+semantic.validate	303
+types.check	70
