@@ -1788,7 +1788,24 @@ out precios["jamon"];  // → 12
 out mixto["Shen"];     // → true
 ```
 
-Accessing a missing key returns `null` (typed and untyped dicts alike). Use `??` to provide a default: `d["missing"] ?? 0`. Writing a **value of the wrong type** into a typed dict (`<K, V>`) is a runtime error.
+A key whose name is a valid identifier can also be read with a dot. The two
+forms are the same operation, and they mix freely:
+
+```serez
+let user <string,any> = ({"name","Sergio"});
+let dic  <string,any> = ({"user",user});
+
+out dic.user.name;      // → Sergio
+out dic["user"].name;   // → Sergio
+out dic.user["name"];   // → Sergio
+out dic?.user?.name;    // → Sergio
+```
+
+The key is the identifier exactly as written — `d.firstName` reads `"firstName"`, never `"first_name"`. Brackets are still needed for a computed key, a key held in a variable, and any key that is not a valid identifier: `headers["x-probe"]` cannot be written `headers.x-probe`, which is a subtraction. A dict's built-in methods win a name they share with a key, so on a dict with a `"length"` key, `d.length` is the method and `d["length"]` is the key.
+
+This is also how structured data from the network reads: `fetch` returns the body as a string, `JSON.parse` turns it into an ordinary dict, and `response.name` is the same rule as above rather than a separate feature.
+
+Accessing a missing key returns `null` (typed and untyped dicts alike), through either form. Use `??` to provide a default: `d["missing"] ?? 0` or `d.missing ?? 0`. Writing a **value of the wrong type** into a typed dict (`<K, V>`) is a runtime error. Writing through a dot is not supported — use `d["key"] = value`.
 
 #### Printing the whole dict
 
@@ -4106,7 +4123,7 @@ sz script.sz > output.txt 2> errors.txt
 | `❌ ERROR: Function expected N arguments, got M` | Arity mismatch at call site |
 | `❌ ERROR: Index out of bounds` | Array access outside `[0, len-1]` |
 | (dict: missing key → `null`) | Accessing a missing key in a dict returns `null`; use `??` for a default |
-| `❌ ERROR [SZ4001]: Unknown dict method 'x'` | Calling an undefined method on a dict. Sets and arrays use the same `SZ4001` shape. |
+| `❌ ERROR [SZ4001]: Unknown dict method 'x'` | **Calling** an undefined method on a dict — `d.x()`. Reading `d.x` without parentheses is a key access and answers `null` when there is no such key. Sets and arrays use the same `SZ4001` shape. |
 | `❌ ERROR [SZ4002]: Dict key/value type mismatch on Add: expected 'T', got 'U'` | Adding an entry whose types violate the dict's annotation |
 | `❌ ERROR: Division by zero` | `/` with zero on the right |
 | `❌ ERROR: Modulus operator by zero` | `%` with zero on the right |

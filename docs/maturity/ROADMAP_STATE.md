@@ -29,12 +29,12 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **15 OPEN, 13 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M10-003** (does any phase timing block a build). **DEC-M9-002** and **DEC-M9-003** are now decided. **DEC-M11-001** (the `unsafe` context) was raised and decided on 2026-09-04: **lexical** |
+| **Open decisions** | **17 OPEN, 13 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M10-003** (does any phase timing block a build). **DEC-M9-002** and **DEC-M9-003** are now decided. **DEC-M11-001** (the `unsafe` context) was raised and decided on 2026-09-04: **lexical**. Added 2026-09-04 by the dict dot-access pass: **DEC-M12-001** (which wins when a key and a method share a name), **DEC-M12-002** (should `d.k = v` write) — both open, neither blocking |
 | Branch | `improve` |
 | HEAD | `807a0a5` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-04 — **the Core-defects pass** (§5.43–§5.55). Eleven demonstrated defects, one commit each: the lockfile the ordinary install never wrote, a crash that lost a package, a local registry that could name any host file, a clippy gate debt could move through and that release never ran, a file whose names went unchecked because it imported, top-level bindings the runtime does not create, an outline that discarded its own nesting, timings that measured the sampling order, and a test that asserted only that nothing crashed. Three findings needed a decision and got a registered one instead of a guess |
+| Last state update | 2026-09-04 — **dict dot access** (§5.61): `dic.name` reads the key `dic["name"]` reads, as one guarded arm in the dict dispatcher rather than new syntax, and fetch needed no case of its own. Two decisions registered (DEC-M12-001, -002). Before that, **the Core-defects pass** (§5.43–§5.55). Eleven demonstrated defects, one commit each: the lockfile the ordinary install never wrote, a crash that lost a package, a local registry that could name any host file, a clippy gate debt could move through and that release never ran, a file whose names went unchecked because it imported, top-level bindings the runtime does not create, an outline that discarded its own nesting, timings that measured the sampling order, and a test that asserted only that nothing crashed. Three findings needed a decision and got a registered one instead of a guess |
 
 Milestone ledger:
 
@@ -2982,6 +2982,57 @@ has, so an in-process run overflows the *harness* before the interpreter's guard
 can refuse. That is a fact about the harness, and saying so in the test is better
 than quietly lowering the depth until it passes.
 
+### 5.61 — `dic.name` was valid syntax the runtime refused — **FIXED 2026-09-04**, medium
+
+`dic["name"]` read the key. `dic.name` did not:
+
+```text
+let dic <string, any> = ({"name", "Sergio"});
+dic["name"]   ->  Sergio
+dic.name      ->  SZ4001: Unknown dict method 'name'
+```
+
+The diagnostic names the cause. `dic.name` **already parsed** — the parser
+produces a `DotCall` with `has_parens: false` — and the semantic phase and the
+type checker already accepted it: `sz --check` passed on a program that could
+not run. Only the dict dispatcher's fallthrough arm was left, and it treated
+every unrecognised name as a bad method call.
+
+So the fix is one guarded arm in `eval_dict_method_slot`, with no grammar, no
+AST node and no new semantics. The parser snapshot is the evidence: across 506
+corpus files the only difference is the new test file itself, and no existing
+tree moved.
+
+**What the arm does, and why each part.** `has_parens` decides, so `dic.name`
+falls back to a key and `dic.notAMethod()` still reports an unknown method —
+without that distinction a mistyped call would evaluate to `null`. The key is
+the identifier verbatim. A missing key answers `null`, which was measured from
+`dic["missing"]` before anything changed, so the two forms cannot drift apart.
+The lookup goes through the same slot-resident hash index the bracket path uses,
+so there is no extra clone of the dict per read.
+
+**Fetch needed nothing.** The question "does structured data from the network
+need a case of its own" was answered by measuring rather than by assuming:
+`fetch` has no structured type. The default call returns the body as a
+**string**; `{ full: true }` returns a `Dict<string, any>`. A program that wants
+fields calls `JSON.parse`, which builds an ordinary `ObjectData::Dict`. One
+runtime path, so an `if came_from_fetch { … }` branch would have been a second
+implementation of something already working. `tests/fetch_dot_access.rs` proves
+it on real HTTP responses from a local `TcpListener` — including a test that a
+fetched dict and a hand-written one answer identically through both forms, which
+fails if anyone later makes fetch data special.
+
+**Two decisions registered rather than taken.** DEC-M12-001, which of a
+colliding key and method wins — the method does, which is what the dispatcher
+already did, and the collision occurs in **0 of 1,135** real `.sz`/`.szx` files.
+DEC-M12-002, whether `d.k = v` should write; it does not today, and reading
+shipped without waiting on it.
+
+**Pinned by** `tests/unit_dict_dot_access.sz` (19 cases, each asserting the dot
+form against the bracket form rather than against a literal) and
+`tests/fetch_dot_access.rs` (11, one of which is a control that the harness can
+fail).
+
 ---
 
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
@@ -3264,6 +3315,125 @@ any other and needs no separate rule; `a_lambda_does_not_inherit_its_callers_blo
 and `a_callback_does_not_inherit_the_block_two_frames_up` pin it.
 
 **One bug had to be fixed to get there** — §5.60.
+
+---
+
+### DEC-M12-001 — When a dict key and a built-in method share a name, which wins?
+
+**Problem.** `dic.name` now reads the key `"name"`. A dict also has ten built-in
+methods, and nothing stops a key from being called `length`, `keys` or `values`.
+One name, two things it could mean.
+
+**Current behaviour.** Measured against the release binary, before and after the
+change — the dispatcher matches its method names first, and the fallback arm
+that reads a key is the last one:
+
+```text
+let dic <string, any> = ({"length", "I am a key"});
+dic["length"]     ->  I am a key
+dic.length        ->  1
+dic.length()      ->  1
+```
+
+So the method wins, and the key stays reachable through brackets. This is not a
+new rule: it is what the dispatcher did when `dic.length` was the only meaning
+available, and the fallback was added underneath it rather than in front of it.
+
+**Measured evidence.** The collision does not occur in practice. Across the
+**1,135** `.sz` and `.szx` files in this repository and the eight ecosystem
+packages, searching for each of the ten method names used as a dict-literal key
+or a JSON key:
+
+| Method name | As a dict key | As a JSON key |
+|---|---|---|
+| `Add`, `Remove`, `RemoveAll`, `clear`, `toList`, `keys`, `values`, `toArray`, `toString` | 0 | 0 |
+| `length` | **1** | 0 |
+
+The single `length` hit is `tests/unit_dict_dot_access.sz`, written to pin this
+decision. Before it, the collision existed in no program anywhere in the
+repository or the ecosystem.
+
+**Option A — the method wins.** What ships. No existing program changes
+meaning, `d.length()` cannot be silently redirected to a key by data arriving
+from the network, and the key is still readable as `d["length"]`.
+
+**Option B — the key wins.** Dot access would be a complete second form:
+whatever `d[k]` reads, `d.k` reads. The cost is that a JSON response is enough
+to change what `d.keys()` means — a server that returns a `"keys"` field would
+turn a working method call into an attempt to call a string. That is a remote
+input deciding which code runs, which is why A is not merely the status quo.
+
+**Trade-offs.** A leaves one asymmetry: for a colliding name, `d.k` and `d[k]`
+answer differently, so "the two forms are the same operation" holds for every
+key except ten reserved words. B removes the asymmetry and adds a data-driven
+dispatch hazard. Neither is free; A's cost is measured at **zero programs** and
+B's cost is unbounded in the direction of untrusted input.
+
+**Architectural impact.** None either way — both are the order of two arms in
+`eval_dict_method_slot`. **Semantic impact.** B changes the meaning of existing
+method calls on dicts whose keys happen to collide. **Compatibility.** A is
+non-breaking; B is breaking in a way that depends on runtime data.
+**Impact by area.** `evaluator::methods_dict`, `spec/dicts.md`.
+
+**Recommendation — a recommendation, not a decision.** **A**, on the strength
+of the untrusted-input argument rather than on the status quo: the measurement
+shows compatibility is not what separates them, since neither option would move
+a single existing program. If the owner prefers B, the escape hatch it needs —
+a way to reach a shadowed method — does not exist yet and would have to be
+designed.
+
+**Blocked by this decision:** nothing. `tests/unit_dict_dot_access.sz` pins the
+measured behaviour, and its case is named for this entry.
+
+---
+
+### DEC-M12-002 — Should `dic.name = value` write the key?
+
+**Problem.** Reading has two forms; writing has one. `dic["name"] = "x"` works
+and `dic.name = "x"` does not, so the symmetry the read side just gained stops
+at the assignment operator.
+
+**Current behaviour.** Measured:
+
+```text
+let dic <string, any> = ({"name", "Sergio"});
+dic["name"] = "Jonathan"    ->  writes
+dic.name = "Jonathan"       ->  SZ4002: 'dic' is not a class or interface instance
+```
+
+The message is the tell: the field-assignment path is class machinery, and a
+dict receiver never reaches the dict writer. This is not a deliberate refusal
+so much as a path that was never asked to handle dicts.
+
+**Option A — leave it.** `d[k] = v` is the way to write; `d.k` is a reading
+convenience. One writer, one place where insertion order and declared-type
+checks happen.
+
+**Option B — make it write.** `d.k = v` inserts exactly as `d[k] = v` does.
+The read and write sides then match, which is what a reader will expect after
+using `d.k` to read.
+
+**Trade-offs.** B is the smaller surprise for anyone who has used the read form,
+and it has the same key-verbatim rule so there is nothing new to specify. Its
+real question is DEC-M12-001's, in a sharper form: `d.length = 1` would either
+have to fail, or shadow a method, or silently write a key that the read form
+cannot get back. A avoids answering that. B also needs the declared-type check
+to run on the dot path, or a `<string, int>` dict could be written through it
+without the check `Add` performs.
+
+**Architectural impact.** B touches the field-assignment path in
+`evaluator::stmt`, which is currently class-only. **Semantic impact.** B makes
+a program that errors today succeed. **Compatibility.** B is additive.
+**Impact by area.** `evaluator::stmt`, `evaluator::methods_dict`,
+`spec/dicts.md`.
+
+**Recommendation — a recommendation, not a decision.** **B**, but only after
+DEC-M12-001, because B has to inherit whatever precedence that entry settles on
+and would otherwise have to invent it. Reading was shipped without waiting for
+this: it is useful on its own, and nothing about it forecloses either answer.
+
+**Blocked by this decision:** nothing. `spec/dicts.md` states the current
+refusal and names this entry.
 
 ---
 

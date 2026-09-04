@@ -362,7 +362,7 @@ tests/unit_dec.sz	84797	0	58ea59f288abf97a	cbf29ce484222325
 tests/unit_default_params.sz	61630	0	0f322bc4e850c26c	cbf29ce484222325
 tests/unit_destructuring.sz	53513	0	39c31fcd06cdbad6	cbf29ce484222325
 tests/unit_dict_advanced.sz	49266	0	a9a437cd3f88a89a	cbf29ce484222325
-tests/unit_dict_dot_access.sz	77881	0	033be46d98788e0e	cbf29ce484222325
+tests/unit_dict_dot_access.sz	88136	0	1c32ce0661b05a74	cbf29ce484222325
 tests/unit_dict_forin.sz	41210	0	18707ec511115967	cbf29ce484222325
 tests/unit_dict_methods_slot.sz	148234	0	8bab47b166bdb32f	cbf29ce484222325
 tests/unit_dict_set_errors.sz	60506	0	e9704163e7e3faff	cbf29ce484222325

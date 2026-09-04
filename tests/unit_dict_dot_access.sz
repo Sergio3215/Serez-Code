@@ -137,6 +137,36 @@ test("reading a key — present or missing — does not mutate the dict", () => 
     assert(dic.missing == null, "the missing key is still missing");
 });
 
+// ── Optional chaining reaches the same arm ───────────────────────────────────
+
+test("optional chaining reads a key", () => {
+    let inner <string, any> = ({"name", "Inner"});
+    let dic <string, any> = ({"user", inner});
+    assert(dic?.name == null, "no such key, and no error");
+    assert(dic?.user?.name == "Inner", "a chain of optional dots");
+    assert(dic?.user?.name == dic["user"]["name"], "agrees with brackets");
+});
+
+// ── What only brackets can reach ─────────────────────────────────────────────
+
+test("a computed key needs brackets", () => {
+    // `d[expr]` takes any expression; `d.name` takes an identifier. This is why
+    // both forms have to stay: the dot form cannot express these at all.
+    let dic <string, any> = ({"name", "Sergio"});
+    let k = "name";
+    assert(dic[k] == "Sergio", "a key held in a variable");
+    assert(dic["na" + "me"] == "Sergio", "a key built at runtime");
+});
+
+test("a key that is not a valid identifier needs brackets", () => {
+    // The ordinary case is a header name. `dic.x-probe` would be a subtraction,
+    // so brackets are the only way in — which the fetch tests rely on when they
+    // read a response header.
+    let dic <string, any> = ({"x-probe", "seen"});
+    assert(dic["x-probe"] == "seen", "a hyphenated key");
+    assert(dic["two words"] == null, "and one with a space is simply absent");
+});
+
 // ── DEC-M12-001: a name shared by a method and a key ─────────────────────────
 
 test("DEC-M12-001: a built-in method wins a name it shares with a key", () => {
