@@ -2052,6 +2052,86 @@ out "v1";
 
 ---
 
+### 5.44 — a crash between the two renames lost the package, and the surviving copy was invisible — **FIXED 2026-09-03**, high (found in the Core-defects pass, 2026-09-03)
+
+`package_install` describes itself as atomic. It is — **against controlled
+errors**. Against a crash it has a window, and the module said nothing about it.
+
+`Transaction::commit` swaps in three renames, because `fs::rename` will not
+overwrite a directory on Windows:
+
+```text
+1. destination      -> <name>.replaced-<pid>
+2. staging          -> destination
+3. remove <name>.replaced-<pid>
+```
+
+Between 1 and 2 the destination **does not exist**. Either rename failing is
+handled: the old version is renamed back before the error returns. A panic
+unwinds through `Drop` and the staging directory goes. A *crash* runs neither.
+
+**Measured** by reconstructing each window exactly and running the next install:
+
+| Window | State a crash leaves | What the next install did |
+|---|---|---|
+| before rename 1 | destination = old, staging orphan | installed; **staging orphan kept** |
+| **between 1 and 2** | **destination ABSENT**, old parked | re-installed from the registry; **parked copy kept** |
+| between 2 and 3 | destination = new, old parked | re-installed; **parked copy kept** |
+
+The middle row looks repaired, and that is the trap: it was repaired *because the
+registry was still reachable and still had that version*. An upgrade that crashes
+while the source is offline, or against a version since withdrawn, lost a working
+install permanently — with an intact copy sitting one directory away under a name
+that nothing ever read again. Every crashed install also left that copy behind
+for good; they accumulate.
+
+**The fix is recovery, not a stronger claim.** The three-rename swap cannot be
+made atomic on Windows, so nothing here is called crash-safe. What changed is
+that the state a crash leaves is now *recognisable*, and `Transaction::begin`
+recognises it before staging anything: if the destination is missing and a parked
+copy exists, the parked copy is restored; whatever is still parked afterwards is
+superseded and removed.
+
+Recovery runs **before** the install rather than after it, which is the load-
+bearing ordering: if the install that follows then fails for any reason, the
+project still has the package it had.
+`an_install_that_fails_after_a_crash_still_leaves_the_old_version` is that test.
+
+**A second defect found on the way.** The parked name was built with
+`Path::with_extension`, which *replaces* an extension rather than appending one.
+A package named `my.pkg` parked as `my.replaced-<pid>` — a name whose prefix no
+longer matched the package, so it could be neither restored nor swept. Built with
+`with_file_name` now, and `a_dotted_package_name_parks_where_recovery_looks`
+pins the two halves together.
+
+**Pinned by** nine tests in `src/package_install.rs`. Five fail against a
+no-op `recover`; the other four are controls that must pass either way —
+the window reproduction itself, a clean tree, a longer-named neighbour whose
+parked copy must be neither installed nor deleted, and
+`dropping_a_transaction_is_not_a_crash_guarantee`, which uses `mem::forget` to
+show that a destructor is cleanup and not a crash guarantee.
+
+### 5.45 — two installs of one package race, with no lock anywhere — *open*, medium (found in §5.44, 2026-09-03)
+
+Nothing in the install path takes a lock. Two `sz install` processes working on
+the same package both move the same destination aside, and the second one's
+"previous version" is the first one's parked copy. The outcome depends on
+interleaving, and one of them can lose its package.
+
+This predates §5.44 and is not made worse by it — recovery reads and writes the
+same directories the racing installs already fight over. It is *bounded* by it:
+the state a lost race leaves is now the same recognisable state a crash leaves,
+so the next install repairs it.
+
+Not fixed here, deliberately. A cross-process lock is a design question with real
+alternatives — a lockfile in the project, a lock per package, an advisory
+directory lock — and it interacts with DEC-M9-002's answer about what a
+transaction covers. Recorded so that "installs are atomic" is not read as
+"concurrent installs are safe". No measured occurrence: no test, tool or
+documented workflow runs two installs at once.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of

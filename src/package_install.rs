@@ -208,8 +208,116 @@ pub struct Transaction {
     committed: bool,
 }
 
+/// The name a superseded version is parked under while the swap happens.
+///
+/// Kept as a function rather than inlined at both sites, because [`recover`] has
+/// to recognise what [`Transaction::commit`] wrote and the two must not drift.
+fn parked_prefix(name: &str) -> String {
+    format!("{}.replaced-", name)
+}
+
+/// Put back what a crashed install left behind, before installing over it.
+///
+/// # The window this closes, and the one it does not
+///
+/// `commit` swaps in three renames, because `fs::rename` will not overwrite a
+/// directory on Windows. Between the first and the second, **the destination does
+/// not exist**: the old version has been parked as `<name>.replaced-<pid>` and
+/// the new one is still in staging. A controlled error there is handled — the
+/// old version is renamed back before the error returns. A *crash* there is not,
+/// because nothing runs. The process dies and the project is left with no
+/// package, and the only surviving copy is parked under a name that, before this
+/// function existed, nothing ever looked at again.
+///
+/// Measured, by reconstructing that exact state and running the next install:
+///
+/// ```text
+/// destination: ABSENT
+/// siblings:    .test-pkg.staging-99999 test-pkg.replaced-99999
+/// -- next run of sz install --
+/// ✅ Installed test-pkg@1.0.0 → ./packages/test-pkg
+/// siblings:    .test-pkg.staging-99999 test-pkg test-pkg.replaced-99999
+/// ```
+///
+/// The re-install appears to repair it, and that is the trap: it only repairs it
+/// *because the registry was still reachable and still had that version*. An
+/// upgrade that crashes while the source is offline, or against a version since
+/// withdrawn, loses a working install permanently — with an intact copy sitting
+/// two directories away. And the parked copy is never removed, so every crashed
+/// install leaves one behind for good.
+///
+/// So recovery happens here, before the install rather than after it: the old
+/// version is restored first, and if the install that follows then fails for any
+/// reason, the project still has the package it had.
+///
+/// # What this is not
+///
+/// This does not make `commit` atomic against a crash, and nothing in this module
+/// should be described as crash-safe. The window is still there. What changes is
+/// that landing in it is no longer permanent: the state is recognisable on disk,
+/// and the next install recognises it.
+///
+/// # Concurrency
+///
+/// Two installs of the same package running at once already race destructively —
+/// there is no cross-device lock anywhere in this path, and both would move the
+/// same destination aside. Recovery does not introduce that race and does not fix
+/// it; see §5.45. Where several parked copies exist, the most recently modified
+/// one is restored, being the best evidence available of which was last good.
+pub fn recover(destination: &Path) -> Result<(), String> {
+    let (Some(parent), Some(name)) = (destination.parent(), destination.file_name()) else {
+        return Ok(());
+    };
+    let prefix = parked_prefix(&name.to_string_lossy());
+
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        // No parent directory yet means no previous install to recover.
+        return Ok(());
+    };
+    let mut parked: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .map(|n| n.to_string_lossy().starts_with(&prefix))
+                    .unwrap_or(false)
+        })
+        .collect();
+    if parked.is_empty() {
+        return Ok(());
+    }
+
+    if !destination.exists() {
+        // Most recently modified first. `modified()` is unavailable on some
+        // filesystems, and an unordered restore is still better than none.
+        parked.sort_by_key(|p| {
+            std::fs::metadata(p)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        let newest = parked.pop().expect("non-empty");
+        std::fs::rename(&newest, destination).map_err(|e| {
+            format!(
+                "Cannot restore '{}' from '{}': {}",
+                destination.display(),
+                newest.display(),
+                e
+            )
+        })?;
+    }
+
+    // Whatever is still parked is a superseded copy: either this call just
+    // restored a newer one, or the destination was already present, which means
+    // some commit got past the swap.
+    for stale in parked {
+        let _ = std::fs::remove_dir_all(&stale);
+    }
+    Ok(())
+}
+
 impl Transaction {
-    /// Begin an install of `destination`. The staging directory is created empty.
+    /// Begin an install of `destination`, recovering a crashed one first.
     pub fn begin(destination: &Path) -> Result<Self, String> {
         let parent = destination
             .parent()
@@ -224,6 +332,10 @@ impl Transaction {
             .into_owned();
         // The pid keeps two concurrent installs of the same package from staging
         // into one directory, the same reason `szx::translated_path` carries it.
+        // Before anything else: a previous install of this destination may have
+        // died mid-swap, and its only surviving copy is parked beside us.
+        recover(destination)?;
+
         let staging = parent.join(format!(".{}.staging-{}", name, std::process::id()));
         if staging.exists() {
             let _ = std::fs::remove_dir_all(&staging);
@@ -276,10 +388,33 @@ impl Transaction {
     /// failure part-way through can put it back. `fs::rename` refuses to
     /// overwrite a directory on Windows, which is why the swap is three steps
     /// rather than one.
+    ///
+    /// # What survives what
+    ///
+    /// A **controlled error** — either rename failing — is handled here: the
+    /// previous version goes back before the error returns, and the caller sees
+    /// a failure over an unchanged project. A **panic** unwinds through [`Drop`],
+    /// which removes the staging directory, so the same holds.
+    ///
+    /// A **crash** does not run either of those. Between the two renames the
+    /// destination does not exist, and a process killed there leaves the project
+    /// without the package. That window is real and is not closed by this
+    /// function; it is closed by [`recover`], which the next [`Transaction::begin`]
+    /// calls. Nothing here is crash-safe on its own, and the first install of a
+    /// package — where there is no previous version to move aside — is the only
+    /// case that is a single rename.
     pub fn commit(mut self) -> Result<(), String> {
-        let previous = self
-            .destination
-            .with_extension(format!("replaced-{}", std::process::id()));
+        let previous = self.destination.with_file_name(format!(
+            "{}{}",
+            parked_prefix(
+                &self
+                    .destination
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            ),
+            std::process::id()
+        ));
         let had_previous = self.destination.exists();
 
         if had_previous {
@@ -329,6 +464,266 @@ impl Drop for Transaction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build the on-disk state that a crash inside `commit` leaves behind.
+    ///
+    /// Reconstructing the state is not the same as surviving a kill, and this
+    /// module does not pretend otherwise — `dropping_a_transaction_is_not_a_crash_guarantee`
+    /// below measures the difference. What these fixtures do give is the one
+    /// thing a real kill cannot: the ability to land in each window *exactly*,
+    /// rather than whenever the scheduler happens to allow.
+    ///
+    /// The pid is a stranger's on purpose. A crashed install's leftovers carry
+    /// the pid of a process that is gone, so recovery must not depend on
+    /// recognising its own.
+    struct CrashSite {
+        root: PathBuf,
+        destination: PathBuf,
+    }
+
+    impl CrashSite {
+        fn new(tag: &str) -> Self {
+            let root = temp(tag).join("packages");
+            std::fs::create_dir_all(&root).expect("packages dir");
+            CrashSite {
+                destination: root.join("pkg"),
+                root,
+            }
+        }
+
+        fn dir(&self, name: &str, contents: &str) -> PathBuf {
+            let path = self.root.join(name);
+            std::fs::create_dir_all(&path).expect("dir");
+            std::fs::write(path.join("index.sz"), contents).expect("file");
+            path
+        }
+
+        fn installed(&self) -> Option<String> {
+            std::fs::read_to_string(self.destination.join("index.sz")).ok()
+        }
+
+        fn siblings(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(&self.root)
+                .expect("read packages")
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    /// The window: killed between the two renames, the package is simply gone.
+    ///
+    /// This is the state the probe measured before recovery existed. The old
+    /// version is intact but parked under a name nothing consulted, so the
+    /// project had no package and the only copy of it was invisible.
+    #[test]
+    fn a_crash_between_the_renames_leaves_no_package_at_all() {
+        let site = CrashSite::new("crash_window");
+        site.dir("pkg.replaced-99999", "old");
+        site.dir(".pkg.staging-99999", "new");
+
+        assert_eq!(
+            site.installed(),
+            None,
+            "the fixture does not reproduce the window it claims to"
+        );
+    }
+
+    /// And recovery puts it back, from the parked copy alone.
+    ///
+    /// No registry, no network, no manifest — the point is that the old version
+    /// returns from what is on disk. An install that repairs the state by
+    /// re-fetching only works while the source is still reachable.
+    #[test]
+    fn recovery_restores_the_package_a_crash_removed() {
+        let site = CrashSite::new("crash_restore");
+        site.dir("pkg.replaced-99999", "old");
+
+        recover(&site.destination).expect("recover");
+
+        assert_eq!(
+            site.installed().as_deref(),
+            Some("old"),
+            "the parked version was not restored"
+        );
+        assert_eq!(
+            site.siblings(),
+            vec!["pkg"],
+            "recovery restored the package but left the parked copy behind"
+        );
+    }
+
+    /// A crash *after* the swap parks a superseded copy that is pure litter.
+    ///
+    /// Recovery must remove it and must not touch the installed version, which
+    /// is the newer one. Restoring here would be a downgrade.
+    #[test]
+    fn recovery_discards_a_superseded_copy_without_touching_the_install() {
+        let site = CrashSite::new("crash_litter");
+        site.dir("pkg", "new");
+        site.dir("pkg.replaced-99999", "old");
+
+        recover(&site.destination).expect("recover");
+
+        assert_eq!(
+            site.installed().as_deref(),
+            Some("new"),
+            "recovery overwrote a good install with a superseded copy"
+        );
+        assert_eq!(site.siblings(), vec!["pkg"], "the parked copy survived");
+    }
+
+    /// Several crashes, and the most recently parked copy is the one restored.
+    #[test]
+    fn recovery_prefers_the_most_recently_parked_copy() {
+        let site = CrashSite::new("crash_many");
+        site.dir("pkg.replaced-1", "older");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        site.dir("pkg.replaced-2", "newer");
+
+        recover(&site.destination).expect("recover");
+
+        assert_eq!(site.installed().as_deref(), Some("newer"));
+        assert_eq!(
+            site.siblings(),
+            vec!["pkg"],
+            "an older copy was left behind"
+        );
+    }
+
+    /// Negative control: with nothing parked, recovery does nothing at all.
+    ///
+    /// Without this, every test above would still pass if `recover` unpacked
+    /// whatever it found, or if it created a destination out of nothing.
+    #[test]
+    fn recovery_on_a_clean_tree_changes_nothing() {
+        let site = CrashSite::new("crash_clean");
+        site.dir("pkg", "installed");
+
+        recover(&site.destination).expect("recover");
+
+        assert_eq!(site.installed().as_deref(), Some("installed"));
+        assert_eq!(site.siblings(), vec!["pkg"]);
+
+        // And on a destination that has never existed.
+        let never = site.root.join("absent");
+        recover(&never).expect("recover");
+        assert!(!never.exists(), "recovery invented a package");
+    }
+
+    /// Recovery must not mistake a *different* package's parked copy for its own.
+    ///
+    /// `pkg` and `pkg-extra` share a prefix, and a `starts_with` on the wrong
+    /// string would move one package's history into the other's place.
+    #[test]
+    fn recovery_does_not_confuse_a_package_with_a_longer_named_neighbour() {
+        let site = CrashSite::new("crash_prefix");
+        site.dir("pkg-extra.replaced-99999", "someone else's");
+
+        recover(&site.destination).expect("recover");
+
+        assert_eq!(
+            site.installed(),
+            None,
+            "a neighbour's parked copy was installed as this package"
+        );
+        assert_eq!(
+            site.siblings(),
+            vec!["pkg-extra.replaced-99999"],
+            "a neighbour's parked copy was deleted"
+        );
+    }
+
+    /// A package name with a dot in it parks under a name recovery can find.
+    ///
+    /// `Path::with_extension` replaces an extension rather than appending one, so
+    /// `my.pkg` parked as `my.replaced-<pid>` — a name whose prefix no longer
+    /// matched the package, leaving it unrecoverable and undeletable. The commit
+    /// path builds the name with `with_file_name` for that reason, and this
+    /// asserts the two halves still agree.
+    #[test]
+    fn a_dotted_package_name_parks_where_recovery_looks() {
+        let site = CrashSite::new("crash_dotted");
+        let dotted = site.root.join("my.pkg");
+        std::fs::create_dir_all(site.root.join("my.pkg.replaced-99999")).expect("parked");
+        std::fs::write(
+            site.root.join("my.pkg.replaced-99999").join("index.sz"),
+            "old",
+        )
+        .expect("file");
+
+        recover(&dotted).expect("recover");
+
+        assert_eq!(
+            std::fs::read_to_string(dotted.join("index.sz"))
+                .ok()
+                .as_deref(),
+            Some("old"),
+            "a dotted package name was parked where recovery cannot see it"
+        );
+    }
+
+    /// The end-to-end shape: crash, then a *failing* install, and the old version
+    /// is still there.
+    ///
+    /// This is what recovery is for. Repairing the state by re-fetching works
+    /// only while the source is reachable; running recovery first means the
+    /// project keeps its package even when the install that follows fails.
+    #[test]
+    fn an_install_that_fails_after_a_crash_still_leaves_the_old_version() {
+        let site = CrashSite::new("crash_then_fail");
+        site.dir("pkg.replaced-99999", "old");
+
+        // `begin` recovers, then stages. The transaction is dropped without a
+        // commit, which is what any failure between the two amounts to.
+        let transaction = Transaction::begin(&site.destination).expect("begin");
+        std::fs::write(transaction.staging_dir().join("index.sz"), "new").expect("stage");
+        drop(transaction);
+
+        assert_eq!(
+            site.installed().as_deref(),
+            Some("old"),
+            "a failed install after a crash left the project with nothing"
+        );
+        assert_eq!(
+            site.siblings(),
+            vec!["pkg"],
+            "the abandoned staging directory or a parked copy survived"
+        );
+    }
+
+    /// The honest limit: `Drop` is cleanup, not a crash guarantee.
+    ///
+    /// A controlled failure and a panic both unwind through `Drop`, so the
+    /// staging directory goes away. A killed process runs no destructor at all,
+    /// and `mem::forget` is the closest thing to that a test can do in-process.
+    /// The staging directory survives — which is exactly why `begin` removes a
+    /// stale one of its own rather than trusting that one cannot exist.
+    #[test]
+    fn dropping_a_transaction_is_not_a_crash_guarantee() {
+        let site = CrashSite::new("crash_forget");
+        let transaction = Transaction::begin(&site.destination).expect("begin");
+        let staging = transaction.staging_dir().to_path_buf();
+        std::fs::write(staging.join("index.sz"), "half-written").expect("stage");
+
+        std::mem::forget(transaction);
+
+        assert!(
+            staging.exists(),
+            "this test no longer measures what it claims: Drop ran"
+        );
+
+        // And the next install of the same destination clears it, because the
+        // staging name is keyed to the pid and this process is reusing its own.
+        let next = Transaction::begin(&site.destination).expect("begin again");
+        assert_eq!(
+            std::fs::read_dir(next.staging_dir()).unwrap().count(),
+            0,
+            "a stale staging directory was reused with its contents"
+        );
+    }
 
     fn temp(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
