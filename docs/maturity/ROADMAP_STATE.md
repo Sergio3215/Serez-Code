@@ -29,7 +29,7 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **17 OPEN, 11 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M10-003** (does any phase timing block a build). **DEC-M9-003** is now decided. New 2026-09-04: **DEC-M11-001** (is the `unsafe` context lexical or dynamic) |
+| **Open decisions** | **16 OPEN, 12 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M10-003** (does any phase timing block a build). **DEC-M9-002** and **DEC-M9-003** are now decided. New 2026-09-04: **DEC-M11-001** (is the `unsafe` context lexical or dynamic) |
 | Branch | `improve` |
 | HEAD | `807a0a5` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
@@ -2833,6 +2833,62 @@ and `cmd` re-parses differently. Both showed up as a stdout of 0 bytes.
 
 ---
 
+### 5.58 — package, manifest and lockfile now commit as one recoverable unit — **FIXED 2026-09-04**, high (owner decision, closes DEC-M9-002)
+
+The owner's answer to DEC-M9-002 is **A**: the package store is not
+authoritative. The logical unit of installation is the package tree *plus* its
+`serez.json` line *plus* its `serez.lock` line, and all three represent one
+confirmed state.
+
+**What was there.** The tree was transactional and the metadata was not. Two
+writes ran *after* a committed install, each printing `⚠ Installed, but could not
+update …` on failure and carrying on — which is exactly the state the decision
+forbids: a new package beside old metadata.
+
+**Not atomic, and the code says so.** Three paths change and no filesystem
+commits three paths at once. What is implemented is a **write-ahead journal**:
+before the first mutation, `.serez-install.journal` records every byte of the
+target state and is flushed; then the tree is swapped, the lockfile written, the
+manifest written, and the journal removed. The window between the first rename
+and the last is real. It is *recoverable*, not absent, and `spec/packages.md` now
+distinguishes the two in those words.
+
+**Why the journal holds content rather than instructions.** A recovery that
+re-derived the manifest would have to read a `serez.json` that may itself be
+half-written, and would produce a different answer depending on when it ran.
+Recorded bytes make roll-forward deterministic and idempotent.
+
+**A real ordering bug, caught by the tests rather than by review.**
+`install_all` read the manifest *before* `install_package` recovered, so a
+journalled update was applied and then immediately overwritten from the stale
+dependency list. Recovery now runs before any project metadata is read. The
+first version of the recovery test failed on exactly this, which is what the
+test was for.
+
+**Failures moved earlier.** `plan_dependency` works out the manifest's new text
+while nothing has changed, so an unparseable `serez.json` fails with the
+previously installed package still in place instead of after the swap.
+
+**Scope, stated rather than implied.** The unit is *one package*. `install_all`
+runs each dependency as its own transaction, so a failure at the *n*-th leaves
+the first *n*-1 fully consistent and the rest untouched. One transaction spanning
+every dependency is not attempted and is not claimed.
+
+**Pinned by** `tests/package_transaction.rs`, 14 tests over the real binary
+covering the eight cases the decision names plus a torn journal, a corrupted one
+and a partial `install_all`. Every test ends with the same invariant check —
+every lockfile line has its package, every package has its line, no journal left
+behind. The journal fixture spells the on-disk format out by hand rather than
+calling the encoder, so the format is checked against the format instead of a
+round-trip that agrees with nothing else. Against a disabled recovery, exactly
+the two recovery tests fail and the other twelve pass.
+
+**Still not covered**, and recorded rather than glossed: two installs of the same
+package at once still race (§5.45). Neither the journal nor the staging directory
+makes that safe, and `spec/packages.md`'s missing-guarantees list says so.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of
@@ -3001,7 +3057,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M7-005** | What a `match` pattern that fails to evaluate does | **OPEN** | nothing; should precede DEC-M7-003 |
 | **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **DECIDED** 2026-09-03 — **C, gated with an explicit allowlist**; implemented in `649ba49` | — (DEC-M9-001 remains open) |
 | **DEC-M9-001** | What ceiling an unbounded read has, and what happens at it | **DECIDED** 2026-09-03 — **A, 64 MiB fatal**; implemented in `41e8d5a` | — |
-| **DEC-M9-002** | Whether package, manifest and lockfile are one recoverable transaction | **OPEN** | nothing; the lockfile is written under either answer |
+| **DEC-M9-002** | Whether package, manifest and lockfile are one recoverable transaction | **DECIDED** 2026-09-04 — **A, one recoverable transaction**, journalled before the first mutation and completed by the next run | — |
 | **DEC-M9-003** | What ceiling `OS.exec` output has, and what happens at it | **DECIDED** 2026-09-04 — **the ceiling is a guarantee `unsafe` waives**; 64 MiB when in force, waived inside `unsafe { }`, which is the only context `OS.exec` runs in | — |
 | **DEC-M10-001** | Whether CI runs the ecosystem canary | **DECIDED** 2026-09-03 — **a pinned blocking gate, plus a daily unpinned run**; implemented in `1d61f5d` | — |
 | **DEC-M10-003** | Whether any phase timing blocks a build | **OPEN** | nothing; the timings are advisory and the stability evidence is collected on every run |
@@ -5055,6 +5111,35 @@ local install is correct under both: under A it is part of the transaction, and
 under B it is the derived record being kept in step. That fix is implemented and
 tested. What waits is the failure-path behaviour, which has no test because it
 has no defined answer.
+
+## RESOLUTION — **DECIDED 2026-09-04: option A, one recoverable transaction.**
+
+The package store is not authoritative. Package, manifest and lockfile represent
+one confirmed state, and an install either establishes all three or leaves the
+previous one.
+
+**Not by claiming atomicity.** Three paths change and no filesystem commits three
+paths at once. The implementation is a **write-ahead journal**: every byte of the
+target state — destination, staging directory, and the full new text of both
+metadata files — is written and flushed to `.serez-install.journal` before the
+first mutation, and the next `sz install` applies whatever remains. Roll-forward
+is deterministic because the journal holds *content*, not instructions: a
+recovery that re-derived the manifest would have to read a `serez.json` that may
+itself be half-written.
+
+A journal torn by a crash during its own write has no matching terminator and is
+discarded — safe precisely because nothing had been mutated at that point.
+
+**The scope question this entry raised** — whether `install_all` commits one
+lockfile at the end or one per package — is answered by the unit being *one
+package*. Each dependency is its own transaction, so a failure at the *n*-th
+leaves the first *n*-1 fully consistent and the rest untouched. Nothing is ever
+half-recorded; what is not attempted is one transaction spanning every
+dependency, and `spec/packages.md` says so.
+
+Implemented in `package_install::{CommitPlan, commit_plan, recover_pending}` and
+pinned by `tests/package_transaction.rs`, 14 tests. Against a disabled recovery
+exactly the two recovery tests fail.
 
 ---
 

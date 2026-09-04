@@ -822,3 +822,44 @@ rather than as a claim.
 **Unchanged:** LLVM parity, publisher signatures, runtime property testing, and
 conformance coverage — none was in this pass's scope, and none is closer.
 
+---
+
+## Decisions implemented on 2026-09-04 — the product-decision pass
+
+Two owner decisions, implemented, plus the documentation contract they imply.
+
+| Decision | Outcome | Commit |
+|---|---|---|
+| package + manifest + lockfile are one recoverable transaction | **IMPLEMENTED** — write-ahead journal, deterministic roll-forward; closes DEC-M9-002 | `bb7d89b` |
+| safe by default; `unsafe` waives *named* guarantees | **IMPLEMENTED** — `execution::{ExecutionContext, Guarantee}`; closes DEC-M9-003 | `ac0937c` |
+| the contract, written down normatively | `spec/security.md`, `spec/limits.md`, `spec/packages.md` | `200516c`, this one |
+
+### What this closes in this register
+
+**Non-atomic package installation** — the entry closed in an earlier cycle on a
+weaker basis than it read, and reduced again in the Core-defects pass. It is now
+what it claims: the tree, the manifest and the lockfile are one unit, an install
+either establishes all three or leaves the previous state, and an interruption is
+repaired on the next run. *Atomic* is still not claimed — the window between the
+first rename and the last is real and documented as recoverable rather than
+absent.
+
+**`OS.exec`'s unbounded output** — added by the Core-defects pass and open as
+DEC-M9-003. Decided: the ceiling is a guarantee `unsafe` waives. The limit exists
+at 64 MiB with a bounded two-pipe reader behind it, and `unsafe` — the only
+context `OS.exec` runs in — waives it. Same behaviour, now a contract.
+
+### What this adds
+
+- **DEC-M11-001**, the `unsafe` context being dynamic where `spec/security.md`
+  said lexical. The spec was corrected to describe the runtime; the runtime was
+  not changed. Measured while registering it: **20 of 20** gated calls across the
+  ecosystem and **145 of 159** in the corpus are already lexical, so the usual
+  argument against a lexical rule is not supported by anything measurable here.
+
+### What is unchanged
+
+No cross-process install lock (§5.45), LLVM parity, publisher signatures,
+runtime property testing, conformance coverage.
+
+

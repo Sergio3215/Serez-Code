@@ -63,20 +63,68 @@ present and otherwise downloads the matching ZIP from the HTTP registry. Local
 installs go to `<project>/packages/<name>`; global installs use
 `$SEREZ_PACKAGES/<name>` or the platform user's `~/.serez/packages/<name>`.
 
-With dependency recording enabled, the resolved exact version is written to the
-project manifest **and to `serez.lock`** after installation. Failure to update
-either is reported as a warning because package files are already present.
+### One install is one transaction
 
-### Installation is atomic
+The logical unit of installation is three things, not one:
 
-An install writes into a staging directory beside the destination and becomes
-visible in a single rename. A failure at any point before that — the download,
-the extraction, the integrity check — leaves the project exactly as it was, with
-any previously installed version still in place and no staging directory left
-behind.
+    the package tree  +  its serez.json line  +  its serez.lock line
+
+They represent a single confirmed state. An install either establishes all three
+or leaves the previous state, and an interruption between them is repaired
+**deterministically on the next run**.
+
+Concretely, an install never leaves:
+
+- a new package tree beside old metadata;
+- a manifest updated against a lockfile that was not;
+- a `serez.lock` line for a package that was not installed.
+
+#### What is guaranteed, and what is not
+
+**Not atomic**, and not described as such: three paths change and no filesystem
+commits three paths at once. Between the first rename and the last there is a
+window in which the tree is new and the metadata is not.
+
+What removes that window is **recovery, not atomicity**. Before the first
+mutation, an install writes `.serez-install.journal` beside `serez.json`
+containing every byte of the target state — the destination, the staging
+directory, and the full new text of both metadata files — and flushes it to
+disk. The next `sz install` finds the journal and applies whatever remains, from
+the recorded bytes, however many times it is run.
+
+A journal cut short by a crash *while it was being written* has no matching
+terminator and is discarded. That is safe because it is written before anything
+is mutated: a torn record means nothing happened.
+
+#### Order
+
+1. the package tree, staged beside the destination and swapped in;
+2. `serez.lock`, written beside itself and renamed over;
+3. `serez.json`, the same way.
+
+The tree first because it is the step that can still fail on its own; the
+lockfile next because it is what the next install verifies against; the manifest
+last because it is the only one a person edits by hand.
+
+#### Failures happen before anything moves
+
+Everything that can be decided is decided while the project is untouched: the
+version, the staged tree, its digest, the integrity check against the lockfile,
+and the manifest's new text. A `serez.json` that does not parse fails there —
+with the previously installed package still in place — rather than after the
+swap.
 
 Until 10.0.0 the destination was removed *before* the new version was fetched, so
-a failed download left the project with no package at all.
+a failed download left the project with no package at all. Until this release the
+manifest and lockfile were written *after* the install and a failure was a
+warning.
+
+#### `install_all`
+
+`sz install` with no argument installs each dependency as its own transaction.
+A failure at the *n*-th leaves the first *n*-1 fully committed — package,
+manifest and lockfile agreeing — and the rest untouched. It is not one
+transaction across every dependency, and does not claim to be.
 
 ### `serez.lock`
 
@@ -169,10 +217,13 @@ The following are known gaps, not implied guarantees:
 - no transitive dependency solver or cycle contract. The lockfile records the
   graph that was resolved, and today that graph is flat;
 - no declared minimum runtime or language-spec version enforced for packages;
-- no transaction spanning package files **and** `serez.json`. The package files
-  are atomic; the manifest and lockfile are written afterwards, and a failure
-  there is a warning rather than a rollback — the package is already correctly
-  installed and removing it would be the worse outcome;
+- no **atomic** commit across package files, `serez.json` and `serez.lock`. The
+  three are one *recoverable* transaction — journalled before the first mutation
+  and completed by the next run — which is what a filesystem can actually
+  provide. A process killed mid-commit leaves a window until the next
+  `sz install`;
+- no cross-process lock. Two installs of the same package at once still race,
+  and neither the journal nor the staging directory makes that safe;
 - no normative yank/cache/offline policy.
 
 These gaps are compatibility and supply-chain work, not reasons to silently
