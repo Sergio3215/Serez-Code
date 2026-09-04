@@ -2281,6 +2281,66 @@ rather than being staged as unused code.
 
 ---
 
+### 5.49 — the clippy gate let debt move, and release did not run it at all — **FIXED 2026-09-03**, high (found in the Core-defects pass, 2026-09-03)
+
+Two defects in the gate DEC-M10-002 built, one in what it measured and one in
+where it ran.
+
+**The identity hole.** The baseline keyed on `(lint, file)` and a **count**. That
+is strictly better than a total and it still let debt move: fix one warning of a
+lint and introduce a different one of the same lint in the same file, and the
+count does not change. Measured on this tree with `clippy::needless_return` in
+`src/evaluator/ops.rs`, which has 59 sites:
+
+| Step | Old gate | Required |
+|---|---|---|
+| 1. baseline, untouched | PASS | PASS |
+| 2. one new warning added | FAIL, `59 -> 60` | FAIL |
+| **3. one fixed AND a different one added** | **PASS** | **FAIL** |
+| 4. reverted | PASS | PASS |
+
+Step 3 is a genuinely new `needless_return` entering the tree while the gate
+prints `180 sites in 61 pairs`, unchanged.
+
+**The fix is to identify a warning by what it is.** The key is now the lint, the
+file, and a 12-character fingerprint over the **offending source text** — the
+highlighted span, not the whole line — together with the normalised message. A
+new warning has a fingerprint the baseline does not contain, whatever was fixed
+beside it. Two identical sites share a fingerprint and are counted, so a third
+copy still fails.
+
+Line numbers stay out of the key, for the reason they were left out originally:
+a baseline that needed refreshing after every unrelated edit would be ignored
+within a week. Verified rather than assumed — 40 lines inserted at the top of
+`ops.rs`, moving every warning in the file:
+
+```text
+Clippy debt within baseline: 180 sites, 137 distinct.
+exit=0
+```
+
+Re-run against the new gate, the same four steps give **PASS / FAIL / FAIL /
+PASS**, and the failure names the text: `return n + 1`.
+
+**The migration hid nothing.** The baseline was regenerated in the new format and
+the per-`(lint, file)` totals compared against the old one line by line: 180
+sites both ways, every pair identical, now resolved into 137 distinct warnings.
+
+**Release ran a clippy that failed nothing.** `.github/workflows/release.yml`
+ran bare `cargo clippy --all-targets`, and clippy exits 0 on warnings. CI has
+gated on the baseline since DEC-M10-002 and release did not — the worse way
+round, since a change could be blocked on a pull request and then shipped by a
+tag. Both now run `tools/clippy_baseline.py --check`.
+
+**The gate tests itself.** `--self-test` runs the four steps against synthetic
+clippy JSON in seconds instead of minutes, plus a fifth: warnings that merely
+*moved* must pass, or the gate would be noise and would be switched off. It runs
+on every push. The real end-to-end control is slow and was run by hand, which is
+what the table above records — CI checks the logic, and the logic is where the
+hole was.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of

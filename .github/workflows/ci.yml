@@ -50,9 +50,21 @@ jobs:
       # DEC-M10-002. `cargo clippy` alone fails nothing — CI has never passed
       # `-D warnings`, so a warning introduced by a change was invisible and this
       # roadmap compared the per-site list by hand at every milestone boundary.
-      # The gate is `current <= baseline`, keyed per lint and per file, so debt
-      # cannot grow while a total stays still by cancelling out. Reducing it is
+      # The gate is `current <= baseline`, keyed per **warning** — the lint, the
+      # file, and a fingerprint over the offending source text — so debt cannot
+      # grow while a count stays still by cancelling out. Keying on (lint, file)
+      # counts alone was not enough: fixing one warning and adding a different
+      # one of the same lint in the same file passed. §5.49. Reducing debt is
       # always allowed; `tools/clippy_baseline.py --write` banks the reduction.
+      # The gate's own four-step control, on synthetic warnings rather than a
+      # clippy run: an unchanged tree passes, a new warning fails, a new warning
+      # *alongside a fix of the same lint in the same file* still fails — which
+      # the first version of this gate did not catch — and a warning that merely
+      # moved down a file does not fail. Seconds, not minutes, so it runs on
+      # every push rather than at milestone boundaries. §5.49.
+      - name: Clippy gate self-test
+        run: python tools/clippy_baseline.py --self-test
+
       - name: Clippy (must not exceed the committed baseline)
         run: python tools/clippy_baseline.py --check
 

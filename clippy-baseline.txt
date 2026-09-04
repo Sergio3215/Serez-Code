@@ -1,71 +1,153 @@
-# serez-clippy-baseline/1
-# Known Clippy debt, as `<lint>\t<file>\t<count>`, sorted.
+# serez-clippy-baseline/2
+# Known Clippy debt, as `<lint>\t<file>\t<fingerprint>\t<count>\t<what>`,
+# sorted. The last column is for the reader and is not compared.
 #
-# The gate is `current <= baseline` per line: a pair that grows, or a pair
-# that is not here at all, fails CI. Fixing warnings is always allowed and
-# is what `tools/clippy_baseline.py --write` is for.
+# The gate is `current <= baseline` per **warning**, not per file: the
+# fingerprint is over the offending source text and the normalised message,
+# so a warning that is new fails even when another of the same lint in the
+# same file was fixed in the same change. Line numbers are deliberately not
+# part of it, so moving code does not touch this file.
 #
-# Sites are deduplicated by (lint, file, line, column) before counting, and
-# paths use forward slashes, so this file is identical on all three runners.
+# Fixing warnings is always allowed and is what `--write` is for.
+#
+# Sites are deduplicated by (lint, file, line, column) before being
+# fingerprinted and paths use forward slashes, so this file is identical on
+# all three runners.
 # total sites: 180
-clippy::derivable_impls	src/run.rs	1
-clippy::doc_lazy_continuation	src/evaluator/namespaces_gui/render.rs	2
-clippy::doc_lazy_continuation	src/package_manager.rs	1
-clippy::double_ended_iterator_last	src/lsp/analysis.rs	1
-clippy::double_ended_iterator_last	src/lsp/server.rs	1
-clippy::excessive_precision	src/evaluator/svg.rs	1
-clippy::explicit_counter_loop	src/evaluator/namespaces_gui/render.rs	1
-clippy::field_reassign_with_default	src/evaluator/svg.rs	2
-clippy::get_first	src/evaluator/methods_tensor.rs	1
-clippy::if_same_then_else	src/evaluator/namespaces_autodiff.rs	1
-clippy::iter_cloned_collect	src/evaluator/classes.rs	4
-clippy::iter_cloned_collect	src/evaluator/methods_array.rs	3
-clippy::iter_cloned_collect	src/evaluator/mod.rs	1
-clippy::iter_cloned_collect	src/evaluator/stmt.rs	4
-clippy::manual_contains	src/evaluator/namespaces_crypto.rs	1
-clippy::manual_div_ceil	src/evaluator/namespaces_crypto.rs	1
-clippy::manual_flatten	src/evaluator/stmt.rs	1
-clippy::manual_memcpy	src/evaluator/methods_tensor.rs	3
-clippy::manual_range_contains	src/evaluator/mod.rs	1
-clippy::manual_range_contains	src/evaluator/namespaces.rs	1
-clippy::manual_range_contains	src/evaluator/namespaces_crypto.rs	2
-clippy::manual_range_contains	src/evaluator/namespaces_gui.rs	1
-clippy::manual_range_contains	src/evaluator/namespaces_memory.rs	1
-clippy::manual_range_contains	src/evaluator/namespaces_os.rs	1
-clippy::map_clone	src/evaluator/stmt.rs	1
-clippy::match_like_matches_macro	src/parser/expressions.rs	1
-clippy::needless_borrow	src/evaluator/svg.rs	1
-clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	14
-clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	6
-clippy::needless_borrows_for_generic_args	tests/filesystem_reach.rs	1
-clippy::needless_late_init	src/evaluator/namespaces_regex.rs	1
-clippy::needless_range_loop	src/evaluator/methods_tensor.rs	7
-clippy::needless_range_loop	src/evaluator/mod.rs	1
-clippy::needless_range_loop	src/evaluator/namespaces_crypto.rs	1
-clippy::needless_range_loop	src/evaluator/namespaces_gui.rs	2
-clippy::needless_range_loop	src/lsp/analysis.rs	1
-clippy::needless_return	src/evaluator/namespaces_gui.rs	2
-clippy::needless_return	src/evaluator/ops.rs	59
-clippy::new_without_default	src/compiler/hir_lower.rs	1
-clippy::new_without_default	src/compiler/llvm_emit.rs	1
-clippy::new_without_default	src/compiler/mir_lower.rs	1
-clippy::new_without_default	src/evaluator/mod.rs	1
-clippy::new_without_default	src/evaluator/namespaces_gui.rs	1
-clippy::new_without_default	src/region.rs	1
-clippy::new_without_default	src/scope.rs	1
-clippy::nonminimal_bool	src/evaluator/namespaces_gui/render.rs	1
-clippy::only_used_in_recursion	src/evaluator/check.rs	1
-clippy::ptr_arg	src/evaluator/namespaces_memory.rs	1
-clippy::question_mark	src/evaluator/namespaces_datetime.rs	1
-clippy::question_mark	src/parser/expressions.rs	2
-clippy::redundant_closure	src/evaluator/namespaces_os.rs	1
-clippy::redundant_closure	src/lsp/server.rs	2
-clippy::too_many_arguments	src/evaluator/namespaces_gui.rs	6
-clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	9
-clippy::type_complexity	src/evaluator/namespaces_autodiff.rs	2
-clippy::type_complexity	src/lsp/server.rs	1
-clippy::unnecessary_map_or	src/evaluator/methods_set.rs	1
-clippy::unnecessary_map_or	src/evaluator/namespaces_regex.rs	1
-clippy::unnecessary_map_or	src/package_manager.rs	7
-clippy::useless_format	src/evaluator/mod.rs	1
-clippy::while_let_loop	src/evaluator/svg.rs	1
+clippy::derivable_impls	src/run.rs	7ced3f5a831e	1	impl Default for RunOpts { fn default() -> Self { RunOpts { permission
+clippy::doc_lazy_continuation	src/evaluator/namespaces_gui/render.rs	46f9e806e1cd	1	doc quote line without `>` marker
+clippy::doc_lazy_continuation	src/evaluator/namespaces_gui/render.rs	b0e5817f1fc5	1	doc list item without indentation
+clippy::doc_lazy_continuation	src/package_manager.rs	e7f832cca0a9	1	doc list item without indentation
+clippy::double_ended_iterator_last	src/lsp/analysis.rs	7fb77b6414fd	1	matches .iter() .filter(|s| s.line <= from_line + 1) .last()
+clippy::double_ended_iterator_last	src/lsp/server.rs	3bd136dcb276	1	doc.symbols .iter() .filter(|s| s.kind == SymbolKind::Class && s.line 
+clippy::excessive_precision	src/evaluator/svg.rs	b2e7c62665f7	1	0.5522847498307936
+clippy::explicit_counter_loop	src/evaluator/namespaces_gui/render.rs	e60b290c1de5	1	for seg in lines.iter()
+clippy::field_reassign_with_default	src/evaluator/svg.rs	d0054a8663ba	2	paint.anti_alias = true;
+clippy::get_first	src/evaluator/methods_tensor.rs	6b2cd7b0e104	1	os.get(0)
+clippy::if_same_then_else	src/evaluator/namespaces_autodiff.rs	5b2f041bc4cc	1	{ x_norm[i * c + j] * g_data[j] + b_data[j] }
+clippy::iter_cloned_collect	src/evaluator/classes.rs	e7db139d9b1d	4	.iter().cloned().collect()
+clippy::iter_cloned_collect	src/evaluator/methods_array.rs	7a804de9dc76	3	.iter().cloned().collect()
+clippy::iter_cloned_collect	src/evaluator/mod.rs	a73c76fd91af	1	.iter().cloned().collect()
+clippy::iter_cloned_collect	src/evaluator/stmt.rs	7f4a0ea1fe9e	4	.iter().cloned().collect()
+clippy::manual_contains	src/evaluator/namespaces_crypto.rs	7144d88d9795	1	chars.iter().any(|&c| c == 255)
+clippy::manual_div_ceil	src/evaluator/namespaces_crypto.rs	334acde50aff	1	(data.len() + 2) / 3
+clippy::manual_flatten	src/evaluator/stmt.rs	f4d2a3aea9a9	1	for s in slots { if let Some(n) = s { self.scopes.declare(n.clone(), s
+clippy::manual_memcpy	src/evaluator/methods_tensor.rs	58bc321ad338	2	for j in 0..hidden_size.min(h0_data.len()) { h_all[j] = h0_data[j]; }
+clippy::manual_memcpy	src/evaluator/methods_tensor.rs	788abb25e58c	1	for j in 0..hidden_size.min(c0_data.len()) { c_all[j] = c0_data[j]; }
+clippy::manual_range_contains	src/evaluator/mod.rs	8ba8e2611a6c	1	i >= 0 && i <= 256
+clippy::manual_range_contains	src/evaluator/namespaces.rs	dd59b4df9b06	1	b >= 0 && b <= 255
+clippy::manual_range_contains	src/evaluator/namespaces_crypto.rs	612bfbd72c7e	1	n >= 0 && n <= 255
+clippy::manual_range_contains	src/evaluator/namespaces_crypto.rs	ec1ad3bb55f6	1	n < 1 || n > MAX_RANDOM_BYTES
+clippy::manual_range_contains	src/evaluator/namespaces_gui.rs	05f6a14d4af8	1	n < 5 || n > 7
+clippy::manual_range_contains	src/evaluator/namespaces_memory.rs	450cd8baae14	1	n < 0 || n > 255
+clippy::manual_range_contains	src/evaluator/namespaces_os.rs	00c1ea9a1689	1	v >= 0 && v <= 255
+clippy::map_clone	src/evaluator/stmt.rs	655898daa008	1	self.resolve(obj_ref).map(|d| d.clone())
+clippy::match_like_matches_macro	src/parser/expressions.rs	2a3523c1e75c	1	match self.peek_token.token_type { TokenType::Plus | TokenType::Minus 
+clippy::needless_borrow	src/evaluator/svg.rs	8359df4faf1c	1	&t
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	0126d32a0cb6	1	&format!("Gui.nodeSet: unknown node id {}", id)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	0863d6a48128	1	&format!("Gui.nodeSet: prop '{}' does not apply to this node", prop)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	165e73d03e26	2	&format!("Gui.{} requires {} arguments", method, want)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	2444a938da06	1	&format!("Gui.selectWindow: unknown window id {}", id)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	745b79fb8eb8	1	&format!("Gui.nodeTransform: unknown node id {}", id)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	89efdec39709	1	&format!("Gui.{}: all arguments must be integers", method)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	95df5dc77b59	1	&format!( "Gui.{} points must be a flat int array [x0,y0,x1,y1,…]", me
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	9fe09e762940	1	&format!("{} requires 5 arguments", sig)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	b15145af13cd	3	&format!("Gui.{}: no window open", method)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	bb1b85a87ada	1	&format!("Gui.{}: invalid argument types", method)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	dd813381edad	1	&format!("Gui.nodeSet: wrong value type for prop '{}'", prop)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	23ebaaa9fe6d	1	&format!( "Media.playSound: unsupported or corrupt audio '{}': {}", pa
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	310bf9c06252	1	&format!("Media.{}: unknown method", o)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	b94722042395	1	&format!("Media.playSound: cannot create playback sink: {}", e)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	ba300b959e9b	1	&format!("Media.playSound: cannot open '{}': {}", path, e)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	e0471306cb6f	1	&format!("Media.{}(id) requires 1 argument", method)
+clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	e520038a328e	1	&format!("Media.{} id must be an integer", method)
+clippy::needless_borrows_for_generic_args	tests/filesystem_reach.rs	2d8cdf0acde2	1	&project.join("data.txt")
+clippy::needless_late_init	src/evaluator/namespaces_regex.rs	bd72d262afca	1	let cap;
+clippy::needless_range_loop	src/evaluator/methods_tensor.rs	196590d375b4	1	0..data.len()
+clippy::needless_range_loop	src/evaluator/methods_tensor.rs	304609fcfd11	1	0..total
+clippy::needless_range_loop	src/evaluator/methods_tensor.rs	52969e54c09f	1	0..m
+clippy::needless_range_loop	src/evaluator/methods_tensor.rs	5825b18177a2	1	0..out_len
+clippy::needless_range_loop	src/evaluator/methods_tensor.rs	5f3a6555d4ff	1	0..cols
+clippy::needless_range_loop	src/evaluator/methods_tensor.rs	a07e7477bc59	1	0..ndim
+clippy::needless_range_loop	src/evaluator/methods_tensor.rs	c269744d7505	1	0..n
+clippy::needless_range_loop	src/evaluator/mod.rs	44e40f3183c5	1	0usize..=256
+clippy::needless_range_loop	src/evaluator/namespaces_crypto.rs	8079a29da269	1	0..80
+clippy::needless_range_loop	src/evaluator/namespaces_gui.rs	435b38d0dd65	1	0..n
+clippy::needless_range_loop	src/evaluator/namespaces_gui.rs	5ece6107c98e	1	0..na
+clippy::needless_range_loop	src/lsp/analysis.rs	2c6c3fab3761	1	sl..=el.min(lines.len().saturating_sub(1))
+clippy::needless_return	src/evaluator/namespaces_gui.rs	7a310533322c	1	return self.gui_file_dialog(dot_call.method == "saveFileDialog", dot_c
+clippy::needless_return	src/evaluator/namespaces_gui.rs	88df10b67011	1	return self.gui_window_control(&m, dot_call)
+clippy::needless_return	src/evaluator/ops.rs	06342882751e	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{
+clippy::needless_return	src/evaluator/ops.rs	0c94b47b8f06	1	return Ok(ExecutionFlow::Value(self.bool_ref(l > r)))
+clippy::needless_return	src/evaluator/ops.rs	0eb677050442	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!( "{}
+clippy::needless_return	src/evaluator/ops.rs	0fa0d26d7da6	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{
+clippy::needless_return	src/evaluator/ops.rs	1b448acfafb9	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	1e6ca50e1f24	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s.repeat(n a
+clippy::needless_return	src/evaluator/ops.rs	20baca7621f4	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	273b486443ed	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{
+clippy::needless_return	src/evaluator/ops.rs	2e2d3d44a7a4	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	2fb01f29770d	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	37d2e825b929	1	return self.rt_err_kind( "TypeError", format!( "Operator '{op}' not su
+clippy::needless_return	src/evaluator/ops.rs	3851c3dfc3e4	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(l + &r))))
+clippy::needless_return	src/evaluator/ops.rs	3ebf80af2a22	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}n
+clippy::needless_return	src/evaluator/ops.rs	45610eeee8c9	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!( "{}
+clippy::needless_return	src/evaluator/ops.rs	586d3ee12099	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	5969230bdc48	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("nul
+clippy::needless_return	src/evaluator/ops.rs	5a5993b88c70	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	5d1c0e42d122	1	return Ok(ExecutionFlow::Value(self.bool_ref(l < r)))
+clippy::needless_return	src/evaluator/ops.rs	63456cfaee17	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!("{}{
+clippy::needless_return	src/evaluator/ops.rs	68850ff45beb	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!( "{}
+clippy::needless_return	src/evaluator/ops.rs	7887d1a85f25	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	8568855d23b7	1	return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(format!( "{}
+clippy::needless_return	src/evaluator/ops.rs	8edfd0dcecac	2	return Ok(ExecutionFlow::Value(self.bool_ref(l == r)))
+clippy::needless_return	src/evaluator/ops.rs	971e9773ec6a	1	return Ok(ExecutionFlow::Value(self.bool_ref(eq)))
+clippy::needless_return	src/evaluator/ops.rs	a4ce6a3e30fd	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	a7ce216f9c7e	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	aa69bca52859	1	return Ok(ExecutionFlow::Value(self.bool_ref(l <= r)))
+clippy::needless_return	src/evaluator/ops.rs	ab14ed707e81	1	return Ok(ExecutionFlow::Value(self.bool_ref(l >= r)))
+clippy::needless_return	src/evaluator/ops.rs	b36359f76024	1	return Ok(ExecutionFlow::Value(self.bool_ref(!eq)))
+clippy::needless_return	src/evaluator/ops.rs	da7a5664e89e	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	dccb75458ffa	12	return Ok(ExecutionFlow::Value(self.false_ref))
+clippy::needless_return	src/evaluator/ops.rs	e0d807e477b5	2	return Ok(ExecutionFlow::Value(self.bool_ref(l != r)))
+clippy::needless_return	src/evaluator/ops.rs	e827afcd2bd8	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	f8b9747a617e	1	return self.rt_err_kind( "TypeError", format!("Operator '{op}' not sup
+clippy::needless_return	src/evaluator/ops.rs	fa3867960b76	12	return Ok(ExecutionFlow::Value(self.true_ref))
+clippy::new_without_default	src/compiler/hir_lower.rs	75cb59bbb4bd	1	pub fn new() -> Self { HirLowerer { type_env: HashMap::new(), fn_sigs:
+clippy::new_without_default	src/compiler/llvm_emit.rs	6c5c8eb84eaf	1	pub fn new() -> Self { LlvmEmitter }
+clippy::new_without_default	src/compiler/mir_lower.rs	709c8f12e7a2	1	pub fn new() -> Self { MirLowerer { temp_counter: 0, block_counter: 0,
+clippy::new_without_default	src/evaluator/mod.rs	4f67766f24f0	1	pub fn new() -> Self { let mut global_arena = Arena::new(); let null_i
+clippy::new_without_default	src/evaluator/namespaces_gui.rs	fb26eb938aca	1	pub fn new() -> Self { GuiHost { inner: Mutex::new(SharedInner::new())
+clippy::new_without_default	src/region.rs	521db9f56866	1	pub fn new() -> Self { Arena { storage: Vec::with_capacity(64), } }
+clippy::new_without_default	src/scope.rs	5518d33f49f8	1	pub fn new() -> Self { ScopeStack { frames: Vec::new(), arena: Arena::
+clippy::nonminimal_bool	src/evaluator/namespaces_gui/render.rs	d3f65e57c638	1	(tag == "row" || sty.get("direction") == Some("row") || (is_flex && !c
+clippy::only_used_in_recursion	src/evaluator/check.rs	e0d4d7bee9de	1	self
+clippy::ptr_arg	src/evaluator/namespaces_memory.rs	e594ae47f833	1	&mut Vec<u8>
+clippy::question_mark	src/evaluator/namespaces_datetime.rs	f836088bdae1	1	if DateTime::<Utc>::from_timestamp_millis(new_epoch).is_none() { retur
+clippy::question_mark	src/parser/expressions.rs	5722131639c2	2	match self.parse_expression(Precedence::Lowest) { Some(e) => e, None =
+clippy::redundant_closure	src/evaluator/namespaces_os.rs	a7cae3282207	1	|a| OwnedValue::Str(a)
+clippy::redundant_closure	src/lsp/server.rs	5a84fe057ad6	1	|r| builtins::is_namespace(r)
+clippy::redundant_closure	src/lsp/server.rs	8821e608ef43	1	|seg| percent_encode(seg)
+clippy::too_many_arguments	src/evaluator/namespaces_gui.rs	36d394452856	1	fn blend_rect(&mut self, x: i32, y: i32, w: i32, h: i32, r: u8, g: u8,
+clippy::too_many_arguments	src/evaluator/namespaces_gui.rs	49315fe04f96	1	fn draw_text( &mut self, fonts: &mut GuiFonts, x: i32, y: i32, text: &
+clippy::too_many_arguments	src/evaluator/namespaces_gui.rs	8db4b9b46750	1	fn draw_image_scaled( &mut self, x: i32, y: i32, handle: i64, dw: i32,
+clippy::too_many_arguments	src/evaluator/namespaces_gui.rs	ab8229c74791	1	fn fill_shadow(&mut self, x: i32, y: i32, w: i32, h: i32, blur: i32, c
+clippy::too_many_arguments	src/evaluator/namespaces_gui.rs	b1170772995d	1	fn fill_gradient(&mut self, x: i32, y: i32, w: i32, h: i32, c1: u32, c
+clippy::too_many_arguments	src/evaluator/namespaces_gui.rs	f758795bcd1c	1	fn draw_text_alpha( &mut self, fonts: &mut GuiFonts, x: i32, y: i32, t
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	1205446340fa	1	fn prim_push_roundrect( st: &mut GuiState, x: i32, y: i32, w: i32, h: 
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	33d4cf975998	1	fn prim_push_shadow( st: &mut GuiState, x: i32, y: i32, w: i32, h: i32
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	4a4f433fea33	1	fn prim_push_bg_styled( st: &mut GuiState, sty: &PrimStyle, x: i32, y:
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	70d0a837594a	1	fn prim_push_fill( st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, 
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	73070176bba4	1	pub(crate) fn render_tree( tag: &str, style: &[OwnedValue], kids: &[Ow
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	d25323e27fe1	1	fn prim_push_text( st: &mut GuiState, x: i32, y: i32, text: &str, scal
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	d84f23b7d5e8	1	fn prim_emit_text( st: &mut GuiState, fonts: &mut Option<GuiFonts>, te
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	e8f93d1e14fe	1	fn resolve( tag: &str, style_inline: &[OwnedValue], avail_w: i32, avai
+clippy::too_many_arguments	src/evaluator/namespaces_gui/render.rs	fcb62973089a	1	fn prim_push_bg( st: &mut GuiState, x: i32, y: i32, w: i32, h: i32, co
+clippy::type_complexity	src/evaluator/namespaces_autodiff.rs	8a185b083b2f	2	Result<Vec<(Vec<usize>, Vec<f64>)>, String>
+clippy::type_complexity	src/lsp/server.rs	26e69e3f1e41	1	Option<(String, String, Vec<(usize, usize)>)>
+clippy::unnecessary_map_or	src/evaluator/methods_set.rs	e41285d4c4b7	1	set_key_str(e).map_or(false, |k| other_keys.contains(&k))
+clippy::unnecessary_map_or	src/evaluator/namespaces_regex.rs	16047f629777	1	self.chars.get(self.pos + 1).map_or(false, |&x| x != ']')
+clippy::unnecessary_map_or	src/package_manager.rs	5a6b81427f69	1	chars .peek() .map_or(false, |c| !matches!(c, ',' | '}' | ']'))
+clippy::unnecessary_map_or	src/package_manager.rs	6bd5f016af6a	3	chars.peek().map_or(false, |c| c.is_whitespace())
+clippy::unnecessary_map_or	src/package_manager.rs	c170dc968842	3	chars .peek() .map_or(false, |c| c.is_whitespace() || *c == ',')
+clippy::useless_format	src/evaluator/mod.rs	b2fa5cfa713a	1	format!("{}", s)
+clippy::while_let_loop	src/evaluator/svg.rs	95cb7f783360	1	loop { let cmd = match nums.next_cmd() { Some(c) => c, None => break, 
