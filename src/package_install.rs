@@ -113,12 +113,17 @@ impl Lockfile {
         Ok(Self { entries })
     }
 
-    /// Write `dir/serez.lock`, sorted, with `\n` endings on every platform.
+    /// The lockfile's exact bytes: sorted, with `\n` endings on every platform.
     ///
     /// Sorted and newline-normalised so the file is a function of the resolved
     /// graph alone: two machines that resolve the same graph produce the same
     /// bytes, and a diff shows what changed rather than how it was written.
-    pub fn write(&self, dir: &Path) -> Result<(), String> {
+    ///
+    /// Split from [`Self::write`] because an install has to know this content
+    /// *before* it changes anything — it goes into the journal, and the journal
+    /// is written before the first mutation. One renderer, so the journalled
+    /// bytes and the written bytes cannot drift apart.
+    pub fn render(&self) -> String {
         let mut sorted = self.entries.clone();
         sorted.sort();
         let mut out = String::from(LOCK_HEADER);
@@ -129,7 +134,11 @@ impl Lockfile {
                 entry.name, entry.version, entry.integrity
             ));
         }
-        std::fs::write(dir.join(LOCKFILE), out)
+        out
+    }
+
+    pub fn write(&self, dir: &Path) -> Result<(), String> {
+        std::fs::write(dir.join(LOCKFILE), self.render())
             .map_err(|e| format!("Cannot write {}: {}", LOCKFILE, e))
     }
 
@@ -151,6 +160,9 @@ impl Lockfile {
     }
 }
 
+/// How much of a file is read at a time while hashing it.
+const DIGEST_CHUNK_BYTES: usize = 64 * 1024;
+
 /// `sha256-<hex>` over every file in `root`, by relative path and contents.
 ///
 /// Deterministic across platforms: paths are separated with `/`, the file list
@@ -158,9 +170,6 @@ impl Lockfile {
 /// length so that concatenation cannot be ambiguous between two different trees.
 /// Directories contribute nothing of their own; an empty one is invisible, which
 /// matches what a package is.
-/// How much of a file is read at a time while hashing it.
-const DIGEST_CHUNK_BYTES: usize = 64 * 1024;
-
 pub fn tree_digest(root: &Path) -> Result<String, String> {
     let mut files = Vec::new();
     collect(root, root, &mut files)?;
@@ -244,6 +253,278 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String>
         }
     }
     Ok(())
+}
+
+/// The name of the write-ahead record an install leaves while it commits.
+///
+/// One per project, not per package: installs are sequential, and two at once
+/// already race over the same `packages/` directory whether or not this exists
+/// (§5.45).
+pub const JOURNAL: &str = ".serez-install.journal";
+
+const JOURNAL_FORMAT: &str = "serez-install-journal/1";
+
+/// Everything one install will change, captured before anything is changed.
+///
+/// # Why a plan, and why it is written down
+///
+/// The decision is that **package, manifest and lockfile are one recoverable
+/// transaction**. A filesystem offers no way to commit three paths at once, so
+/// "one transaction" has to mean something a filesystem can actually provide:
+/// every byte of the target state is recorded *before* the first mutation, and
+/// the next run finishes what an interrupted one started.
+///
+/// That is why this holds the manifest and lockfile **contents** rather than
+/// instructions for producing them. A recovery that had to re-derive them would
+/// have to re-read a `serez.json` that may itself be half-written, and would
+/// produce a different answer depending on when it ran. Recorded bytes make
+/// recovery deterministic: whatever the crash, the next run applies exactly the
+/// state the interrupted one had already decided on.
+#[derive(Debug, Clone)]
+pub struct CommitPlan {
+    pub package: String,
+    pub version: String,
+    pub integrity: String,
+    /// Where the package tree goes.
+    pub destination: PathBuf,
+    /// The staging directory holding the new tree, beside `destination`.
+    pub staging: PathBuf,
+    /// `serez.json` and its full new content, when this install changes it.
+    pub manifest: Option<(PathBuf, String)>,
+    /// `serez.lock` and its full new content.
+    pub lockfile: (PathBuf, String),
+}
+
+impl CommitPlan {
+    /// Serialise, with a terminator that says the record is complete.
+    ///
+    /// Length-prefixed file bodies, because a manifest contains newlines and a
+    /// line-oriented format would guess where one ends. The final digest is over
+    /// everything above it: a journal cut short by a crash *while it was being
+    /// written* has no terminator, or a terminator that does not match, and is
+    /// discarded rather than half-applied — which is safe precisely because
+    /// nothing has been mutated yet at that point.
+    fn encode(&self) -> Result<Vec<u8>, String> {
+        for (label, value) in [
+            ("package", self.package.as_str()),
+            ("version", self.version.as_str()),
+            ("integrity", self.integrity.as_str()),
+            ("destination", &self.destination.to_string_lossy()),
+            ("staging", &self.staging.to_string_lossy()),
+        ] {
+            if value.contains('\n') || value.contains('\t') {
+                return Err(format!(
+                    "cannot journal an install whose {label} contains a tab or a newline: {value:?}"
+                ));
+            }
+        }
+
+        let mut out = Vec::new();
+        out.extend_from_slice(format!("{JOURNAL_FORMAT}\n").as_bytes());
+        out.extend_from_slice(format!("package\t{}\n", self.package).as_bytes());
+        out.extend_from_slice(format!("version\t{}\n", self.version).as_bytes());
+        out.extend_from_slice(format!("integrity\t{}\n", self.integrity).as_bytes());
+        out.extend_from_slice(
+            format!("destination\t{}\n", self.destination.to_string_lossy()).as_bytes(),
+        );
+        out.extend_from_slice(format!("staging\t{}\n", self.staging.to_string_lossy()).as_bytes());
+
+        let mut files: Vec<(&PathBuf, &String)> = vec![(&self.lockfile.0, &self.lockfile.1)];
+        if let Some((path, body)) = &self.manifest {
+            files.push((path, body));
+        }
+        for (path, body) in files {
+            let path = path.to_string_lossy();
+            if path.contains('\n') || path.contains('\t') {
+                return Err(format!(
+                    "cannot journal a path containing a tab or newline: {path:?}"
+                ));
+            }
+            out.extend_from_slice(format!("file\t{}\t{}\n", body.len(), path).as_bytes());
+            out.extend_from_slice(body.as_bytes());
+            out.push(b'\n');
+        }
+
+        let digest = to_hex(&crate::hash::sha256(&out));
+        out.extend_from_slice(format!("end\t{digest}\n").as_bytes());
+        Ok(out)
+    }
+
+    /// Read back a journal, or `None` when it is absent or was cut short.
+    ///
+    /// A torn record is not an error: it means the crash happened before any
+    /// mutation, so there is nothing to recover and the file is simply stale.
+    fn decode(bytes: &[u8]) -> Option<CommitPlan> {
+        let terminator = bytes
+            .windows(5)
+            .rposition(|w| w == b"\nend\t")
+            .map(|i| i + 1)?;
+        let (body, tail) = bytes.split_at(terminator);
+        let recorded = std::str::from_utf8(tail)
+            .ok()?
+            .trim()
+            .strip_prefix("end\t")?;
+        if recorded != to_hex(&crate::hash::sha256(body)) {
+            return None;
+        }
+
+        let mut rest = body.strip_prefix(format!("{JOURNAL_FORMAT}\n").as_bytes())?;
+        let scalar = |key: &str, rest: &mut &[u8]| -> Option<String> {
+            let line_end = rest.iter().position(|b| *b == b'\n')?;
+            let line = std::str::from_utf8(&rest[..line_end]).ok()?;
+            let value = line.strip_prefix(key)?.strip_prefix('\t')?.to_string();
+            *rest = &rest[line_end + 1..];
+            Some(value)
+        };
+        let package = scalar("package", &mut rest)?;
+        let version = scalar("version", &mut rest)?;
+        let integrity = scalar("integrity", &mut rest)?;
+        let destination = PathBuf::from(scalar("destination", &mut rest)?);
+        let staging = PathBuf::from(scalar("staging", &mut rest)?);
+
+        let mut files: Vec<(PathBuf, String)> = Vec::new();
+        while rest.starts_with(b"file\t") {
+            let line_end = rest.iter().position(|b| *b == b'\n')?;
+            let header = std::str::from_utf8(&rest[..line_end]).ok()?;
+            let mut parts = header.splitn(3, '\t');
+            parts.next()?;
+            let len: usize = parts.next()?.parse().ok()?;
+            let path = PathBuf::from(parts.next()?);
+            rest = &rest[line_end + 1..];
+            if rest.len() < len + 1 {
+                return None;
+            }
+            let content = std::str::from_utf8(&rest[..len]).ok()?.to_string();
+            rest = &rest[len + 1..];
+            files.push((path, content));
+        }
+
+        let mut files = files.into_iter();
+        let lockfile = files.next()?;
+        let manifest = files.next();
+        Some(CommitPlan {
+            package,
+            version,
+            integrity,
+            destination,
+            staging,
+            manifest,
+            lockfile,
+        })
+    }
+
+    /// Where this plan's journal lives: beside the metadata it describes.
+    fn journal_path(&self) -> PathBuf {
+        self.lockfile
+            .0
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(JOURNAL)
+    }
+}
+
+/// Replace `path`'s contents in one rename.
+///
+/// A half-written `serez.lock` is worse than an old one: it is the file every
+/// later install verifies against. Writing beside it and renaming means a reader
+/// sees either the old bytes or the new ones.
+fn write_atomically(path: &Path, body: &str) -> Result<(), String> {
+    let temp = path.with_file_name(format!(
+        ".{}.writing-{}",
+        path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        std::process::id()
+    ));
+    std::fs::write(&temp, body).map_err(|e| format!("Cannot write '{}': {}", temp.display(), e))?;
+    std::fs::rename(&temp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        format!("Cannot replace '{}': {}", path.display(), e)
+    })
+}
+
+/// Apply a plan: the package tree, then the lockfile, then the manifest.
+///
+/// # What is guaranteed, and what is not
+///
+/// This is **not** atomic and is not described as such. Three paths change and a
+/// filesystem cannot commit three paths at once, so between the first rename and
+/// the last there is a window in which the package is new and the metadata is
+/// not. What is guaranteed is that the window is **recoverable**: the journal
+/// holds every byte of the target state, and [`recover_pending`] finishes the
+/// job on the next run, deterministically and however many times it is run.
+///
+/// The order is deliberate. The package tree first, because it is the one step
+/// that can still fail for reasons of its own; the lockfile next, because it is
+/// what the next install verifies against; the manifest last, because it is the
+/// only one a human edits.
+fn apply(plan: &CommitPlan) -> Result<(), String> {
+    // Idempotent: after a crash past this point the staging directory is gone,
+    // and the swap has already happened.
+    if plan.staging.exists() {
+        Transaction::adopt(plan.staging.clone(), plan.destination.clone()).commit()?;
+    } else {
+        // The swap may have been interrupted *inside* its own three renames.
+        recover(&plan.destination)?;
+    }
+
+    write_atomically(&plan.lockfile.0, &plan.lockfile.1)?;
+    if let Some((path, body)) = &plan.manifest {
+        write_atomically(path, body)?;
+    }
+    Ok(())
+}
+
+/// Run a plan as one recoverable unit: record it, apply it, then forget it.
+pub fn commit_plan(plan: &CommitPlan) -> Result<(), String> {
+    let journal = plan.journal_path();
+    let encoded = plan.encode()?;
+
+    // Written and flushed *before* the first mutation. A crash before this
+    // leaves nothing changed; a crash during it leaves a record with no
+    // terminator, which `decode` discards — also with nothing changed.
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&journal)
+            .map_err(|e| format!("Cannot write '{}': {}", journal.display(), e))?;
+        file.write_all(&encoded)
+            .map_err(|e| format!("Cannot write '{}': {}", journal.display(), e))?;
+        // Durability, not just ordering: without this a power loss can lose the
+        // record while keeping the renames that follow it.
+        file.sync_all()
+            .map_err(|e| format!("Cannot flush '{}': {}", journal.display(), e))?;
+    }
+
+    let applied = apply(plan);
+
+    // Removed last, and only on success: a journal that outlives a failed apply
+    // is what the next run uses to finish the job.
+    if applied.is_ok() {
+        let _ = std::fs::remove_file(&journal);
+    }
+    applied
+}
+
+/// Finish an install a previous run left half-applied, if there is one.
+///
+/// Called before anything else an install does. Returns what was recovered, for
+/// the caller to report — silence about a repair is how a repair becomes
+/// folklore.
+pub fn recover_pending(project: &Path) -> Result<Option<String>, String> {
+    let journal = project.join(JOURNAL);
+    let Ok(bytes) = std::fs::read(&journal) else {
+        return Ok(None);
+    };
+
+    let Some(plan) = CommitPlan::decode(&bytes) else {
+        // Torn or unreadable: written before any mutation, so nothing happened.
+        let _ = std::fs::remove_file(&journal);
+        return Ok(None);
+    };
+
+    apply(&plan)?;
+    let _ = std::fs::remove_file(&journal);
+    Ok(Some(format!("{}@{}", plan.package, plan.version)))
 }
 
 /// An install in progress: a staging directory that is either committed whole or
@@ -400,6 +681,31 @@ impl Transaction {
             staging,
             committed: false,
         })
+    }
+
+    /// Give up ownership of the staging directory without committing.
+    ///
+    /// `Drop` removes an uncommitted staging directory, which is right for every
+    /// failure path and wrong for the one case where the directory is being
+    /// handed to a [`CommitPlan`] that will swap it in. Marking it committed is
+    /// the smallest way to say "someone else owns this now"; `mem::forget` would
+    /// leak the `PathBuf`s and hide the intent.
+    pub(crate) fn hand_over(mut self) {
+        self.committed = true;
+    }
+
+    /// Rebuild a transaction from paths a journal recorded.
+    ///
+    /// Recovery needs the same three-rename swap a fresh install uses, and a
+    /// second copy of it would be a second thing to keep correct. This does not
+    /// create or clean the staging directory — it is already there, written by
+    /// the run that was interrupted.
+    pub(crate) fn adopt(staging: PathBuf, destination: PathBuf) -> Self {
+        Transaction {
+            destination,
+            staging,
+            committed: false,
+        }
     }
 
     /// Where to put the files. Nothing here is visible to the project yet.

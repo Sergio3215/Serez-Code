@@ -265,6 +265,15 @@ pub fn install_package(
     } else {
         std::env::current_dir().ok()
     };
+
+    // Before anything is read, finish what a previous run left half-applied.
+    // Reading the lockfile first would read whichever half survived the crash.
+    if let Some(dir) = &project {
+        if let Some(recovered) = crate::package_install::recover_pending(dir)? {
+            println!("↺ Completed an interrupted install of {}", recovered);
+        }
+    }
+
     let mut lock = match &project {
         Some(dir) => Lockfile::read(dir)?,
         None => Lockfile::default(),
@@ -295,7 +304,56 @@ pub fn install_package(
         Some(entry) if entry.version == version => transaction.verify(&entry.integrity)?,
         _ => {}
     }
-    transaction.commit()?;
+
+    // ── the commit ──────────────────────────────────────────────────────────
+    //
+    // Package, manifest and lockfile are **one recoverable transaction**. Every
+    // byte of the target state is worked out here, while nothing has changed
+    // yet, and handed to `commit_plan` as a unit. A failure anywhere above this
+    // point leaves the project exactly as it was; a crash below it is finished
+    // by the next run from the journal.
+    //
+    // This is what the metadata writes used to be: two `if let Err(e) =`
+    // warnings after a committed install, which could leave a new package with
+    // an old lockfile and say so in a line nobody reads.
+    match &project {
+        None => {
+            // A global install has no project metadata, so the package tree is
+            // the whole transaction and `Transaction` already covers it.
+            transaction.commit()?;
+        }
+        Some(dir) => {
+            lock.upsert(LockEntry {
+                name: pkg_name.clone(),
+                version: version.clone(),
+                integrity: integrity.clone(),
+            });
+
+            // Prepared, not written. `plan_dependency` returns the manifest's
+            // new text without touching the file, so a manifest that cannot be
+            // parsed fails here — with the old package still installed — rather
+            // than after the swap.
+            let manifest_change = match manifest {
+                ManifestPolicy::Record => plan_dependency(dir, &pkg_name, &version)?,
+                ManifestPolicy::Keep => None,
+            };
+
+            let plan = crate::package_install::CommitPlan {
+                package: pkg_name.clone(),
+                version: version.clone(),
+                integrity,
+                destination: dest.clone(),
+                staging: transaction.staging_dir().to_path_buf(),
+                manifest: manifest_change,
+                lockfile: (dir.join(LOCKFILE), lock.render()),
+            };
+
+            // The transaction's `Drop` would remove the staging directory the
+            // plan is about to adopt, so it is dismissed rather than dropped.
+            transaction.hand_over();
+            crate::package_install::commit_plan(&plan)?;
+        }
+    }
 
     if global {
         println!(
@@ -309,38 +367,6 @@ pub fn install_package(
             "✅ Installed {}@{} → ./packages/{}",
             pkg_name, version, pkg_name
         );
-    }
-
-    // Record the resolved dependency in serez.json and serez.lock (local
-    // installs only). A write failure here is a warning, not a hard error: the
-    // package is already on disk, and failing after a successful install would
-    // be the non-atomicity this change removes, in a different place.
-    // A write failure here is a warning, not a hard error: the package is
-    // already correctly on disk, and failing after a successful install would be
-    // the non-atomicity this whole path exists to remove, in a different place.
-    //
-    // Whether that is the right answer — whether package, manifest and lockfile
-    // should instead be one recoverable transaction — is
-    // **DEC-PACKAGE-TRANSACTION**, registered and not taken here. Writing the
-    // lockfile on every successful local install is correct under either answer:
-    // under a single transaction it is part of it, and under an authoritative
-    // store it is the record being kept in step.
-    if !global {
-        if let Some(dir) = &project {
-            if manifest == ManifestPolicy::Record {
-                if let Err(e) = record_dependency(dir, &pkg_name, &version) {
-                    eprintln!("⚠ Installed, but could not update serez.json: {}", e);
-                }
-            }
-            lock.upsert(LockEntry {
-                name: pkg_name.clone(),
-                version: version.clone(),
-                integrity,
-            });
-            if let Err(e) = lock.write(dir) {
-                eprintln!("⚠ Installed, but could not update {}: {}", LOCKFILE, e);
-            }
-        }
     }
 
     Ok(())
@@ -822,6 +848,17 @@ pub fn update_all(global: bool) -> Result<(), String> {
 pub fn install_all() -> Result<(), String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
+
+    // Before the manifest is read, not after. `install_package` recovers too,
+    // but by the time it runs this function has already decided what to install
+    // from a `serez.json` an interrupted run had not finished updating — so the
+    // recovery would land and then be immediately overwritten with the stale
+    // list. Measured as exactly that: a journalled update to 2.0.0 was applied
+    // and then undone by an install of 1.0.0 in the same command.
+    if let Some(recovered) = crate::package_install::recover_pending(&cwd)? {
+        println!("↺ Completed an interrupted install of {}", recovered);
+    }
+
     let manifest = SerezManifest::load(&cwd)?;
 
     if manifest.dependencies.is_empty() {
@@ -858,7 +895,19 @@ pub fn install_all() -> Result<(), String> {
 
 /// Insert or update a dependency in the project's serez.json.
 /// No-op (with a hint) if there is no manifest in `dir`.
-fn record_dependency(dir: &Path, name: &str, version: &str) -> Result<(), String> {
+/// What `serez.json` would become, without writing it.
+///
+/// Split from the write so an install can decide the manifest's new text while
+/// nothing has been mutated. A manifest that does not parse, or a name or
+/// version that does not validate, then fails with the project untouched
+/// instead of after the package tree has already been swapped.
+///
+/// `None` means nothing to write: there is no manifest to record into.
+fn plan_dependency(
+    dir: &Path,
+    name: &str,
+    version: &str,
+) -> Result<Option<(PathBuf, String)>, String> {
     validate_package_name(name)?;
     validate_package_version(version)?;
     let path = dir.join("serez.json");
@@ -866,14 +915,13 @@ fn record_dependency(dir: &Path, name: &str, version: &str) -> Result<(), String
         Ok(s) => s,
         Err(_) => {
             println!("ℹ No serez.json found — run `sz init` to track dependencies.");
-            return Ok(());
+            return Ok(None);
         }
     };
     SerezManifest::parse(&raw)?;
     let updated = upsert_dependency(&raw, name, version)?;
-    std::fs::write(&path, &updated).map_err(|e| format!("Cannot write serez.json: {}", e))?;
     println!("   added {}@{} to serez.json", name, version);
-    Ok(())
+    Ok(Some((path, updated)))
 }
 
 /// Remove a dependency from the project's serez.json if present.
