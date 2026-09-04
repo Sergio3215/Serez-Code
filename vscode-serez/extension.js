@@ -75,11 +75,28 @@ function activate(context) {
         const provider = vscode.languages.registerDocumentFormattingEditProvider(
             { language, scheme: 'file' },
             {
-                provideDocumentFormattingEdits(document) {
+                provideDocumentFormattingEdits(document, options, token) {
+                    if (token && token.isCancellationRequested) return [];
+
                     const original = document.getText();
-                    const formatted = format(original);
+                    let formatted;
+                    try {
+                        // `options` carries the editor's resolved tabSize and
+                        // insertSpaces for this document. They were ignored, so
+                        // a workspace set to 2 spaces or to tabs got 4 spaces on
+                        // every save, silently, with no setting that could fix it.
+                        formatted = format(original, options);
+                    } catch (e) {
+                        // A formatter that throws while the user is typing takes
+                        // format-on-save down with it. Returning no edits leaves
+                        // the document exactly as it is, which is the safe
+                        // failure for an operation that rewrites a whole file.
+                        console.error('serez: formatter failed, document left unchanged', e);
+                        return [];
+                    }
 
                     if (formatted === original) return [];
+                    if (token && token.isCancellationRequested) return [];
 
                     const start = document.positionAt(0);
                     const end   = document.positionAt(original.length);
