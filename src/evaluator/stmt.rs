@@ -1379,10 +1379,13 @@ impl super::Evaluator {
     }
 
     pub(super) fn eval_unsafe_block(&mut self, block: &ast::BlockStatement) -> EvalResult {
-        let prev = self.in_unsafe_block;
-        self.in_unsafe_block = true;
+        // Saved and restored rather than cleared: `unsafe { unsafe { } }` must
+        // leave the outer block still unsafe, and the restore has to happen on
+        // every way out of the block — a `throw` and a `return` included, which
+        // is why `eval_block`'s result is held rather than `?`-propagated.
+        let previous = self.execution.enter_unsafe();
         let result = self.eval_block(block);
-        self.in_unsafe_block = prev;
+        self.execution.restore(previous);
         result
     }
 

@@ -195,20 +195,25 @@ fn an_ordinary_small_body_is_unaffected() {
     );
 }
 
-// ── the fourth read, which has no ceiling ────────────────────────────────────
+// ── the fourth read, whose ceiling `unsafe` waives ───────────────────────────
 
-/// `OS.exec` captures a child's output whole. **DEC-M9-003**, open.
+/// `OS.exec` inside `unsafe` captures a child's output whole. **DEC-M9-003.**
 ///
-/// # Why a test asserts a defect
+/// # The decision this now describes
 ///
-/// This one pins the *current* contract rather than a desired one. DEC-M9-003
-/// has three defensible answers — a fatal ceiling, bounded capture with a
-/// truncation flag, or a host-set default — and picking one here would be
-/// deciding it. What can be done without deciding is to make the change
-/// deliberate: whoever implements the decision has to come here and change this
-/// test, rather than discovering afterwards that the behaviour moved.
+/// This test used to pin a defect, because DEC-M9-003 was open and picking an
+/// answer here would have decided it. It is decided: the process output ceiling
+/// is a guarantee `unsafe { }` waives, so the whole of a child's output arriving
+/// is the **contract**, not an omission. The three read ceilings above are the
+/// unwaived kind and are unaffected.
 ///
-/// # What was measured, and why this test is smaller than the measurement
+/// The unwaived path for a child process is real and tested at its boundary —
+/// exactly 64 MiB captured, 64 MiB + 1 refused, on both streams — in
+/// `evaluator::child_output_tests`. It cannot be tested through `OS.exec`,
+/// because `OS.exec` requires `unsafe` and so never runs with the guarantee in
+/// force.
+///
+/// # What was measured
 ///
 /// Against the release binary, peak working set of `sz` by child output size:
 ///
@@ -219,11 +224,11 @@ fn an_ordinary_small_body_is_unaffected() {
 /// 200 MiB          9.4 MiB   the same bytes through OS.spawn, which is bounded
 /// ```
 ///
-/// Roughly 5× the child's output, resident, succeeding. This test uses **8 MiB**
-/// instead: it asserts the *property* — that the whole of a child's output
-/// arrives, with no ceiling applied — and the property does not need a gigabyte
-/// to state. A test that allocated a gigabyte would fail on a small CI runner for
-/// reasons unrelated to what it is checking.
+/// Roughly 5x the child's output, resident. This test uses **8 MiB**: it asserts
+/// the property, and the property does not need a gigabyte to state. A test that
+/// allocated one would fail on a small CI runner for reasons unrelated to what
+/// it checks. `tests/unsafe_contract.rs` takes the same property past the 64 MiB
+/// ceiling, where the waiver is the only thing that can explain the result.
 ///
 /// # Why it drives the binary
 ///
@@ -232,7 +237,7 @@ fn an_ordinary_small_body_is_unaffected() {
 /// lockdown, where `use permissions` is refused outright. That refusal is itself
 /// worth pinning, so it is the second test below.
 #[test]
-fn os_exec_output_is_currently_unbounded() {
+fn os_exec_inside_unsafe_captures_the_whole_output() {
     let dir = std::env::temp_dir().join(format!("serez-exec-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -293,9 +298,9 @@ fn os_exec_output_is_currently_unbounded() {
     assert_eq!(
         captured,
         8 * 1024 * 1024,
-        "OS.exec no longer returns the child's whole output. That is DEC-M9-003 \
-         being decided; update this test and spec/limits.md to say what the new \
-         contract is."
+        "OS.exec no longer returns the child's whole output. Inside `unsafe` the \
+         process output ceiling is waived — see security.md's waivable-guarantee \
+         table — so this is a change to the contract, not a bug fix."
     );
 }
 

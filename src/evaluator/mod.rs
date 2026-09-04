@@ -95,6 +95,82 @@ pub(crate) fn read_bounded(reader: impl std::io::Read) -> Result<Vec<u8>, String
     Ok(buf)
 }
 
+/// What a child process wrote, and whether the runtime stopped listening.
+pub(crate) struct ChildOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub status: std::process::ExitStatus,
+}
+
+/// Run a child and capture both streams, refusing past
+/// [`MAX_UNBOUNDED_READ_BYTES`] on either.
+///
+/// # Why not `Command::output()`
+///
+/// Because it has no ceiling: it reads both pipes to EOF, and the size is the
+/// child's to choose. Measured against a release build, a child emitting 200 MiB
+/// took the interpreter to a peak working set of **1,009.6 MiB** and succeeded.
+///
+/// # Why both streams are drained at once
+///
+/// Reading one to EOF before starting the other deadlocks whenever the child
+/// fills the pipe it is not being read from — the child blocks on the write, the
+/// parent blocks on the read that will never finish. That bug was already fixed
+/// once for `OS.spawn`, whose stderr is drained on its own thread for exactly
+/// this reason. One stream goes to a thread here, the other stays on this one,
+/// and both are complete before the exit status is taken.
+///
+/// # When this is used
+///
+/// Only where the [`Guarantee::ProcessOutputCeiling`] has **not** been waived.
+/// `unsafe { }` waives it, and `OS.exec` is reachable only inside `unsafe`, so
+/// today every `OS.exec` takes the unbounded path by contract rather than by
+/// omission. This is the behaviour the guarantee describes when it is in force,
+/// and it is unit-tested directly for that reason.
+///
+/// [`Guarantee::ProcessOutputCeiling`]: crate::execution::Guarantee::ProcessOutputCeiling
+pub(crate) fn run_child_bounded(
+    mut command: std::process::Command,
+) -> std::io::Result<Result<ChildOutput, String>> {
+    use std::process::Stdio;
+
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+
+    let mut err_pipe = child.stderr.take();
+    let drain_err = std::thread::spawn(move || match err_pipe.as_mut() {
+        Some(pipe) => read_bounded(pipe),
+        None => Ok(Vec::new()),
+    });
+
+    let out = match child.stdout.as_mut() {
+        Some(pipe) => read_bounded(pipe),
+        None => Ok(Vec::new()),
+    };
+
+    // Joined before anything is returned, including on the over-ceiling path:
+    // dropping the handle without joining would leave the thread reading a pipe
+    // whose child is about to be waited on.
+    let err = drain_err
+        .join()
+        .unwrap_or_else(|_| Err("the stderr reader panicked".to_string()));
+
+    let status = child.wait()?;
+
+    match (out, err) {
+        (Ok(stdout), Ok(stderr)) => Ok(Ok(ChildOutput {
+            stdout,
+            stderr,
+            status,
+        })),
+        // Either stream over the ceiling refuses the call. Which one is not
+        // reported separately: the condition is the same and the remedy is the
+        // same, and naming the stream would imply the other one was fine when it
+        // may simply not have been read yet.
+        (Err(e), _) | (_, Err(e)) => Ok(Err(e)),
+    }
+}
+
 /// How many values one generator call may accumulate before it is stopped.
 ///
 /// `fn*` is not lazy: calling one runs the body to completion and returns an
@@ -365,8 +441,13 @@ pub struct Evaluator {
     // LCG state for Math.random()
     lcg_state: u64,
     source_lines: Vec<String>,
-    // true while executing inside an unsafe { } block
-    in_unsafe_block: bool,
+    /// Where execution is with respect to the runtime's guarantees.
+    ///
+    /// Was a bare `in_unsafe_block: bool`. The question a guard needs to ask is
+    /// not "am I inside unsafe" but "may I relax *this* guarantee", and
+    /// `ExecutionContext::waives` keeps the set of relaxations enumerable
+    /// instead of letting each namespace read the flag and decide for itself.
+    execution: crate::execution::ExecutionContext,
     // registered native function names
     native_fns: HashSet<String>,
     // Three fields until M6.2. Where the evaluator is in module terms: what has
@@ -655,7 +736,7 @@ impl Evaluator {
             sealed_classes: HashSet::new(),
             lcg_state: seed,
             source_lines: Vec::new(),
-            in_unsafe_block: false,
+            execution: crate::execution::ExecutionContext::new(),
             native_fns: HashSet::new(),
             modules: crate::modules::ModuleContext::default(),
             yield_collector: None,
@@ -919,7 +1000,7 @@ impl Evaluator {
     /// CLI/tooling classify the denial as `SZ6003`; user `try/catch` cannot
     /// consume it.
     pub(crate) fn require_unsafe(&mut self, operation: &str, reason: &str) -> Option<EvalResult> {
-        if self.in_unsafe_block {
+        if self.execution.is_unsafe() {
             return None;
         }
         let suffix = if reason.is_empty() {
@@ -2831,5 +2912,154 @@ fn json_parse_number(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), 
     } else {
         let n: i64 = s.parse().map_err(|_| format!("invalid integer '{}'", s))?;
         Ok((OwnedValue::Integer(n), i))
+    }
+}
+
+#[cfg(test)]
+mod child_output_tests {
+    use super::*;
+
+    /// A file of exactly `bytes`, for a child to copy to a stream.
+    ///
+    /// A real child copying a real file, rather than a fake reader: the property
+    /// is that bytes crossing a pipe are counted and that both pipes are drained
+    /// at once, and a fake reader would only assert that the arithmetic is
+    /// self-consistent. Generating the bytes *inside* the shell is not an option
+    /// — a `for /L` loop emitting 64 MiB takes minutes on Windows.
+    fn payload(tag: &str, bytes: usize) -> std::path::PathBuf {
+        // No punctuation in the name. `{:?}` of a `ThreadId` renders as
+        // `ThreadId(5)`, and `cmd /c` treats parentheses as grouping even inside
+        // quotes — the child read an empty file and every assertion here failed
+        // on a stdout of 0 bytes.
+        let thread: String = format!("{:?}", std::thread::current().id())
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
+        let path = std::env::temp_dir().join(format!(
+            "serez-child-{tag}-{}-{thread}.bin",
+            std::process::id()
+        ));
+        std::fs::write(&path, vec![b'z'; bytes]).expect("payload");
+        path
+    }
+
+    /// A child that copies `file` to stdout, or to stderr.
+    ///
+    /// The path is a **separate argument**, not interpolated into one string.
+    /// Rust escapes arguments for the MSVCRT parser and `cmd.exe` uses different
+    /// rules, so `cmd /c "type \"C:\...\""` arrives double-escaped and the
+    /// child answers "The filename, directory name, or volume label syntax is
+    /// incorrect" on stderr — which is how every assertion here first failed on
+    /// a stdout of 0 bytes.
+    fn copying(file: &std::path::Path, to_stderr: bool) -> std::process::Command {
+        let path = file.display().to_string();
+        if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/c", "type", &path]);
+            if to_stderr {
+                c.arg("1>&2");
+            }
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            let redirect = if to_stderr { " 1>&2" } else { "" };
+            c.args(["-c", &format!("cat \"$0\"{}", redirect), &path]);
+            c
+        }
+    }
+
+    /// A small child comes back whole.
+    ///
+    /// The positive control: every other assertion here is that something is
+    /// refused, and all of them would pass against a reader that refused
+    /// everything.
+    #[test]
+    fn a_small_child_is_captured_in_full() {
+        let file = payload("small", 32);
+        let output = run_child_bounded(copying(&file, false))
+            .expect("spawn")
+            .expect("a small child must not hit the ceiling");
+        assert_eq!(output.stdout.len(), 32, "stdout was truncated or padded");
+        assert!(output.status.success());
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// Exactly at the ceiling is captured; one byte past it is refused.
+    ///
+    /// The boundary, not 10× it. A limit tested only far past its edge passes
+    /// with the comparison written backwards or applied to the wrong quantity.
+    #[test]
+    fn the_ceiling_is_where_the_spec_says_it_is() {
+        let at = payload("at", MAX_UNBOUNDED_READ_BYTES);
+        let output = run_child_bounded(copying(&at, false))
+            .expect("spawn")
+            .expect("a child of exactly the ceiling must be captured");
+        assert_eq!(output.stdout.len(), MAX_UNBOUNDED_READ_BYTES);
+        let _ = std::fs::remove_file(&at);
+
+        let over = payload("over", MAX_UNBOUNDED_READ_BYTES + 1);
+        match run_child_bounded(copying(&over, false)).expect("spawn") {
+            Err(message) => assert_eq!(
+                message, OVER_THE_READ_CEILING,
+                "refused for some other reason"
+            ),
+            Ok(output) => panic!(
+                "{} bytes of stdout were captured; the ceiling is {}",
+                output.stdout.len(),
+                MAX_UNBOUNDED_READ_BYTES
+            ),
+        }
+        let _ = std::fs::remove_file(&over);
+    }
+
+    /// And on stderr, which is the stream drained on the other thread.
+    ///
+    /// Both are asserted because they take different code paths — one is read on
+    /// this thread and one on a spawned one — and a ceiling applied to only the
+    /// first would pass a stdout-only test.
+    #[test]
+    fn the_ceiling_applies_to_stderr_too() {
+        let over = payload("err", MAX_UNBOUNDED_READ_BYTES + 1);
+        assert!(
+            run_child_bounded(copying(&over, true))
+                .expect("spawn")
+                .is_err(),
+            "an over-the-ceiling stderr was captured whole"
+        );
+        let _ = std::fs::remove_file(&over);
+    }
+
+    /// A child writing a lot to *both* streams does not deadlock.
+    ///
+    /// This is what `Command::output()` does for free and a naive replacement
+    /// gets wrong: read one to EOF and the child blocks writing the other, which
+    /// blocks the read that would unblock it. Both sides stay well under the
+    /// ceiling, so a failure here is a hang rather than a refusal — the size is
+    /// chosen to exceed a pipe buffer, not the limit.
+    #[test]
+    fn a_child_writing_to_both_streams_does_not_deadlock() {
+        let file = payload("both", 4 * 1024 * 1024);
+        let path = file.display().to_string();
+        let command = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/c", "type", &path, "&", "type", &path, "1>&2"]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", "cat \"$0\" & cat \"$0\" 1>&2; wait", &path]);
+            c
+        };
+
+        let output = run_child_bounded(command)
+            .expect("spawn")
+            .expect("well under the ceiling on both streams");
+        assert!(
+            output.stdout.len() > 64 * 1024 && output.stderr.len() > 64 * 1024,
+            "stdout {} / stderr {} bytes; both must exceed a pipe buffer for this \
+             to mean anything",
+            output.stdout.len(),
+            output.stderr.len()
+        );
+        let _ = std::fs::remove_file(&file);
     }
 }

@@ -710,8 +710,43 @@ impl super::Evaluator {
                         Err(signal) => return signal,
                     };
                 }
-                match std::process::Command::new(&cmd).args(&args_vec).output() {
-                    Ok(output) => {
+                // The output ceiling is a guarantee `unsafe { }` is defined to
+                // waive, and `OS.exec` is reachable only inside `unsafe` — so in
+                // practice this always takes the unbounded path. That is the
+                // contract, not an omission: the caller chose the command and is
+                // the only party who can know whether its output is bounded, and
+                // `spec/security.md` says so.
+                //
+                // The bounded path is asked for through the same primitive every
+                // other guard uses, rather than being absent, so that the day a
+                // safe route to a child process exists it is already correct.
+                let mut command = std::process::Command::new(&cmd);
+                command.args(&args_vec);
+                let captured = if self
+                    .execution
+                    .waives(crate::execution::Guarantee::ProcessOutputCeiling)
+                {
+                    std::process::Command::new(&cmd)
+                        .args(&args_vec)
+                        .output()
+                        .map(|o| {
+                            Ok(crate::evaluator::ChildOutput {
+                                stdout: o.stdout,
+                                stderr: o.stderr,
+                                status: o.status,
+                            })
+                        })
+                } else {
+                    crate::evaluator::run_child_bounded(command)
+                };
+
+                match captured {
+                    Ok(Err(over)) => {
+                        // A resource ceiling is fatal and not catchable, the same
+                        // treatment every other entry in spec/limits.md gets.
+                        self.fatal_err_kind("ResourceError", format!("OS.exec '{}' {}", cmd, over))
+                    }
+                    Ok(Ok(output)) => {
                         let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
                         let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
                         let code = output.status.code().unwrap_or(-1) as i64;
