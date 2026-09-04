@@ -119,30 +119,66 @@ fn a_lexical_failure_reaches_the_editor_as_a_lexical_code() {
 /// gap cannot be closed by accident and then discovered as a surprise.
 #[test]
 fn the_semantic_phase_does_not_yet_reach_the_editor() {
-    let analysis = analysis::analyze(
-        "class Task { public Task() {} }
-",
-    );
-    assert!(
-        !analysis.diagnostics.iter().any(|d| d.code == "SZ8000"),
-        "the editor now reports the semantic phase. That is very likely an          improvement — but it is DEC-M4-006, and this pin exists so it is          decided rather than drifted into. Answer the decision, then delete this."
-    );
+    // Every rule the phase has, not just the one it had when this pin was
+    // written. The gap is not a property of the reserved-name rule; it is that
+    // `analyze` never calls `semantic::validate`, so it widens with every rule
+    // the phase gains — and it gained two more in this cycle.
+    let rejected: &[(&str, &str)] = &[
+        (
+            "a reserved namespace name",
+            "class Task { public Task() {} }\n",
+        ),
+        (
+            "a duplicate declaration",
+            "fn int f() { return 1; }\nfn int f() { return 2; }\n",
+        ),
+        (
+            "an unresolvable parent",
+            "public class Child : NeverDeclared { public Child() { this.a = 1; } }\n",
+        ),
+        ("a name declared nowhere", "out totallyUndefined;\n"),
+        ("a name used before it is declared", "out x;\nlet x = 1;\n"),
+    ];
 
-    // The positive control, and the thing that makes the pin mean something: the
-    // rule really does fire, in the same process, through the same library. The
-    // editor is not being asked about a program nothing rejects.
-    let mut parser = serez_code::parser::Parser::new(serez_code::lexer::Lexer::new(
-        "class Task { public Task() {} }
-"
-        .to_string(),
-    ));
-    let program = parser.parse_program();
-    assert!(!parser.has_errors(), "fixture must parse cleanly");
-    let findings = serez_code::semantic::validate::validate(&program);
+    for (what, source) in rejected {
+        // The positive control comes first, and it is what makes the pin mean
+        // something: the rule really does fire, in the same process, through the
+        // same library. Without it, the assertion below would pass against a
+        // phase that had stopped working.
+        let mut parser =
+            serez_code::parser::Parser::new(serez_code::lexer::Lexer::new(source.to_string()));
+        let program = parser.parse_program();
+        assert!(!parser.has_errors(), "fixture must parse cleanly: {what}");
+        let findings = serez_code::semantic::validate::validate(&program);
+        assert!(
+            findings.iter().any(|d| d.code == "SZ8000"),
+            "the semantic phase no longer rejects {what}, so this pin proves \
+             nothing: got {:?}",
+            findings.iter().map(|d| d.code).collect::<Vec<_>>()
+        );
+
+        let analysis = analysis::analyze(source);
+        assert!(
+            !analysis.diagnostics.iter().any(|d| d.code == "SZ8000"),
+            "the editor now reports the semantic phase for {what}. That is very \
+             likely an improvement — but it is DEC-M4-006, and this pin exists so \
+             it is decided rather than drifted into. Answer the decision, then \
+             delete this."
+        );
+    }
+}
+
+/// And the editor is not silent in general — it reports what it was wired for.
+///
+/// The control on the control. Every assertion above is that a diagnostic is
+/// *absent*, and all of them would pass against an `analyze` that had stopped
+/// producing diagnostics at all.
+#[test]
+fn the_editor_still_reports_the_phases_it_was_wired_for() {
+    let broken = analysis::analyze("let = 5;\n");
     assert!(
-        findings.iter().any(|d| d.code == "SZ8000"),
-        "the semantic phase did not reject `class Task`, so this pin proves          nothing: got {:?}",
-        findings.iter().map(|d| d.code).collect::<Vec<_>>()
+        !broken.diagnostics.is_empty(),
+        "the editor reported nothing for a file that does not parse"
     );
 }
 

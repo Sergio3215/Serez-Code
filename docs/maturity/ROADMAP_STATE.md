@@ -2633,6 +2633,40 @@ with a `type Phase<'a>` alias rather than recorded as accepted debt.
 
 ---
 
+### 5.55 — the editor's silence about the semantic phase now spans five rules — *open under DEC-M4-006*, medium (widened from §5.41, 2026-09-04)
+
+§5.41 recorded that `sz` rejects a program the editor says nothing about, and
+DEC-M4-006 owns what to do. The Core-defects pass asked whether that decision was
+still necessary once the resolver's false positives and negatives were closed.
+
+**They were closed, and it is still necessary** — the re-evaluation is written
+into DEC-M4-006 itself. In short: the reason severity was fraught was not knowing
+how often the phase is wrong, and that is now measured — §5.51's rule has zero
+false positives across the corpus and all eight ecosystem packages, and §5.50's
+import resolution is off by default, so the LSP sees exactly what the CLI sees.
+What remains is the A/B/C product judgement about whether an editor should also
+suppress type diagnostics, which no measurement settles.
+
+**What did change is the size of the gap.** `analyze` does not call
+`semantic::validate` at all, so the silence grows with every rule the phase
+gains. One rule when §5.41 was written, five now:
+
+| The phase rejects | The editor says |
+|---|---|
+| a reserved namespace name | nothing |
+| a duplicate declaration | nothing |
+| an unresolvable parent | nothing |
+| a name declared nowhere | nothing |
+| a name used before it is declared | nothing |
+
+`the_semantic_phase_does_not_yet_reach_the_editor` covers all five now, each with
+a positive control asserting the rule really fires in the same process through
+the same library — without which the pin would pass against a phase that had
+stopped working. A sixth test asserts the editor is not silent in general, which
+is the control the five absences need.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of
@@ -4287,6 +4321,47 @@ diagnostics and they can be decided independently.
 
 **Blocked by this decision:** nothing. Pinned by
 `the_semantic_phase_does_not_yet_reach_the_editor`.
+
+#### Re-evaluated 2026-09-04, and still required
+
+The Core-defects pass asked whether this decision was still necessary once the
+resolver's false positives and negatives were addressed. They were — §5.50 and
+§5.51 — and it is.
+
+**What changed.** The reason severity was fraught was that nobody knew how often
+the phase was wrong. Now:
+
+  * §5.51's declaration-order rule was measured against the whole 508-file corpus
+    and all eight ecosystem packages with **zero** false positives, and carries
+    nine negative controls for the forward references that legitimately work.
+  * §5.50's import resolution — the one remaining source of new rejections — is
+    **off by default**, so `lsp::analysis::analyze`, which passes no directory,
+    sees exactly what `sz file.sz` sees. Neither more nor less.
+
+So "would the editor report things the compiler does not" is answered: no.
+
+**What has not changed**, and is the whole decision: **A, B or C**. B silently
+drops type diagnostics when a semantic one appears, mirroring `run.rs`. That is a
+product judgement about what an editor should show, and no measurement settles
+it. Severity is the smaller half of it.
+
+**What widened.** The gap is not a property of one rule — `analyze` never calls
+`semantic::validate` at all, so it grows with every rule the phase gains. It had
+one rule when this entry was written and has five now. The pin was widened to
+cover all of them, each with a positive control proving the rule fires in the
+same process through the same library, plus a control proving the editor is not
+simply silent.
+
+| The phase rejects | The editor says |
+|---|---|
+| a reserved namespace name | nothing |
+| a duplicate declaration | nothing |
+| an unresolvable parent | nothing |
+| a name declared nowhere | nothing |
+| a name used before it is declared | nothing |
+
+**Explicitly blocked**, as the finding asked: this stays open, and nothing about
+what the editor publishes changes until it is answered.
 
 ---
 
