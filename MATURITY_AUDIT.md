@@ -760,3 +760,65 @@ Every entry above is now closed or reduced. What remains in this register:
 response-size ceiling and the unbounded `read_to_end` are separate problems; the
 only overlap taken was the redirect chain, without which the allowlist would be
 bypassable.
+
+---
+
+## Findings closed on 2026-09-04 — the Core-defects pass
+
+Eleven demonstrated Core defects, worked one at a time against a measurement
+taken first. Five had no decision in them and are fixed; three needed a decision
+that is registered rather than taken; three were test- or measurement-quality
+problems.
+
+| # | Finding | Outcome | Commit |
+|---|---|---|---|
+| 1 | `sz install` produced no lockfile | **FIXED** — `ManifestPolicy` splits the manifest from the lockfile | `25bafe8` |
+| 2 | a crash between the two renames lost the package | **FIXED** — recovery on the next `begin`, not a stronger claim | `b1c6e8d` |
+| 3 | a local-registry package could name any host file | **FIXED** — one policy with the archive path | `f3f228b` |
+| 4 | `OS.exec` output is unbounded | **REGISTERED, DEC-M9-003** — measured, documented, pinned, not changed | `820e512` |
+| 5 | the clippy gate let debt move, and release did not run it | **FIXED** — per-warning fingerprints, both workflows | `6776064` |
+| 6 | one `import` switched off name checking for a file | **IMPLEMENTED, OFF — DEC-M4-007** | `0a445d5` |
+| 7 | top-level bindings pre-seeded that the runtime does not create | **FIXED** — the measured rule, with nine negative controls | `5382bd1` |
+| 11 | a `stopGrad` test that asserted only that nothing crashed | **FIXED** — four tests, one quantitative | `32be43d` |
+| 8 | the `.szx` outline threw away nesting the scanner had | **PARTLY FIXED** — depth, containers, fields; a JSX frontend is debt | `d371acc` |
+| 9 | phase timings measured the sampling order | **FIXED** — interleaved with warmup; **DEC-M10-003** registered | `ca743fc` |
+| 10 | the editor is silent about the semantic phase | **RE-EVALUATED, still blocked — DEC-M4-006** | `807a0a5` |
+
+**Gates, start and end.**
+
+| | `c3a84bf` | `807a0a5` |
+|---|---|---|
+| `cargo fmt --check` | clean | clean |
+| clippy | 180 sites, keyed `(lint, file)` | **180 sites, keyed per warning**, and release gated too |
+| `cargo test --all-targets` | 517 in 25 suites | **586 in 30 suites** |
+| both Serez runners | 508 / 0 / 0 | **508 / 0 / 0**, identical |
+| ecosystem canary | 8/8 | **8/8** |
+
+### What this register gains and loses
+
+**Closed here:** nothing that was already listed. Every finding above was found
+by this pass, not carried forward.
+
+**Reduced:** the *non-atomic installation* entry, closed in a previous cycle, was
+closed on a weaker basis than it read. It was atomic against controlled errors
+and not against a crash, the lockfile was unreachable from the ordinary install
+path, and the local-registry door asked none of the questions the remote one did.
+All three are now fixed and tested; "atomic" is written down with its limits
+rather than as a claim.
+
+**Added, and still open:**
+
+- **`OS.exec` output has no ceiling** — the fourth unbounded read, outside
+  DEC-M9-001's scope. Not reachable from untrusted source; roughly 5× the
+  child's output resident. **DEC-M9-003**.
+- **no cross-process lock on installs** — two `sz install` runs on the same
+  package race, with no measured occurrence. §5.45.
+- **no structural `.szx` frontend** — the outline is a token scan that does not
+  know it is inside JSX. §5.53.
+- **the semantic phase does not reach the editor**, now across five rules
+  rather than one. **DEC-M4-006**, re-evaluated on 2026-09-04 and still
+  required.
+
+**Unchanged:** LLVM parity, publisher signatures, runtime property testing, and
+conformance coverage — none was in this pass's scope, and none is closer.
+

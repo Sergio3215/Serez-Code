@@ -31,10 +31,10 @@ Read before starting any milestone, in this order:
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
 | **Open decisions** | **17 OPEN, 10 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M9-003** (what ceiling `OS.exec` output has), **DEC-M10-003** (does any phase timing block a build) |
 | Branch | `improve` |
-| HEAD | `2d4302f` |
+| HEAD | `807a0a5` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-03 — **the approved-decisions cycle** (§0B, §0A.H). Eleven answers implemented across ten commits: lexical name resolution, the LSP outline from the tree, a narrow service trait, one read ceiling, a generator ceiling, atomic/locked/verified package installs, the LLVM feature matrix, the clippy baseline gate, the canary as a pinned gate plus a daily run, and advisory phase timings. `MATURITY_AUDIT.md`'s **critical** entry is closed |
+| Last state update | 2026-09-04 — **the Core-defects pass** (§5.43–§5.55). Eleven demonstrated defects, one commit each: the lockfile the ordinary install never wrote, a crash that lost a package, a local registry that could name any host file, a clippy gate debt could move through and that release never ran, a file whose names went unchecked because it imported, top-level bindings the runtime does not create, an outline that discarded its own nesting, timings that measured the sampling order, and a test that asserted only that nothing crashed. Three findings needed a decision and got a registered one instead of a guess |
 
 Milestone ledger:
 
@@ -44,13 +44,13 @@ Milestone ledger:
 | M1 — Parser Molecular | **COMPLETE** (2026-09-01) — mod.rs 3,936 -> 422 (-89%), 1 file -> 14 |
 | M2 — AST + Spans Stable | **COMPLETE** (2026-09-02) — all 28 `Expression` variants and 39 of 40 structs carry a span |
 | M3 — Diagnostics Unified | **COMPLETE** (2026-09-02) — 5 diagnostic types -> 1, 4 rendered formats -> 1 renderer, §5.17 fixed |
-| M4 — Semantic Layer Established | **PARTIAL** — DEC-M4-002 and -004 are decided *and implemented*, so neither blocks anything now. **M4.6.1 is still open**: DEC-M4-003 has not been answered, and the reserved-name guard still covers 7 of 22 namespaces |
+| M4 — Semantic Layer Established | **PARTIAL** (2026-09-04) — the phase gained a fifth rule (§5.51) and an import resolver that is built and switched off (§5.50). **Three things the DoD asks for are still missing**: DEC-M4-003 is unanswered so the reserved-name guard still covers 7 of 22 namespaces (M4.6.1); the phase does not reach the editor at all, now across all five rules (DEC-M4-006); and DEC-M4-007 decides whether it may resolve through `import`. Four rules more than it had is not the definition of done |
 | M5 — Type System Stable | **COMPLETE** (2026-09-03, §9I) — 4 checker/runtime divergences fixed, §5.29 closed, 5 decisions registered |
-| M6 — Runtime Molecular | **PARTIAL** (2026-09-03, §9K) — `Evaluator` 48 fields -> 38; DEC-M6-001 decided and `ValueSink` built, with **1 of 16** namespaces across it. The charter asks for dispatch off the evaluator, and 15 namespaces are still on it |
+| M6 — Runtime Molecular | **PARTIAL** (2026-09-03, §9K) — unchanged by the Core-defects pass, deliberately: **1 of 16** namespaces is across the `ValueSink` boundary and 15 are not. The charter asks for dispatch off the evaluator. No molecule here required crossing one, so none was crossed |
 | M7 — Semantics Frozen | **PARTIAL** (2026-09-03, §9M) — everything settled is specified; 6 decisions open and pinned |
-| M8 — Conformance Complete | **PARTIAL** (2026-09-03, §9O) — scheme + checker complete and enforced; 1 area of 30 covered |
-| M9 — Robustness & Security Hardened | **PARTIAL** (2026-09-03, §9Q) — three unbounded reads and generator accumulation now have ceilings, and package installation is atomic, locked and verified. **The runtime is still not property-tested**, which is what the DoD asks and what M9.2 only did for the frontend |
-| M10 — Stable Language Platform | **PARTIAL** (2026-09-03, §9S) — the DAG is enforced and acyclic, and every release gate now exists: clippy baseline, the canary as a blocking gate plus a daily run, advisory phase timings. **LLVM parity is measured but unverified** — 12 of 27 features reach the backend and none has demonstrated parity, so the backend stays experimental and absent from the CLI |
+| M8 — Conformance Complete | **PARTIAL** (2026-09-03, §9O) — scheme + checker complete and enforced; **1 area of 30** covered. Unchanged: the Core-defects pass added no conformance identifiers, because inflating the percentage without doing an area's work is the one thing §9O says not to do |
+| M9 — Robustness & Security Hardened | **PARTIAL** (2026-09-04, §9Q) — package installation is now genuinely what it claimed: the lockfile is written by the install everyone runs, a crash mid-swap is recoverable, and a local registry is held to the archive path's limits (§5.43–§5.46). **Still not done**: the runtime is not property-tested (the DoD's ask, and M9.2 covered the frontend only), `OS.exec`'s output has no ceiling (DEC-M9-003), and concurrent installs have no lock (§5.45) |
+| M10 — Stable Language Platform | **PARTIAL** (2026-09-04, §9S) — the release gates are now real rather than nominal: the clippy gate identifies a warning by what it is instead of counting per file, and **release runs it**, which it did not (§5.49). Phase timings measure the code rather than the sampling order (§5.54). **Still not done**: LLVM parity is measured and unverified — 12 of 27 features reach the backend, none has demonstrated parity — and DEC-M10-003 decides whether any timing blocks a build |
 
 ---
 
@@ -73,13 +73,13 @@ to prevent.
 | **M1** Parser Molecular | **COMPLETE** | — |
 | **M2** AST + Spans Stable | **COMPLETE** | — |
 | **M3** Diagnostics Unified | **COMPLETE** | — |
-| **M4** Semantic Layer | **PARTIAL** | the layer is built, validated and **adopted** — it rejects programs, and the LSP reads it. M4.6.1 remains, waiting on DEC-M4-003 |
+| **M4** Semantic Layer | **PARTIAL** | five rules now, and none of them reaches the editor. M4.6.1 waits on DEC-M4-003; the editor on DEC-M4-006; imports on DEC-M4-007 |
 | **M5** Type System Stable | **COMPLETE** | — every consumer agrees; the 5 open decisions are about what the rules *should be*, not whether the implementation is coherent about them |
 | **M6** Runtime Molecular | **PARTIAL** | 48 fields → 38; the boundary exists and 1 of 16 dispatches is across it. Not blocked any more — 15 namespaces of work |
 | **M7** Semantics Frozen | **PARTIAL** | everything settled is specified; freezing the unsettled *is* deciding it — 6 decisions |
 | **M8** Conformance Complete | **PARTIAL** | machinery complete and enforced; **1 area of 30** carries identifiers. Blocked by nothing — this one closes with work |
-| **M9** Robustness & Security | **PARTIAL** | resource ceilings and package installation are done; the **runtime and JSON boundaries** are still not property-tested. Blocked by nothing |
-| **M10** Stable Platform | **PARTIAL** | DAG enforced and acyclic; every release gate exists. The LLVM backend is now *measured* rather than merely unproven — and 15 of 27 features do not reach it |
+| **M9** Robustness & Security | **PARTIAL** | package installation is done and now proven rather than asserted; the **runtime and JSON boundaries** are still not property-tested, and `OS.exec` is the fourth unbounded read (DEC-M9-003) |
+| **M10** Stable Platform | **PARTIAL** | the release gates are real rather than nominal — release runs the clippy gate now, and it identifies a warning by what it is. The LLVM backend is *measured* and unproven; 15 of 27 features do not reach it |
 
 **Four COMPLETE, seven PARTIAL, none BLOCKED.** Nothing is stopped: every PARTIAL
 either waits on an answer or waits on work, and both are named.
@@ -355,6 +355,82 @@ caution: the first run of the phase-timing harness found `semantic.validate`
 varying by **2.73×** between the fastest and slowest of seven consecutive runs on
 an idle machine. "Warning first, gate later" is not a hedge — it is what that
 number requires.
+
+### I. The Core-defects pass — 2026-09-04, `c3a84bf` -> `807a0a5`
+
+Eleven demonstrated Core defects, one commit each, each against a measurement
+taken before anything was changed.
+
+| | `c3a84bf` | `807a0a5` |
+|---|---|---|
+| `cargo fmt --check` | clean | clean |
+| clippy | 180 sites, keyed `(lint, file)` | **180 sites, keyed per warning** |
+| release runs the clippy gate | **no** | **yes** |
+| `cargo test --all-targets` | 517 in 25 suites | **586 in 30 suites** |
+| both Serez runners | 508 / 0 / 0 | **508 / 0 / 0**, identical |
+| ecosystem canary | 8/8 | **8/8** |
+| open decisions | 14 | **17** |
+
+#### Three decisions were registered rather than taken, and that is the result
+
+The instruction was explicit: a fix that requires choosing between legitimate
+policies is not a fix. Three did.
+
+  * **DEC-M9-003** — `OS.exec` captures a child's output whole. Every available
+    answer changes a public contract, so the routes were enumerated, the reach
+    was measured (unreachable from untrusted source), the risk went into
+    `spec/limits.md`, and the current behaviour is pinned so the change has to be
+    deliberate. Nothing about `OS.exec` moved.
+  * **DEC-M4-007** — resolving imports is implementable and implemented, and it
+    is **off**. §7A had asked for "an explicit answer for lockdown and a measured
+    cost" before A could be taken; both now exist in the entry, including the one
+    ecosystem package it rejects and why that package is wrong.
+  * **DEC-M10-003** — the phase timings had to be fixed before the gating
+    question could even be asked honestly, and then the answer was a table of
+    variances, not a gate.
+
+#### Two claims in this repository were weaker than they read
+
+Worth separating from the fixes, because both were things the roadmap already
+said were done.
+
+**"Package installation is atomic."** It was atomic against controlled errors.
+Against a crash between the two renames it left the project with no package and
+the only copy parked under a name nothing ever read. And the lockfile — the
+integrity record the whole design turns on — was never written by the install a
+fresh clone runs, so the check had nothing to verify against. Both fixed;
+`commit()` now says where its window is instead of implying it has none.
+
+**"Clippy is a gate."** It was, on CI, keyed on counts per file — so fixing one
+warning and adding a different one of the same lint passed. And
+`release.yml` ran bare `cargo clippy`, which fails nothing, so a change could be
+blocked on a pull request and shipped by a tag.
+
+#### The gates caught four mistakes in the work that followed them
+
+Which is the only way to know a gate works.
+
+  * The **clippy gate** failed on tabs in a doc comment, then on a
+    `type_complexity` pair from the new timing harness. Both fixed at the cause.
+  * The **clippy gate caught its own weakness**: adding a field to `RunOpts`
+    re-fingerprinted a years-old `derivable_impls` warning, because that lint
+    spans a whole `impl`. The fingerprint stops at the span's first line now, and
+    a sixth self-test step pins it.
+  * The **lib tests** caught a real bug in a new incremental SHA-256 — `update`
+    discarded everything buffered when a call did not complete a block. The
+    published vectors could not see it, because one-shot `sha256` calls `update`
+    exactly once.
+  * The **corpus** caught two mistakes in the declaration-order rule: excluding
+    `UseKind::Type` on the strength of its name, and an empty `declared_so_far`
+    that made every builtin an out-of-order use — 52 files.
+
+#### No milestone became COMPLETE, and none was close
+
+Five milestones were re-read against their Definition of Done. M4 gained a rule
+and still does not reach the editor. M6 was not touched, because no molecule here
+needed to cross the boundary. M8 gained nothing, deliberately. M9's package work
+is genuinely done and its runtime is still not property-tested. M10's gates are
+real now and LLVM parity is still unverified.
 
 ### F. The pattern worth carrying forward
 
