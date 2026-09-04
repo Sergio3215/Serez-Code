@@ -1,0 +1,195 @@
+// unit_dict_dot_access.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// `dic.name` is a second way to write `dic["name"]` — a second *form*, not a
+// second *semantics*. Every case below asserts the two forms against each
+// other rather than against a hard-coded expectation, so they cannot drift
+// apart later: if the bracket policy ever changes, these fail together instead
+// of silently describing two different languages.
+//
+// The syntax was already there. The parser produces a DotCall with
+// `has_parens: false` for `dic.name`, and the semantic phase and the type
+// checker already accepted it — only the runtime refused it, with
+// "Unknown dict method 'name'". So what is pinned here is the runtime
+// behaviour of an existing syntax, not a new one.
+
+class DotAccessProbe {
+    public DotAccessProbe(string n) { this.name = n; }
+    public string greet() { return "hi " + this.name; }
+}
+
+// ── The two forms agree ──────────────────────────────────────────────────────
+
+test("dot access reads the key that brackets read", () => {
+    let dic <string, any> = ({"name", "Sergio"});
+    assert(dic["name"] == "Sergio", "brackets still read the key");
+    assert(dic.name == "Sergio", "dot reads the same key");
+    assert(dic.name == dic["name"], "the two forms are the same value");
+});
+
+test("the key is the identifier exactly as written", () => {
+    // No case folding, no camelCase-to-snake_case translation: `firstName`
+    // means the key "firstName" and nothing else.
+    let dic <string, any> = ({"firstName", "Sergio"});
+    assert(dic.firstName == "Sergio", "the identifier is the key verbatim");
+    assert(dic.firstname == null, "a differently-cased key is a different key");
+    assert(dic.first_name == null, "no separator translation happens");
+});
+
+test("several keys, each reachable both ways", () => {
+    let dic <string, any> = ({"name", "Sergio"}, {"city", "Rosario"}, {"role", "owner"});
+    assert(dic.name == dic["name"], "first key agrees");
+    assert(dic.city == dic["city"], "second key agrees");
+    assert(dic.role == dic["role"], "third key agrees");
+    assert(dic.city == "Rosario", "and reads the right value");
+});
+
+// ── Every value type a <string, any> dict can hold ────────────────────────────
+
+test("string values", () => {
+    let dic <string, any> = ({"v", "text"});
+    assert(dic.v == "text", "dot reads a string");
+    assert(dic.v == dic["v"], "agrees with brackets");
+});
+
+test("numeric values, integer and float", () => {
+    let dic <string, any> = ({"i", 42}, {"f", 3.5});
+    assert(dic.i == 42, "dot reads an int");
+    assert(dic.f == 3.5, "dot reads a float");
+    assert(dic.i == dic["i"], "int agrees with brackets");
+    assert(dic.f == dic["f"], "float agrees with brackets");
+});
+
+test("boolean values", () => {
+    let dic <string, any> = ({"yes", true}, {"no", false});
+    assert(dic.yes == true, "dot reads true");
+    assert(dic.no == false, "dot reads false");
+    assert(dic.yes == dic["yes"], "true agrees with brackets");
+    assert(dic.no == dic["no"], "false agrees with brackets");
+});
+
+test("a null value is a present key, not a missing one", () => {
+    let dic <string, any> = ({"v", null});
+    assert(dic.v == null, "dot reads the stored null");
+    assert(dic.v == dic["v"], "agrees with brackets");
+    assert(dic.length() == 1, "the key is really there");
+});
+
+test("an array value", () => {
+    let dic <string, any> = ({"xs", [1, 2, 3]});
+    assert(dic.xs[1] == 2, "dot access then index");
+    assert(dic.xs[1] == dic["xs"][1], "agrees with brackets");
+});
+
+// ── Nesting, and the two forms mixed in one expression ───────────────────────
+
+test("nested dicts, all four ways of writing the same read", () => {
+    let inner <string, any> = ({"name", "Inner"});
+    let dic <string, any> = ({"user", inner});
+    assert(dic["user"]["name"] == "Inner", "brackets, brackets");
+    assert(dic.user.name == "Inner", "dot, dot");
+    assert(dic["user"].name == "Inner", "brackets, dot");
+    assert(dic.user["name"] == "Inner", "dot, brackets");
+});
+
+test("three levels deep", () => {
+    let leaf <string, any> = ({"v", "deep"});
+    let mid <string, any> = ({"leaf", leaf});
+    let top <string, any> = ({"mid", mid});
+    assert(top.mid.leaf.v == "deep", "a chain of dots");
+    assert(top.mid.leaf.v == top["mid"]["leaf"]["v"], "agrees with brackets");
+});
+
+// ── Missing keys reuse the existing policy ───────────────────────────────────
+
+test("a missing key answers what a missing key already answered", () => {
+    let dic <string, any> = ({"name", "Sergio"});
+    assert(dic["missing"] == null, "the bracket policy, measured");
+    assert(dic.missing == null, "dot follows it rather than inventing one");
+    assert(dic.missing == dic["missing"], "the two forms agree when absent");
+});
+
+test("a missing key on an empty dict", () => {
+    let dic <string, any> = ();
+    assert(dic.anything == null, "no key, no error");
+    assert(dic.anything == dic["anything"], "still agrees with brackets");
+});
+
+// ── Reading does not change the dict ──────────────────────────────────────────
+
+test("repeated dot access returns the same value every time", () => {
+    let dic <string, any> = ({"n", 1});
+    assert(dic.n == 1, "first read");
+    assert(dic.n == 1, "second read");
+    assert(dic.n == 1, "third read");
+});
+
+test("reading a key — present or missing — does not mutate the dict", () => {
+    let dic <string, any> = ({"name", "Sergio"});
+    assert(dic.length() == 1, "one key to start");
+    let seen = dic.name;
+    let absent1 = dic.missing;
+    let absent2 = dic.missing;
+    assert(seen == "Sergio", "the read produced the value");
+    assert(absent1 == null, "and the missing reads produced null");
+    assert(absent2 == null, "twice");
+    assert(dic.length() == 1, "reading a missing key did not insert it");
+    assert(dic["name"] == "Sergio", "the present key is untouched");
+    assert(dic.missing == null, "the missing key is still missing");
+});
+
+// ── DEC-M12-001: a name shared by a method and a key ─────────────────────────
+
+test("DEC-M12-001: a built-in method wins a name it shares with a key", () => {
+    // Measured before the change and preserved by it: the dispatcher matches
+    // its method names first, so `dic.length` is the method even when "length"
+    // is also a key. Brackets remain the way to reach the shadowed key, so no
+    // data becomes unreachable.
+    let dic <string, any> = ({"length", "I am a key"});
+    assert(dic["length"] == "I am a key", "the key is still reachable");
+    assert(dic.length == 1, "the method wins the bare name");
+    assert(dic.length() == 1, "and so does the call form");
+});
+
+test("keys that do not collide are unaffected by the method table", () => {
+    let dic <string, any> = ({"name", "Sergio"});
+    assert(dic.name == "Sergio", "an ordinary key is read as a key");
+    assert(dic.length() == 1, "and the methods still work");
+});
+
+// ── A call is still a call ───────────────────────────────────────────────────
+
+test("an unknown method call is still an error, not a null key read", () => {
+    // Dot *access* falls back to a key; dot *call* does not. Without this, a
+    // mistyped method call would silently evaluate to null.
+    let dic <string, any> = ({"name", "Sergio"});
+    let caught = false;
+    try {
+        let r = dic.notAMethod();
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "dic.notAMethod() still reports an unknown method");
+});
+
+// ── The access forms that existed before must be unaffected ──────────────────
+
+test("class fields and instance methods are untouched", () => {
+    let p = new DotAccessProbe("Cls");
+    assert(p.name == "Cls", "a class field still reads as a field");
+    assert(p.greet() == "hi Cls", "an instance method still calls");
+});
+
+test("the dict's own methods are untouched", () => {
+    let dic <string, any> = ({"a", 1});
+    assert(dic.length() == 1, "length");
+    assert(dic.keys().length() == 1, "keys");
+    assert(dic.values().length() == 1, "values");
+    dic.Add({"b", 2});
+    assert(dic.length() == 2, "Add");
+    assert(dic.b == 2, "and the added key reads back through dot");
+    dic.Remove("b");
+    assert(dic.length() == 1, "Remove");
+    assert(dic.b == null, "the removed key is missing again");
+});
+
+summary();

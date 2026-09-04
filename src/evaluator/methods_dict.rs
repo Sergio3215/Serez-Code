@@ -164,6 +164,50 @@ impl super::Evaluator {
                 Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
             }
 
+            // `dic.name` — a second way to write `dic["name"]`, not a second
+            // semantics.
+            //
+            // # Why this lives here and needs nothing else
+            //
+            // `dic.name` was already valid syntax: the parser produces a
+            // `DotCall` with `has_parens: false`, and the semantic phase and the
+            // type checker already accept it — measured, `sz --check` passes and
+            // only the runtime refused, with `Unknown dict method 'name'`. So the
+            // whole change is this arm; the grammar, the AST and the earlier
+            // phases are untouched.
+            //
+            // # Why `has_parens` decides
+            //
+            // The AST already distinguishes `dic.name` from `dic.name()`. A call
+            // is a call: `dic.typo()` keeps reporting an unknown method, which is
+            // the error detection that would otherwise be lost. Only the
+            // property form falls through to a key lookup.
+            //
+            // # Same lookup, same policy
+            //
+            // The key is the identifier exactly as written — no case or
+            // separator translation — and a key that is not there answers `null`,
+            // because that is what `dic["missing"]` answers. Measured before
+            // changing anything, so the two forms cannot drift apart.
+            //
+            // Methods still win a name they share with a key: `dic.length` is the
+            // method even when `"length"` is a key, which is what the dispatcher
+            // did before this arm existed. `dic["length"]` still reaches the key.
+            // That precedence is **DEC-M12-001**, registered rather than invented.
+            unknown if !dot_call.has_parens => {
+                let key = unknown.to_string();
+                let found = match self.resolve(dict_ref) {
+                    Some(ObjectData::Dict { entries, index, .. }) => {
+                        index.lookup(entries, &key).map(|i| entries[i].1.clone())
+                    }
+                    _ => return self.dict_receiver_broken(unknown),
+                };
+                match found {
+                    Some(v) => Ok(ExecutionFlow::Value(self.plant_global(v))),
+                    None => Ok(ExecutionFlow::Value(self.null_ref)),
+                }
+            }
+
             unknown => {
                 let message = format!("Unknown dict method '{unknown}'");
                 self.rt_err_kind("ReferenceError", message)

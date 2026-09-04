@@ -1,7 +1,7 @@
 # serez-parser-snapshot/1
 # Parser output for every .sz file under tests, benchmarks, std, apps.
 # path<TAB>tree-bytes<TAB>diagnostics<TAB>fnv1a64(tree)<TAB>fnv1a64(diagnostics)
-# files: 505
+# files: 506
 apps/01_task_manager.sz	62318	0	a3f338cdf17155ce	cbf29ce484222325
 apps/02_statistics.sz	67295	0	fc1fbbf98d0d7329	cbf29ce484222325
 apps/03_text_analyzer.sz	53830	0	2c9ae7ec03fdc6ba	cbf29ce484222325
@@ -362,6 +362,7 @@ tests/unit_dec.sz	84797	0	58ea59f288abf97a	cbf29ce484222325
 tests/unit_default_params.sz	61630	0	0f322bc4e850c26c	cbf29ce484222325
 tests/unit_destructuring.sz	53513	0	39c31fcd06cdbad6	cbf29ce484222325
 tests/unit_dict_advanced.sz	49266	0	a9a437cd3f88a89a	cbf29ce484222325
+tests/unit_dict_dot_access.sz	77881	0	033be46d98788e0e	cbf29ce484222325
 tests/unit_dict_forin.sz	41210	0	18707ec511115967	cbf29ce484222325
 tests/unit_dict_methods_slot.sz	148234	0	8bab47b166bdb32f	cbf29ce484222325
 tests/unit_dict_set_errors.sz	60506	0	e9704163e7e3faff	cbf29ce484222325
