@@ -39,7 +39,11 @@
 //! `spec/security.md` said the call must "appear **lexically** inside an
 //! `unsafe { }` block", which is not what the runtime does. The divergence is
 //! **DEC-M11-001**; this module implements and documents the measured behaviour
-//! and does not change it.
+//! and does not change it. Worth knowing before that decision is taken: every
+//! one of the 20 gated calls across the eight ecosystem packages, and 145 of the
+//! 159 in the corpus, is *already* lexical — the other 14 are the fixtures that
+//! call outside a block on purpose. Nothing measured relies on the dynamic
+//! reading.
 //!
 //! Leaving a block restores the previous context immediately, including when the
 //! block is left by `throw` or by `return`, and nesting composes.

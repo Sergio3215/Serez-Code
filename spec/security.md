@@ -14,7 +14,7 @@ interchangeable and only the last one is a security boundary.
 | Mechanism | What it is | What it is not |
 | --- | --- | --- |
 | Permission manifest | A declaration in `serez.json` (or inline) of which native namespaces a program intends to use. | Not a boundary: outside lockdown a program can grant itself any permission at runtime. |
-| `unsafe { }` | A syntactic gate on individually destructive operations. | Not a permission and not isolation: any program can write `unsafe`. |
+| `unsafe { }` | A gate on individually destructive operations, and the author's acceptance of the named limits it waives. | Not a permission and not isolation: any program can write `unsafe`, and it grants no capability. |
 | Lockdown | A restricted profile for source you did not write, closing self-granting, the capabilities that reach disk with nothing declared, and the network. | Not a sandbox: the process still runs with the invoking user's full rights, and an allowed host is still reached from the machine's network position. |
 | OS isolation | A container, VM or restricted account around the `sz` process. | The only actual security boundary. Provided by the operating system, not by Serez. |
 
@@ -103,21 +103,150 @@ Making `File` — or per-operation dotted permissions — genuinely enforced is 
 capability decision, not a diagnostics one. It would break existing programs
 and needs the process in `compatibility.md`.
 
-## `unsafe { }`
+## Safe by default, and `unsafe { }`
 
-An operation-level gate on things that are destructive rather than merely
-capable. It requires the call to appear lexically inside an `unsafe { }` block:
+### Safe by default
 
-- `File.delete`, `File.rename`
-- Raw memory: allocation, pointer reads and writes, `*ptr = value`
-- OS operations that modify OS state
+Serez Code is **safe by default**. Ordinary code runs under the runtime's
+guarantees because that is what code does, not because it opted in.
 
-`unsafe` is a speed bump against accident, not a privilege check. Any program
-can open an `unsafe` block. Its value is that a reviewer can grep for it, and
-that no destructive operation happens without the author having typed the word.
-Calling a gated operation outside such a block yields structured fatal
-`UnsafeError` (`SZ6003`). It crosses `try/catch` unchanged; the CLI and tooling
-receive the diagnostic payload, while user code cannot swallow the gate.
+**There is no `safe` keyword**, and one will not be added. `safe` is an ordinary
+identifier and may be used as a variable name. The only explicit syntax in this
+model is `unsafe { }`.
+
+### What `unsafe` means
+
+`unsafe { }` is the author stating that they accept **specific, named**
+relaxations of what the runtime otherwise guarantees, for the operations inside
+the block. Two things follow from that wording:
+
+1. Some operations are **only** available inside it. They are destructive rather
+   than merely capable, and the runtime will not perform them unless the word
+   was typed:
+
+   - `File.delete`, `File.rename`
+   - `Env.set`
+   - Raw memory: `Memory.alloc`, `free`, `read`, `write`, `copy`, `fill`, and
+     `*ptr = value`
+   - `OS.exec`, `OS.spawn`, `OS.kill`
+   - `Terminal.setRawMode`, `readByte`, `readEvent`, `enableMouse`
+
+   Calling one outside a block yields structured fatal `UnsafeError` (`SZ6003`).
+   It crosses `try/catch` unchanged; the CLI and tooling receive the diagnostic
+   payload, and user code cannot swallow the gate.
+
+2. Some **limits** are defined as waivable inside it. These are listed in full
+   below. A limit that is not listed is not waivable, and adding one is a
+   language decision rather than an implementation detail.
+
+### What `unsafe` does not mean
+
+`unsafe` is **not** "turn off the defences". None of these changes inside a
+block:
+
+| Still in force inside `unsafe` | |
+| --- | --- |
+| Permissions | `use permissions { OS }` is still required. `unsafe` grants nothing. |
+| Lockdown | Untrusted-source mode is unaffected; `use permissions` is still refused there. |
+| Argument validation | `OS.exec(42)` is still a `TypeError`. |
+| The protected-path heuristic | `SZ6004` still refuses the listed system paths. |
+| Type safety | Method and member resolution are unchanged. |
+| Parser guarantees | Nesting and depth limits are unchanged. |
+| Interpreter invariants | Arena, scope and call-depth protections are unchanged. |
+| Every unlisted limit | Including the generator ceiling, `File.read`'s ceiling, and the `fetch` / `import` / `OS.spawn` read ceilings. |
+
+It is also **not a privilege check**. Any program can open an `unsafe` block; its
+value is that a reviewer can grep for it and that no destructive operation
+happens without the author having typed the word.
+
+### Permissions and `unsafe` are different questions
+
+They are not interchangeable and neither substitutes for the other:
+
+- a **permission** says *this program is authorised to reach this capability*;
+- **`unsafe`** says *this author accepts a named relaxation for this operation*.
+
+The three outcomes, which is the whole model:
+
+`unsafe` without the permission — the capability was never authorised:
+
+```serez
+// runtime-error-example: unsafe does not grant a permission
+unsafe { OS.exec("git", ["status"]) }             // SZ6001 — no permission
+```
+
+The permission without `unsafe` — authorised, but the author has not accepted
+the relaxation:
+
+```serez
+// runtime-error-example: a permission does not stand in for unsafe
+use permissions { OS }
+OS.exec("git", ["status"])                        // SZ6003 — no unsafe
+```
+
+Both together:
+
+```serez
+use permissions { OS }
+unsafe {
+    let result = OS.exec("git", ["log", "--oneline", "-5"])
+    out result.code
+}
+```
+
+`unsafe` does **not** grant the `OS` permission, and the `OS` permission does
+**not** stand in for `unsafe`.
+
+### The waivable guarantees, in full
+
+| Guarantee | Normally | Inside `unsafe` |
+| --- | --- | --- |
+| process output ceiling | A child process's stdout and stderr are accumulated up to 64 MiB; past it the call is refused with fatal `ResourceError`. | Waived. `OS.exec` may hold as much as the child emits. |
+
+That is the entire list. The runtime cannot know whether a given command's
+output is bounded — the size is the child's to choose — and the author who chose
+the command is the only party who can. Waiving it means the process may hold
+roughly **5×** the child's output; the responsibility for that is the author's,
+which is what typing `unsafe` records.
+
+`OS.exec` requires `unsafe`, so in practice it always runs with this guarantee
+waived. That is the contract, not an oversight.
+
+### Where the context applies
+
+The `unsafe` context is **dynamic**: it is in force for everything that runs
+while the block is executing, including functions *called* from inside it.
+
+```serez
+use permissions { OS }
+
+fn void helper() { OS.exec("git", ["status"]) }   // no `unsafe` here
+
+unsafe { helper() }                                // runs — the context is dynamic
+```
+
+Called from outside a block, the same function is refused:
+
+```serez
+// runtime-error-example: the context ends with the block, not with the function
+use permissions { OS }
+
+fn void helper() { OS.exec("git", ["status"]) }
+
+helper()                                           // SZ6003
+```
+
+Leaving the block restores the ordinary context immediately, including when it
+is left by `throw` or by `return`, and nested blocks compose. Whether dynamic is
+the right model — Rust's equivalent is lexical — is an open question recorded as
+**DEC-M11-001**; this section describes what the runtime does.
+
+### The developer's responsibility
+
+Inside `unsafe`, the author is asserting that they have checked what the runtime
+no longer will: for the process output ceiling, that the command's output is
+bounded by something other than memory. Nothing else is delegated, because
+nothing else is listed.
 
 ## Protected process-target heuristic
 

@@ -74,6 +74,7 @@ measurement made here.
 | `fetch` response body | 64 MiB | Fatal `ResourceError` (`SZ6002`). |
 | HTTP `import` module text | 64 MiB | Fatal `ResourceError` (`SZ6002`), before the module is cached to disk. |
 | `OS.spawn` child stderr | 64 MiB | Fatal `ResourceError` (`SZ6002`), raised when `OS.tick` harvests the job. |
+| `OS.exec` child stdout/stderr | 64 MiB | Fatal `ResourceError`. **Waived inside `unsafe { }`**, which is the only context `OS.exec` runs in — see `security.md`. |
 | Values one generator call accumulates | 1,000,000 (host-configurable) | Fatal `ResourceError` (`SZ6002`). |
 | WebSocket frame payload | 16 MiB | Frame rejected. |
 | Concurrent Task workers, per runtime | 32 | New worker creation is fatal `SZ6002`. |
@@ -201,19 +202,18 @@ These are known gaps, not guarantees:
   conformance suite. The host may set a different one; a running program cannot.
   A lazy or streaming redesign remains a separate architectural change, and this
   ceiling does not prejudge it.
-- **`OS.exec` output.** The child's stdout and stderr are captured whole, with
-  no ceiling, and returned as two strings on `ExecResult`. The size is the
-  child's choice, and the cost is roughly **5×** it: measured against a release
-  build, a child emitting 200 MiB took the interpreter to a peak working set of
-  **1,009.6 MiB** and succeeded. 16 MiB cost 56.3 MiB. The same 200 MiB through
-  `OS.spawn`, whose stderr *is* bounded, cost 9.4 MiB.
+- **`OS.exec` output, inside `unsafe`.** The ceiling below is **waived** there,
+  by design: see `security.md`'s waivable-guarantee table. The child's stdout and
+  stderr are captured whole and returned as two strings on `ExecResult`. The size
+  is the child's choice and the cost is roughly **5×** it — measured against a
+  release build, a child emitting 200 MiB took the interpreter to a peak working
+  set of **1,009.6 MiB** and succeeded; 16 MiB cost 56.3 MiB.
 
-  This is the one unbounded read DEC-M9-001 did not cover, and what to do about
-  it is **DEC-M9-003**, open. It is not reachable from untrusted source —
-  `OS.exec` needs the `OS` permission and an `unsafe` block, and under lockdown
-  `use permissions` is refused — so it is a resource risk to a program the author
-  ran deliberately. A program that needs a large amount of output from a child
-  should write it to a file and read that, which is bounded at 256 MiB.
+  `OS.exec` requires `unsafe`, so this is what every call does today. It is not
+  reachable from untrusted source — the `OS` permission is needed too, and under
+  lockdown `use permissions` is refused. A program that needs a large amount of
+  output from a child should write it to a file and read that, which is bounded
+  at 256 MiB. **DEC-M9-003** is closed by this.
 - **Wall-clock time.** There is no execution timeout or Task cancellation. A
   `while (true)`—including inside a worker—runs until the process is stopped.
 - **File and socket count.** Open handles are bounded by the host, not by the

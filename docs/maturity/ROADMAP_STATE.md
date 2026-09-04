@@ -29,7 +29,7 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **17 OPEN, 10 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M9-003** (what ceiling `OS.exec` output has), **DEC-M10-003** (does any phase timing block a build) |
+| **Open decisions** | **17 OPEN, 11 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M10-003** (does any phase timing block a build). **DEC-M9-003** is now decided. New 2026-09-04: **DEC-M11-001** (is the `unsafe` context lexical or dynamic) |
 | Branch | `improve` |
 | HEAD | `807a0a5` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
@@ -2743,6 +2743,96 @@ is the control the five absences need.
 
 ---
 
+### 5.56 — `unsafe` was a bool with no stated contract — **FIXED 2026-09-04**, medium (owner decision, 2026-09-04)
+
+The owner's decision: Serez is **safe by default**, there is no `safe` keyword
+and there will not be one, and `unsafe { }` is the author accepting *specific,
+named* relaxations — not the defences going off.
+
+**What was there.** `Evaluator::in_unsafe_block: bool`, set on entry to a block
+and read at exactly one site, `require_unsafe`. Nothing said which guarantees
+`unsafe` may relax, because nothing relaxed any: the gate was binary and the
+question "may this limit be waived here" had no representation at all.
+
+**What is there now.** `execution::ExecutionContext`, with the question a guard
+should ask:
+
+```rust
+ctx.waives(Guarantee::ProcessOutputCeiling)
+```
+
+`Guarantee` is the contract, enumerated in one place. A limit not listed is not
+waivable, and adding a variant is a language decision rather than a refactor —
+which is the point of an enum over `if function_name == "OS.exec"`. Today the
+list has one entry.
+
+**Measured before changing anything.** The permission/`unsafe` separation was
+already correct and is now pinned in both directions:
+
+| Program | Outcome |
+|---|---|
+| `unsafe { OS.exec(…) }` | `SZ6001` — no permission |
+| `use permissions { OS }` then `OS.exec(…)` | `SZ6003` — no unsafe |
+| both | runs |
+
+And what `unsafe` does *not* relax, each now a test rather than a sentence:
+lockdown, argument validation, the protected-path heuristic, type safety, and an
+unlisted limit — the generator ceiling, chosen because it is host-set and
+deliberately absent from `Guarantee`.
+
+**A spec/implementation divergence, found by measuring.** `spec/security.md`
+said a gated call must "appear **lexically** inside an `unsafe { }` block". It
+need not: the context is **dynamic**, and a function called from inside a block
+runs with it in force. Registered as **DEC-M11-001** and *not* changed; the spec
+now describes the runtime.
+
+The evidence turned out to cut against the obvious recommendation. Every one of
+the **20** gated calls across the eight ecosystem packages is already lexical,
+and **145 of 159** in the corpus — the other 14 being the `sec_*_requires_unsafe`
+fixtures that call outside a block on purpose. So the usual argument for keeping
+dynamic, that changing it would break working code, is not supported by anything
+measurable from here. That is written into the entry rather than left as a
+recommendation the numbers do not carry.
+
+**Pinned by** `tests/unsafe_contract.rs` (20 tests) and `src/execution.rs`'s own
+four, which walk `Guarantee::ALL` rather than naming a variant, so one added
+later cannot default to waived in ordinary code without failing.
+
+### 5.57 — `OS.exec`'s output ceiling, decided — **FIXED 2026-09-04**, high (closes DEC-M9-003)
+
+§5.48 measured the fourth unbounded read and registered the decision. The owner
+answered it, and not with any of the A/B/C the entry offered: **the ceiling is a
+guarantee `unsafe` waives.** Limits are mandatory while the runtime's guarantees
+are in force; `unsafe` is where an author accepts named relaxations; this is one.
+
+So the ceiling exists — 64 MiB, the same number the other three reads use — and
+`unsafe` waives it. `OS.exec` requires `unsafe`, so every call takes the waived
+path. The observable behaviour is what it was; what changed is that it is now a
+contract in `spec/security.md`'s waivable-guarantee table instead of a gap in
+`spec/limits.md`'s "what is not limited".
+
+**The unwaived path is real, not decorative.** `evaluator::run_child_bounded`
+drains both pipes concurrently — reading one to EOF before the other deadlocks
+when the child fills the second, which is the bug already fixed once for
+`OS.spawn` — and is tested at its boundary: exactly 64 MiB captured, 64 MiB + 1
+refused, on stdout and stderr **separately**, because they take different code
+paths and a ceiling applied only to the first would pass a stdout-only test. A
+fourth test writes 4 MiB to both streams at once and fails by hanging if the
+drain is ever serialised.
+
+It has to be tested there rather than through `OS.exec`, because `OS.exec` never
+runs with the guarantee in force. That is stated in the test file rather than
+left for a reader to notice.
+
+**Fixture note.** The child fixtures copy a file rather than generating bytes in
+the shell: a `for /L` loop emitting 64 MiB takes minutes on Windows and timed the
+suite out. Two more Windows-specific traps cost a cycle each and are recorded in
+the code — a `ThreadId(5)` in a filename, whose parentheses `cmd` treats as
+grouping, and `cmd /c "type \"…\""`, which Rust escapes for the MSVCRT parser
+and `cmd` re-parses differently. Both showed up as a stdout of 0 bytes.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of
@@ -2888,6 +2978,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 
 | ID | Subject | Status | Blocks |
 |---|---|---|---|
+| **DEC-M11-001** | Whether the `unsafe` context is lexical or dynamic | **OPEN** | nothing; the measured behaviour is pinned and the spec now describes it |
 | **DEC-M4-001** | Where the reserved-name check runs | **DECIDED** 2026-09-03 — **A, a new fatal semantic phase** | unblocked M4.5.*; DEC-M4-003's landing site |
 | **DEC-M4-002** | Whether an unresolved free variable is a diagnostic | **DECIDED** 2026-09-03 — **A, fatal**; implemented in `1513b43` | — |
 | **DEC-M4-003** | Whether the reserved-name guard covers all 22 namespaces | **OPEN** | M4.6.1 — and is ordered after DEC-M4-001 |
@@ -2911,10 +3002,88 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **DECIDED** 2026-09-03 — **C, gated with an explicit allowlist**; implemented in `649ba49` | — (DEC-M9-001 remains open) |
 | **DEC-M9-001** | What ceiling an unbounded read has, and what happens at it | **DECIDED** 2026-09-03 — **A, 64 MiB fatal**; implemented in `41e8d5a` | — |
 | **DEC-M9-002** | Whether package, manifest and lockfile are one recoverable transaction | **OPEN** | nothing; the lockfile is written under either answer |
-| **DEC-M9-003** | What ceiling `OS.exec` output has, and what happens at it | **OPEN** | nothing; the risk is documented and the current behaviour pinned |
+| **DEC-M9-003** | What ceiling `OS.exec` output has, and what happens at it | **DECIDED** 2026-09-04 — **the ceiling is a guarantee `unsafe` waives**; 64 MiB when in force, waived inside `unsafe { }`, which is the only context `OS.exec` runs in | — |
 | **DEC-M10-001** | Whether CI runs the ecosystem canary | **DECIDED** 2026-09-03 — **a pinned blocking gate, plus a daily unpinned run**; implemented in `1d61f5d` | — |
 | **DEC-M10-003** | Whether any phase timing blocks a build | **OPEN** | nothing; the timings are advisory and the stability evidence is collected on every run |
 | **DEC-M10-002** | Whether clippy is a gate | **DECIDED** 2026-09-03 — **a per-lint/file baseline** (§7A's C; the letter given was B — see §0B.B); implemented in `1d61f5d` | — |
+
+---
+
+### DEC-M11-001 — Is the `unsafe` context lexical or dynamic?
+
+**Problem.** `spec/security.md` said an `unsafe`-gated call must "appear
+**lexically** inside an `unsafe { }` block". The runtime does not work that way,
+and never has: the context is **dynamic**, so a function called from inside a
+block runs with it in force wherever its body happens to be.
+
+**Current behaviour.** Measured against the release binary:
+
+```text
+fn void helper() { OS.exec("cmd", ["/c","echo","hi"]); }
+unsafe { helper(); }        runs
+helper();                   SZ6003 — requires an `unsafe { }` block
+```
+
+`Evaluator` holds one context, set on entry to a block and restored on the way
+out — including when the block is left by `throw` or by `return` — so the
+propagation is a property of *execution*, not of source position.
+
+**Measured evidence.** The divergence is between the spec and the
+implementation, not within either — and **nothing measured depends on the
+dynamic reading**:
+
+| Where | Gated calls | Lexically inside `unsafe` | Not |
+|---|---|---|---|
+| the 508-file corpus | 159 | 145 | **14** |
+| eight ecosystem packages | 20 | **20** | 0 |
+
+All 14 corpus exceptions are the `sec_*_requires_unsafe.sz` fixtures, which call
+the operation outside a block on purpose to assert that it is refused. Not one
+program in either set gates a destructive call through a helper.
+
+That cuts against the recommendation below rather than for it, and is recorded
+that way: option B's compatibility cost, which is the main argument against it,
+is **zero across everything currently measurable**. What B would still cost is
+paid by code that is not in these two sets.
+
+**Option A — dynamic, and correct the spec.** What the runtime does. A block
+says "everything that happens while this runs may relax the listed guarantees",
+which is coherent, and it is what every existing program was written against.
+It also means a function's own source cannot tell you whether it is running
+under a relaxation.
+
+**Option B — lexical, and correct the runtime.** What the spec said, and what
+Rust does. A reader of a function can see whether it is inside `unsafe` without
+knowing its callers, which is the property that makes `unsafe` greppable. It is
+a **breaking change**: `unsafe { helper() }` stops working, and every program
+that gates through a helper has to move the block.
+
+**Trade-offs.** A is free and already true; its cost is that "grep for unsafe"
+tells you where relaxations are *authorised*, not where they *happen*. B is the
+stronger review property, and its usual objection — that it breaks working
+programs — is not supported by the measurement above: nothing in the corpus or
+the ecosystem would move. B does still need a rule for what a lambda called from
+inside a block does, which A never has to answer, and it is breaking for code
+outside these two sets in a way that cannot be measured from here.
+
+**Architectural impact.** B needs the context on the call frame rather than the
+evaluator, and a decision about closures. **Semantic impact.** B rejects
+programs that run today. **Compatibility.** B is breaking; `compatibility.md`'s
+process applies. **Impact by area.** `execution`, `evaluator::stmt`,
+`spec/security.md`, and any ecosystem package that wraps a gated call.
+
+**Recommendation — a recommendation, not a decision.** Weaker than it would
+have been before the measurement. **A** for now, because it is what the runtime
+does and the spec has been corrected to describe it rather than to describe an
+intention. But the usual reason to prefer A — that B breaks working code — did
+not survive being checked: 20 of 20 ecosystem calls and 145 of 145 real corpus
+calls are already lexical. If the owner wants the stronger review property, B is
+cheaper than it looks, and the open question is the closure rule rather than
+migration.
+
+**Blocked by this decision:** nothing. `unsafe_propagates_dynamically_into_calls`
+pins the measured behaviour and says in its failure message that changing it is
+this decision.
 
 ---
 
@@ -4858,6 +5027,26 @@ string.
 `spec/limits.md` and the current behaviour is pinned by
 `os_exec_output_is_currently_unbounded` in `tests/read_ceiling.rs`, which fails
 the day the contract changes — so the change has to be deliberate.
+
+## RESOLUTION — **DECIDED 2026-09-04: the ceiling is a guarantee `unsafe` waives.**
+
+Not A, B or C as written. The owner's answer reframes the question: a limit the
+runtime enforces is mandatory *while the runtime's guarantees are in force*, and
+`unsafe { }` is where an author accepts named relaxations. The process output
+ceiling is one of those, and the only one.
+
+So the ceiling **exists**, at 64 MiB, and `unsafe` waives it. Because `OS.exec`
+requires `unsafe`, every call today takes the waived path — which is the same
+observable behaviour as before and, for the first time, a stated contract rather
+than an omission.
+
+Implemented in `execution::Guarantee::ProcessOutputCeiling` and
+`evaluator::run_child_bounded`, a bounded two-pipe drain: reading one stream to
+EOF before the other deadlocks when the child fills the second, which is the bug
+already fixed once for `OS.spawn`. The unwaived path is tested at its boundary —
+exactly 64 MiB captured, 64 MiB + 1 refused, on both streams — in
+`evaluator::child_output_tests`, because there is no safe route to a child
+process to test it through.
 
 ---
 
