@@ -2,3 +2,4 @@
 .vscode/**
 .gitignore
 **/.DS_Store
+test/**

@@ -134,5 +134,8 @@
         "editor.insertSpaces": true
       }
     }
+  },
+  "scripts": {
+    "test": "node test/run.js"
   }
 }
