@@ -29,7 +29,7 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **15 OPEN, 10 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction) |
+| **Open decisions** | **16 OPEN, 10 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M9-003** (what ceiling `OS.exec` output has) |
 | Branch | `improve` |
 | HEAD | `2d4302f` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
@@ -2220,6 +2220,67 @@ and requires one digest, which is the property vectors cannot express.
 
 ---
 
+### 5.48 — the fourth unbounded read, and the only one DEC-M9-001 did not cover — *open under DEC-M9-003*, high (found in the Core-defects pass, 2026-09-03)
+
+`OS.exec` uses `Command::output()`, which reads both of a child's streams to EOF
+with no ceiling. The size is the child's choice; the command is the author's.
+
+**Measured**, peak working set of the release `sz` against a child emitting a
+fixed number of bytes on stdout:
+
+| Child output | `OS.exec` | `OS.spawn` stderr, bounded since DEC-M9-001 |
+|---|---|---|
+| a few bytes | 9.3 MiB | — |
+| 16 MiB | 56.3 MiB | — |
+| **200 MiB** | **1,009.6 MiB**, exit 0, 6.4 s | **9.4 MiB** |
+
+About 5× the child's output, resident, and it *succeeds* —
+`r.stdout.length()` returned 209,715,200. The multiplier is the raw `Vec`, plus
+`from_utf8_lossy(..).to_string()`'s copy, plus the `ObjectData::Str`, on top of
+`read_to_end`'s doubling.
+
+**Bounded in reach, measured rather than assumed.** `OS.exec` needs the `OS`
+permission *and* an `unsafe` block, and under lockdown `use permissions` is
+refused outright (`SZ6004`). A locked-down `Task` worker inherits its parent's
+grants, but a locked-down parent could not have granted `OS`; only a host calling
+`set_permissions` on a locked-down evaluator produces that pairing. So this is a
+resource risk to a program its author ran deliberately, not the untrusted-input
+class DEC-M9-001 closed.
+
+**Not fixed here, deliberately.** Every fix changes `OS.exec`'s public contract,
+and which change is right is **DEC-M9-003** — a fatal ceiling, bounded capture
+with a truncation flag, or a host-set default. What was done instead is
+everything that does not require the answer: the routes were enumerated (below),
+the reach was measured, the risk is written into `spec/limits.md` under *what is
+not limited*, and the current contract is pinned by
+`os_exec_output_is_currently_unbounded`, so whoever implements the decision has
+to change that test on purpose.
+
+**Every route that captures a child's output**, since the finding asked for all
+of them:
+
+| Route | stdout | stderr | Bounded |
+|---|---|---|---|
+| `OS.exec` | captured whole | captured whole | **no** — this finding |
+| `OS.spawn` | `Stdio::null()` | `read_bounded`, drained in a thread | yes |
+| `OS.kill` (`taskkill`/`kill`) | `.output()` | `.output()` | no, but the child is a fixed system utility whose output is a line |
+| `szx` translate, two sites in `src/szx.rs` | `Stdio::null()` | `.output()` piped | **no** — the child is `sz` running a translator, so the output is a Serez program's stderr |
+
+The `szx` pair is recorded rather than fixed: the child is this same binary
+running a known translator, the parent is the CLI rather than a Serez program,
+and changing it would pre-empt whatever DEC-M9-003 decides about the shape of a
+bounded two-pipe read. It is listed so "every route" means every route.
+
+**The infrastructure any answer needs, and why it is not written yet.**
+`read_bounded` and `OVER_THE_READ_CEILING` exist and are the right primitive for
+a single stream. `OS.exec` needs a *two-pipe* bounded read: `Command::output()`
+drains both concurrently, and reading one to EOF before the other deadlocks when
+the second pipe fills — the bug already fixed once for `OS.spawn`. Writing that
+drainer is the whole of implementing option A or C, so it waits for the decision
+rather than being staged as unused code.
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of
@@ -2388,6 +2449,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **DECIDED** 2026-09-03 — **C, gated with an explicit allowlist**; implemented in `649ba49` | — (DEC-M9-001 remains open) |
 | **DEC-M9-001** | What ceiling an unbounded read has, and what happens at it | **DECIDED** 2026-09-03 — **A, 64 MiB fatal**; implemented in `41e8d5a` | — |
 | **DEC-M9-002** | Whether package, manifest and lockfile are one recoverable transaction | **OPEN** | nothing; the lockfile is written under either answer |
+| **DEC-M9-003** | What ceiling `OS.exec` output has, and what happens at it | **OPEN** | nothing; the risk is documented and the current behaviour pinned |
 | **DEC-M10-001** | Whether CI runs the ecosystem canary | **DECIDED** 2026-09-03 — **a pinned blocking gate, plus a daily unpinned run**; implemented in `1d61f5d` | — |
 | **DEC-M10-002** | Whether clippy is a gate | **DECIDED** 2026-09-03 — **a per-lint/file baseline** (§7A's C; the letter given was B — see §0B.B); implemented in `1d61f5d` | — |
 
@@ -4080,6 +4142,100 @@ outside the package tree, which is a widening of its contract. B needs a new
 package. The per-package write is the part with no defender — it produces a
 lockfile that describes a partial install, which is worse than either whole
 answer. The manifest rollback is the expensive half of A and can follow.
+
+### DEC-M9-003 — What ceiling does `OS.exec` output have, and what happens at it?
+
+*Also referred to as **DEC-PENDING-OS-EXEC-LIMIT** in the request that raised it.*
+
+**Problem.** `OS.exec` uses `Command::output()`, which reads the child's stdout
+and stderr to EOF into two `Vec<u8>` with no ceiling. The size is chosen by the
+child, and a Serez program calling `git log`, a build tool or anything fed from
+the network does not know it in advance. DEC-M9-001 gave the other three
+unbounded reads a 64 MiB fatal ceiling; this one was not in its scope and still
+has none.
+
+**Current behaviour.** The whole of both streams is captured and returned as two
+Serez strings on an `ExecResult`. There is no truncation, no error and no
+warning at any size.
+
+**Measured evidence.** Peak working set of `sz` against a child emitting a fixed
+number of bytes on stdout, release build:
+
+| Child output | `OS.exec` peak | `OS.spawn` peak (stderr, bounded) |
+|---|---|---|
+| a few bytes | 9.3 MiB | — |
+| 16 MiB | 56.3 MiB | — |
+| **200 MiB** | **1,009.6 MiB**, exit 0, 6.4 s | **9.4 MiB** |
+
+About **5× the child's output**, resident, and it succeeds: `r.stdout.length()`
+returned 209,715,200. The amplification is the raw `Vec` plus
+`String::from_utf8_lossy(..).to_string()`'s copy plus the `ObjectData::Str`, on
+top of `read_to_end`'s doubling. The last column is the same 200 MiB through the
+path DEC-M9-001 already bounded, for contrast.
+
+**Reachability, measured rather than assumed.** `OS.exec` needs both the `OS`
+permission and an `unsafe` block. Under lockdown `use permissions` is refused
+outright:
+
+```text
+❌ ERROR [SZ6004]: `use permissions` is not available here — this code is running
+without permissions and cannot grant itself any.
+```
+
+so untrusted source cannot reach it. A locked-down `Task` worker inherits its
+parent's grants, but a locked-down parent cannot have granted `OS` in the first
+place; only a **host** that calls `set_permissions` on a locked-down evaluator
+can produce that combination. This is therefore a resource risk to a program the
+user ran deliberately, not an untrusted-input vector like the three reads
+DEC-M9-001 closed. It is still real: the *size* is the child's choice even when
+the *command* is the author's.
+
+**Option A — one fixed fatal ceiling.** 64 MiB, like DEC-M9-001, reusing
+`read_bounded` and `OVER_THE_READ_CEILING`. One policy across four reads instead
+of two. A child that legitimately emits more becomes unusable through `OS.exec`.
+
+**Option B — bounded capture with a defined outcome short of fatal.** Keep the
+first *N* bytes, mark the result truncated, and let the program decide — an extra
+field on `ExecResult`, or spooling the overflow to a file. Nothing is lost that
+the program cares about, at the cost of a wider public type and a second notion
+of "the output" for callers that ignore the flag.
+
+**Option C — host-configurable with a safe default.** The shape generator
+accumulation already uses: a default the host may change through `RunOpts`, which
+a running program cannot raise. Fits the existing precedent and adds another
+knob.
+
+**Trade-offs.** A is the smallest change and the most consistent, and it is the
+one that breaks a working program. B keeps every current use working and changes
+a public type, which is the thing this cycle is otherwise avoiding. C postpones
+the argument by making it configuration, which is honest for a host and useless
+for a program that hits the default.
+
+**Architectural impact.** A and C need a bounded *two-pipe* reader, not
+`read_bounded`: `Command::output()` drains both streams concurrently, and reading
+one at a time deadlocks when the other's pipe fills — the bug already fixed once
+for `OS.spawn`. That is the only new machinery any option needs, and it is not
+written here, because writing it would be implementing the decision.
+
+**Semantic impact.** A makes a currently-successful call fatal. B changes the
+shape of `ExecResult`. C changes nothing by default and everything for a host.
+**Compatibility.** A and B are both observable changes to a public API.
+**Impact by area.** `OS.exec` only; `spec/limits.md`; the `unit_os_namespaces`
+corpus.
+
+**Recommendation — a recommendation, not a decision.** **A**, at 64 MiB. Four
+unbounded reads with one answer is worth more than a fourth answer tuned to this
+one, and B's truncation flag is a field every existing caller will ignore, which
+makes silent truncation the common case — worse than a loud failure. A program
+that genuinely needs 200 MiB from a child wants a file or `OS.spawn`, not a
+string.
+
+**Blocked by this decision:** nothing. The risk is documented in
+`spec/limits.md` and the current behaviour is pinned by
+`os_exec_output_is_currently_unbounded` in `tests/read_ceiling.rs`, which fails
+the day the contract changes — so the change has to be deliberate.
+
+---
 
 **Blocked by this decision:** nothing. Writing the lockfile on every successful
 local install is correct under both: under A it is part of the transaction, and

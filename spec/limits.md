@@ -201,6 +201,19 @@ These are known gaps, not guarantees:
   conformance suite. The host may set a different one; a running program cannot.
   A lazy or streaming redesign remains a separate architectural change, and this
   ceiling does not prejudge it.
+- **`OS.exec` output.** The child's stdout and stderr are captured whole, with
+  no ceiling, and returned as two strings on `ExecResult`. The size is the
+  child's choice, and the cost is roughly **5×** it: measured against a release
+  build, a child emitting 200 MiB took the interpreter to a peak working set of
+  **1,009.6 MiB** and succeeded. 16 MiB cost 56.3 MiB. The same 200 MiB through
+  `OS.spawn`, whose stderr *is* bounded, cost 9.4 MiB.
+
+  This is the one unbounded read DEC-M9-001 did not cover, and what to do about
+  it is **DEC-M9-003**, open. It is not reachable from untrusted source —
+  `OS.exec` needs the `OS` permission and an `unsafe` block, and under lockdown
+  `use permissions` is refused — so it is a resource risk to a program the author
+  ran deliberately. A program that needs a large amount of output from a child
+  should write it to a file and read that, which is bounded at 256 MiB.
 - **Wall-clock time.** There is no execution timeout or Task cancellation. A
   `while (true)`—including inside a worker—runs until the process is stopped.
 - **File and socket count.** Open handles are bounded by the host, not by the

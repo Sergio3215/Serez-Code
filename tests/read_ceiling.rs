@@ -194,3 +194,126 @@ fn an_ordinary_small_body_is_unaffected() {
         outcome.failure
     );
 }
+
+// ── the fourth read, which has no ceiling ────────────────────────────────────
+
+/// `OS.exec` captures a child's output whole. **DEC-M9-003**, open.
+///
+/// # Why a test asserts a defect
+///
+/// This one pins the *current* contract rather than a desired one. DEC-M9-003
+/// has three defensible answers — a fatal ceiling, bounded capture with a
+/// truncation flag, or a host-set default — and picking one here would be
+/// deciding it. What can be done without deciding is to make the change
+/// deliberate: whoever implements the decision has to come here and change this
+/// test, rather than discovering afterwards that the behaviour moved.
+///
+/// # What was measured, and why this test is smaller than the measurement
+///
+/// Against the release binary, peak working set of `sz` by child output size:
+///
+/// ```text
+/// a few bytes      9.3 MiB
+/// 16 MiB          56.3 MiB
+/// 200 MiB      1,009.6 MiB   exit 0, r.stdout.length() == 209715200
+/// 200 MiB          9.4 MiB   the same bytes through OS.spawn, which is bounded
+/// ```
+///
+/// Roughly 5× the child's output, resident, succeeding. This test uses **8 MiB**
+/// instead: it asserts the *property* — that the whole of a child's output
+/// arrives, with no ceiling applied — and the property does not need a gigabyte
+/// to state. A test that allocated a gigabyte would fail on a small CI runner for
+/// reasons unrelated to what it is checking.
+///
+/// # Why it drives the binary
+///
+/// `OS.exec` needs the `OS` permission and an `unsafe` block, and
+/// `RunOpts::sandboxed()` — what every other test in this file uses — is
+/// lockdown, where `use permissions` is refused outright. That refusal is itself
+/// worth pinning, so it is the second test below.
+#[test]
+fn os_exec_output_is_currently_unbounded() {
+    let dir = std::env::temp_dir().join(format!("serez-exec-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+
+    // 8 MiB, well over what any pipe buffers and well under anything that would
+    // trouble a runner.
+    let payload = dir.join("payload.bin");
+    std::fs::write(&payload, vec![b'z'; 8 * 1024 * 1024]).expect("payload");
+
+    // The child is whatever the platform's "copy this file to stdout" is. What
+    // is being measured is the capture, not the command.
+    let (shell, flag, verb) = if cfg!(windows) {
+        ("cmd", "/c", "type")
+    } else {
+        ("sh", "-c", "cat")
+    };
+    let quoted = payload.to_string_lossy().replace('\\', "\\\\");
+    let argv = if cfg!(windows) {
+        format!("[\"{flag}\", \"{verb}\", \"{quoted}\"]")
+    } else {
+        format!("[\"{flag}\", \"{verb} '{quoted}'\"]")
+    };
+
+    let program = dir.join("exec.sz");
+    std::fs::write(
+        &program,
+        format!(
+            "use permissions {{ OS }}\n\
+             unsafe {{\n\
+             \x20 let r = OS.exec(\"{shell}\", {argv});\n\
+             \x20 out r.stdout.length();\n\
+             }}\n"
+        ),
+    )
+    .expect("program");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sz"))
+        .arg(&program)
+        .output()
+        .expect("run sz");
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    if !out.status.success() {
+        let _ = std::fs::remove_dir_all(&dir);
+        panic!(
+            "OS.exec failed on an 8 MiB child. If this is DEC-M9-003 being \
+             implemented, this test is the one to update deliberately: {}",
+            stderr
+        );
+    }
+
+    let captured: usize = stdout
+        .parse()
+        .unwrap_or_else(|_| panic!("expected a length on stdout, got {:?}", stdout));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        captured,
+        8 * 1024 * 1024,
+        "OS.exec no longer returns the child's whole output. That is DEC-M9-003 \
+         being decided; update this test and spec/limits.md to say what the new \
+         contract is."
+    );
+}
+
+/// The reachability half: untrusted source cannot get to `OS.exec` at all.
+///
+/// This is what keeps DEC-M9-003 a resource question rather than the kind of
+/// untrusted-input vector DEC-M9-001 closed, and it is worth a test because the
+/// *reason* the risk is bounded is a rule that could quietly change.
+#[test]
+fn lockdown_refuses_the_grant_that_os_exec_needs() {
+    let outcome = run_source_detailed(
+        "use permissions { OS }\nunsafe { OS.exec(\"cmd\", [\"/c\", \"echo\", \"hi\"]); }\n"
+            .to_string(),
+        "<os-exec-lockdown>",
+        RunOpts::sandboxed(),
+    );
+    assert_ne!(
+        outcome.exit_code, 0,
+        "locked-down source reached OS.exec: DEC-M9-003's risk is wider than recorded"
+    );
+}
