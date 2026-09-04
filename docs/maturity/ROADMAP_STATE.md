@@ -29,7 +29,7 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **14 OPEN, 10 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009** |
+| **Open decisions** | **15 OPEN, 10 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction) |
 | Branch | `improve` |
 | HEAD | `2d4302f` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
@@ -1996,6 +1996,62 @@ finding (2)–(4) is that nothing does.
 
 ---
 
+### 5.43 — the lockfile was never written by the install everyone runs — **FIXED 2026-09-03**, high (found in the Core-defects pass, 2026-09-03)
+
+`sz install <pkg>` wrote `serez.lock`. A bare `sz install` did not — and a bare
+`sz install` is what a fresh clone runs, what CI runs, and what every project
+whose dependencies are already in `serez.json` runs. The integrity check was
+built, tested and unreachable through the ordinary path.
+
+**Measured before touching anything**, in a project whose one dependency came
+from the manifest:
+
+```text
+$ sz install
+✅ Installed test-pkg@1.0.0 → ./packages/test-pkg
+$ ls serez.lock
+ls: cannot access 'serez.lock': No such file or directory
+```
+
+**The cause, not the symptom.** `install_package` took a `record: bool` that
+gated two different records at once: the dependency line in `serez.json` and the
+integrity line in `serez.lock`. `install_all` reads its dependencies *from* the
+manifest, so it correctly did not want to write them back — and passing
+`record: false` silently took the lockfile with it. One flag, two questions, and
+the answer to one of them was wrong for the other.
+
+The fix is to stop conflating them. `ManifestPolicy::{Record, Keep}` names the
+manifest question only; the lockfile is written on every successful local
+install, because it records *what was installed* rather than what was asked for.
+
+**Why this was safe to fix while DEC-M9-002 is open.** Writing the lockfile is
+correct under both of that decision's alternatives — under a single transaction
+it is part of it, and under an authoritative package store it is the derived
+record being kept in step. What DEC-M9-002 still decides is the *failure* path,
+and that is untouched here.
+
+**Pinned by** `tests/package_lockfile.rs`, five tests over the real binary. Three
+of them fail against the old behaviour and two do not, which is the control that
+matters: `install_all_leaves_the_manifest_alone` and
+`installing_a_named_package_records_it_in_both` describe behaviour the fix must
+*not* change, and they passed before and after.
+
+The negative control is the load-bearing one. A lockfile that is written but
+never consulted would satisfy a test that only stats the path, so
+`a_recorded_digest_refuses_a_changed_package` tampers with the registry after a
+successful install and requires the second install to exit non-zero **and** to
+leave the already-correct copy undamaged. Measured:
+
+```text
+❌ ERROR: integrity check failed for 'test-pkg':
+  expected sha256-ef1b614f…
+  got      sha256-f1e28ac6…
+$ cat packages/test-pkg/index.sz
+out "v1";
+```
+
+---
+
 ## 6. Carried-forward debt from `MATURITY_AUDIT.md`
 
 `MATURITY_AUDIT.md` remains the register; this is the roadmap-facing digest of
@@ -2163,6 +2219,7 @@ impact · compatibility · impact on tests, specs, LSP, runtime and ecosystem ·
 | **DEC-M7-005** | What a `match` pattern that fails to evaluate does | **OPEN** | nothing; should precede DEC-M7-003 |
 | **DEC-M7-006** | Whether `fetch` is reachable under lockdown | **DECIDED** 2026-09-03 — **C, gated with an explicit allowlist**; implemented in `649ba49` | — (DEC-M9-001 remains open) |
 | **DEC-M9-001** | What ceiling an unbounded read has, and what happens at it | **DECIDED** 2026-09-03 — **A, 64 MiB fatal**; implemented in `41e8d5a` | — |
+| **DEC-M9-002** | Whether package, manifest and lockfile are one recoverable transaction | **OPEN** | nothing; the lockfile is written under either answer |
 | **DEC-M10-001** | Whether CI runs the ecosystem canary | **DECIDED** 2026-09-03 — **a pinned blocking gate, plus a daily unpinned run**; implemented in `1d61f5d` | — |
 | **DEC-M10-002** | Whether clippy is a gate | **DECIDED** 2026-09-03 — **a per-lint/file baseline** (§7A's C; the letter given was B — see §0B.B); implemented in `1d61f5d` | — |
 
@@ -3773,6 +3830,94 @@ of them. Extending that to files that do not compile is a promise the tree canno
 keep.
 
 **Blocked by this decision:** nothing. Pinned by `symbols_survive_parse_errors`.
+
+---
+
+### DEC-M9-002 — Are package, manifest and lockfile one recoverable transaction?
+
+*Also referred to as **DEC-PENDING-PACKAGE-TRANSACTION** in the request that
+raised it.*
+
+**Problem.** Installing a dependency writes three things: the package tree under
+`packages/`, a dependency line in `serez.json`, and an integrity line in
+`serez.lock`. Only the first is transactional. The other two are written
+afterwards, individually, and a failure between them is reported as a warning on
+an install that has already said it succeeded. `install_all` compounds this: it
+loops over dependencies and writes the lockfile once per package, so a failure at
+package *N* leaves entries for 1..*N*-1 committed and the rest absent.
+
+Whether that is a defect or the intended design cannot be settled by reading the
+code, because two coherent designs disagree about it.
+
+**Current behaviour.** `install_package` (`src/package_manager.rs`) drives
+`package_install::Transaction`, which is atomic **for the package tree**: staging
+directory, digest, verify against the lockfile if an entry exists, then commit by
+rename. After `commit()` returns, and outside any transaction:
+
+```rust
+if !global {
+    if let Some(dir) = &project {
+        if manifest == ManifestPolicy::Record {
+            if let Err(e) = record_dependency(dir, &pkg_name, &version) { eprintln!("⚠ ...") }
+        }
+        lock.upsert(...);
+        if let Err(e) = lock.write(dir) { eprintln!("⚠ ...") }
+    }
+}
+```
+
+Both failures print `⚠ Installed, but could not update …` and the process still
+exits 0.
+
+**Measured evidence.**
+
+  * A bare `sz install` in a project whose one dependency comes from
+    `serez.json` produced the package and **no lockfile at all** — the defect
+    fixed in this cycle, and the reason the transaction question surfaced.
+  * The package tree survives a refused install intact:
+    `a_recorded_digest_refuses_a_changed_package` tampers with the registry after
+    a successful install, and asserts both that the second install exits non-zero
+    and that `packages/test-pkg/index.sz` is still the original.
+  * The three-write sequence is **not** covered by that: no test asserts what
+    `serez.json` and `serez.lock` contain after a failure between them, because
+    the current design has no defined answer.
+
+**Option A — one recoverable transaction.** Package, manifest and lockfile commit
+together or not at all. An install that cannot write the lockfile rolls the
+package back and exits non-zero; `install_all` commits one lockfile at the end
+rather than one per package.
+
+**Option B — the package store is authoritative.** `packages/` is the truth, and
+the manifest and lockfile are derived records that may lag. A failed write is a
+warning, the install stands, and a later command reconstructs the records from
+what is on disk.
+
+**Trade-offs.** A gives a project that is either fully installed or untouched,
+which is what a CI cache and a reproducible build want; it costs a rollback path
+for the manifest and a second failure mode (rollback itself failing), and it
+turns a warning into a hard failure, which is a public behaviour change. B is
+what the code does today and never destroys a working install to satisfy
+bookkeeping; it costs the guarantee that the lockfile describes what is on disk,
+which is the guarantee the lockfile exists to provide — and B is only honest if
+the reconstruction command exists, which it does not.
+
+**Architectural impact.** A extends `package_install::Transaction` to cover files
+outside the package tree, which is a widening of its contract. B needs a new
+`sz install --repair` or equivalent. **Semantic impact.** None on the language.
+**Compatibility.** A changes exit codes on a path that currently exits 0.
+**Impact by area.** Package manager, CI, the `55_packages_e2e` corpus.
+
+**Recommendation — a recommendation, not a decision.** **A**, scoped to
+`install_all` first: one lockfile write after the loop, rather than one per
+package. The per-package write is the part with no defender — it produces a
+lockfile that describes a partial install, which is worse than either whole
+answer. The manifest rollback is the expensive half of A and can follow.
+
+**Blocked by this decision:** nothing. Writing the lockfile on every successful
+local install is correct under both: under A it is part of the transaction, and
+under B it is the derived record being kept in step. That fix is implemented and
+tested. What waits is the failure-path behaviour, which has no test because it
+has no defined answer.
 
 ---
 

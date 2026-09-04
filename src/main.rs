@@ -133,7 +133,15 @@ fn run() -> i32 {
                 .find(|a| !a.starts_with('-'))
                 .map(|s| s.as_str());
             return subcommand_code(match spec {
-                Some(s) => package_manager::install_package(s, !global, global),
+                Some(s) => package_manager::install_package(
+                    s,
+                    if global {
+                        package_manager::ManifestPolicy::Keep
+                    } else {
+                        package_manager::ManifestPolicy::Record
+                    },
+                    global,
+                ),
                 None => package_manager::install_all(),
             });
         }

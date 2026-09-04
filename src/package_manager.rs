@@ -201,7 +201,34 @@ pub fn registry_url() -> String {
 /// When `record` is true, the resolved dependency is written back into the
 /// project's serez.json (used by `sz install <pkg>`; skipped by `sz install`
 /// which already reads its list from the manifest).
-pub fn install_package(pkg_spec: &str, record: bool, global: bool) -> Result<(), String> {
+/// Whether an install adds the dependency to `serez.json`.
+///
+/// This used to be a `record: bool` that gated **both** the manifest and the
+/// lockfile, and the two are not the same question. `install_all` reads its
+/// dependencies *from* the manifest, so it must not write them back — and it
+/// passed `record: false`, which silently took the lockfile with it. A project
+/// installed the normal way (`sz install`, a fresh clone, CI) therefore got no
+/// `serez.lock` at all, and the integrity check had nothing to verify against on
+/// the next install. The whole guarantee was unreachable through the ordinary
+/// path.
+///
+/// The lockfile is a record of *what was installed* and is written on every
+/// successful local install. The manifest is a record of *what the project asked
+/// for*, and only an install that originates a dependency writes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestPolicy {
+    /// `sz install <pkg>` — the dependency is new to the project.
+    Record,
+    /// `sz install` — the dependency already comes from the manifest, and
+    /// rewriting it would be a no-op at best and a reformat at worst.
+    Keep,
+}
+
+pub fn install_package(
+    pkg_spec: &str,
+    manifest: ManifestPolicy,
+    global: bool,
+) -> Result<(), String> {
     let (pkg_name, pkg_version) = parse_pkg_spec(pkg_spec)?;
     let registry = registry_dir();
 
@@ -286,10 +313,22 @@ pub fn install_package(pkg_spec: &str, record: bool, global: bool) -> Result<(),
     // installs only). A write failure here is a warning, not a hard error: the
     // package is already on disk, and failing after a successful install would
     // be the non-atomicity this change removes, in a different place.
-    if record && !global {
+    // A write failure here is a warning, not a hard error: the package is
+    // already correctly on disk, and failing after a successful install would be
+    // the non-atomicity this whole path exists to remove, in a different place.
+    //
+    // Whether that is the right answer — whether package, manifest and lockfile
+    // should instead be one recoverable transaction — is
+    // **DEC-PACKAGE-TRANSACTION**, registered and not taken here. Writing the
+    // lockfile on every successful local install is correct under either answer:
+    // under a single transaction it is part of it, and under an authoritative
+    // store it is the record being kept in step.
+    if !global {
         if let Some(dir) = &project {
-            if let Err(e) = record_dependency(dir, &pkg_name, &version) {
-                eprintln!("⚠ Installed, but could not update serez.json: {}", e);
+            if manifest == ManifestPolicy::Record {
+                if let Err(e) = record_dependency(dir, &pkg_name, &version) {
+                    eprintln!("⚠ Installed, but could not update serez.json: {}", e);
+                }
             }
             lock.upsert(LockEntry {
                 name: pkg_name.clone(),
@@ -720,7 +759,15 @@ pub fn update_package(name: &str, global: bool) -> Result<(), String> {
     validate_package_name(name)?;
     let version = fetch_latest_version(name)?;
     println!("Updating {} → {} ...", name, version);
-    install_package(&format!("{}@{}", name, version), !global, global)
+    install_package(
+        &format!("{}@{}", name, version),
+        if global {
+            ManifestPolicy::Keep
+        } else {
+            ManifestPolicy::Record
+        },
+        global,
+    )
 }
 
 /// Update every package: the project's serez.json dependencies (local), or
@@ -787,8 +834,10 @@ pub fn install_all() -> Result<(), String> {
             continue;
         }
         let spec = format!("{}@{}", name, version);
-        // Don't rewrite the manifest: these deps already come from it. Local.
-        install_package(&spec, false, false)?;
+        // The manifest is where these came from, so it is not rewritten — but
+        // the lockfile is, which `ManifestPolicy` is what separates. Passing
+        // `record: false` here used to suppress both.
+        install_package(&spec, ManifestPolicy::Keep, false)?;
         installed += 1;
     }
     if installed == 0 {
