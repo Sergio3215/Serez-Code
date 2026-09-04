@@ -104,19 +104,19 @@ function check(name, condition, detail) {
     const four = sz.provideDocumentFormattingEdits(
         doc(source), { tabSize: 4, insertSpaces: true }, token);
     check('tabSize 4 indents four spaces',
-        four[0] && four[0].text === 'fn void f() {\n    out 1;\n}\n',
+        four[0] && four[0].text === 'fn void f() {\n    out 1;\n}',
         four[0] && JSON.stringify(four[0].text));
 
     const two = sz.provideDocumentFormattingEdits(
         doc(source), { tabSize: 2, insertSpaces: true }, token);
     check('tabSize 2 indents two spaces',
-        two[0] && two[0].text === 'fn void f() {\n  out 1;\n}\n',
+        two[0] && two[0].text === 'fn void f() {\n  out 1;\n}',
         two[0] && JSON.stringify(two[0].text));
 
     const tabs = sz.provideDocumentFormattingEdits(
         doc(source), { insertSpaces: false }, token);
     check('insertSpaces false indents with a tab',
-        tabs[0] && tabs[0].text === 'fn void f() {\n\tout 1;\n}\n',
+        tabs[0] && tabs[0].text === 'fn void f() {\n\tout 1;\n}',
         tabs[0] && JSON.stringify(tabs[0].text));
 }
 
@@ -131,9 +131,19 @@ function check(name, condition, detail) {
         doc('fn void f() {\nout 1;\n}\n'), options, { isCancellationRequested: true });
     check('a cancelled request produces no edit', cancelled.length === 0);
 
+    // Formatted output has no trailing newline, so `out 1;` — not `out 1;\n` —
+    // is the already-formatted document. The version with the newline is one
+    // edit away from it, and asserting that keeps this check honest: it would
+    // otherwise pass by comparing a document to a policy that had moved.
     const already = sz.provideDocumentFormattingEdits(
-        doc('out 1;\n'), options, { isCancellationRequested: false });
+        doc('out 1;'), options, { isCancellationRequested: false });
     check('an already-formatted document produces no edit', already.length === 0);
+
+    const trailing = sz.provideDocumentFormattingEdits(
+        doc('out 1;\n'), options, { isCancellationRequested: false });
+    check('a document with a trailing newline is edited to remove it',
+        trailing.length === 1 && trailing[0].text === 'out 1;',
+        trailing[0] && JSON.stringify(trailing[0].text));
 }
 
 // ── DEC-FMT-002: the warning ────────────────────────────────────────────────

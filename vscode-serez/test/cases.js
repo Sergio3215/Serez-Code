@@ -5,7 +5,18 @@
 //   fn      — 'sz' | 'szx' | 'szs'
 //   input   — the document as the user typed it
 //   expect  — the exact expected output, or `INPUT` when the formatter must
-//             leave it alone (up to the trailing-newline policy)
+//             leave the document alone, or `VERBATIM` for the one case where
+//             it must not touch a single byte
+//
+// **Formatted output never ends with a newline.** The runner applies that to
+// every expectation, so the strings below can be written the way a document
+// reads — ending in `\n` — without every one of them restating the policy. The
+// EOF cases assert it directly, and nothing else has to.
+//
+// `INPUT` and `VERBATIM` differ only there. `INPUT` means "the formatter
+// changes nothing except the final newline it always drops"; `VERBATIM` means
+// "byte for byte, newline included", which is what DEC-FMT-002 requires of a
+// document the formatter declined to read.
 //
 // Every case is also checked for idempotence by the runner, so none of them has
 // to assert that separately.
@@ -16,13 +27,13 @@
 // body.
 
 const INPUT = Symbol('unchanged');
+const VERBATIM = Symbol('untouched, final newline included');
 
 const cases = [
     // ── 1–3: the smallest documents ─────────────────────────────────────────
     { name: 'empty file', fn: 'sz', input: '', expect: '' },
-    // The blank lines go; the document still ended with a newline, so the
-    // output does too.
-    { name: 'only blank lines', fn: 'sz', input: '\n\n\n', expect: '\n' },
+    // The blank lines go, and nothing is left to end — not even a line break.
+    { name: 'only blank lines', fn: 'sz', input: '\n\n\n', expect: '' },
     { name: 'one statement', fn: 'sz', input: 'out 1;\n', expect: INPUT },
 
     // ── indentation ─────────────────────────────────────────────────────────
@@ -266,28 +277,77 @@ const cases = [
         expect: 'out 1;\n\nout 2;\n',
     },
     {
-        name: 'trailing blank lines are dropped, and the newline state is kept',
+        name: 'trailing blank lines are dropped',
         fn: 'sz',
         input: 'out 1;\n\n\n',
-        expect: 'out 1;\n',
+        expect: 'out 1;',
     },
+
+    // ── the end of the document ─────────────────────────────────────────────
+    //
+    // Formatted output has no trailing newline. The three inputs a document can
+    // arrive as — no break, LF, CRLF — all leave as the same bytes, which is
+    // the point: how the document ends stops depending on how it arrived.
+    //
+    // These spell the expectation out as a literal rather than leaning on the
+    // runner's rule, so the policy is asserted somewhere that does not move
+    // when the runner does.
     {
-        name: 'a missing final newline is NOT added',
+        name: 'EOF: a document with no final newline does not gain one',
         fn: 'sz',
         input: 'out 1;',
-        expect: INPUT,
+        expect: 'out 1;',
     },
     {
-        name: 'an existing final newline is kept',
+        name: 'EOF: an LF final newline is removed',
         fn: 'sz',
         input: 'out 1;\n',
-        expect: INPUT,
+        expect: 'out 1;',
     },
     {
-        name: 'a CRLF final newline is kept as CRLF',
+        name: 'EOF: a CRLF final newline is removed',
         fn: 'sz',
         input: 'out 1;\r\n',
-        expect: INPUT,
+        expect: 'out 1;',
+    },
+    {
+        name: 'EOF: the rule survives a document with structure',
+        fn: 'sz',
+        input: 'fn void f() {\nout 1;\n}\n',
+        expect: 'fn void f() {\n    out 1;\n}',
+    },
+    {
+        // The distinction that matters: this is about the *end* of the
+        // document, not about LF vs CRLF *inside* it. The interior breaks are
+        // still CRLF; only the last one is gone.
+        name: 'EOF: removing the last break does not touch the interior endings',
+        fn: 'sz',
+        input: 'fn void f() {\r\nout 1;\r\n}\r\n',
+        expect: 'fn void f() {\r\n    out 1;\r\n}',
+    },
+    {
+        name: 'EOF: szx has no trailing newline either',
+        fn: 'szx',
+        input: 'out 1;\n',
+        expect: 'out 1;',
+    },
+    {
+        name: 'EOF: szx, CRLF',
+        fn: 'szx',
+        input: '<div>\n<p>hi</p>\n</div>\r\n',
+        expect: '<div>\n    <p>hi</p>\n</div>',
+    },
+    {
+        name: 'EOF: szs has no trailing newline either',
+        fn: 'szs',
+        input: '.a {\ncolor: red;\n}\n',
+        expect: '.a {\n    color: red;\n}',
+    },
+    {
+        name: 'EOF: szs, CRLF',
+        fn: 'szs',
+        input: '.a { color: red; }\r\n',
+        expect: '.a { color: red; }',
     },
 
     // ── incomplete documents: the formatter runs while you type ─────────────
@@ -325,7 +385,7 @@ const cases = [
         name: 'a stray closing brace does not go negative',
         fn: 'sz',
         input: '}\n}\nout 1;\n',
-        expect: INPUT,
+        expect: VERBATIM,
     },
     {
         name: 'a half-written declaration is left alone',
@@ -404,25 +464,28 @@ const cases = [
     },
 
     // DEC-FMT-002: a document that contradicts itself comes back exactly as
-    // it went in. These assert the preservation; the warning is provider-side
-    // and is covered by test/provider.js.
+    // it went in — `VERBATIM`, so the final newline stays too. That path does
+    // not format at all, and stripping a byte off a document the formatter just
+    // declined to read would be the one edit it is not entitled to make. These
+    // assert the preservation; the warning is provider-side and is covered by
+    // test/provider.js.
     {
         name: 'a group closed by a brace leaves the document untouched',
         fn: 'sz',
         input: 'fn void f() {\nfoo(}\n}\n',
-        expect: INPUT,
+        expect: VERBATIM,
     },
     {
         name: 'a bracket closed by a paren leaves the document untouched',
         fn: 'sz',
         input: 'let a = [1, 2);\n',
-        expect: INPUT,
+        expect: VERBATIM,
     },
     {
         name: 'a closer that closes nothing leaves the document untouched',
         fn: 'sz',
         input: 'out 1;\n}\n',
-        expect: INPUT,
+        expect: VERBATIM,
     },
     {
         // The control: badly indented AND contradictory. If the formatter
@@ -430,13 +493,13 @@ const cases = [
         name: 'a contradictory document is not partially reformatted',
         fn: 'sz',
         input: 'fn void f() {\n            out 1;\nfoo(}\n}\n',
-        expect: INPUT,
+        expect: VERBATIM,
     },
     {
         name: 'szx: a contradictory document is left untouched',
         fn: 'szx',
         input: 'fn void f() {\nfoo(}\n}\n',
-        expect: INPUT,
+        expect: VERBATIM,
     },
 
     // Incomplete but determinable: formatted normally, no warning.
@@ -522,6 +585,128 @@ const cases = [
         input: '.a {\n    /* } */\n    color: red;\n}\n',
         expect: INPUT,
     },
+
+    // ── dictionary access, both forms ───────────────────────────────────────
+    //
+    // `dic.name` and `dic["name"]` read the same key, and a program may mix
+    // them in one expression. The formatter is an indenter: on one line it has
+    // nothing to do to any of these, and the cases exist to prove that a `.`
+    // between identifiers is never mistaken for the leading `.` of a
+    // continuation, and that a `[` after an identifier is indexing rather than
+    // an array literal opening a level.
+    {
+        name: 'access: dot access is left as written',
+        fn: 'sz',
+        input: 'out dic.name;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'access: bracket access is left as written',
+        fn: 'sz',
+        input: 'out dic["name"];\n',
+        expect: INPUT,
+    },
+    {
+        name: 'access: a chain of dots is left as written',
+        fn: 'sz',
+        input: 'out dic.user.name;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'access: brackets then dot',
+        fn: 'sz',
+        input: 'out dic["user"].name;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'access: dot then brackets',
+        fn: 'sz',
+        input: 'out dic.user["name"];\n',
+        expect: INPUT,
+    },
+    {
+        name: 'access: a declaration and both forms of read',
+        fn: 'sz',
+        input: 'let dic <string, any> = ({"name", "Sergio"});\nout dic["name"];\nout dic.name;\n',
+        expect: INPUT,
+    },
+    {
+        // The dict type annotation is `<string, any>`; the `<` and `>` in it
+        // must not be read as JSX tags, which is what would push the following
+        // lines a level in.
+        name: 'access: the dict annotation does not open a level',
+        fn: 'sz',
+        input: 'let dic <string, any> = ({"name", "Sergio"});\nout 1;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'access: indexing a value reached through a dot',
+        fn: 'sz',
+        input: 'out dic.tags[0];\n',
+        expect: INPUT,
+    },
+    {
+        name: 'access: inside a block, the access is indented with the line',
+        fn: 'sz',
+        input: 'fn void f() {\nout dic.user.name;\n}\n',
+        expect: 'fn void f() {\n    out dic.user.name;\n}',
+    },
+    {
+        name: 'access: szx, a dict read inside an expression hole',
+        fn: 'szx',
+        input: '<div>\n<p>{dic.user.name}</p>\n</div>\n',
+        expect: '<div>\n    <p>{dic.user.name}</p>\n</div>',
+    },
+
+    // ── multi-line access chains — DEC-FMT-001 ──────────────────────────────
+    //
+    // Running the formatter formats: a chain broken across lines is re-indented
+    // one level past the line it continues, like any other continuation. A
+    // leading `.` cannot start a statement, so it is recognised without needing
+    // to know what the expression means.
+    {
+        name: 'chain: a dot chain broken across lines is indented one level',
+        fn: 'sz',
+        input: 'let v = dic\n.user\n.name;\n',
+        expect: 'let v = dic\n    .user\n    .name;',
+    },
+    {
+        name: 'chain: badly indented, DEC-FMT-001 normalises it',
+        fn: 'sz',
+        input: 'let v = dic\n            .user\n  .name;\n',
+        expect: 'let v = dic\n    .user\n    .name;',
+    },
+    {
+        name: 'chain: inside a block, one level past the statement',
+        fn: 'sz',
+        input: 'fn void f() {\nlet v = dic\n.user\n.name;\n}\n',
+        expect: 'fn void f() {\n    let v = dic\n        .user\n        .name;\n}',
+    },
+    {
+        name: 'chain: a method call chain',
+        fn: 'sz',
+        input: 'let v = dic.keys()\n.length();\n',
+        expect: 'let v = dic.keys()\n    .length();',
+    },
+    {
+        // Measured, and left as it is on purpose. A line opening with `[` is
+        // ambiguous in the same way a leading `+` or `-` is: `["user"]` can
+        // index the line above, and `[1, 2]` can open an array literal that
+        // starts a statement — Serez does not require semicolons, so the
+        // previous token cannot settle it either, since `let v = dic` is
+        // already a complete statement.
+        //
+        // `.name` on the next line *is* recognised, because a leading `.`
+        // cannot start a statement. So this comes back half-indented, which is
+        // honest about what a character scanner can know. Telling the two apart
+        // needs the parser; DEC-FMT-002's principle applies — do not guess —
+        // and this is recorded in FORMATTER.md's known limits rather than
+        // approximated here.
+        name: 'chain: a line opening with a bracket is not a continuation',
+        fn: 'sz',
+        input: 'let v = dic\n["user"]\n.name;\n',
+        expect: 'let v = dic\n["user"]\n    .name;',
+    },
 ];
 
-module.exports = { cases, INPUT };
+module.exports = { cases, INPUT, VERBATIM };

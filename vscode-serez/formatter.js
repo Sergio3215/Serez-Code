@@ -381,18 +381,6 @@ function pushLevel(levels, endDepth, minDepth) {
 // ── line endings and indent unit ─────────────────────────────────────────────
 
 /**
- * Did the document end with a newline?
- *
- * The formatter used to append one unconditionally, turning `out 1` into
- * `out 1\n` on every save. Whether a file ends in a newline is the author's (or
- * their editor's) business; `files.insertFinalNewline` is where that belongs.
- * Formatting preserves the state it found.
- */
-function hadFinalNewline(text) {
-    return /\n$/.test(text);
-}
-
-/**
  * The dominant line ending, so format-on-save does not rewrite every line of a
  * CRLF file. Splitting on /\r?\n/ and joining with '\n' turned every save of a
  * CRLF document into a whole-file diff.
@@ -461,7 +449,6 @@ function formatSz(text, options, report) {
  */
 function indentDocument(text, options, report, tagScanner) {
     const eol = dominantEol(text);
-    const finalNewline = hadFinalNewline(text);
     const unit = indentUnit(options);
     const lines = text.split(/\r?\n/);
     const out = [];
@@ -530,7 +517,23 @@ function indentDocument(text, options, report, tagScanner) {
         return text;
     }
 
-    return out.join(eol) + (finalNewline ? eol : '');
+    // No trailing newline, ever.
+    //
+    // The formatter's output ends at the last character of the last line:
+    // `out 1;`, `out 1;\n` and `out 1;\r\n` all come back as `out 1;`. Trailing
+    // blank lines were already dropped above; this drops the last line break
+    // too, so "how the document ends" has one answer instead of depending on
+    // what the document happened to arrive as.
+    //
+    // This is about the *end* of the document only. Line endings *inside* it
+    // are untouched — `eol` is still the document's dominant ending, so a CRLF
+    // file stays CRLF and format-on-save does not rewrite every line.
+    //
+    // A document returned early under DEC-FMT-002 keeps whatever it had,
+    // including its final newline: that path does not format at all, and
+    // stripping a byte off a document the formatter just declined to read
+    // would be the one edit it is not entitled to make.
+    return out.join(eol);
 }
 
 // ── .szx — braces, groups and JSX tag depth on one stack ────────────────────
@@ -640,5 +643,5 @@ function formatSzs(text, options, report) {
 module.exports = {
     formatSz, formatSzx, formatSzs, countBraces,
     scanLine, initialState, isLiteral, continuesExpression,
-    dominantEol, hadFinalNewline, indentUnit,
+    dominantEol, indentUnit,
 };

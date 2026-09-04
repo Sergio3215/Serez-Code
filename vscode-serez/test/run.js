@@ -17,7 +17,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { cases, INPUT } = require('./cases');
+const { cases, INPUT, VERBATIM } = require('./cases');
 const formatter = require('../formatter');
 
 const FORMATTERS = {
@@ -37,6 +37,12 @@ function show(s) {
     return JSON.stringify(s);
 }
 
+// The trailing-newline policy, in one place. `\r\n` and `\n` both go; only the
+// last one does, so interior line endings are none of this function's business.
+function withoutFinalNewline(s) {
+    return s.replace(/\r?\n$/, '');
+}
+
 // ── 1. cases ────────────────────────────────────────────────────────────────
 
 for (const c of cases) {
@@ -54,10 +60,15 @@ for (const c of cases) {
         continue;
     }
 
-    // `INPUT` means "leave it alone" — byte for byte. The formatter used to
-    // append a final newline; it now preserves whatever the document had, so
-    // there is no longer a policy to make an exception for.
-    const expected = c.expect === INPUT ? c.input : c.expect;
+    // Formatted output never ends with a newline, so every expectation is read
+    // through that rule and the case data does not have to restate it 77 times.
+    // `INPUT` means "unchanged apart from that"; `VERBATIM` is the DEC-FMT-002
+    // exception, where the document comes back byte for byte because the
+    // formatter declined to read it at all.
+    const expected =
+        c.expect === VERBATIM ? c.input
+        : c.expect === INPUT ? withoutFinalNewline(c.input)
+        : withoutFinalNewline(c.expect);
 
     if (out !== expected) {
         fail('cases', c.name, `\n      in       ${show(c.input)}\n      expected ${show(expected)}\n      actual   ${show(out)}`);
@@ -108,10 +119,10 @@ for (const c of cases) {
 {
     const src = 'fn void f() {\nout 1;\n}\n';
     const checks = [
-        ['default is 4 spaces', undefined, 'fn void f() {\n    out 1;\n}\n'],
-        ['tabSize 2', { tabSize: 2, insertSpaces: true }, 'fn void f() {\n  out 1;\n}\n'],
-        ['tabSize 8', { tabSize: 8, insertSpaces: true }, 'fn void f() {\n        out 1;\n}\n'],
-        ['tabs', { insertSpaces: false }, 'fn void f() {\n\tout 1;\n}\n'],
+        ['default is 4 spaces', undefined, 'fn void f() {\n    out 1;\n}'],
+        ['tabSize 2', { tabSize: 2, insertSpaces: true }, 'fn void f() {\n  out 1;\n}'],
+        ['tabSize 8', { tabSize: 8, insertSpaces: true }, 'fn void f() {\n        out 1;\n}'],
+        ['tabs', { insertSpaces: false }, 'fn void f() {\n\tout 1;\n}'],
     ];
     for (const [name, options, expected] of checks) {
         const out = formatter.formatSz(src, options);

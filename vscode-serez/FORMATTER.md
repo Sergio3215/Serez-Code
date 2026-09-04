@@ -29,7 +29,7 @@ looking at one line; everything it leaves alone is the author's.
 | **Literal lines** | A line that *begins* inside a multi-line string, raw string or block comment is emitted byte-for-byte, trailing whitespace included. |
 | **Trailing whitespace** | Removed everywhere else. |
 | **Blank lines** | Runs collapse to one. Leading and trailing blank lines are removed. |
-| **Final newline** | **Preserved as found.** A document without one does not gain one; a document with one keeps it. |
+| **Final newline** | **Removed.** Formatted output never ends with a line break — `out 1;`, `out 1;\n` and `out 1;\r\n` all come back as `out 1;`. |
 | **Line endings** | The document's dominant ending is preserved — CRLF stays CRLF. Independent of the final-newline rule. |
 | **Spacing inside a line** | Never touched. `-x`, `obj.field`, `f(x)`, `a[i]`, `1+2` come back as written. |
 
@@ -71,6 +71,26 @@ account, though it can be one when the line above ended open.
 
 `<` and `>` are excluded from the "ends open" set: a line ending in `>` is
 overwhelmingly a JSX tag, not a dangling comparison.
+
+### The end of the document
+
+Formatted output ends at the last character of the last line. Trailing blank
+lines were already dropped; the last line break goes with them, so how a
+document ends has one answer instead of depending on how it arrived:
+
+    "out 1;"        ->  "out 1;"
+    "out 1;\n"      ->  "out 1;"
+    "out 1;\r\n"    ->  "out 1;"
+
+This is about the **end** of the document and nothing else. Line endings
+*inside* it are untouched: a CRLF document keeps CRLF between its lines, and
+only the final one is removed. The two rules are independent, and confusing
+them would turn every save of a CRLF file into a whole-file diff.
+
+One document is exempt. Under DEC-FMT-002 a contradictory document is returned
+byte for byte, final newline included — that path does not format at all, and
+taking a byte off a document the formatter has just declined to read would be
+the one edit it is not entitled to make.
 
 ### Lexical safety
 
@@ -190,5 +210,13 @@ ignore it.
 - Continuation lines are indented exactly one level. Aligning to the opening
   delimiter's column is not offered, and would not be idempotent-safe without
   tracking columns.
+- A continuation line that **opens with `[`** is not recognised as one, so a
+  chain broken as `dic` / `["user"]` / `.name` comes back half-indented: the
+  `.name` moves in, the `["user"]` does not. `[` is ambiguous the way a leading
+  `+` or `-` is — it can index the line above or open an array literal that
+  starts a statement — and because Serez does not require semicolons, the
+  previous token cannot settle it: `let v = dic` is already complete. Telling
+  the two apart needs the parser. Pinned by a test, and left rather than
+  guessed at, per DEC-FMT-002's principle.
 - `.szs` is indentation only; declarations and one-line rules are preserved
   verbatim by design.
