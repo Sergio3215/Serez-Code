@@ -136,6 +136,6 @@
     }
   },
   "scripts": {
-    "test": "node test/run.js"
+    "test": "node test/run.js && node test/provider.js"
   }
 }

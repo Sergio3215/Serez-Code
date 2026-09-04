@@ -403,6 +403,56 @@ const cases = [
         expect: INPUT,
     },
 
+    // DEC-FMT-002: a document that contradicts itself comes back exactly as
+    // it went in. These assert the preservation; the warning is provider-side
+    // and is covered by test/provider.js.
+    {
+        name: 'a group closed by a brace leaves the document untouched',
+        fn: 'sz',
+        input: 'fn void f() {\nfoo(}\n}\n',
+        expect: INPUT,
+    },
+    {
+        name: 'a bracket closed by a paren leaves the document untouched',
+        fn: 'sz',
+        input: 'let a = [1, 2);\n',
+        expect: INPUT,
+    },
+    {
+        name: 'a closer that closes nothing leaves the document untouched',
+        fn: 'sz',
+        input: 'out 1;\n}\n',
+        expect: INPUT,
+    },
+    {
+        // The control: badly indented AND contradictory. If the formatter
+        // pressed on it would re-indent this; it must not.
+        name: 'a contradictory document is not partially reformatted',
+        fn: 'sz',
+        input: 'fn void f() {\n            out 1;\nfoo(}\n}\n',
+        expect: INPUT,
+    },
+    {
+        name: 'szx: a contradictory document is left untouched',
+        fn: 'szx',
+        input: 'fn void f() {\nfoo(}\n}\n',
+        expect: INPUT,
+    },
+
+    // Incomplete but determinable: formatted normally, no warning.
+    {
+        name: 'an open group is still indented',
+        fn: 'sz',
+        input: 'foo(\na,\nb\n',
+        expect: 'foo(\n    a,\n    b\n',
+    },
+    {
+        name: 'an open block is still indented',
+        fn: 'sz',
+        input: 'fn void f() {\nout 1;\n',
+        expect: 'fn void f() {\n    out 1;\n',
+    },
+
     // ── .szx ────────────────────────────────────────────────────────────────
     {
         name: 'szx: a JSX tree is indented by tag depth',

@@ -79,19 +79,36 @@ function activate(context) {
                     if (token && token.isCancellationRequested) return [];
 
                     const original = document.getText();
+                    // DEC-FMT-002. The formatter fills this in when the document
+                    // contradicts itself — a closer that matches nothing, or the
+                    // wrong opener — and returns the text untouched rather than
+                    // deriving indentation from a structure it cannot read.
+                    const report = {};
                     let formatted;
                     try {
                         // `options` carries the editor's resolved tabSize and
                         // insertSpaces for this document. They were ignored, so
                         // a workspace set to 2 spaces or to tabs got 4 spaces on
                         // every save, silently, with no setting that could fix it.
-                        formatted = format(original, options);
+                        formatted = format(original, options, report);
                     } catch (e) {
                         // A formatter that throws while the user is typing takes
                         // format-on-save down with it. Returning no edits leaves
                         // the document exactly as it is, which is the safe
                         // failure for an operation that rewrites a whole file.
                         console.error('serez: formatter failed, document left unchanged', e);
+                        return [];
+                    }
+
+                    if (report.uncertain) {
+                        // One message per run, not one per finding: the
+                        // formatter stops at the first contradiction anyway, and
+                        // a save that produced a queue of pop-ups would be worse
+                        // than the syntax error it is reporting.
+                        vscode.window.showWarningMessage(
+                            'Serez formatter: the structure of this document could not be ' +
+                            'determined, so it was left unchanged. There may be a syntax ' +
+                            `error (${report.reason}).`);
                         return [];
                     }
 

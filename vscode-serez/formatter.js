@@ -553,14 +553,21 @@ function isAlpha(c) {
 
 function jsxScanner() {
     let inTag = false;
-    let tagBraceDepth = 0;
+    // The delimiter depth the open tag started at. A `>` only ends the tag head
+    // when the stack is back to it, so the `>` of an `=>` inside
+    // `onChange={(v) => …}` does not terminate the tag.
+    //
+    // This reads the shared stack rather than counting braces privately, because
+    // `scanLine` consumes `{` and `}` as delimiters before `onChar` ever sees
+    // them: a private counter stayed at zero, every attribute arrow closed its
+    // tag early, and the orphaned tag was later \closed\ by the enclosing `)`.
+    // That produced a spurious mismatch on 103 of 347 real .szx files.
+    let tagDepth = 0;
 
     return function forLine(trimmed, sample) {
         return function onChar(i, c, state) {
             if (inTag) {
-                if (c === '{') { tagBraceDepth++; return; }
-                if (c === '}') { if (tagBraceDepth > 0) tagBraceDepth--; return; }
-                if (c === '>' && tagBraceDepth === 0) {
+                if (c === '>' && state.stack.length === tagDepth) {
                     if (trimmed[i - 1] === '/') {
                         pop(state, sample); // self-closing: cancel the tag's push
                     }
@@ -595,14 +602,14 @@ function jsxScanner() {
                     return j - 1; // `<string, any>` and friends: not a tag
                 }
                 push(state, sample);
-                if (afterName === undefined) { inTag = true; tagBraceDepth = 0; return j - 1; }
+                if (afterName === undefined) { inTag = true; tagDepth = state.stack.length; return j - 1; }
                 if (afterName === '>') return j;
                 if (afterName === '/') {
                     if (trimmed[j + 1] === '>') { pop(state, sample); return j + 1; }
                     return;
                 }
                 inTag = true;
-                tagBraceDepth = 0;
+                tagDepth = state.stack.length;
                 return j - 1;
             }
         };
