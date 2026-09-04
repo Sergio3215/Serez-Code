@@ -1000,7 +1000,7 @@ impl Evaluator {
     /// CLI/tooling classify the denial as `SZ6003`; user `try/catch` cannot
     /// consume it.
     pub(crate) fn require_unsafe(&mut self, operation: &str, reason: &str) -> Option<EvalResult> {
-        if self.execution.is_unsafe() {
+        if self.execution.is_unsafe(self.call_depth) {
             return None;
         }
         let suffix = if reason.is_empty() {

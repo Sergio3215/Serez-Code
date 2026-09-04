@@ -25,28 +25,49 @@
 //! guarantees, the interpreter's own invariants, and every limit not listed in
 //! [`Guarantee`]. A relaxation exists only when it is named here.
 //!
-//! # How the context propagates, measured rather than assumed
+//! # `unsafe` has lexical scope — DEC-M11-001
 //!
-//! `unsafe` in Serez is **dynamic**: a function *called* from inside an
-//! `unsafe { }` block runs with the context in effect, even though its body is
-//! nowhere near an `unsafe` keyword.
+//! **`unsafe` authority does not cross a function-call boundary.** A block
+//! relaxes guarantees for the statements and expressions written inside it, and
+//! for nothing else. A function called from within one starts under the
+//! runtime's ordinary guarantees, whatever its caller was doing.
 //!
 //! ```text
-//! fn void helper() { OS.exec("cmd", ["/c","echo","hi"]); }
-//! unsafe { helper(); }                        runs
+//! fn dangerous() { OS.exec("git", ["status"]) }   // SZ6003 — no unsafe here
+//! unsafe { dangerous() }                          // the caller's block does not reach in
+//!
+//! fn dangerous() { unsafe { OS.exec("git", ["status"]) } }
+//! unsafe { dangerous() }                          // runs — the callee declares its own
 //! ```
 //!
-//! `spec/security.md` said the call must "appear **lexically** inside an
-//! `unsafe { }` block", which is not what the runtime does. The divergence is
-//! **DEC-M11-001**; this module implements and documents the measured behaviour
-//! and does not change it. Worth knowing before that decision is taken: every
-//! one of the 20 gated calls across the eight ecosystem packages, and 145 of the
-//! 159 in the corpus, is *already* lexical — the other 14 are the fixtures that
-//! call outside a block on purpose. Nothing measured relies on the dynamic
-//! reading.
+//! The point is that a function can be **audited locally**: whether it relaxes a
+//! runtime guarantee is visible in its own body, and does not depend on who
+//! calls it.
 //!
-//! Leaving a block restores the previous context immediately, including when the
-//! block is left by `throw` or by `return`, and nesting composes.
+//! Nesting inside the *same* body is unaffected — an `if`, a loop or a nested
+//! block inside `unsafe { }` is still inside it. What ends the reach is a call.
+//!
+//! # How that is enforced
+//!
+//! [`ExecutionContext`] records the **call frame** a block was opened in, not a
+//! boolean. The gate asks whether the frame asking is the frame that opened the
+//! block; a callee runs one frame deeper, so it never is.
+//!
+//! Recording the frame rather than clearing a flag on entry to every call is
+//! what makes this safe to add: the evaluator has five call-frame entry points
+//! and twenty-seven exits, and a model that had to reset state at each exit would
+//! leak the first time one was missed. Here nothing is reset on return — the
+//! caller's frame number comes back on its own, and its block applies again.
+//!
+//! It was **dynamic** before, measured at every boundary:
+//!
+//! ```text
+//! fn called from unsafe            callee ran unsafe
+//! method called from unsafe        method ran unsafe
+//! constructor from unsafe          ctor ran unsafe
+//! lambda called from unsafe        lambda ran unsafe
+//! callback passed through a fn     callback ran unsafe
+//! ```
 //!
 //! # Why a type rather than a `bool`
 //!
@@ -92,13 +113,19 @@ impl Guarantee {
     }
 }
 
-/// Where execution is with respect to the runtime's guarantees.
+/// Which call frame, if any, is currently inside an `unsafe { }` block.
 ///
-/// Small on purpose. It holds one fact today and exists so that the rest of the
-/// runtime asks a question instead of reading a flag.
+/// A frame number rather than a flag, because `unsafe` is lexical: the block
+/// applies to the frame that opened it and to no other. See the module docs.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionContext {
-    inside_unsafe: bool,
+    /// The call depth at which the innermost open block was entered.
+    ///
+    /// `None` in ordinary code. A callee is one frame deeper than whoever called
+    /// it, so `Some(caller)` never matches a callee's own depth — which is the
+    /// whole of DEC-M11-001, expressed as a comparison rather than as a reset at
+    /// every call site.
+    unsafe_at: Option<usize>,
 }
 
 impl ExecutionContext {
@@ -107,36 +134,37 @@ impl ExecutionContext {
         ExecutionContext::default()
     }
 
-    /// Is execution inside an `unsafe { }` block?
+    /// Is the frame at `frame` inside its own `unsafe { }` block?
     ///
     /// This is the question the `unsafe` **gate** asks — "was this operation
-    /// authorised at all". A guard deciding whether to relax a limit should ask
+    /// authorised here". A guard deciding whether to relax a limit should ask
     /// [`Self::waives`] instead, so that the set of relaxations stays
     /// enumerable.
-    pub fn is_unsafe(&self) -> bool {
-        self.inside_unsafe
+    pub fn is_unsafe(&self, frame: usize) -> bool {
+        self.unsafe_at == Some(frame)
     }
 
-    /// May `guarantee` be relaxed here?
+    /// May `guarantee` be relaxed by the frame at `frame`?
     ///
-    /// False in ordinary code, for every guarantee. `unsafe` is what makes it
+    /// False in ordinary code, for every guarantee, and false in a frame whose
+    /// *caller* opened a block. `unsafe` written in this frame is what makes it
     /// true, and only for the guarantees [`Guarantee`] lists.
-    pub fn waives(&self, guarantee: Guarantee) -> bool {
+    pub fn waives(&self, guarantee: Guarantee, frame: usize) -> bool {
         match guarantee {
-            Guarantee::ProcessOutputCeiling => self.inside_unsafe,
+            Guarantee::ProcessOutputCeiling => self.is_unsafe(frame),
         }
     }
 
-    /// Enter an `unsafe { }` block, returning the context to restore on the way
-    /// out.
+    /// Enter an `unsafe { }` block opened in the frame at `frame`, returning the
+    /// context to restore on the way out.
     ///
     /// Returning the previous value rather than counting depth keeps the
-    /// save/restore shape the evaluator already had, which is what makes
-    /// nesting and an early `throw` or `return` behave identically to before.
+    /// save/restore shape the evaluator already had, which is what makes nesting
+    /// and an early `throw` or `return` behave identically.
     #[must_use = "the previous context must be restored when the block ends"]
-    pub fn enter_unsafe(&mut self) -> ExecutionContext {
+    pub fn enter_unsafe(&mut self, frame: usize) -> ExecutionContext {
         let previous = *self;
-        self.inside_unsafe = true;
+        self.unsafe_at = Some(frame);
         previous
     }
 
@@ -150,59 +178,106 @@ impl ExecutionContext {
 mod tests {
     use super::*;
 
-    /// Ordinary code waives nothing. This is the safe-by-default contract, and
-    /// it is asserted over *every* guarantee rather than the one that exists, so
-    /// a variant added later cannot quietly default to waived.
+    /// The frame a block was opened in. Any number; the tests care about
+    /// same-frame versus deeper.
+    const CALLER: usize = 3;
+    const CALLEE: usize = 4;
+
+    /// Ordinary code waives nothing.
+    ///
+    /// Asserted over *every* guarantee rather than the one that exists, so a
+    /// variant added later cannot quietly default to waived.
     #[test]
     fn a_default_context_waives_nothing() {
         let ctx = ExecutionContext::new();
-        assert!(!ctx.is_unsafe());
+        assert!(!ctx.is_unsafe(CALLER));
         for guarantee in Guarantee::ALL {
             assert!(
-                !ctx.waives(*guarantee),
+                !ctx.waives(*guarantee, CALLER),
                 "'{}' is waived outside unsafe",
                 guarantee.name()
             );
         }
     }
 
-    /// And `unsafe` waives exactly the enumerated ones.
+    /// A block waives the listed guarantees **in its own frame**.
     #[test]
-    fn an_unsafe_context_waives_the_listed_guarantees() {
+    fn a_block_waives_the_listed_guarantees_in_its_own_frame() {
         let mut ctx = ExecutionContext::new();
-        let _ = ctx.enter_unsafe();
-        assert!(ctx.is_unsafe());
+        let _ = ctx.enter_unsafe(CALLER);
+        assert!(ctx.is_unsafe(CALLER));
         for guarantee in Guarantee::ALL {
             assert!(
-                ctx.waives(*guarantee),
+                ctx.waives(*guarantee, CALLER),
                 "'{}' is listed as waivable and was not waived",
                 guarantee.name()
             );
         }
     }
 
-    /// Leaving restores, and nesting composes.
-    ///
-    /// The inner block's exit must not clear the outer one, which is the bug a
-    /// plain `= false` on exit would have.
+    /// DEC-M11-001, at the level of the type: a deeper frame is not covered.
     #[test]
-    fn nesting_restores_the_enclosing_context() {
+    fn a_callee_frame_is_not_covered_by_its_callers_block() {
         let mut ctx = ExecutionContext::new();
+        let _ = ctx.enter_unsafe(CALLER);
+        assert!(
+            !ctx.is_unsafe(CALLEE),
+            "the caller's block reached into the callee's frame"
+        );
+        for guarantee in Guarantee::ALL {
+            assert!(
+                !ctx.waives(*guarantee, CALLEE),
+                "'{}' crossed a call boundary",
+                guarantee.name()
+            );
+        }
+    }
 
-        let outer = ctx.enter_unsafe();
-        assert!(ctx.is_unsafe());
+    /// And the callee's own block covers the callee, not the caller.
+    #[test]
+    fn a_callee_declares_its_own_block() {
+        let mut ctx = ExecutionContext::new();
+        let outer = ctx.enter_unsafe(CALLER);
 
-        let inner = ctx.enter_unsafe();
-        assert!(ctx.is_unsafe());
+        // The callee opens one in its own frame.
+        let inner = ctx.enter_unsafe(CALLEE);
+        assert!(ctx.is_unsafe(CALLEE));
+        assert!(
+            !ctx.is_unsafe(CALLER),
+            "the callee's block leaked back into the caller's frame"
+        );
+
+        // Returning restores the caller's context, and the caller's own block
+        // applies again.
         ctx.restore(inner);
         assert!(
-            ctx.is_unsafe(),
+            ctx.is_unsafe(CALLER),
+            "the caller lost its own block on return"
+        );
+
+        ctx.restore(outer);
+        assert!(!ctx.is_unsafe(CALLER));
+    }
+
+    /// Nesting within one frame composes: the inner exit does not clear the
+    /// outer block.
+    #[test]
+    fn nesting_in_one_frame_restores_the_enclosing_block() {
+        let mut ctx = ExecutionContext::new();
+
+        let outer = ctx.enter_unsafe(CALLER);
+        let inner = ctx.enter_unsafe(CALLER);
+        assert!(ctx.is_unsafe(CALLER));
+
+        ctx.restore(inner);
+        assert!(
+            ctx.is_unsafe(CALLER),
             "leaving the inner block cleared the outer one"
         );
 
         ctx.restore(outer);
         assert!(
-            !ctx.is_unsafe(),
+            !ctx.is_unsafe(CALLER),
             "leaving the outer block did not restore safe"
         );
     }
@@ -211,9 +286,9 @@ mod tests {
     #[test]
     fn restoring_is_idempotent() {
         let mut ctx = ExecutionContext::new();
-        let saved = ctx.enter_unsafe();
+        let saved = ctx.enter_unsafe(CALLER);
         ctx.restore(saved);
         ctx.restore(saved);
-        assert!(!ctx.is_unsafe());
+        assert!(!ctx.is_unsafe(CALLER));
     }
 }

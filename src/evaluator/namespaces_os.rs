@@ -722,10 +722,10 @@ impl super::Evaluator {
                 // safe route to a child process exists it is already correct.
                 let mut command = std::process::Command::new(&cmd);
                 command.args(&args_vec);
-                let captured = if self
-                    .execution
-                    .waives(crate::execution::Guarantee::ProcessOutputCeiling)
-                {
+                let captured = if self.execution.waives(
+                    crate::execution::Guarantee::ProcessOutputCeiling,
+                    self.call_depth,
+                ) {
                     std::process::Command::new(&cmd)
                         .args(&args_vec)
                         .output()

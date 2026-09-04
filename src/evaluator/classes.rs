@@ -179,7 +179,18 @@ impl super::Evaluator {
                 return self.rt_err_kind("TypeError", message);
             }
 
+            // A constructor body is a call frame. It was not one: it pushed a scope
+            // and nothing else, which is why `unsafe { new C() }` used to reach into
+            // the constructor — DEC-M11-001's boundary is the call frame — and why
+            // constructor recursion overflowed the native stack instead of being
+            // refused. `public class R { public R() { let x = new R(); } }` killed the
+            // process with `thread '<unknown>' has overflowed its stack`, exit 127,
+            // while the same recursion through a function was refused at depth 512.
+            if let Some(error) = self.require_call_capacity() {
+                return error;
+            }
             self.scopes.push();
+            self.call_depth += 1;
             self.scopes.declare("this".to_string(), instance_ref);
 
             for (i, param) in ctor.parameters.iter().enumerate() {
@@ -201,10 +212,12 @@ impl super::Evaluator {
                         DefaultArgumentResult::Value(value) => value,
                         DefaultArgumentResult::Throw(owned) => {
                             self.scopes.pop();
+                            self.call_depth -= 1;
                             return Ok(ExecutionFlow::Throw(self.plant(owned)));
                         }
                         DefaultArgumentResult::Error => {
                             self.scopes.pop();
+                            self.call_depth -= 1;
                             return Err(RuntimeFailure);
                         }
                     }
@@ -233,6 +246,7 @@ impl super::Evaluator {
                                 param.name, new_expr.class_name, expected_type, actual
                             );
                             self.scopes.pop();
+                            self.call_depth -= 1;
                             return self.rt_err_kind("TypeError", message);
                         }
                     }
@@ -291,6 +305,7 @@ impl super::Evaluator {
             let live_ref = self.scopes.lookup("this").unwrap_or(instance_ref);
             let throw_owned = ctor_throw.map(|r| self.extract(r));
             self.scopes.pop();
+            self.call_depth -= 1;
 
             if body_error {
                 return Err(RuntimeFailure);

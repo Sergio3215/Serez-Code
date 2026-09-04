@@ -1383,7 +1383,7 @@ impl super::Evaluator {
         // leave the outer block still unsafe, and the restore has to happen on
         // every way out of the block — a `throw` and a `return` included, which
         // is why `eval_block`'s result is held rather than `?`-propagated.
-        let previous = self.execution.enter_unsafe();
+        let previous = self.execution.enter_unsafe(self.call_depth);
         let result = self.eval_block(block);
         self.execution.restore(previous);
         result

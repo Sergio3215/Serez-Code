@@ -14,7 +14,7 @@ interchangeable and only the last one is a security boundary.
 | Mechanism | What it is | What it is not |
 | --- | --- | --- |
 | Permission manifest | A declaration in `serez.json` (or inline) of which native namespaces a program intends to use. | Not a boundary: outside lockdown a program can grant itself any permission at runtime. |
-| `unsafe { }` | A gate on individually destructive operations, and the author's acceptance of the named limits it waives. | Not a permission and not isolation: any program can write `unsafe`, and it grants no capability. |
+| `unsafe { }` | A **lexically scoped** gate on individually destructive operations, and the author's acceptance of the named limits it waives. | Not a permission and not isolation: any program can write `unsafe`, it grants no capability, and it does not reach into a function it calls. |
 | Lockdown | A restricted profile for source you did not write, closing self-granting, the capabilities that reach disk with nothing declared, and the network. | Not a sandbox: the process still runs with the invoking user's full rights, and an allowed host is still reached from the machine's network position. |
 | OS isolation | A container, VM or restricted account around the `sz` process. | The only actual security boundary. Provided by the operating system, not by Serez. |
 
@@ -212,34 +212,70 @@ which is what typing `unsafe` records.
 `OS.exec` requires `unsafe`, so in practice it always runs with this guarantee
 waived. That is the contract, not an oversight.
 
-### Where the context applies
+### `unsafe` has lexical scope
 
-The `unsafe` context is **dynamic**: it is in force for everything that runs
-while the block is executing, including functions *called* from inside it.
+**`unsafe` authority does not cross a function-call boundary.**
+
+A block relaxes guarantees for the statements and expressions written inside it,
+and for nothing else. A function called from within one starts under the
+runtime's ordinary guarantees, whatever its caller was doing.
+
+The caller's block does **not** authorise the callee:
+
+```serez
+// runtime-error-example: the caller's block does not reach into the callee
+use permissions { OS }
+
+fn void dangerous() { OS.exec("git", ["status"]) }   // no `unsafe` here
+
+unsafe { dangerous() }                                // SZ6003 — refused
+```
+
+A function that relaxes a guarantee declares its own block:
 
 ```serez
 use permissions { OS }
 
-fn void helper() { OS.exec("git", ["status"]) }   // no `unsafe` here
+fn void dangerous() {
+    unsafe { OS.exec("git", ["status"]) }
+}
 
-unsafe { helper() }                                // runs — the context is dynamic
+unsafe { dangerous() }                                // runs
+dangerous()                                           // and so does this
 ```
 
-Called from outside a block, the same function is refused:
+The second call matters as much as the first: because the block is the callee's
+own, the caller is irrelevant. Whether a function relaxes a runtime guarantee is
+visible **in its own body**, which is what makes a function auditable locally.
+
+#### Nesting is not a call
+
+Within one body, a block covers everything lexically inside it — a nested block,
+an `if`, a loop:
 
 ```serez
-// runtime-error-example: the context ends with the block, not with the function
 use permissions { OS }
 
-fn void helper() { OS.exec("git", ["status"]) }
-
-helper()                                           // SZ6003
+unsafe {
+    if (true) {
+        OS.exec("git", ["status"])                    // still inside the block
+    }
+}
 ```
 
-Leaving the block restores the ordinary context immediately, including when it
-is left by `throw` or by `return`, and nested blocks compose. Whether dynamic is
-the right model — Rust's equivalent is lexical — is an open question recorded as
-**DEC-M11-001**; this section describes what the runtime does.
+What ends the reach is a **call**, not a brace. `unsafe { helper() }` does not
+make `helper`'s body unsafe.
+
+#### Every call boundary
+
+The rule is the same for every way of entering a body: plain functions, methods,
+constructors, lambdas, and callbacks reached through another function. None of
+them inherits a caller's block.
+
+Leaving a block restores the ordinary context immediately, including when it is
+left by `throw` or by `return`, and nested blocks within one body compose. A
+call made from inside a block returns into it: the caller's block still applies
+to the statements after the call.
 
 ### The developer's responsibility
 
