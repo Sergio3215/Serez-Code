@@ -54,11 +54,10 @@ for (const c of cases) {
         continue;
     }
 
-    // `INPUT` means "leave it alone", up to the documented trailing-newline
-    // policy — a file that does not end in a newline gets one.
-    const expected = c.expect === INPUT
-        ? (c.input.endsWith('\n') || c.input === '' ? c.input : c.input + '\n')
-        : c.expect;
+    // `INPUT` means "leave it alone" — byte for byte. The formatter used to
+    // append a final newline; it now preserves whatever the document had, so
+    // there is no longer a policy to make an exception for.
+    const expected = c.expect === INPUT ? c.input : c.expect;
 
     if (out !== expected) {
         fail('cases', c.name, `\n      in       ${show(c.input)}\n      expected ${show(expected)}\n      actual   ${show(out)}`);

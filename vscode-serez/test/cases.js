@@ -19,7 +19,9 @@ const INPUT = Symbol('unchanged');
 
 const cases = [
     // ── 1–3: the smallest documents ─────────────────────────────────────────
-    { name: 'empty file', fn: 'sz', input: '', expect: '\n' },
+    { name: 'empty file', fn: 'sz', input: '', expect: '' },
+    // The blank lines go; the document still ended with a newline, so the
+    // output does too.
     { name: 'only blank lines', fn: 'sz', input: '\n\n\n', expect: '\n' },
     { name: 'one statement', fn: 'sz', input: 'out 1;\n', expect: INPUT },
 
@@ -264,16 +266,28 @@ const cases = [
         expect: 'out 1;\n\nout 2;\n',
     },
     {
-        name: 'trailing blank lines are dropped and one newline is added',
+        name: 'trailing blank lines are dropped, and the newline state is kept',
         fn: 'sz',
         input: 'out 1;\n\n\n',
         expect: 'out 1;\n',
     },
     {
-        name: 'a missing final newline is added',
+        name: 'a missing final newline is NOT added',
         fn: 'sz',
         input: 'out 1;',
-        expect: 'out 1;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'an existing final newline is kept',
+        fn: 'sz',
+        input: 'out 1;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'a CRLF final newline is kept as CRLF',
+        fn: 'sz',
+        input: 'out 1;\r\n',
+        expect: INPUT,
     },
 
     // ── incomplete documents: the formatter runs while you type ─────────────
@@ -323,19 +337,19 @@ const cases = [
     // A line starting with an unambiguously infix token continues the
     // expression above it and keeps its own indentation.
     {
-        name: 'a logical operator continuation keeps its indentation',
+        name: 'a logical operator continuation is indented one level',
         fn: 'sz',
         input: 'let ok = a\n    && b\n    || c;\n',
         expect: INPUT,
     },
     {
-        name: 'a pipe continuation keeps its indentation',
+        name: 'a pipe continuation is indented one level',
         fn: 'sz',
         input: 'let r = xs\n    |> f\n    |> g;\n',
         expect: INPUT,
     },
     {
-        name: 'a comma continuation keeps its indentation',
+        name: 'a comma continuation sits at the group level',
         fn: 'sz',
         input: 'let t = f(a\n    , b);\n',
         expect: INPUT,
@@ -351,19 +365,21 @@ const cases = [
     },
     // Continuation lines: the formatter indents blocks, not expressions.
     {
-        name: 'a chained call keeps the author indentation',
+        name: 'a correctly indented chain is left alone',
         fn: 'sz',
         input: 'let r = nums\n    .filter(f)\n    .map(g);\n',
         expect: INPUT,
     },
     {
-        name: 'a chained call is not flattened to the left margin',
+        // DEC-FMT-001: running the formatter normalises indentation. An
+        // over-indented chain is brought back to one level, not preserved.
+        name: 'an over-indented chain is normalised',
         fn: 'sz',
         input: 'let r = nums\n        .filter(f)\n        .map(g);\n',
-        expect: INPUT,
+        expect: 'let r = nums\n    .filter(f)\n    .map(g);\n',
     },
     {
-        name: 'multi-line call arguments keep their indentation',
+        name: 'multi-line call arguments are indented one level',
         fn: 'sz',
         input: 'let xs = [\n    new P(1),\n    new P(2),\n];\n',
         expect: INPUT,
@@ -375,7 +391,7 @@ const cases = [
         expect: 'let x = f(1);\nfn void g() {\n    out 1;\n}\n',
     },
     {
-        name: 'trailing whitespace goes even on a continuation line',
+        name: 'trailing whitespace goes on a continuation line too',
         fn: 'sz',
         input: 'let r = nums\n    .filter(f)   \n    .map(g);\n',
         expect: 'let r = nums\n    .filter(f)\n    .map(g);\n',
@@ -397,7 +413,7 @@ const cases = [
     {
         // The idiom every serez-ui component uses. The formatter used to
         // pull the whole tree one level left, because `(` was not tracked.
-        name: 'szx: JSX inside return ( ) keeps the author indentation',
+        name: 'szx: JSX inside return ( ) is indented by group and tag depth',
         fn: 'szx',
         input:
             'public class C {\n    public C() { this.n = 0; }\n' +

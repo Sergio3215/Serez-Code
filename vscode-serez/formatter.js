@@ -59,8 +59,23 @@ const RAW_STRING = 3;
 
 /** A fresh scanner state: code, no open construct. */
 function initialState() {
-    return { mode: CODE, depth: 0, group: 0 };
+    return {
+        mode: CODE,
+        depth: 0,
+        group: 0,
+        /** Open delimiters, innermost last: '{', '(' or '['. */
+        stack: [],
+        /** A closer that did not match its opener, or closed nothing. */
+        mismatch: null,
+        /** The last code character seen, for continuation classification. */
+        lastCode: '',
+        /** The one before it, so two-character operators can be recognised. */
+        prevCode: '',
+    };
 }
+
+/** The opener each closer must match. */
+const OPENER_OF = { '}': '{', ')': '(', ']': '[' };
 
 /**
  * Is a line that begins in `state` *literal text* — a multi-line string, raw
@@ -73,60 +88,6 @@ function initialState() {
  */
 function isLiteral(state) {
     return state.mode !== CODE;
-}
-
-/**
- * Is a line the middle of an expression rather than the start of a statement?
- *
- * Two signals, neither of them a guess:
- *
- *   1. `state.group > 0` — a `(` or `[` opened on an earlier line is still
- *      open, so this line is inside an argument list, an array literal or a
- *      parenthesised expression;
- *   2. the line begins with a token that **cannot start a statement** — a
- *      member access `.`, or an unambiguously infix operator. A line starting
- *      with `&&`, `|>` or `,` is always the continuation of the expression
- *      above it. That is a fact about the grammar, not a formatting guess.
- *
- * `+`, `-` and `!` are deliberately **not** in that set: they are also prefix
- * operators, so `-x;` is a statement on its own and the formatter cannot tell
- * the two apart without a parser. Excluding them costs a little — a line
- * starting with `+` is still re-indented — and including them would risk
- * leaving a real statement at whatever column it happened to have. `<` and `>`
- * are excluded for the same reason in `.szx`, where they may open a tag.
- *
- * Both keep the indentation the author gave them. The formatter indents
- * **blocks**; it does not reflow expressions, and pretending otherwise did this
- * to 40 of the 493 corpus files:
- *
- *     let r = nums          let r = nums
- *         .filter(f)    ->  .filter(f)
- *         .map(g);          .map(g);
- *
- * and would have rewritten **327 of the 347** real `.szx` files in the
- * ecosystem, every one of them by pulling its JSX one level left, because the
- * tree sits inside `return (`.
- *
- * Whether continuations should instead be *actively* re-indented is a real
- * product choice with more than one defensible answer — DEC-FMT-001. Leaving
- * them alone is the option that cannot damage correct code.
- */
-
-/**
- * Line-leading tokens that cannot begin a statement, longest first so that `|>`
- * is tested before `|` would be and `==` before `=`.
- */
-const INFIX_STARTS = [
-    '|>', '&&', '||', '??', '==', '!=', '<=', '>=', '=>', '::',
-    '.', ',', '?', ':', '*', '/', '%',
-];
-
-function continuesExpression(state, trimmed) {
-    if (state.group > 0) return true;
-    for (const token of INFIX_STARTS) {
-        if (trimmed.startsWith(token)) return true;
-    }
-    return false;
 }
 
 /**
@@ -226,28 +187,40 @@ function scanLine(line, state, onDelta, onChar) {
             i++;
             continue;
         }
-        if (c === '{') {
+        if (c === '{' || c === '(' || c === '[') {
+            state.stack.push(c);
+            if (c !== '{') state.group++;
+            // Reported for every delimiter, not only braces: the caller samples
+            // the stack depth here, and a `)` that is never reported leaves a
+            // line printing at the level it was about to leave.
             if (onDelta) onDelta(1);
+            remember(state, c);
             i++;
             continue;
         }
-        if (c === '}') {
+        if (c === '}' || c === ')' || c === ']') {
+            // A closer that matches nothing, or matches the wrong opener, means
+            // the document contradicts itself. Recorded rather than guessed
+            // around: see DEC-FMT-002.
+            const top = state.stack[state.stack.length - 1];
+            if (top === undefined || top !== OPENER_OF[c]) {
+                if (!state.mismatch) {
+                    state.mismatch = top === undefined
+                        ? `a '${c}' closes nothing`
+                        : `a '${top}' is closed by a '${c}'`;
+                }
+            } else {
+                state.stack.pop();
+            }
+            if (c !== '}' && state.group > 0) state.group--;
             if (onDelta) onDelta(-1);
+            remember(state, c);
             i++;
             continue;
         }
-        if (c === '(' || c === '[') {
-            state.group++;
-            i++;
-            continue;
-        }
-        if (c === ')' || c === ']') {
-            if (state.group > 0) state.group--;
-            i++;
-            continue;
-        }
+        if (c !== ' ' && c !== '\t') remember(state, c);
         if (onChar) {
-            const jump = onChar(i, c);
+            const jump = onChar(i, c, state);
             if (typeof jump === 'number' && jump > i) { i = jump + 1; continue; }
         }
         i++;
@@ -256,6 +229,84 @@ function scanLine(line, state, onDelta, onChar) {
 
 function isIdentChar(c) {
     return c !== undefined && /[A-Za-z0-9_]/.test(c);
+}
+
+/** Record a code character, keeping the previous one for two-char operators. */
+function remember(state, c) {
+    state.prevCode = state.lastCode;
+    state.lastCode = c;
+}
+
+// ── continuation classification ─────────────────────────────────────────────
+//
+// A line continues the expression above it when either end of the join says so,
+// and both ends are read from tokens rather than guessed from a symbol:
+//
+//   * the PREVIOUS line ends with something that cannot end a statement — an
+//     operator, an `=`, a comma. Serez does not require semicolons (`let a = 1`
+//     then `out a` is two statements), so this is the only reliable signal that
+//     the previous line is unfinished;
+//   * this line STARTS with a token that cannot begin a statement.
+//
+// `+` and `-` are the interesting case. They are both prefix and infix, and the
+// symbol alone cannot say which. The previous token can: `let a = 1` followed by
+// `+ 2;` parses as `1 + 2` — measured, it prints 3 — so a leading `+` after a
+// token that ends an expression is a continuation. After a `;` or a `}` it
+// starts a statement.
+//
+// `!` is prefix only, so it is never a continuation on its own account; it can
+// still be one when the previous line ended open (`let x =` / `!flag;`).
+
+/** Tokens that cannot start a statement, longest first. */
+const INFIX_STARTS = [
+    '|>', '&&', '||', '??', '==', '!=', '<=', '>=', '=>', '::',
+    '.', ',', '?', ':', '*', '%',
+];
+
+/**
+ * Trailing characters that leave an expression unfinished.
+ *
+ * `<` and `>` are deliberately absent. A line ending in `>` is overwhelmingly a
+ * JSX tag, not a dangling comparison, and treating it as unfinished indented
+ * every child of every element one level too deep in `.szx`.
+ */
+const OPEN_TAIL = new Set(['=', '+', '-', '*', '/', '%', ',', '&', '|', '^',
+    '?', ':', '!', '~', '.']);
+
+/** Trailing characters that complete an expression. */
+function endsExpression(c) {
+    return c !== '' && (isIdentChar(c) || c === '"' || c === ')' || c === ']');
+}
+
+/**
+ * Does `trimmed` continue the expression the scanner has been reading?
+ *
+ * `state` must be the state *before* the line is scanned.
+ */
+function continuesExpression(state, trimmed) {
+    // A comment is never an operator, whatever it starts with.
+    if (trimmed.startsWith('//') || trimmed.startsWith('/*')) return false;
+
+    // The previous line ended mid-expression.
+    if (OPEN_TAIL.has(state.lastCode)) return true;
+
+    // An infix token only continues something if there IS something: the
+    // previous line has to have ended with an expression. Without that check a
+    // CSS selector `.a {` reads as a continuation of whatever preceded it, and
+    // `.szs` indented every rule in the file.
+    if (!endsExpression(state.lastCode)) return false;
+
+    for (const token of INFIX_STARTS) {
+        if (trimmed.startsWith(token)) return true;
+    }
+
+    // Ambiguous prefix/infix: decided by what came before, not by the symbol.
+    // `let a = 1` then `+ 2;` parses as `1 + 2` — measured, it prints 3.
+    if (trimmed.startsWith('+') || trimmed.startsWith('-') || trimmed.startsWith('/')) {
+        return true;
+    }
+
+    return false;
 }
 
 /**
@@ -270,7 +321,76 @@ function emitBody(raw, trimmed, state) {
     return state.mode === CODE ? trimmed : raw.trimStart();
 }
 
+/**
+ * How many open delimiters this line closes before it says anything else.
+ *
+ * `}`, `)`, `]` and a JSX `</Tag>` all count; anything else stops the run.
+ */
+function leadingClosers(trimmed) {
+    let closed = 0;
+    for (let i = 0; i < trimmed.length; i++) {
+        const c = trimmed[i];
+        if (c === ' ' || c === '	') continue;
+        if (c === '}' || c === ')' || c === ']') { closed++; continue; }
+        if (c === '<' && trimmed[i + 1] === '/') {
+            const gt = trimmed.indexOf('>', i + 2);
+            if (gt === -1) break;
+            closed++;
+            i = gt;
+            continue;
+        }
+        break;
+    }
+    return closed;
+}
+
+// ── indentation levels ──────────────────────────────────────────────────────
+//
+// One level per *line* that left a delimiter open, not one per delimiter. That
+// distinction is the whole model:
+//
+//     foo({            <- opens two delimiters, one level
+//         a: 1         <- level 1, not 2
+//     })
+//
+// `Levels` holds the delimiter depth at which each open line started. A line
+// prints at the number of entries still standing once its own leading closers
+// have popped, which is the generalised form of "a line starting with `}`
+// dedents" and works identically for `)` and `]`.
+
+function newLevels() {
+    return [];
+}
+
+/**
+ * The level this line prints at, after popping what its leading closers close.
+ * `depths` is mutated: the pops are real, because the closers really closed.
+ */
+function levelFor(levels, minDepth) {
+    while (levels.length && minDepth < levels[levels.length - 1]) levels.pop();
+    return levels.length;
+}
+
+/** Record that this line left something open. */
+function pushLevel(levels, endDepth, minDepth) {
+    if (endDepth > minDepth && (!levels.length || endDepth > levels[levels.length - 1])) {
+        levels.push(endDepth);
+    }
+}
+
 // ── line endings and indent unit ─────────────────────────────────────────────
+
+/**
+ * Did the document end with a newline?
+ *
+ * The formatter used to append one unconditionally, turning `out 1` into
+ * `out 1\n` on every save. Whether a file ends in a newline is the author's (or
+ * their editor's) business; `files.insertFinalNewline` is where that belongs.
+ * Formatting preserves the state it found.
+ */
+function hadFinalNewline(text) {
+    return /\n$/.test(text);
+}
 
 /**
  * The dominant line ending, so format-on-save does not rewrite every line of a
@@ -313,24 +433,47 @@ function countBraces(line) {
     return { opens, closes };
 }
 
-function formatSz(text, options) {
+/**
+ * `.sz` — indent by delimiter level, with active continuation indentation.
+ *
+ * `report`, when given, receives `{ uncertain, reason }` if the document
+ * contradicts itself — see DEC-FMT-002 and `indentDocument`.
+ */
+function formatSz(text, options, report) {
+    return indentDocument(text, options, report, null);
+}
+
+/**
+ * The shared line loop.
+ *
+ * `tagScanner`, when given, is called for every character in code position and
+ * may push or pop `state.stack` itself — that is how `.szx` counts JSX tags on
+ * the same stack as `{`, `(` and `[`, so one level model covers both.
+ *
+ * # DEC-FMT-002
+ *
+ * If the scanner meets a closer that matches nothing, or the wrong opener, the
+ * document contradicts itself and its structure cannot be determined. The
+ * original text is returned untouched and `report.uncertain` is set, so the
+ * editor can say a syntax error is likely. An *incomplete* document — an
+ * unclosed `(`, an open block, an unterminated string — is not that: it is
+ * determinable and is formatted normally, without a warning.
+ */
+function indentDocument(text, options, report, tagScanner) {
     const eol = dominantEol(text);
+    const finalNewline = hadFinalNewline(text);
     const unit = indentUnit(options);
     const lines = text.split(/\r?\n/);
     const out = [];
-    let indent = 0;
-    let prevBlank = false;
     const state = initialState();
+    const levels = newLevels();
+    let prevBlank = false;
 
     for (const raw of lines) {
-        // Checked BEFORE scanning: the scan may close the string on this
-        // very line, and by then `state.mode` no longer says how the line
-        // *began*.
-        const literal = isLiteral(state);
-        if (literal) {
-            scanLine(raw, state, delta => {
-                indent = Math.max(0, indent + delta);
-            });
+        // Checked BEFORE scanning: the scan may close the string on this very
+        // line, and by then `state.mode` no longer says how the line *began*.
+        if (isLiteral(state)) {
+            scanLine(raw, state, null, tagScanner ? tagScanner(raw) : null);
             out.push(raw); // byte-for-byte: in a string, spaces are content
             prevBlank = false;
             continue;
@@ -338,18 +481,6 @@ function formatSz(text, options) {
 
         const trimmed = raw.trim();
 
-        if (trimmed !== '' && continuesExpression(state, trimmed)) {
-            scanLine(trimmed, state, delta => {
-                indent = Math.max(0, indent + delta);
-            });
-            // The author's indentation, minus trailing whitespace, which is
-            // invisible and never meaningful in code position.
-            out.push(raw.replace(/[ \t]+$/, ''));
-            prevBlank = false;
-            continue;
-        }
-
-        // Collapse consecutive blank lines to one
         if (trimmed === '') {
             if (!prevBlank) out.push('');
             prevBlank = true;
@@ -357,44 +488,61 @@ function formatSz(text, options) {
         }
         prevBlank = false;
 
-        let opens = 0;
-        let closes = 0;
-        scanLine(trimmed, state, d => { if (d > 0) opens++; else closes++; });
-        const leadingClose = trimmed.startsWith('}');
+        // Decided before the line is scanned: it is about the join between this
+        // line and the one above it.
+        // Only outside a group: inside `(` or `[` the level already comes from
+        // the open delimiter, and adding a bonus for the trailing comma of the
+        // line above would indent each argument one deeper than the last.
+        const closers = leadingClosers(trimmed);
+        // A line that starts by closing something is never the middle of an
+        // expression, whatever the line above it dangled. Without this,
+        // `return a +` followed by `}` pushed the brace in a level — caught by
+        // the differential run over the fixture corpus, not by a unit case.
+        const continuation = closers === 0 && state.group === 0 &&
+            continuesExpression(state, trimmed);
 
-        // If line starts with }, dedent before printing
-        if (leadingClose && indent > 0) indent--;
+        // A line prints at the level its LEADING closers leave it at. Only
+        // leading ones: `, b);` closes a group at its end and still belongs to
+        // that group, while `)` on its own line does not. Taking the minimum
+        // over the whole line would dedent the first of those.
+        const minDepth = Math.max(0, state.stack.length - closers);
+        const onChar = tagScanner ? tagScanner(trimmed, null) : null;
+        scanLine(trimmed, state, null, onChar);
+
+        const level = levelFor(levels, minDepth);
+        const printLevel = level + (continuation ? 1 : 0);
 
         const body = emitBody(raw, trimmed, state);
-        out.push(indent > 0 ? unit.repeat(indent) + body : body);
+        out.push(printLevel > 0 ? unit.repeat(printLevel) + body : body);
 
-        // Calculate net indent change for the NEXT line.
-        // leadingClose was already applied above, so add it back to the net
-        // so it is not double-counted (e.g. "} else {" → net = 0 + 1 = 1).
-        const net = opens - closes + (leadingClose ? 1 : 0);
-        indent = Math.max(0, indent + net);
+        pushLevel(levels, state.stack.length, minDepth);
     }
 
-    // Strip trailing blank lines, ensure file ends with a single newline
     while (out.length && out[out.length - 1] === '') out.pop();
-    return out.join(eol) + eol;
+
+    if (state.mismatch) {
+        if (report) {
+            report.uncertain = true;
+            report.reason = state.mismatch;
+        }
+        // Nothing is rewritten: the structure the indentation would come from is
+        // the thing that is contradictory.
+        return text;
+    }
+
+    return out.join(eol) + (finalNewline ? eol : '');
 }
 
-// ── .szx — braces + JSX tag depth ────────────────────────────────────────────
+// ── .szx — braces, groups and JSX tag depth on one stack ────────────────────
 //
-// One indent accumulator fed by two token kinds scanned in source order:
-//   { / }                    → ±1 (plain Serez code, lambda bodies, JSX exprs)
-//   <Tag …> / <>             → +1   </Tag> / </>  → −1   <Tag …/> → 0
+// `<Tag …>` / `<>` push, `</Tag>` / `</>` and `… />` pop, on the SAME stack the
+// delimiters use, so a JSX tree and a block indent by the same rule.
+//
 // A `<` only starts a tag when the previous char is not alphanumeric and the
-// next is a letter, `>` (fragment) or `/` (closer) — so `a < b` and the dict
-// annotation `<string, any>` (name followed by `,`) are left alone.
-// An open tag may span lines (`<Tabs` + one attr per line): state carries
-// `inTag`; its head terminator is a `>` at attribute brace-depth 0 (so the
-// `>` of `=>` inside an attribute expression never terminates the tag), with
-// `/>` cancelling the indent (self-closing).
-// The line prints at `indent + min(0, lowest running net on the line)` — the
-// generalized version of the old "leading }" rule; it also covers `</div>`
-// and `/>` lines starting with a dedent.
+// next is a letter, `>` (fragment) or `/` — so `a < b` and the dict annotation
+// `<string, any>` (name followed by `,`) are left alone. An open tag may span
+// lines: `inTag` carries across, and its head ends at a `>` outside any brace,
+// so the `>` of `=>` inside an attribute never terminates it.
 
 function isAlnum(c) {
     return /[A-Za-z0-9_]/.test(c);
@@ -403,219 +551,87 @@ function isAlpha(c) {
     return /[A-Za-z]/.test(c);
 }
 
-function formatSzx(text, options) {
-    const eol = dominantEol(text);
-    const unit = indentUnit(options);
-    const lines = text.split(/\r?\n/);
-    const out = [];
-    let indent = 0;
-    let prevBlank = false;
+function jsxScanner() {
+    let inTag = false;
+    let tagBraceDepth = 0;
 
-    // Cross-line lexical state (strings, raw strings, block comments) and the
-    // cross-line JSX state (an open tag whose attributes span lines).
-    const state = initialState();
-    let inTag = false;        // inside `<Tag attr…` before its closing `>`
-    let tagBraceDepth = 0;    // brace depth INSIDE the open tag's attributes
-
-    for (const raw of lines) {
-        // Checked BEFORE scanning: the scan may close the string on this
-        // very line, and by then `state.mode` no longer says how the line
-        // *began*.
-        const literal = isLiteral(state);
-        if (literal) {
-            scanLine(raw, state, delta => {
-                indent = Math.max(0, indent + delta);
-            });
-            out.push(raw); // byte-for-byte: in a string, spaces are content
-            prevBlank = false;
-            continue;
-        }
-
-        const trimmed = raw.trim();
-
-        if (trimmed !== '' && continuesExpression(state, trimmed)) {
-            scanLine(trimmed, state, delta => {
-                indent = Math.max(0, indent + delta);
-            });
-            // The author's indentation, minus trailing whitespace, which is
-            // invisible and never meaningful in code position.
-            out.push(raw.replace(/[ \t]+$/, ''));
-            prevBlank = false;
-            continue;
-        }
-
-        if (trimmed === '') {
-            if (!prevBlank) out.push('');
-            prevBlank = true;
-            continue;
-        }
-        prevBlank = false;
-
-        let net = 0;      // running indent delta over this line
-        let minNet = 0;   // lowest running delta (leading dedents)
-
-        scanLine(
-            trimmed,
-            state,
-            delta => {
-                net += delta;
-                if (delta < 0 && net < minNet) minNet = net;
-                if (inTag) {
-                    if (delta > 0) tagBraceDepth++;
-                    else if (tagBraceDepth > 0) tagBraceDepth--;
+    return function forLine(trimmed, sample) {
+        return function onChar(i, c, state) {
+            if (inTag) {
+                if (c === '{') { tagBraceDepth++; return; }
+                if (c === '}') { if (tagBraceDepth > 0) tagBraceDepth--; return; }
+                if (c === '>' && tagBraceDepth === 0) {
+                    if (trimmed[i - 1] === '/') {
+                        pop(state, sample); // self-closing: cancel the tag's push
+                    }
+                    inTag = false;
                 }
-            },
-            (i, c) => {
-                if (inTag) {
-                    // Head terminator only at attribute brace-depth 0 (skips `=>`)
-                    if (c === '>' && tagBraceDepth === 0) {
-                        if (trimmed[i - 1] === '/') {
-                            net--; // self-closing: cancel the tag's +1
-                            if (net < minNet) minNet = net;
-                        }
-                        inTag = false;
-                    }
-                    return;
-                }
-
-                if (c !== '<') return;
-
-                const prev = i > 0 ? trimmed[i - 1] : ' ';
-                const next = trimmed[i + 1];
-                if (next === undefined) return;
-
-                // Closing tag or fragment: </Tag> | </> — unambiguous, so it
-                // counts even right after text (`Tareas</h1>`).
-                if (next === '/') {
-                    const after = trimmed[i + 2];
-                    if (after === '>' || (after !== undefined && isAlpha(after))) {
-                        net--;
-                        if (net < minNet) minNet = net;
-                        const gt = trimmed.indexOf('>', i + 2);
-                        return gt === -1 ? trimmed.length : gt;
-                    }
-                    return;
-                }
-                // Openers are ambiguous after an identifier/number (`a<b`,
-                // `i<n`): require a non-alphanumeric previous char.
-                if (isAlnum(prev)) return;
-                // Fragment open: <>
-                if (next === '>') {
-                    net++;
-                    return i + 1;
-                }
-                // Candidate element: <Name …
-                if (isAlpha(next)) {
-                    let j = i + 1;
-                    while (j < trimmed.length && /[A-Za-z0-9_-]/.test(trimmed[j])) j++;
-                    const afterName = trimmed[j];
-                    // Not JSX unless the name is followed by attrs, `>`, `/` or EOL
-                    // (`<string, any>` — dict annotation — hits the `,` and is skipped)
-                    if (afterName !== undefined && afterName !== '>' && afterName !== '/' &&
-                        afterName !== ' ' && afterName !== '\t') {
-                        return j - 1;
-                    }
-                    net++; // tag opened (attrs/children indent)
-                    if (afterName === undefined) {
-                        // `<Tabs` and the attributes continue on the next lines
-                        inTag = true;
-                        tagBraceDepth = 0;
-                        return j - 1;
-                    }
-                    if (afterName === '>') {
-                        return j; // children follow; keep the +1
-                    }
-                    if (afterName === '/') {
-                        // `<br/>`-style immediate self-close
-                        if (trimmed[j + 1] === '>') {
-                            net--;
-                            return j + 1;
-                        }
-                        return;
-                    }
-                    // whitespace → attribute list (may end on this line or later)
-                    inTag = true;
-                    tagBraceDepth = 0;
-                    return j - 1;
-                }
+                return;
             }
-        );
 
-        const printIndent = Math.max(0, indent + minNet);
-        const body = emitBody(raw, trimmed, state);
-        out.push(printIndent > 0 ? unit.repeat(printIndent) + body : body);
-        indent = Math.max(0, indent + net);
-    }
+            if (c !== '<') return;
+            const prev = i > 0 ? trimmed[i - 1] : ' ';
+            const next = trimmed[i + 1];
+            if (next === undefined) return;
 
-    while (out.length && out[out.length - 1] === '') out.pop();
-    return out.join(eol) + eol;
+            if (next === '/') {
+                const after = trimmed[i + 2];
+                if (after === '>' || (after !== undefined && isAlpha(after))) {
+                    pop(state, sample);
+                    const gt = trimmed.indexOf('>', i + 2);
+                    return gt === -1 ? trimmed.length : gt;
+                }
+                return;
+            }
+            if (isAlnum(prev)) return;
+            if (next === '>') { push(state, sample); return i + 1; }
+
+            if (isAlpha(next)) {
+                let j = i + 1;
+                while (j < trimmed.length && /[A-Za-z0-9_-]/.test(trimmed[j])) j++;
+                const afterName = trimmed[j];
+                if (afterName !== undefined && afterName !== '>' && afterName !== '/' &&
+                    afterName !== ' ' && afterName !== '\t') {
+                    return j - 1; // `<string, any>` and friends: not a tag
+                }
+                push(state, sample);
+                if (afterName === undefined) { inTag = true; tagBraceDepth = 0; return j - 1; }
+                if (afterName === '>') return j;
+                if (afterName === '/') {
+                    if (trimmed[j + 1] === '>') { pop(state, sample); return j + 1; }
+                    return;
+                }
+                inTag = true;
+                tagBraceDepth = 0;
+                return j - 1;
+            }
+        };
+    };
 }
 
-// ── .szs — brace indenter aware of /* */ block comments ─────────────────────
-// Indentation only: one-line rules (`sel { prop: v; }`) and the author's
-// declaration style are preserved verbatim.
-
-function formatSzs(text, options) {
-    const eol = dominantEol(text);
-    const unit = indentUnit(options);
-    const lines = text.split(/\r?\n/);
-    const out = [];
-    let indent = 0;
-    let prevBlank = false;
-    const state = initialState();
-
-    for (const raw of lines) {
-        // Checked BEFORE scanning: the scan may close the string on this
-        // very line, and by then `state.mode` no longer says how the line
-        // *began*.
-        const literal = isLiteral(state);
-        if (literal) {
-            scanLine(raw, state, delta => {
-                indent = Math.max(0, indent + delta);
-            });
-            out.push(raw); // byte-for-byte: in a string, spaces are content
-            prevBlank = false;
-            continue;
-        }
-
-        const trimmed = raw.trim();
-
-        if (trimmed !== '' && continuesExpression(state, trimmed)) {
-            scanLine(trimmed, state, delta => {
-                indent = Math.max(0, indent + delta);
-            });
-            // The author's indentation, minus trailing whitespace, which is
-            // invisible and never meaningful in code position.
-            out.push(raw.replace(/[ \t]+$/, ''));
-            prevBlank = false;
-            continue;
-        }
-
-        if (trimmed === '') {
-            if (!prevBlank) out.push('');
-            prevBlank = true;
-            continue;
-        }
-        prevBlank = false;
-
-        let net = 0;
-        let minNet = 0;
-        scanLine(trimmed, state, delta => {
-            net += delta;
-            if (delta < 0 && net < minNet) minNet = net;
-        });
-
-        const printIndent = Math.max(0, indent + minNet);
-        const body = emitBody(raw, trimmed, state);
-        out.push(printIndent > 0 ? unit.repeat(printIndent) + body : body);
-        indent = Math.max(0, indent + net);
-    }
-
-    while (out.length && out[out.length - 1] === '') out.pop();
-    return out.join(eol) + eol;
+/** A tag counts as a delimiter, so it shares the level model. */
+function push(state, sample) {
+    state.stack.push('<');
+    if (sample) sample();
 }
+function pop(state, sample) {
+    if (state.stack.length && state.stack[state.stack.length - 1] === '<') state.stack.pop();
+    if (sample) sample();
+}
+
+function formatSzx(text, options, report) {
+    return indentDocument(text, options, report, jsxScanner());
+}
+
+// ── .szs — the same model; declarations are never rewritten ────────────────
+
+function formatSzs(text, options, report) {
+    return indentDocument(text, options, report, null);
+}
+
 
 module.exports = {
     formatSz, formatSzx, formatSzs, countBraces,
-    scanLine, initialState, isLiteral, continuesExpression, dominantEol, indentUnit,
+    scanLine, initialState, isLiteral, continuesExpression,
+    dominantEol, hadFinalNewline, indentUnit,
 };
