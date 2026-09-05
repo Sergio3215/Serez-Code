@@ -125,13 +125,38 @@ if ($WaitForCI) {
     Write-Host "Checking remote CI status for current commit..." -ForegroundColor Cyan
     $headSha = (git rev-parse HEAD).Trim()
     if (Get-Command gh -ErrorAction SilentlyContinue) {
-        Write-Host "Waiting for GitHub Actions run for commit $headSha..." -ForegroundColor Cyan
-        gh run watch --commit $headSha --exit-status
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "WARNING: Remote CI run failed for commit $headSha." -ForegroundColor Red
-            Write-Host "No tags or branches were rolled back automatically." -ForegroundColor Yellow
+        Write-Host "Waiting for GitHub Actions runs for commit $headSha..." -ForegroundColor Cyan
+        
+        # Wait up to 60 seconds for GitHub Actions to register the run
+        $runs = @()
+        for ($i = 0; $i -lt 12; $i++) {
+            Start-Sleep -Seconds 5
+            $raw = gh run list -c $headSha --json databaseId,workflowName,status,conclusion | Out-String
+            if ($raw) {
+                try {
+                    $runs = $raw | ConvertFrom-Json
+                    if ($runs -and $runs.Count -gt 0) { break }
+                } catch {}
+            }
+        }
+
+        if (-not $runs -or $runs.Count -eq 0) {
+            Write-Host "No GitHub Actions runs found for commit $headSha after 60s." -ForegroundColor Yellow
         } else {
-            Write-Host "Remote CI run passed successfully!" -ForegroundColor Green
+            $allPassed = $true
+            foreach ($r in $runs) {
+                Write-Host "Watching workflow '$($r.workflowName)' (Run ID: $($r.databaseId))..." -ForegroundColor Cyan
+                gh run watch $($r.databaseId) --exit-status
+                if ($LASTEXITCODE -ne 0) {
+                    $allPassed = $false
+                }
+            }
+            if (-not $allPassed) {
+                Write-Host "WARNING: Remote CI run(s) failed for commit $headSha." -ForegroundColor Red
+                Write-Host "No tags or branches were rolled back automatically." -ForegroundColor Yellow
+            } else {
+                Write-Host "All remote CI runs passed successfully for commit $headSha!" -ForegroundColor Green
+            }
         }
     } else {
         Write-Host "gh CLI not found; skipping remote CI check." -ForegroundColor Yellow
