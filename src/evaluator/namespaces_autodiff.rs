@@ -2912,18 +2912,20 @@ impl super::Evaluator {
                 buf.extend_from_slice(&v.to_le_bytes());
             }
         }
-        std::fs::write(path, &buf).map_err(|e| format!("cannot write '{}': {}", path, e))
+        std::fs::write(path, &buf)
+            .map_err(|e| format!("cannot write '{}': {}", path, super::portable_io_err(&e)))
     }
 
     /// Read tensors from a .szw binary file.
     fn read_weights_file(path: &str) -> Result<Vec<(Vec<usize>, Vec<f64>)>, String> {
         const MAX_WEIGHTS_FILE_BYTES: u64 = 256 * 1024 * 1024;
-        let metadata =
-            std::fs::metadata(path).map_err(|e| format!("cannot inspect '{}': {}", path, e))?;
+        let metadata = std::fs::metadata(path)
+            .map_err(|e| format!("cannot inspect '{}': {}", path, super::portable_io_err(&e)))?;
         if metadata.len() > MAX_WEIGHTS_FILE_BYTES {
             return Err(format!("'{}' exceeds the 256 MiB weights-file limit", path));
         }
-        let buf = std::fs::read(path).map_err(|e| format!("cannot read '{}': {}", path, e))?;
+        let buf = std::fs::read(path)
+            .map_err(|e| format!("cannot read '{}': {}", path, super::portable_io_err(&e)))?;
         Self::parse_weights_bytes(&buf, path)
     }
 

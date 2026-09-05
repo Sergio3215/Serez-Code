@@ -105,7 +105,7 @@ sec_fetch_header_injection.sz	1	80	ae2e72691d94421e
 sec_fetch_injection.sz	1	75	0083aa902b91fc96
 sec_fetch_protocol.sz	1	104	40ccc4825fed54c0
 sec_file_delete_requires_unsafe.sz	1	99	4c724ad8764c8c07
-sec_file_read.sz	1	129	d3c07282b73feb1d
+sec_file_read.sz	1	112	7010dc1e364443cc
 sec_file_rename_requires_unsafe.sz	1	97	d21b5c689f6e0e67
 sec_getter_no_setter.sz	1	89	6192c429a8bd3695
 sec_gui_no_permission.sz	1	146	88bd635615e2df2f
@@ -132,8 +132,8 @@ sec_os_no_permission.sz	1	142	40d3a1e86d356c75
 sec_os_spawn_requires_unsafe.sz	1	97	f20d50cdc9d8b3bc
 sec_os_spawn_system_path.sz	1	82	0867bf41f59f86d7
 sec_parseint_nan.sz	1	47	3a277e547845ed43
-sec_path_traversal.sz	1	138	33a25046f7293f9f
-sec_path_traversal_abs.sz	1	145	870dffda191fe74d
+sec_path_traversal.sz	1	121	6f4ce581c3f4592a
+sec_path_traversal_abs.sz	1	128	54e7e12fd9c8ea1c
 sec_pop_empty_array.sz	1	52	de64b3683c5838f5
 sec_power_2_63.sz	1	56	928b5bed08abc619
 sec_power_overflow.sz	1	56	928b5bed08abc619
