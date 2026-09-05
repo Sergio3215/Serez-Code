@@ -621,19 +621,21 @@ The `.vsix` is in `.gitignore` — it is a build artifact, not source code.
 |---|---|---|
 | `cargo fmt --check` | 3 OS | any unformatted file |
 | `cargo check` | 3 OS | any compile error |
-| **Clippy baseline** | 3 OS | a lint/file pair that grew, or one not in `clippy-baseline.txt` |
+| **Clippy baseline** | 3 OS | a warning identity not covered by `clippy-baseline.txt`, or an existing identity whose count grew |
 | `cargo test --all-targets` | 3 OS | any failing Rust test |
 | Serez conformance | 3 OS | any failing `.sz` fixture, per runner |
 | **Ecosystem canary** | Linux | any official package failing against the core built here |
 | Performance phases | 3 OS | *nothing* — advisory, see below |
 
 **Clippy is a baseline, not `-D warnings`.** The 180 existing warnings are known
-debt; the gate is `current <= baseline`, keyed per lint and per file so that
-fixing one warning and introducing another cannot cancel out in a total. Fixing
-warnings is always allowed — `python tools/clippy_baseline.py --write` banks the
-reduction so it cannot come back. Refreshing the baseline to silence a real
-regression is the one thing the gate exists to stop, and doing it deliberately
-belongs in the commit message.
+debt; the gate is `current <= baseline`, keyed by lint, file, offending source
+and diagnostic message so that fixing one warning and introducing another cannot
+cancel out in a total. Clippy's classifications and messages change between Rust
+releases, so `rust-toolchain.toml` and every CI/release job pin Rust 1.87.0, the
+toolchain against which this baseline is frozen. Fixing warnings is always allowed —
+`python tools/clippy_baseline.py --write` banks the reduction so it cannot come
+back. Refreshing the baseline to silence a real regression is the one thing the
+gate exists to stop, and doing it deliberately belongs in the commit message.
 
 **The canary is pinned.** `ecosystem-pins.txt` names a commit per package, so the
 only thing that can turn the gate red is a change in *this* repository — a
