@@ -41,56 +41,11 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
 
-      - name: Format
-        run: cargo fmt --check
-
-      - name: Check
-        run: cargo check
-
-      # DEC-M10-002. `cargo clippy` alone fails nothing — CI has never passed
-      # `-D warnings`, so a warning introduced by a change was invisible and this
-      # roadmap compared the per-site list by hand at every milestone boundary.
-      # The gate is `current <= baseline`, keyed per **warning** — the lint, the
-      # file, and a fingerprint over the offending source text — so debt cannot
-      # grow while a count stays still by cancelling out. Keying on (lint, file)
-      # counts alone was not enough: fixing one warning and adding a different
-      # one of the same lint in the same file passed. §5.49. Reducing debt is
-      # always allowed; `tools/clippy_baseline.py --write` banks the reduction.
-      # The gate's own four-step control, on synthetic warnings rather than a
-      # clippy run: an unchanged tree passes, a new warning fails, a new warning
-      # *alongside a fix of the same lint in the same file* still fails — which
-      # the first version of this gate did not catch — and a warning that merely
-      # moved down a file does not fail. Seconds, not minutes, so it runs on
-      # every push rather than at milestone boundaries. §5.49.
-      - name: Clippy gate self-test
-        run: python tools/clippy_baseline.py --self-test
-
-      - name: Clippy (must not exceed the committed baseline)
-        run: python tools/clippy_baseline.py --check
-
-      - name: Rust tests
-        run: cargo test --all-targets
-
-      # Advisory, never blocking. The phase timings are compared against
-      # `perf-baseline.txt` in a release build — a debug run would be several
-      # times slower and warn every time — and a phase past its budget is
-      # printed rather than failed. Timing on a shared runner is noisy, and a
-      # flaky gate teaches people to re-run until green, which is how a real
-      # regression gets merged. The `spread` column collected here on all three
-      # runners is the evidence for whether any of these is stable enough to
-      # become a gate later.
-      - name: Performance phases (advisory)
-        run: cargo test --release --test perf_budget -- --nocapture
-
-      - name: Serez conformance, regression, error-path, security and CLI tests (Windows)
-        if: runner.os == 'Windows'
+      # Single source of truth for all blocking CI gates (Format, Check, Clippy baseline,
+      # Rust tests, Advisory perf budget, Conformance runner, Formatter tests).
+      - name: Run CI gates
         shell: pwsh
-        run: .\run_tests.ps1 -json conformance-${{ matrix.os }}.json
-
-      - name: Serez conformance, regression, error-path, security and CLI tests (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: ./run_tests.sh --json conformance-${{ matrix.os }}.json
+        run: pwsh ./tools/ci-gates.ps1 -Mode Core -JsonReport conformance-${{ matrix.os }}.json
 
       # Uploaded even when the suite fails — a failing run is exactly the one
       # worth reading per test rather than by scrolling the log.
@@ -132,8 +87,7 @@ jobs:
       - name: Fetch the official packages at their pinned commits
         run: bash tools/fetch_ecosystem.sh
 
-      # Builds the core from this checkout; `run_ecosystem.sh` does it without
-      # `--skip-build`, so the binary under test is always the one this commit
-      # produces.
-      - name: Run the canary
-        run: bash run_ecosystem.sh
+      # Single source of truth: shared ecosystem canary gate
+      - name: Run ecosystem canary gate
+        shell: pwsh
+        run: pwsh ./tools/ci-gates.ps1 -Mode Ecosystem

@@ -42,8 +42,10 @@ jobs:
       - name: Fetch the official packages at their default branches
         run: bash tools/fetch_ecosystem.sh --latest
 
-      - name: Run the canary
-        run: bash run_ecosystem.sh
+      # Single source of truth: shared ecosystem canary gate
+      - name: Run ecosystem canary
+        shell: pwsh
+        run: pwsh ./tools/ci-gates.ps1 -Mode Ecosystem
 
       # The pins are the gate's contract with the packages, so a reader of a
       # failed run needs to know how far the two have drifted before deciding

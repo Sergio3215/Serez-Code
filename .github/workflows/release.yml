@@ -29,26 +29,10 @@ jobs:
           package_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "serez-code") | .version')"
           test "v${package_version}" = "${GITHUB_REF_NAME}"
 
-      - name: Format
-        run: cargo fmt --check
-
-      - name: Check
-        run: cargo check
-
-      # This was `cargo clippy --all-targets`, which fails nothing: clippy
-      # exits 0 on warnings, so the release job's clippy step could not block a
-      # release however much debt the tag carried. CI has gated on the baseline
-      # since DEC-M10-002 and release did not, which is the worse way round —
-      # a change could be blocked on a pull request and then shipped by a tag.
-      # Same command, same policy, both places. §5.49.
-      - name: Clippy (must not exceed the committed baseline)
-        run: python tools/clippy_baseline.py --check
-
-      - name: Rust tests
-        run: cargo test --all-targets
-
-      - name: Serez conformance, regression, error-path, security and CLI tests
-        run: ./run_tests.sh
+      # Single source of truth for release candidate verification
+      - name: Run CI gates
+        shell: pwsh
+        run: pwsh ./tools/ci-gates.ps1 -Mode Core
 
   build:
     name: Build — ${{ matrix.name }}
