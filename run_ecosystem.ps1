@@ -93,7 +93,7 @@ foreach ($pkg in $packages) {
     # pipeline — the information stream (6) has to be merged in to capture it.
     Push-Location $dir
     try {
-        $output = & $runner 6>&1 2>&1 | Out-String
+        $output = & $runner -sz $binary 6>&1 2>&1 | Out-String
         $code   = $LASTEXITCODE
     } catch {
         $output = $_ | Out-String
