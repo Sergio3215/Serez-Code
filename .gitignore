@@ -28,6 +28,7 @@ ANALISIS_MEMORIA_RENDIMIENTO.md
 !tests/lib/**
 !tests/packages/**
 !tests/runner_fixtures/**
+!tests/szx/**
 # The Serez-source standard library that `import "std/..."` resolves to, via
 # SEREZ_HOME. Twelve test files load it and `*.sz` was swallowing all of it,
 # so 476 lines of shipped library source lived only in working trees.

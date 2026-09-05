@@ -1,0 +1,24 @@
+// component.szx — the shape every serez-ui app has: a class with fields, a
+// constructor, and a render() that returns JSX with Serez expressions in it.
+import "serez-ui"
+
+class Counter {
+    count = 0
+
+    public Counter() {
+        this.count = 0
+    }
+
+    public render() {
+        let c = this.count
+        return (
+            <div>
+                <h1>{c}</h1>
+                <Button onClick={() => { this.count = this.count + 1 }}>Mas</Button>
+            </div>
+        )
+    }
+}
+
+let app = new Counter()
+let tree = app.render()

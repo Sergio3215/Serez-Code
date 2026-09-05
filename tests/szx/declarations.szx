@@ -1,0 +1,28 @@
+// declarations.szx — one of every top-level declaration form, so the outline's
+// coverage is measured rather than assumed.
+import "serez-ui"
+
+const VERSION = "1.0.0"
+let mutable = 0
+
+enum Mode { Light, Dark }
+
+interface Renderable { }
+
+fn string greet(string who) {
+    return "hi " + who
+}
+
+class Widget {
+    id = 0
+
+    public Widget() {
+        this.id = 0
+    }
+
+    public paint() {
+        return (<div><span>{this.id}</span></div>)
+    }
+}
+
+let [first, second] = [1, 2]
