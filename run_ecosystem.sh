@@ -77,7 +77,7 @@ for pkg in "${PACKAGES[@]}"; do
     fi
 
     echo "── $pkg ──────────────────────────────────────────"
-    output="$(cd "$dir" && bash "$runner" 2>&1)"
+    output="$(cd "$dir" && bash "$runner" "$BINARY" 2>&1)"
     code=$?
 
     # Prefer the runner's own tally over its exit code: some report totals and
