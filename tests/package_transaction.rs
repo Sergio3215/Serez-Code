@@ -557,7 +557,11 @@ fn write_journal(
     lockfile: &str,
     manifest: Option<&str>,
 ) {
-    let dir = project.dir.display().to_string();
+    let dest = project.path(&format!("packages/{package}"));
+    let staging = project.path(&format!("packages/.{package}.staging-0"));
+    let lock_path = project.path("serez.lock");
+    let manifest_path = project.path("serez.json");
+
     let mut body = String::new();
     body.push_str("serez-install-journal/1\n");
     body.push_str(&format!("package\t{package}\n"));
@@ -565,16 +569,19 @@ fn write_journal(
     body.push_str(
         "integrity\tsha256-0000000000000000000000000000000000000000000000000000000000000000\n",
     );
-    body.push_str(&format!("destination\t{dir}\\packages\\{package}\n"));
-    body.push_str(&format!("staging\t{dir}\\packages\\.{package}.staging-0\n"));
+
+    body.push_str(&format!("destination\t{}\n", dest.display()));
+    body.push_str(&format!("staging\t{}\n", staging.display()));
     body.push_str(&format!(
-        "file\t{}\t{dir}\\serez.lock\n{lockfile}\n",
-        lockfile.len()
+        "file\t{}\t{}\n{lockfile}\n",
+        lockfile.len(),
+        lock_path.display()
     ));
     if let Some(manifest) = manifest {
         body.push_str(&format!(
-            "file\t{}\t{dir}\\serez.json\n{manifest}\n",
-            manifest.len()
+            "file\t{}\t{}\n{manifest}\n",
+            manifest.len(),
+            manifest_path.display()
         ));
     }
 

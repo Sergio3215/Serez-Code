@@ -1,0 +1,37 @@
+// nesting.szx — declarations at four different depths, so an outline that
+// flattens them is visibly wrong rather than merely unproven.
+import "serez-ui"
+
+const TOP = 1
+
+fn int outer(int n) {
+    let insideFn = n + TOP
+    fn int inner(int m) {
+        let insideInner = m
+        return insideInner
+    }
+    return inner(insideFn)
+}
+
+class Panel {
+    label = "p"
+
+    public Panel() {
+        let insideCtor = 1
+        this.label = "p"
+    }
+
+    public render() {
+        let insideMethod = 2
+        return (
+            <div>
+                <span>{insideMethod}</span>
+            </div>
+        )
+    }
+}
+
+let handler = () => {
+    let insideLambda = 3
+    return insideLambda
+}

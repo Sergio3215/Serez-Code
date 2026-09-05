@@ -1,0 +1,27 @@
+// expressions.szx — Serez inside JSX braces, which is where a scanner that
+// counts braces naively loses its place.
+import "serez-ui"
+
+class Form {
+    name = ""
+    agree = false
+
+    public Form() {
+        this.name = ""
+        this.agree = false
+    }
+
+    public render() {
+        let title = "hola"
+        return (
+            <div>
+                <h1>{"Panel: " + title + " / " + this.name}</h1>
+                <Input value={this.name} onChange={(v) => { this.name = v }} />
+                <Checkbox checked={this.agree} onChange={(b) => { this.agree = b }} />
+                <p>{ this.agree ? "si" : "no" }</p>
+            </div>
+        )
+    }
+}
+
+let form = new Form()
