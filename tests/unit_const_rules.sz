@@ -105,4 +105,92 @@ test("const bool used in logical expression", () => {
     assert(shouldLog == false, "not prod and logs disabled = false");
 });
 
+// ── DEC-M12-003: `const` freezes the binding, not the value ──────────────────
+//
+// Decided 2026-09-05, and closed with no runtime change: this is what the
+// runtime already did. What was missing is exactly what these cases add. The
+// suite above covered reads, scoping and rebinding rejection, so the *value*
+// half of the rule was true by accident rather than by test — nothing would
+// have failed if a later change had started freezing values, or had stopped
+// refusing a rebind.
+//
+// So the rule is walked across every container and every operation it applies
+// to. What `const` refuses is one thing: making the name refer to something
+// else. Everything a `let` binding permits on the value, a `const` binding
+// permits too.
+
+test("DEC-M12-003: const refuses to rebind the name", () => {
+    const total = 1;
+    let caught = false;
+    try {
+        total = 2;
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "reassigning the name is refused");
+    assert(total == 1, "and the binding is unchanged");
+});
+
+test("DEC-M12-003: a const array is writable through an index", () => {
+    const scores = [10, 20];
+    scores[0] = 99;
+    assert(scores[0] == 99, "the element was written");
+    assert(scores[1] == 20, "and its neighbour was not");
+});
+
+test("DEC-M12-003: a const array is writable through its methods", () => {
+    const scores = [10, 20];
+    scores.push(30);
+    assert(scores.length() == 3, "push works");
+    assert(scores[2] == 30, "and appended the value");
+    let last = scores.pop();
+    assert(last == 30, "pop works");
+    assert(scores.length() == 2, "and shortened it");
+});
+
+test("DEC-M12-003: a const array still refuses to be rebound", () => {
+    const scores = [10, 20];
+    let caught = false;
+    try {
+        scores = [1];
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "rebinding the name is refused");
+    assert(scores.length() == 2, "and the array is untouched");
+    assert(scores[0] == 10, "with its original contents");
+});
+
+test("DEC-M12-003: a const dict is writable through both spellings", () => {
+    // The two forms are one write (DEC-M12-002), so they cannot differ here
+    // either: whatever const permits, it permits for both.
+    const config <string, any> = ({"debug", false});
+    config["debug"] = true;
+    assert(config.debug == true, "the bracket write took");
+    config.debug = false;
+    assert(config["debug"] == false, "and so did the dot write");
+    config.added = 1;
+    assert(config["added"] == 1, "a new key is created, as under let");
+});
+
+test("DEC-M12-003: a const dict is writable through its methods, and not rebindable", () => {
+    const config <string, any> = ({"debug", false});
+    config.Add({"level", 3});
+    assert(config.length() == 2, "Add works");
+    config.Remove("level");
+    assert(config.length() == 1, "Remove works");
+
+    // A dict literal is not an expression (see dicts.md), so the rebind is
+    // attempted with another annotated binding rather than a literal.
+    let other <string, any> = ({"x", 1});
+    let caught = false;
+    try {
+        config = other;
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "rebinding the name is refused");
+    assert(config.length() == 1, "and the dict is untouched");
+});
+
 summary();

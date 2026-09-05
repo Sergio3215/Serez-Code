@@ -351,7 +351,7 @@ tests/unit_compound_assign.sz	25361	0	c22adfa3a4967644	cbf29ce484222325
 tests/unit_compound_assign_edge.sz	34331	0	7111f0e03e137c39	cbf29ce484222325
 tests/unit_comprehensive_new.sz	207866	0	a2f96ab0adf4c29c	cbf29ce484222325
 tests/unit_const.sz	3827	0	d8f281564fb549a9	cbf29ce484222325
-tests/unit_const_rules.sz	35257	0	2a7cb9dfc835f43f	cbf29ce484222325
+tests/unit_const_rules.sz	60042	0	955206433b4b62f9	cbf29ce484222325
 tests/unit_control_flow.sz	60543	0	3984e859bbcde686	cbf29ce484222325
 tests/unit_control_flow_contract.sz	48445	0	ce61b0154d190451	cbf29ce484222325
 tests/unit_crypto.sz	32554	0	41013c3b31465715	cbf29ce484222325
