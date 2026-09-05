@@ -1192,8 +1192,18 @@ impl super::Evaluator {
                 // change when their arguments observe the receiver.
                 if dot_call.method == "length" && dot_call.arguments.is_empty() {
                     let n = match self.resolve(obj_ref) {
+                        // `a.length` is a property on an array, with or without
+                        // parentheses — documented and used 88 times across the
+                        // corpus and the apps.
                         Some(ObjectData::Array { elements, .. }) => Some(elements.len() as i64),
-                        Some(ObjectData::Dict { entries, .. }) => Some(entries.len() as i64),
+                        // A dict is different, and DEC-M12-001 is why: on a dict
+                        // `d.length` is the key "length", so only the call form
+                        // may be answered here. Without this guard the shortcut
+                        // would reach past the dispatcher and make one key
+                        // unreadable — the precedence bug, relocated.
+                        Some(ObjectData::Dict { entries, .. }) if dot_call.has_parens => {
+                            Some(entries.len() as i64)
+                        }
                         _ => None,
                     };
                     if let Some(n) = n {

@@ -66,11 +66,55 @@ impl super::Evaluator {
         self.rt_err_kind("TypeError", format!("{method}: receiver is not a dict"))
     }
 
+    /// Read one key out of a dict slot, with the bracket path's own semantics.
+    ///
+    /// This is the whole of `dic.name`, and it is deliberately the same three
+    /// lines `Expression::Index` runs: the slot-resident hash index, the value
+    /// cloned out of the arena, and `null` when the key is not there. Two
+    /// spellings of one operation cannot drift apart if they are one lookup.
+    pub(super) fn dict_key_read(&mut self, dict_ref: ObjectRef, key: &str) -> EvalResult {
+        let found = match self.resolve(dict_ref) {
+            Some(ObjectData::Dict { entries, index, .. }) => {
+                index.lookup(entries, key).map(|i| entries[i].1.clone())
+            }
+            _ => return self.dict_receiver_broken(key),
+        };
+        match found {
+            Some(v) => Ok(ExecutionFlow::Value(self.plant_global(v))),
+            None => Ok(ExecutionFlow::Value(self.null_ref)),
+        }
+    }
+
     pub(super) fn eval_dict_method_slot(
         &mut self,
         dict_ref: ObjectRef,
         dot_call: &ast::DotCallExpression,
     ) -> EvalResult {
+        // DEC-M12-001 — member resolution is driven by the receiver, then by the
+        // form of access, and never by the member's name.
+        //
+        // The receiver here is already known to be a dict. On a dict, `d.k` is
+        // the key `"k"` — so the method table below is not consulted at all, and
+        // a key called "keys" or "length" is reached exactly like any other:
+        //
+        //     let dic <string, any> = ({"keys", "valor"});
+        //     dic.keys      ->  "valor"      (this line)
+        //     dic.keys()    ->  ["keys"]     (the match below)
+        //
+        // The two are told apart by `has_parens`, which the parser already
+        // records on the node — structural information, not a guess from the
+        // name. That is what makes this safe: nothing here has to know which
+        // identifiers happen to be method names, so a dict's data can never
+        // decide which code runs.
+        //
+        // The earlier implementation matched the method arms first and fell
+        // through to a key only for names that were not methods. That made ten
+        // identifiers unreachable as keys through dot access, and made the
+        // meaning of `d.k` depend on a table rather than on the receiver.
+        if !dot_call.has_parens {
+            return self.dict_key_read(dict_ref, &dot_call.method);
+        }
+
         match dot_call.method.as_str() {
             "Add" => self.dict_add(dict_ref, dot_call),
             "Remove" => self.dict_remove(dict_ref, dot_call),
@@ -164,50 +208,9 @@ impl super::Evaluator {
                 Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
             }
 
-            // `dic.name` — a second way to write `dic["name"]`, not a second
-            // semantics.
-            //
-            // # Why this lives here and needs nothing else
-            //
-            // `dic.name` was already valid syntax: the parser produces a
-            // `DotCall` with `has_parens: false`, and the semantic phase and the
-            // type checker already accept it — measured, `sz --check` passes and
-            // only the runtime refused, with `Unknown dict method 'name'`. So the
-            // whole change is this arm; the grammar, the AST and the earlier
-            // phases are untouched.
-            //
-            // # Why `has_parens` decides
-            //
-            // The AST already distinguishes `dic.name` from `dic.name()`. A call
-            // is a call: `dic.typo()` keeps reporting an unknown method, which is
-            // the error detection that would otherwise be lost. Only the
-            // property form falls through to a key lookup.
-            //
-            // # Same lookup, same policy
-            //
-            // The key is the identifier exactly as written — no case or
-            // separator translation — and a key that is not there answers `null`,
-            // because that is what `dic["missing"]` answers. Measured before
-            // changing anything, so the two forms cannot drift apart.
-            //
-            // Methods still win a name they share with a key: `dic.length` is the
-            // method even when `"length"` is a key, which is what the dispatcher
-            // did before this arm existed. `dic["length"]` still reaches the key.
-            // That precedence is **DEC-M12-001**, registered rather than invented.
-            unknown if !dot_call.has_parens => {
-                let key = unknown.to_string();
-                let found = match self.resolve(dict_ref) {
-                    Some(ObjectData::Dict { entries, index, .. }) => {
-                        index.lookup(entries, &key).map(|i| entries[i].1.clone())
-                    }
-                    _ => return self.dict_receiver_broken(unknown),
-                };
-                match found {
-                    Some(v) => Ok(ExecutionFlow::Value(self.plant_global(v))),
-                    None => Ok(ExecutionFlow::Value(self.null_ref)),
-                }
-            }
-
+            // Only a *call* reaches here — `d.k` returned above — so an
+            // unrecognised name is a mistyped method rather than a missing key,
+            // and saying so keeps the error that a silent `null` would lose.
             unknown => {
                 let message = format!("Unknown dict method '{unknown}'");
                 self.rt_err_kind("ReferenceError", message)

@@ -11,6 +11,11 @@
 // checker already accepted it — only the runtime refused it, with
 // "Unknown dict method 'name'". So what is pinned here is the runtime
 // behaviour of an existing syntax, not a new one.
+//
+// Under DEC-M12-001 the receiver decides: because the receiver is a dict,
+// `d.k` is the key "k" and the method table is never consulted for it. `d.k()`
+// is the call form and still runs the method. Writes follow DEC-M12-002 and
+// live in `unit_dict_dot_assign.sz`.
 
 class DotAccessProbe {
     public DotAccessProbe(string n) { this.name = n; }
@@ -167,20 +172,69 @@ test("a key that is not a valid identifier needs brackets", () => {
     assert(dic["two words"] == null, "and one with a space is simply absent");
 });
 
-// ── DEC-M12-001: a name shared by a method and a key ─────────────────────────
+// ── DEC-M12-001: resolution is driven by the receiver, never by the name ─────
+//
+// On a dict, `d.k` is the key "k". The method table is not consulted for a
+// property access at all, so no identifier is reserved and no key is
+// unreachable. `d.k()` is the call form and still runs the method.
+//
+// These are the positive controls for that decision. They are written so that
+// restoring "a method wins the bare name" fails every one of them.
 
-test("DEC-M12-001: a built-in method wins a name it shares with a key", () => {
-    // Measured before the change and preserved by it: the dispatcher matches
-    // its method names first, so `dic.length` is the method even when "length"
-    // is also a key. Brackets remain the way to reach the shadowed key, so no
-    // data becomes unreachable.
-    let dic <string, any> = ({"length", "I am a key"});
-    assert(dic["length"] == "I am a key", "the key is still reachable");
-    assert(dic.length == 1, "the method wins the bare name");
-    assert(dic.length() == 1, "and so does the call form");
+test("DEC-M12-001: a key wins the bare name over a method of the same name", () => {
+    let dic <string, any> = ({"keys", "valor"});
+    assert(dic["keys"] == "valor", "the key is there");
+    assert(dic.keys == "valor", "and the bare name reads it, not the method");
+    assert(dic.keys == dic["keys"], "the two forms agree, collision or not");
 });
 
-test("keys that do not collide are unaffected by the method table", () => {
+test("DEC-M12-001: the call form still runs the method on that same dict", () => {
+    let dic <string, any> = ({"keys", "valor"});
+    let ks = dic.keys();
+    assert(ks.length() == 1, "keys() returned the key list");
+    assert(ks[0] == "keys", "which contains the colliding key name");
+    assert(dic.keys == "valor", "and the property form still reads the value");
+});
+
+test("DEC-M12-001: every built-in name is readable as a key", () => {
+    // The control the decision most needs: ten names that used to be reserved
+    // by the dispatcher. If precedence is ever restored, all ten fail at once
+    // rather than one obscure case failing later.
+    let dic <string, any> = ({"Add", "a"}, {"Remove", "b"}, {"RemoveAll", "c"},
+                             {"clear", "d"}, {"toList", "e"}, {"keys", "f"},
+                             {"values", "g"}, {"toArray", "h"}, {"length", "i"},
+                             {"toString", "j"});
+    assert(dic.Add == "a", "Add");
+    assert(dic.Remove == "b", "Remove");
+    assert(dic.RemoveAll == "c", "RemoveAll");
+    assert(dic.clear == "d", "clear");
+    assert(dic.toList == "e", "toList");
+    assert(dic.keys == "f", "keys");
+    assert(dic.values == "g", "values");
+    assert(dic.toArray == "h", "toArray");
+    assert(dic.length == "i", "length");
+    assert(dic.toString == "j", "toString");
+});
+
+test("DEC-M12-001: length is a key on a dict and a property on an array", () => {
+    // `a.length` without parentheses is a documented array property and is used
+    // across the corpus, so the fast path that answers it must stay — for
+    // arrays. On a dict the same spelling is the key, which is why the receiver
+    // and not the name decides.
+    let a = [1, 2, 3];
+    assert(a.length == 3, "an array answers its length as a property");
+    assert(a.length() == 3, "and as a call");
+
+    let dic <string, any> = ({"length", "I am a key"});
+    assert(dic.length == "I am a key", "a dict answers the key");
+    assert(dic.length() == 1, "and the call still counts the entries");
+
+    let plain <string, any> = ({"name", "Sergio"});
+    assert(plain.length == null, "with no such key there is no such value");
+    assert(plain.length() == 1, "though the method still counts");
+});
+
+test("keys that do not collide behave the same way", () => {
     let dic <string, any> = ({"name", "Sergio"});
     assert(dic.name == "Sergio", "an ordinary key is read as a key");
     assert(dic.length() == 1, "and the methods still work");
@@ -189,7 +243,7 @@ test("keys that do not collide are unaffected by the method table", () => {
 // ── A call is still a call ───────────────────────────────────────────────────
 
 test("an unknown method call is still an error, not a null key read", () => {
-    // Dot *access* falls back to a key; dot *call* does not. Without this, a
+    // Dot *access* is a key; dot *call* is a call. Without the distinction, a
     // mistyped method call would silently evaluate to null.
     let dic <string, any> = ({"name", "Sergio"});
     let caught = false;

@@ -34,8 +34,10 @@ use std::net::{TcpListener, TcpStream};
 // ── A server that answers with the shapes a real API answers with ────────────
 
 /// The JSON every test below reads. Nested object, array, string, int, bool and
-/// null, so one response covers every value type dot access has to carry.
-const PAYLOAD: &str = r#"{"name":"Sergio","age":28,"active":true,"nickname":null,"address":{"city":"Rosario","zip":"S2000"},"tags":["owner","admin"]}"#;
+/// null, so one response covers every value type dot access has to carry —
+/// plus `keys` and `length`, which are the names of dict methods and are here
+/// because a real API is under no obligation to avoid them.
+const PAYLOAD: &str = r#"{"name":"Sergio","age":28,"active":true,"nickname":null,"address":{"city":"Rosario","zip":"S2000"},"tags":["owner","admin"],"keys":"a field called keys","length":"a field called length"}"#;
 
 fn spawn_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -273,6 +275,42 @@ fn the_headers_dict_inside_a_full_response_reads_the_same_way() {
     );
 }
 
+// ── DEC-M12-001 on real response data ────────────────────────────────────────
+
+#[test]
+fn a_response_field_named_after_a_method_is_read_as_a_field() {
+    // The case the decision exists for. A server is free to return a field
+    // called "keys", and a client that reads `response.keys` means the field.
+    // Under the previous precedence it got the method's key list instead —
+    // silently, and only for the field names that happened to collide.
+    let port = spawn_server();
+    assert_passes(
+        r#"
+        let data = JSON.parse(fetch("http://127.0.0.1:PORT/json"));
+        assert(data.keys == "a field called keys", "the field, not the method");
+        assert(data.keys == data["keys"], "the two forms agree on it");
+        assert(data.length == "a field called length", "and the same for length");
+        assert(data.length == data["length"], "which brackets also read");
+        "#,
+        port,
+    );
+}
+
+#[test]
+fn the_call_form_still_reaches_the_method_on_that_response() {
+    let port = spawn_server();
+    assert_passes(
+        r#"
+        let data = JSON.parse(fetch("http://127.0.0.1:PORT/json"));
+        assert(data.length() == 8, "length() counts the fields");
+        assert(data.keys().length() == 8, "keys() lists them");
+        assert(data.keys().includes("keys"), "including the colliding one");
+        assert(data.keys == "a field called keys", "and the field is still readable");
+        "#,
+        port,
+    );
+}
+
 // ── The control: one path, not two ───────────────────────────────────────────
 
 #[test]
@@ -295,8 +333,8 @@ fn a_fetched_dict_and_a_literal_dict_behave_identically() {
         assert(type_of(fetched) == type_of(literal), "they are the same type");
 
         // The dict methods answer on a fetched dict exactly as on any other.
-        assert(fetched.keys().length() == 6, "keys() over the response");
-        assert(fetched.length() == 6, "length() over the response");
+        assert(fetched.keys().length() == 8, "keys() over the response");
+        assert(fetched.length() == 8, "length() over the response");
         "#,
         port,
     );
