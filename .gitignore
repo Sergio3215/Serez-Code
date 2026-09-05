@@ -58,3 +58,5 @@ documentacion-internal-082026.md
 # `tests/` legitimately starts with `~`, and `tests/parser_snapshot.rs` already
 # treats that prefix as "not corpus".
 tests/~*.sz
+status
+audit

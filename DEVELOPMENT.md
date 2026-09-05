@@ -33,7 +33,7 @@ assumes you are going to touch `src/`.
 
 | Metric | Value |
 |---|---|
-| Version | 10.0.0 (`Cargo.toml`) |
+| Version | 11.0.0 (`Cargo.toml`) |
 | Rust files | 60 (`src/`) |
 | Parser size | ~152 KB |
 | Evaluator size (all submodules) | ~1.5 MB |

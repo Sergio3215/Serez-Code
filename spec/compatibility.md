@@ -9,7 +9,7 @@ Other spec documents refer to "the deprecation policy". This is it.
 ## Two version numbers
 
 **Runtime version** — the number `sz --version` prints and `Cargo.toml`
-declares. It is currently `10.0.0`. A release is a git tag `vX.Y.Z`; the release
+declares. It is currently `11.0.0`. A release is a git tag `vX.Y.Z`; the release
 workflow refuses to publish when the tag and the Cargo version disagree, so the
 printed version is always the version that was built.
 
@@ -173,7 +173,7 @@ is the interpreter reading the manifest. `sz install` checks it against the
 running runtime and fails with an actionable message when it is not satisfied.
 
 **`sz install` is the only thing that checks it.** Running a program does not:
-a project declaring `"serez-code": ">= 99.0.0"` runs on 10.0.0 without a word.
+a project declaring `"serez-code": ">= 99.0.0"` runs on 11.0.0 without a word.
 `sz update` skips the key, and installing a *dependency* does not verify that
 dependency's own floor — only the manifest in the current directory is read. So
 the declaration protects the author who types `sz install`, not the user who

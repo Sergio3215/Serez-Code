@@ -33,7 +33,7 @@ Read before starting any milestone, in this order:
 | Branch | `improve` |
 | HEAD | `807a0a5` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
-| Runtime version | 10.0.0 |
+| Runtime version | 11.0.0 |
 | Last state update | 2026-09-04 — **receiver-driven member resolution** (§5.62), closing **DEC-M12-001** and **DEC-M12-002**: on a dict `d.k` is the key and `d.k()` the method, `d.k = v` is the write `d["k"] = v` through one writer, and two defects fell out — a nested dot write that reported success and changed nothing, and a dotted path the lvalue walkers could not follow. **DEC-M12-003** raised (does `const` freeze the value). Before that, **dict dot access** (§5.61). Before that, **the Core-defects pass** (§5.43–§5.55). Eleven demonstrated defects, one commit each: the lockfile the ordinary install never wrote, a crash that lost a package, a local registry that could name any host file, a clippy gate debt could move through and that release never ran, a file whose names went unchecked because it imported, top-level bindings the runtime does not create, an outline that discarded its own nesting, timings that measured the sampling order, and a test that asserted only that nothing crashed. Three findings needed a decision and got a registered one instead of a guess |
 
 Milestone ledger:
