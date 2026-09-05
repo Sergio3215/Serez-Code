@@ -194,16 +194,25 @@ impl super::Evaluator {
                     Err(e) => {
                         return self.rt_err_kind(
                             "IOError",
-                            format!("File error reading '{}': {}", path, e),
+                            format!(
+                                "File error reading '{}': {}",
+                                path,
+                                super::portable_io_err(&e)
+                            ),
                         );
                     }
                     _ => {}
                 }
                 match std::fs::read_to_string(&path) {
                     Ok(content) => Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(content)))),
-                    Err(e) => {
-                        self.rt_err_kind("IOError", format!("File error reading '{}': {}", path, e))
-                    }
+                    Err(e) => self.rt_err_kind(
+                        "IOError",
+                        format!(
+                            "File error reading '{}': {}",
+                            path,
+                            super::portable_io_err(&e)
+                        ),
+                    ),
                 }
             }
             "write" => {
@@ -230,9 +239,14 @@ impl super::Evaluator {
                 let content = self.display(cr);
                 match std::fs::write(&path, &content) {
                     Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
-                    Err(e) => {
-                        self.rt_err_kind("IOError", format!("File error writing '{}': {}", path, e))
-                    }
+                    Err(e) => self.rt_err_kind(
+                        "IOError",
+                        format!(
+                            "File error writing '{}': {}",
+                            path,
+                            super::portable_io_err(&e)
+                        ),
+                    ),
                 }
             }
             "create" => {
@@ -255,7 +269,11 @@ impl super::Evaluator {
                     if let Err(e) = std::fs::File::create(&path) {
                         return self.rt_err_kind(
                             "IOError",
-                            format!("File error creating '{}': {}", path, e),
+                            format!(
+                                "File error creating '{}': {}",
+                                path,
+                                super::portable_io_err(&e)
+                            ),
                         );
                     }
                 }
@@ -290,7 +308,11 @@ impl super::Evaluator {
                     Err(e) => {
                         return self.rt_err_kind(
                             "IOError",
-                            format!("File error reading binary '{}': {}", path, e),
+                            format!(
+                                "File error reading binary '{}': {}",
+                                path,
+                                super::portable_io_err(&e)
+                            ),
                         );
                     }
                     _ => {}
@@ -308,7 +330,11 @@ impl super::Evaluator {
                     }
                     Err(e) => self.rt_err_kind(
                         "IOError",
-                        format!("File error reading binary '{}': {}", path, e),
+                        format!(
+                            "File error reading binary '{}': {}",
+                            path,
+                            super::portable_io_err(&e)
+                        ),
                     ),
                 }
             }
@@ -361,7 +387,11 @@ impl super::Evaluator {
                     Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => self.rt_err_kind(
                         "IOError",
-                        format!("File error writing binary '{}': {}", path, e),
+                        format!(
+                            "File error writing binary '{}': {}",
+                            path,
+                            super::portable_io_err(&e)
+                        ),
                     ),
                 }
             }
@@ -395,8 +425,14 @@ impl super::Evaluator {
                             elements: owned,
                         })))
                     }
-                    Err(e) => self
-                        .rt_err_kind("IOError", format!("File.listDir '{}' failed: {}", path, e)),
+                    Err(e) => self.rt_err_kind(
+                        "IOError",
+                        format!(
+                            "File.listDir '{}' failed: {}",
+                            path,
+                            super::portable_io_err(&e)
+                        ),
+                    ),
                 }
             }
             "mkdir" => {
@@ -424,9 +460,14 @@ impl super::Evaluator {
                 }
                 match std::fs::create_dir_all(&path) {
                     Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
-                    Err(e) => {
-                        self.rt_err_kind("IOError", format!("File.mkdir '{}' failed: {}", path, e))
-                    }
+                    Err(e) => self.rt_err_kind(
+                        "IOError",
+                        format!(
+                            "File.mkdir '{}' failed: {}",
+                            path,
+                            super::portable_io_err(&e)
+                        ),
+                    ),
                 }
             }
             "stat" => {
@@ -466,9 +507,14 @@ impl super::Evaluator {
                             ],
                         })))
                     }
-                    Err(e) => {
-                        self.rt_err_kind("IOError", format!("File.stat '{}' failed: {}", path, e))
-                    }
+                    Err(e) => self.rt_err_kind(
+                        "IOError",
+                        format!(
+                            "File.stat '{}' failed: {}",
+                            path,
+                            super::portable_io_err(&e)
+                        ),
+                    ),
                 }
             }
             "delete" => {
@@ -499,9 +545,14 @@ impl super::Evaluator {
                 };
                 match result {
                     Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
-                    Err(e) => {
-                        self.rt_err_kind("IOError", format!("File.delete '{}' failed: {}", path, e))
-                    }
+                    Err(e) => self.rt_err_kind(
+                        "IOError",
+                        format!(
+                            "File.delete '{}' failed: {}",
+                            path,
+                            super::portable_io_err(&e)
+                        ),
+                    ),
                 }
             }
             "rename" => {
@@ -541,7 +592,12 @@ impl super::Evaluator {
                     Ok(_) => Ok(ExecutionFlow::Value(self.null_ref)),
                     Err(e) => self.rt_err_kind(
                         "IOError",
-                        format!("File.rename '{}' → '{}' failed: {}", from, to, e),
+                        format!(
+                            "File.rename '{}' → '{}' failed: {}",
+                            from,
+                            to,
+                            super::portable_io_err(&e)
+                        ),
                     ),
                 }
             }

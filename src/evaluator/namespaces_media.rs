@@ -69,7 +69,11 @@ impl super::Evaluator {
                     Err(e) => {
                         return self.rt_err_kind(
                             "IOError",
-                            &format!("Media.playSound: cannot open '{}': {}", path, e),
+                            format!(
+                                "Media.playSound: cannot open '{}': {}",
+                                path,
+                                super::portable_io_err(&e)
+                            ),
                         );
                     }
                 };
@@ -78,7 +82,7 @@ impl super::Evaluator {
                     Err(e) => {
                         return self.rt_err_kind(
                             "MediaError",
-                            &format!(
+                            format!(
                                 "Media.playSound: unsupported or corrupt audio '{}': {}",
                                 path, e
                             ),
@@ -101,7 +105,7 @@ impl super::Evaluator {
                     Err(e) => {
                         return self.rt_err_kind(
                             "MediaError",
-                            &format!("Media.playSound: cannot create playback sink: {}", e),
+                            format!("Media.playSound: cannot create playback sink: {}", e),
                         );
                     }
                 };
@@ -183,7 +187,7 @@ impl super::Evaluator {
                 if dot_call.arguments.len() != 1 {
                     return self.rt_err_kind(
                         "TypeError",
-                        &format!("Media.{}(id) requires 1 argument", method),
+                        format!("Media.{}(id) requires 1 argument", method),
                     );
                 }
                 let id = match self.gui_int_arg(&dot_call.arguments[0]) {
@@ -191,7 +195,7 @@ impl super::Evaluator {
                     None => {
                         return self.rt_err_kind(
                             "TypeError",
-                            &format!("Media.{} id must be an integer", method),
+                            format!("Media.{} id must be an integer", method),
                         );
                     }
                 };
@@ -266,7 +270,7 @@ impl super::Evaluator {
 
             other => {
                 let o = other.to_string();
-                self.rt_err_kind("ReferenceError", &format!("Media.{}: unknown method", o))
+                self.rt_err_kind("ReferenceError", format!("Media.{}: unknown method", o))
             }
         }
     }

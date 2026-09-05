@@ -2914,6 +2914,24 @@ fn json_parse_number(chars: &[char], pos: usize) -> Result<(OwnedValue, usize), 
         Ok((OwnedValue::Integer(n), i))
     }
 }
+pub(crate) fn portable_io_err(e: &std::io::Error) -> String {
+    let msg = e.to_string();
+    if cfg!(windows) {
+        if msg.starts_with("The system cannot find the file specified.") {
+            return msg.replace(
+                "The system cannot find the file specified.",
+                "No such file or directory",
+            );
+        }
+        if msg.starts_with("The system cannot find the path specified.") {
+            return msg.replace(
+                "The system cannot find the path specified.",
+                "No such file or directory",
+            );
+        }
+    }
+    msg
+}
 
 #[cfg(test)]
 mod child_output_tests {
