@@ -5,7 +5,8 @@ Normative contract for dict values and their built-in methods.
 Every rule here was derived from the current implementation and is pinned by a
 test in `tests/07_dicts.sz`, `tests/74_dict_slot_e2e.sz`,
 `tests/unit_dict_set_errors.sz`, `tests/unit_dict_dot_access.sz`,
-`tests/fetch_dot_access.rs` or `tests/runtime_outcome.rs`.
+`tests/unit_dict_dot_assign.sz`, `tests/fetch_dot_access.rs` or
+`tests/runtime_outcome.rs`.
 
 ## Declaration and value semantics
 
@@ -104,15 +105,24 @@ key, a key held in a variable, and a key that is not a valid identifier are
 reachable only that way. A header name like `"x-probe"` is the ordinary case:
 `d.x-probe` is a subtraction, not a key.
 
-**A built-in method wins a name it shares with a key.** The method table is
-consulted first, so on a dict that has a `"length"` key, `d.length` is still the
-method and `d["length"]` is the key. See **DEC-M12-001**; measured across the
-1,135 `.sz` and `.szx` files in this repository and the ecosystem packages, no
-program has a key that collides with a method name.
+**No key name is reserved.** Resolution is driven by the receiver, and the
+receiver here is a dict, so `d.k` is the key `"k"` whatever `k` is called — the
+method table is not consulted for a property access at all:
 
-Only the property form reads a key. `d.name` is an access; `d.name()` is a
-method call and reports an unknown method if there is no such method, so a
-mistyped call is still an error rather than a silent `null`.
+```serez
+let dic <string, any> = ({"keys", "valor"});
+out dic.keys;      // valor — the key
+out dic["keys"];   // valor — the same key
+out dic.keys();    // [keys] — the method
+```
+
+`d.k` and `d.k()` are told apart by whether the call was written with
+parentheses, which the parser records on the node. Nothing resolves by asking
+whether a name happens to be a method, so data arriving from elsewhere cannot
+change which code a program runs. This is **DEC-M12-001**.
+
+An unknown *call* is still an error: `d.notAMethod()` reports an unknown method
+rather than answering `null`, so a mistyped call does not pass silently.
 
 Structured data from the network is read the same way and by the same code.
 `fetch` returns the body as a string; `JSON.parse` turns it into an ordinary
@@ -129,13 +139,36 @@ that is not present is a no-op, not an error.
 
 `RemoveAll()` and `clear()` are the same operation and empty the dict.
 
-**`d.key = value` is not a write.** The two read forms do not both have a write
-form: assignment through a dot reports catchable `TypeError` / `SZ4002` with
-"is not a class or interface instance", because the field-assignment path is
-class machinery and does not accept a dict receiver. `d[key] = value` is the
-way to write. Registered as **DEC-M12-002**, open — whether the symmetry is
-worth having is a product question, and reading was shipped without waiting on
-it.
+**`d.key = value` is `d["key"] = value`.** Both spellings reach the same
+writer, so everything stated above about writing holds for either — the
+declared value type is enforced, and a key that is not present is created:
+
+```serez
+let dic <string, any> = ({"name", "Sergio"});
+dic.name = "Jonathan";
+dic.newKey = 42;
+out dic["name"];     // Jonathan
+out dic["newKey"];   // 42
+```
+
+The same holds through a nested path, where all four spellings write the key the
+bracket form writes:
+
+```serez
+let inner <string, any> = ({"name", "Old"});
+let dic <string, any> = ({"user", inner});
+dic.user.name = "New";
+out dic["user"]["name"];   // New
+```
+
+Whether a write is permitted depends on the mutability of the binding and on the
+declared types — never on which spelling was used. This is **DEC-M12-002**.
+
+`const` currently rejects **rebinding** the name and does not freeze the value
+it binds, uniformly for arrays, dicts and mutating methods: `const d; d["k"] = v`
+and `const d; d.k = v` both write, and both would stop together if that changed.
+Whether `const` should freeze the value is **DEC-M12-003**, open, and is not a
+dictionary question.
 
 ## Declared types
 
@@ -170,7 +203,7 @@ caller unchanged.
 | Key or value rejected by the declared type | catchable `TypeError` / `SZ4002` |
 | Unknown dict method *call* — `d.notAMethod()` | catchable `ReferenceError` / `SZ4001` |
 | Unknown dict *property* — `d.notAKey` | not an error: `null`, as for `d["notAKey"]` |
-| `d.key = value` | catchable `TypeError` / `SZ4002` — see DEC-M12-002 |
+| `d.key = value` rejected by the declared value type | catchable `TypeError` / `SZ4002`, the same as `d[key] = value` |
 
 A reader that takes no arguments no longer ignores extra ones, and a reader
 whose receiver is not a dict reports it instead of answering with empty data.

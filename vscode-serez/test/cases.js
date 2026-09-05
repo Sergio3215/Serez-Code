@@ -688,6 +688,63 @@ const cases = [
         input: 'let v = dic.keys()\n.length();\n',
         expect: 'let v = dic.keys()\n    .length();',
     },
+    // ── dictionary writes ───────────────────────────────────────────────────
+    //
+    // `dic.name = v` and `dic["name"] = v` are the same write, and a dotted
+    // path through a dict is an lvalue. The formatter has nothing to change on
+    // any of these — no spacing inside a line is touched — so what the cases
+    // hold is that none of them is mistaken for something else: an `=` after a
+    // dotted chain does not make the line look unfinished, and a `[` after an
+    // identifier is indexing rather than a level.
+    {
+        name: 'assign: dot assignment is left as written',
+        fn: 'sz',
+        input: 'dic.name = value;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'assign: bracket assignment is left as written',
+        fn: 'sz',
+        input: 'dic["name"] = value;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'assign: a nested dotted path as an lvalue',
+        fn: 'sz',
+        input: 'dic.user.name = value;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'assign: brackets then dot as an lvalue',
+        fn: 'sz',
+        input: 'dic["user"].name = value;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'assign: dot then brackets as an lvalue',
+        fn: 'sz',
+        input: 'dic.user["name"] = value;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'assign: inside a block, indented with the line',
+        fn: 'sz',
+        input: 'fn void f() {\ndic.user.name = value;\n}\n',
+        expect: 'fn void f() {\n    dic.user.name = value;\n}',
+    },
+    {
+        name: 'assign: a write does not read as an unfinished line',
+        fn: 'sz',
+        input: 'dic.name = value;\nout dic.name;\n',
+        expect: INPUT,
+    },
+    {
+        name: 'assign: a chain broken before the assignment',
+        fn: 'sz',
+        input: 'dic.user\n.name = value;\n',
+        expect: 'dic.user\n    .name = value;',
+    },
+
     {
         // Measured, and left as it is on purpose. A line opening with `[` is
         // ambiguous in the same way a leading `+` or `-` is: `["user"]` can

@@ -29,12 +29,12 @@ Read before starting any milestone, in this order:
 | Goals done in M6 | **M6.0** the 48-field audit (§9J.0) · **M6.1** autodiff · **M6.2** modules · **M6.3** security, task, caches · **M6.4** service operations · **audit** (§9K) |
 | Goals done in M5 | **M5.0** audit (§9H.0) · **M5.1** the agreement net (§9H.1) · **M5.2** three false positives (§9H.2) · **M5.3** `export`, closing §5.29 (§9H.3) · **M5.4** positions and tooling parity (§9H.4) · **audit** (§9I) |
 | **Autonomy protocol** | Milestones proceed without per-milestone authorization. A decision with several defensible answers is **registered in §7A, not taken**, and blocks only what genuinely depends on it. Nothing is marked COMPLETE whose Definition of Done is unmet. See §12. |
-| **Open decisions** | **17 OPEN, 13 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M10-003** (does any phase timing block a build). **DEC-M9-002** and **DEC-M9-003** are now decided. **DEC-M11-001** (the `unsafe` context) was raised and decided on 2026-09-04: **lexical**. Added 2026-09-04 by the dict dot-access pass: **DEC-M12-001** (which wins when a key and a method share a name), **DEC-M12-002** (should `d.k = v` write) — both open, neither blocking |
+| **Open decisions** | **16 OPEN, 15 DECIDED.** All in §7A. Decided this cycle: **DEC-M4-002** (a name must resolve lexically), **-004** (the outline comes from the tree), **DEC-M6-001** (a narrow trait), **DEC-M9-001** (one 64 MiB ceiling), **DEC-M10-001** (the canary as a pinned gate plus a daily run), **-002** (a clippy baseline). Earlier: **DEC-M4-001**, **-005**, **DEC-M7-002**, **-006**. **Nothing open blocks queued work.** Four new and open: **DEC-M4-006**, **-007**, **-008**, **-009**. Added 2026-09-03 by the Core-defects pass: **DEC-M9-002** (is an install one transaction), **DEC-M10-003** (does any phase timing block a build). **DEC-M9-002** and **DEC-M9-003** are now decided. **DEC-M11-001** (the `unsafe` context) was raised and decided on 2026-09-04: **lexical**. Added and **decided** 2026-09-04 by the dict dot-access pass: **DEC-M12-001** (member resolution is driven by the receiver, not by the member name) and **DEC-M12-002** (`d.k = v` is the write `d["k"] = v`, through one writer). Raised by that work and open: **DEC-M12-003** (does `const` freeze the value or only the binding) — not blocking |
 | Branch | `improve` |
 | HEAD | `807a0a5` |
 | M0 baseline commit | `d8662c2` (= tag `v10.0.0`, on `origin`) |
 | Runtime version | 10.0.0 |
-| Last state update | 2026-09-04 — **dict dot access** (§5.61): `dic.name` reads the key `dic["name"]` reads, as one guarded arm in the dict dispatcher rather than new syntax, and fetch needed no case of its own. Two decisions registered (DEC-M12-001, -002). Before that, **the Core-defects pass** (§5.43–§5.55). Eleven demonstrated defects, one commit each: the lockfile the ordinary install never wrote, a crash that lost a package, a local registry that could name any host file, a clippy gate debt could move through and that release never ran, a file whose names went unchecked because it imported, top-level bindings the runtime does not create, an outline that discarded its own nesting, timings that measured the sampling order, and a test that asserted only that nothing crashed. Three findings needed a decision and got a registered one instead of a guess |
+| Last state update | 2026-09-04 — **receiver-driven member resolution** (§5.62), closing **DEC-M12-001** and **DEC-M12-002**: on a dict `d.k` is the key and `d.k()` the method, `d.k = v` is the write `d["k"] = v` through one writer, and two defects fell out — a nested dot write that reported success and changed nothing, and a dotted path the lvalue walkers could not follow. **DEC-M12-003** raised (does `const` freeze the value). Before that, **dict dot access** (§5.61). Before that, **the Core-defects pass** (§5.43–§5.55). Eleven demonstrated defects, one commit each: the lockfile the ordinary install never wrote, a crash that lost a package, a local registry that could name any host file, a clippy gate debt could move through and that release never ran, a file whose names went unchecked because it imported, top-level bindings the runtime does not create, an outline that discarded its own nesting, timings that measured the sampling order, and a test that asserted only that nothing crashed. Three findings needed a decision and got a registered one instead of a guess |
 
 Milestone ledger:
 
@@ -3022,16 +3022,80 @@ it on real HTTP responses from a local `TcpListener` — including a test that a
 fetched dict and a hand-written one answer identically through both forms, which
 fails if anyone later makes fetch data special.
 
-**Two decisions registered rather than taken.** DEC-M12-001, which of a
-colliding key and method wins — the method does, which is what the dispatcher
-already did, and the collision occurs in **0 of 1,135** real `.sz`/`.szx` files.
-DEC-M12-002, whether `d.k = v` should write; it does not today, and reading
-shipped without waiting on it.
+**Two decisions registered rather than taken** — and **both decided the next
+day**, so this paragraph describes what shipped here, not what stands. DEC-M12-001
+was registered as "which of a colliding key and method wins", and the answer was
+that the question was at the wrong level: resolution is driven by the receiver.
+DEC-M12-002 was registered as "should `d.k = v` write"; it does now. See §5.62,
+which supersedes the precedence described in this entry.
 
 **Pinned by** `tests/unit_dict_dot_access.sz` (19 cases, each asserting the dot
 form against the bracket form rather than against a literal) and
 `tests/fetch_dot_access.rs` (11, one of which is a control that the harness can
 fail).
+
+### 5.62 — a dict key could be shadowed by a method name, and could not be written by name — **FIXED 2026-09-04**, medium (closes DEC-M12-001 and DEC-M12-002)
+
+Two halves of one mistake: `receiver.member` was being resolved by looking at
+`member` before looking at `receiver`.
+
+**Reading.** A dict with a key called `"keys"` could not read it with a dot.
+
+```text
+let dic <string, any> = ({"keys", "valor"});
+dic["keys"]   ->  valor
+dic.keys      ->  [keys]        <- the method's key list, not the key
+```
+
+Ten identifiers were reserved on every dict in the language, and the meaning of
+`d.k` depended on a table rather than on the value in front of it. Decided:
+**member resolution is driven by the receiver, then by the form of access, and
+never by the member's name.** On a dict `d.k` is the key; `d.k()` is the call
+form and runs the method. The two are separated by `has_parens`, which the
+parser already recorded — structural information, so nothing has to know which
+identifiers happen to be method names and response data cannot decide which code
+runs.
+
+The precedence lived in two places, which is why the first fix was incomplete:
+the dispatcher, and a `length` shortcut in `expr.rs` that answered dicts ahead of
+it. Gating the shortcut on `has_parens` **for dicts only** is what keeps
+`a.length` an array property — documented, and used 88 times across the corpus
+and the apps — while `d.length` is a dict key.
+
+**Writing.** `dic["name"] = "x"` worked; `dic.name = "x"` reported "is not a
+class or interface instance", the field-assignment path being class machinery a
+dict never reached. Decided: the two spellings are one write. `dict_key_write`
+is extracted from the bracket path and called by both, so the declared value
+type is enforced either way — a dot assignment is not an escape from the check —
+and a key that is not present is created, because measurement showed
+`d["newKey"] = v` already appends.
+
+**Two defects came out of the second half**, both the same assumption that a
+dotted step meant a class instance:
+
+  * `dic.user["name"] = "C"` reported success and **changed nothing**. Reading
+    `dic.user` yields a copy, so the write needs a writeback; the writeback
+    handled `ObjectData::Instance` only and fell through silently on a dict. A
+    lost write that reports success is worse than a refused one.
+  * `dic.user.name = "A"` failed with "the path to it does not exist" on a path
+    that did: the four lvalue walkers resolved a `Field` step on an instance and
+    a `Key` step on a dict, but never a `Field` step landing on a dict.
+
+**Mutability was measured rather than assumed.** `const` rejects rebinding and
+does not freeze the value — uniformly for arrays, dicts, index assignment and
+mutating methods, and that is what `spec/scopes.md` says. Dot assignment
+inherits the policy instead of inventing a second one, and the test asserts the
+two forms accept or refuse *together* rather than asserting an answer, so it
+moves with the policy. Whether `const` should freeze the value is **DEC-M12-003**,
+registered and open: it is a language-wide question about arrays and instances
+as much as dicts, and half-applying it would reintroduce exactly the shape of
+inconsistency DEC-M12-001 was raised to remove.
+
+**Pinned by** `tests/unit_dict_dot_access.sz` (25), `tests/unit_dict_dot_assign.sz`
+(17) and `tests/fetch_dot_access.rs` (15). The read control asserts all ten
+built-in names readable as keys on one dict, so restoring precedence fails ten
+assertions at once; the fetch suite covers the case the decision is really for,
+a response carrying a field called `keys`.
 
 ---
 
@@ -3385,6 +3449,39 @@ designed.
 **Blocked by this decision:** nothing. `tests/unit_dict_dot_access.sz` pins the
 measured behaviour, and its case is named for this entry.
 
+## RESOLUTION — **DECIDED 2026-09-04: the receiver decides.**
+
+Neither A nor B as they were framed. Both options above argued about which
+*name* should win, and the owner's answer is that the question was posed at the
+wrong level: **member resolution is driven by the receiver's type, then by the
+form of access, and never by the member's name.**
+
+On a dict, `d.k` is the key `"k"` — the method table is not consulted for a
+property access at all, so no identifier is reserved and `dic.keys` is `valor`.
+`d.k()` is the call form and runs the method. On a class instance,
+`instance.member` and `instance.method()` resolve by the class rules and are
+untouched. There is no global table in which method names outrank keys.
+
+That answers option B's hazard, which was the argument that carried the
+recommendation above. B was "the key always wins", and its cost was that a
+server returning a `"keys"` field could turn `d.keys()` into an attempt to call
+a string. It cannot: the call form is a different form, distinguished
+structurally by `has_parens`, which the parser already records. The hazard came
+from conflating access with call, not from letting keys win their own name.
+
+**How.** Two sites, because the precedence lived in two places. The dispatcher
+returns a key read before its match when `!has_parens`, so the match only ever
+sees a call. And the `length` shortcut in `expr.rs`, which answered dicts ahead
+of the dispatcher, is gated on `has_parens` for dicts — otherwise it would have
+reached past the fix and left `length` the one key still unreadable. Arrays keep
+the parenless property form, which is documented and used 88 times across the
+corpus and apps; the receiver is exactly what tells the two cases apart.
+
+**Pinned by** `tests/unit_dict_dot_access.sz`, whose control asserts all ten
+built-in names readable as keys on one dict, so restoring precedence fails ten
+assertions at once. `tests/fetch_dot_access.rs` covers the case the decision is
+really for: a response carrying a field called `keys`.
+
 ---
 
 ### DEC-M12-002 — Should `dic.name = value` write the key?
@@ -3434,6 +3531,119 @@ this: it is useful on its own, and nothing about it forecloses either answer.
 
 **Blocked by this decision:** nothing. `spec/dicts.md` states the current
 refusal and names this entry.
+
+## RESOLUTION — **DECIDED 2026-09-04: yes, and through one writer.**
+
+Option B. `d.k = v` and `d["k"] = v` are the same write, and what may be written
+depends on the mutability of the binding and on the declared types — never on
+which spelling was used.
+
+The entry's own objection is answered by DEC-M12-001 rather than by this one:
+`d.length = 1` was said to need a rule, and it does not, because on a dict
+`length` is a key like any other and the method is still reached by the call
+form. B inherits that precedence, which is why it could not go first.
+
+**How.** `dict_key_write` is extracted from the bracket path and called by both
+spellings, so the declared value type is enforced either way and a key that is
+not present is created — measured before the change, `d["newKey"] = v` appends,
+and the dot path inherits that rather than choosing. `assign_field_on`
+dispatches on the receiver: a dict goes to the key, a class instance keeps
+setters, getter-only rejection and declared field types. A separate
+implementation is what would have let the two drift, and is how dot assignment
+would have become an escape from the type check.
+
+**Two defects fell out of it**, both the same mistake — a step written with a
+dot assumed a class instance — and both fixed by asking the receiver:
+
+  * `dic.user["name"] = "C"` reported success and **changed nothing**. The
+    writeback for `receiver.field[i]` handled `ObjectData::Instance` only, so on
+    a dict it matched nothing and fell through silently.
+  * `dic.user.name = "A"` failed with SZ4000 "the path to it does not exist" on
+    a path that did. The lvalue walkers resolved a `Field` step on an instance
+    and a `Key` step on a dict, but never a `Field` step landing on a dict.
+
+All four spellings now reach the same slot, three levels deep included.
+
+**Mutability was measured, not assumed.** Serez's rule is that `const` rejects
+rebinding: `const x = 1; x = 2` is refused, while `const a = [1,2]; a[0] = 9`,
+`const d; d["k"] = v` and `const d; d.Add(...)` all succeed, uniformly across
+arrays, dicts and mutating methods — and `spec/scopes.md` says "const bindings
+reject assignment" of the binding. Dot assignment inherits that policy rather
+than inventing a second one, which is what this decision requires. The test
+asserts the two forms accept or refuse **together** rather than asserting a
+particular answer, so it moves with the policy. Whether `const` should freeze
+the value is DEC-M12-003.
+
+**Pinned by** `tests/unit_dict_dot_assign.sz` (17) and four cases in
+`tests/fetch_dot_access.rs`.
+
+---
+
+### DEC-M12-003 — Does `const` freeze the value, or only the binding?
+
+**Problem.** Raised while implementing DEC-M12-002, and deliberately not
+answered there. `const` refuses to let the name be rebound. It does not stop the
+value from being changed in place.
+
+**Current behaviour.** Measured against the release binary:
+
+```text
+const x = 1;         x = 2;              SZ4002 — Cannot reassign const 'x'
+const a = [1, 2];    a[0] = 9;           writes
+                     a.push(3);          writes
+const d <string,any> = ({"k",1});
+                     d["k"] = 2;         writes
+                     d.k = 2;            writes
+                     d.Add({"j",3});     writes
+```
+
+Consistent across arrays, dicts, index assignment and mutating methods, and
+consistent with what `spec/scopes.md` and `spec/variables.md` actually say:
+`const` "creates a binding that cannot be reassigned", and "`const` bindings
+reject assignment" — of the binding.
+
+**Measured evidence.** Nothing depends on either answer. Across the `.sz` and
+`.szx` files in this repository and the eight ecosystem packages there are
+**59** distinct `const` bindings and **no** program that mutates a const-bound
+value: no index write, no mutating method call. There are also **zero** `const`
+dict declarations. No test pins the permissive behaviour either — the const
+suite covers reads, scoping and rebinding rejection only.
+
+**Option A — the binding only.** What ships, what the spec says, and what every
+`let`-vs-`const` distinction in the language currently means. `const` is about
+the name.
+
+**Option B — freeze the value.** `const` means the value cannot change either.
+Stronger and closer to what a reader coming from other languages expects.
+Because compatibility costs nothing here, the real work is deciding scope: to be
+coherent it has to cover arrays, dicts, class instances, index assignment and
+every mutating method, not just the two assignment forms — freezing dict key
+writes alone would contradict `spec/dicts.md`'s own statement that
+`d[key] = value` and `d.Add({key, value})` "perform the same insert".
+
+**Trade-offs.** A is free and documented. B is the stronger guarantee and costs
+no existing program, but it is a language-wide change to what `const` means,
+needs a deep-vs-shallow rule for nested values, and needs an answer for a const
+value passed into a function that mutates it. It is not a dictionary question,
+which is why it is not settled inside DEC-M12-002.
+
+**Architectural impact.** B needs a mutability flag reaching the arena slot or
+the write paths, since the const-ness currently lives in `const_names` beside
+the binding. **Semantic impact.** B rejects programs that run today.
+**Compatibility.** B is breaking in principle and free in practice, on the
+measurement above. **Impact by area.** `evaluator::stmt`, `evaluator::lvalue`,
+`evaluator::methods_*`, `spec/scopes.md`, `spec/variables.md`, `spec/dicts.md`,
+`spec/arrays.md`.
+
+**Recommendation — a recommendation, not a decision.** **B**, if it is taken
+language-wide in one pass; **A** otherwise. A half-applied freeze is worse than
+either, because it makes `const` mean different things depending on which
+container and which operation, and that is exactly the shape of bug
+DEC-M12-001 was raised to remove.
+
+**Blocked by this decision:** nothing. `unit_dict_dot_assign.sz` asserts that
+the two spellings agree under `const` rather than asserting which answer they
+give, so it holds under A and continues to hold under B.
 
 ---
 

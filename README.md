@@ -1801,11 +1801,32 @@ out dic.user["name"];   // → Sergio
 out dic?.user?.name;    // → Sergio
 ```
 
-The key is the identifier exactly as written — `d.firstName` reads `"firstName"`, never `"first_name"`. Brackets are still needed for a computed key, a key held in a variable, and any key that is not a valid identifier: `headers["x-probe"]` cannot be written `headers.x-probe`, which is a subtraction. A dict's built-in methods win a name they share with a key, so on a dict with a `"length"` key, `d.length` is the method and `d["length"]` is the key.
+The key is the identifier exactly as written — `d.firstName` reads `"firstName"`, never `"first_name"`. Brackets are still needed for a computed key, a key held in a variable, and any key that is not a valid identifier: `headers["x-probe"]` cannot be written `headers.x-probe`, which is a subtraction.
+
+No key name is reserved. Because the receiver is a dict, `d.k` is the key `"k"` even when a method has that name; the call form is what reaches the method:
+
+```serez
+let dic <string,any> = ({"keys","valor"});
+out dic.keys;     // → valor    (the key)
+out dic.keys();   // → [keys]   (the method)
+```
 
 This is also how structured data from the network reads: `fetch` returns the body as a string, `JSON.parse` turns it into an ordinary dict, and `response.name` is the same rule as above rather than a separate feature.
 
-Accessing a missing key returns `null` (typed and untyped dicts alike), through either form. Use `??` to provide a default: `d["missing"] ?? 0` or `d.missing ?? 0`. Writing a **value of the wrong type** into a typed dict (`<K, V>`) is a runtime error. Writing through a dot is not supported — use `d["key"] = value`.
+Accessing a missing key returns `null` (typed and untyped dicts alike), through either form. Use `??` to provide a default: `d["missing"] ?? 0` or `d.missing ?? 0`.
+
+#### Writing
+
+Both forms write, and they write the same key — including through a nested path, and including a key that does not exist yet:
+
+```serez
+let dic <string,any> = ({"name","Sergio"});
+dic.name    = "Jonathan";   // same as dic["name"] = "Jonathan"
+dic.newKey  = 42;           // creates it, as brackets do
+out dic["name"];            // → Jonathan
+```
+
+Writing a **value of the wrong type** into a typed dict (`<K, V>`) is a runtime error, through either form — the dot spelling is not a way around the check.
 
 #### Printing the whole dict
 
