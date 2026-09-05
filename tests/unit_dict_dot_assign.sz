@@ -1,0 +1,239 @@
+// unit_dict_dot_assign.sz
+// ─────────────────────────────────────────────────────────────────────────────
+// DEC-M12-002 — `d.k = v` and `d["k"] = v` are the same write.
+//
+// Not two writes that agree: **one** writer, reached by two spellings. That is
+// what these assert, and it is why they are written as comparisons between the
+// forms rather than against literals — if the bracket policy moves, both move
+// together or a case here fails.
+//
+// The receiver still decides, exactly as it does for reading (DEC-M12-001):
+// on a dict `d.k = v` writes the key, on a class instance `o.f = v` is field
+// assignment with setters, getter-only rejection and declared field types.
+// Neither can be reached by naming a member the other way round.
+
+class AssignProbe {
+    public AssignProbe(string n) { this.name = n; }
+    public string greet() { return "hi " + this.name; }
+}
+
+// ── The two spellings are one write ──────────────────────────────────────────
+
+test("DEC-M12-002: dot write, then both forms observe it", () => {
+    // The mandated positive control.
+    let dic <string, any> = ({"name", "Sergio"});
+    dic.name = "Jonathan";
+    assert(dic.name == "Jonathan", "the dot read sees the write");
+    assert(dic["name"] == "Jonathan", "and so does the bracket read");
+    assert(dic.name == dic["name"], "the two reads are the same value");
+});
+
+test("bracket write, then both forms observe it", () => {
+    let dic <string, any> = ({"name", "Sergio"});
+    dic["name"] = "Jonathan";
+    assert(dic.name == "Jonathan", "the dot read sees the bracket write");
+    assert(dic["name"] == dic.name, "the two reads agree");
+});
+
+test("the two writes reach the same key, alternating", () => {
+    let dic <string, any> = ({"n", 0});
+    dic["n"] = 1;
+    assert(dic.n == 1, "bracket then dot read");
+    dic.n = 2;
+    assert(dic["n"] == 2, "dot then bracket read");
+    dic["n"] = 3;
+    assert(dic.n == 3, "and back again");
+    assert(dic.length() == 1, "one key throughout: no second key was created");
+});
+
+test("a write through either form leaves the other keys alone", () => {
+    let dic <string, any> = ({"a", 1}, {"b", 2}, {"c", 3});
+    dic.b = 20;
+    assert(dic.a == 1, "a untouched");
+    assert(dic.c == 3, "c untouched");
+    assert(dic.b == 20, "b written");
+    assert(dic.length() == 3, "and no key was added or lost");
+});
+
+// ── Creating a key ───────────────────────────────────────────────────────────
+
+test("a key that is not there is created, as bracket assignment creates it", () => {
+    // Measured first: `d["newKey"] = v` appends. Dot assignment inherits that
+    // rather than choosing a policy of its own.
+    let viaBracket <string, any> = ({"name", "Sergio"});
+    let viaDot <string, any> = ({"name", "Sergio"});
+
+    viaBracket["newKey"] = 42;
+    viaDot.newKey = 42;
+
+    assert(viaBracket["newKey"] == 42, "brackets created it");
+    assert(viaDot.newKey == 42, "and so did the dot");
+    assert(viaDot["newKey"] == viaBracket["newKey"], "with the same value");
+    assert(viaDot.length() == viaBracket.length(), "and the same entry count");
+    assert(viaDot.length() == 2, "which is two");
+});
+
+// ── Declared types are enforced on both paths ────────────────────────────────
+
+test("a typed dict accepts a good value through either form", () => {
+    let typed <string, int> = ({"n", 1});
+    typed["n"] = 5;
+    assert(typed.n == 5, "bracket write of an int");
+    typed.n = 7;
+    assert(typed["n"] == 7, "dot write of an int");
+});
+
+test("a typed dict rejects a bad value through the dot form too", () => {
+    // The check lives in the writer both forms call, so dot assignment is not
+    // an escape from it. Without that, `<string, int>` would be enforced or not
+    // depending on which spelling the program used.
+    let typed <string, int> = ({"n", 1});
+    let caught = false;
+    try {
+        typed.n = "not an int";
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "the dot write was rejected");
+    assert(typed.n == 1, "and the dict was left alone");
+});
+
+test("a typed dict rejects a bad value through the bracket form", () => {
+    let typed <string, int> = ({"n", 1});
+    let caught = false;
+    try {
+        typed["n"] = "not an int";
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "the bracket write was rejected");
+    assert(typed.n == 1, "and the dict was left alone");
+});
+
+// ── Nested and mixed writes reach the same slot ──────────────────────────────
+
+test("all four spellings of a nested write reach the same key", () => {
+    let i1 <string, any> = ({"name", "Old"});
+    let d1 <string, any> = ({"user", i1});
+    d1["user"]["name"] = "W";
+    assert(d1["user"]["name"] == "W", "brackets, brackets");
+
+    let i2 <string, any> = ({"name", "Old"});
+    let d2 <string, any> = ({"user", i2});
+    d2.user.name = "W";
+    assert(d2["user"]["name"] == "W", "dot, dot reaches the same key");
+
+    let i3 <string, any> = ({"name", "Old"});
+    let d3 <string, any> = ({"user", i3});
+    d3["user"].name = "W";
+    assert(d3["user"]["name"] == "W", "brackets, dot");
+
+    let i4 <string, any> = ({"name", "Old"});
+    let d4 <string, any> = ({"user", i4});
+    d4.user["name"] = "W";
+    assert(d4["user"]["name"] == "W", "dot, brackets — this one silently did nothing");
+});
+
+test("a nested write is visible through every way of reading it", () => {
+    let inner <string, any> = ({"name", "Old"});
+    let dic <string, any> = ({"user", inner});
+    dic.user.name = "New";
+    assert(dic.user.name == "New", "dot, dot");
+    assert(dic["user"]["name"] == "New", "brackets, brackets");
+    assert(dic["user"].name == "New", "brackets, dot");
+    assert(dic.user["name"] == "New", "dot, brackets");
+});
+
+test("three levels deep", () => {
+    let leaf <string, any> = ({"v", "old"});
+    let mid <string, any> = ({"leaf", leaf});
+    let top <string, any> = ({"mid", mid});
+    top.mid.leaf.v = "deep";
+    assert(top.mid.leaf.v == "deep", "the dotted path wrote");
+    assert(top["mid"]["leaf"]["v"] == "deep", "and the bracket path reads it");
+});
+
+test("the source dict is a copy, so a nested write does not reach back", () => {
+    // Value semantics, unchanged by any of this: `inner` was copied into the
+    // outer dict, so writing through the outer one leaves the original alone.
+    let inner <string, any> = ({"name", "Old"});
+    let dic <string, any> = ({"user", inner});
+    dic.user.name = "New";
+    assert(dic.user.name == "New", "the copy inside the dict changed");
+    assert(inner.name == "Old", "the binding it was built from did not");
+});
+
+// ── Mutability: whatever the policy is, both forms follow it ─────────────────
+
+test("a let-bound dict is writable through both forms", () => {
+    let dic <string, any> = ({"name", "Sergio"});
+    dic["name"] = "A";
+    assert(dic.name == "A", "bracket write accepted");
+    dic.name = "B";
+    assert(dic["name"] == "B", "dot write accepted");
+});
+
+test("const: both forms answer the same, whatever const decides", () => {
+    // The binding requirement of DEC-M12-002: what may be written depends on
+    // Serez's mutability rules, never on which spelling was used. This asserts
+    // the *agreement*, not a particular answer, so the day `const` is tightened
+    // to freeze the value (DEC-M12-003, open) this test moves with it and
+    // catches the two forms diverging.
+    const viaBracket <string, any> = ({"name", "Sergio"});
+    const viaDot <string, any> = ({"name", "Sergio"});
+
+    let bracketWrote = true;
+    try {
+        viaBracket["name"] = "Jonathan";
+    } catch (e) {
+        bracketWrote = false;
+    }
+
+    let dotWrote = true;
+    try {
+        viaDot.name = "Jonathan";
+    } catch (e) {
+        dotWrote = false;
+    }
+
+    assert(bracketWrote == dotWrote, "the two forms accept or refuse together");
+    assert(viaDot["name"] == viaBracket["name"], "and leave the same value behind");
+});
+
+test("const still rejects rebinding the name itself", () => {
+    // The rule the spec states, and the one this change does not touch.
+    const dic <string, any> = ({"name", "Sergio"});
+    let caught = false;
+    try {
+        dic = ({"other", 1});
+    } catch (e) {
+        caught = true;
+    }
+    assert(caught, "a const binding cannot be reassigned");
+});
+
+// ── The receiver still decides ───────────────────────────────────────────────
+
+test("class property assignment is untouched", () => {
+    let p = new AssignProbe("Ana");
+    assert(p.name == "Ana", "read before");
+    p.name = "Beto";
+    assert(p.name == "Beto", "a class field is still a class field");
+    assert(p.greet() == "hi Beto", "and the method sees the new value");
+});
+
+test("assigning a key does not disturb the dict's methods", () => {
+    // Writing a key named after a method must not replace the method: the two
+    // live in different places, and only the call form reaches the method.
+    let dic <string, any> = ({"a", 1});
+    dic.keys = "just a value";
+    assert(dic.keys == "just a value", "the key holds the value");
+    let ks = dic.keys();
+    assert(ks.length() == 2, "and keys() still lists both keys");
+    assert(dic.length() == 2, "as does length()");
+    dic.length = 99;
+    assert(dic.length == 99, "a key called length holds 99");
+    assert(dic.length() == 3, "and length() still counts three entries");
+});
+
+summary();

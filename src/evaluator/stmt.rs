@@ -528,7 +528,7 @@ impl super::Evaluator {
                 // full-container copy for dicts).
                 enum Container {
                     Array(Option<String>, usize),
-                    Dict(String, String),
+                    Dict,
                     Other,
                 }
                 let container = match self.resolve(arr_ref) {
@@ -536,11 +536,9 @@ impl super::Evaluator {
                         element_type,
                         elements,
                     }) => Container::Array(element_type.clone(), elements.len()),
-                    Some(ObjectData::Dict {
-                        key_type,
-                        value_type,
-                        ..
-                    }) => Container::Dict(key_type.clone(), value_type.clone()),
+                    // The declared types come from the slot inside
+                    // `dict_key_write`, which is the only place that reads them.
+                    Some(ObjectData::Dict { .. }) => Container::Dict,
                     _ => Container::Other,
                 };
 
@@ -581,39 +579,10 @@ impl super::Evaluator {
                         }
                     }
 
-                    Container::Dict(key_type, value_type) => {
-                        {
-                            let val_data = self.resolve(val_ref).unwrap();
-                            if !type_matches(&value_type, val_data) {
-                                let tn = val_data.type_name().to_string();
-                                return self.rt_err_kind(
-                                    "TypeError",
-                                    format!(
-                                        "Cannot assign '{}' to <{},{}> dict value",
-                                        tn, key_type, value_type
-                                    ),
-                                );
-                            }
-                        }
+                    Container::Dict => {
                         let search_key = obj_data_to_key_str(&idx_data);
-                        let owned_val = self.extract(val_ref);
-                        let arena = match arr_ref.region {
-                            RegionId::Global => &mut self.global_arena,
-                            RegionId::Scoped => &mut self.scopes.arena,
-                        };
-                        if let Some(ObjectData::Dict { entries, index, .. }) =
-                            arena.get_mut(arr_ref.index)
-                        {
-                            // O(1) via the slot-resident hash index; replacing a value
-                            // in place keeps the index valid, a push invalidates it by
-                            // length and it rebuilds on the next lookup.
-                            match index.lookup(entries, &search_key) {
-                                Some(i) => entries[i].1 = owned_val,
-                                None => {
-                                    entries.push((OwnedValue::Str(search_key.clone()), owned_val));
-                                    index.record_append(&search_key, entries.len() - 1);
-                                }
-                            }
+                        if let Some(err) = self.dict_key_write(arr_ref, &search_key, val_ref) {
+                            return err;
                         }
                     }
 
@@ -622,23 +591,58 @@ impl super::Evaluator {
                     }
                 }
 
-                // Writeback: if target was this.field[i], update the instance field
+                // Writeback for `receiver.field[i] = v`.
+                //
+                // Reading `receiver.field` yields a COPY, so the mutation above
+                // happened to a temporary and has to travel back. Which write
+                // sends it back depends on what the receiver is — DEC-M12-001's
+                // principle, in the one place it was missing.
+                //
+                // This handled `ObjectData::Instance` only, because
+                // `this.field[i] = v` was the case it was written for. On a dict
+                // receiver it matched nothing and fell through **silently**:
+                // `dic.user["name"] = "C"` reported success, left the dict
+                // untouched, and the next read still returned the old value.
+                // Losing a write quietly is worse than refusing it, so the
+                // receiver is now dispatched on rather than assumed.
                 if let Some((obj_name, field_name)) = writeback {
                     let updated_owned = self.extract(arr_ref);
                     if let Some(obj_ref) = self.lookup_var(&obj_name) {
-                        if let Some(ObjectData::Instance {
-                            class_name,
-                            mut fields,
-                        }) = self.resolve(obj_ref).map(|d| d.clone())
-                        {
-                            if let Some(entry) = fields.iter_mut().find(|(k, _)| k == &field_name) {
-                                entry.1 = updated_owned;
+                        match self.resolve(obj_ref).map(|d| d.clone()) {
+                            Some(ObjectData::Instance {
+                                class_name,
+                                mut fields,
+                            }) => {
+                                if let Some(entry) =
+                                    fields.iter_mut().find(|(k, _)| k == &field_name)
+                                {
+                                    entry.1 = updated_owned;
+                                }
+                                let inst = ObjectData::Instance { class_name, fields };
+                                match obj_ref.region {
+                                    RegionId::Global => {
+                                        self.global_arena.update(obj_ref.index, inst)
+                                    }
+                                    RegionId::Scoped => {
+                                        self.scopes.arena.update(obj_ref.index, inst)
+                                    }
+                                }
                             }
-                            let inst = ObjectData::Instance { class_name, fields };
-                            match obj_ref.region {
-                                RegionId::Global => self.global_arena.update(obj_ref.index, inst),
-                                RegionId::Scoped => self.scopes.arena.update(obj_ref.index, inst),
+                            // A dict receiver: the copy goes back to its key.
+                            Some(ObjectData::Dict { .. }) => {
+                                let arena = match obj_ref.region {
+                                    RegionId::Global => &mut self.global_arena,
+                                    RegionId::Scoped => &mut self.scopes.arena,
+                                };
+                                if let Some(ObjectData::Dict { entries, index, .. }) =
+                                    arena.get_mut(obj_ref.index)
+                                {
+                                    if let Some(i) = index.lookup(entries, &field_name) {
+                                        entries[i].1 = updated_owned;
+                                    }
+                                }
                             }
+                            _ => {}
                         }
                     }
                 }
@@ -757,8 +761,6 @@ impl super::Evaluator {
                     Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
-                let new_val = self.extract(val_ref);
-
                 let obj_ref = match self.lookup_var(&stmt.object) {
                     Some(r) => r,
                     None => {
@@ -770,7 +772,7 @@ impl super::Evaluator {
                     }
                 };
 
-                self.assign_field_on(obj_ref, &stmt.field, new_val, &stmt.object)
+                self.assign_field_on(obj_ref, &stmt.field, val_ref, &stmt.object)
             }
 
             // a.b.c = valor. El receptor es una cadena de lecturas, así que
@@ -783,14 +785,12 @@ impl super::Evaluator {
                     Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
-                let new_val = self.extract(val_ref);
-
                 let obj_ref = match self.eval_expression(&stmt.object) {
                     Ok(ExecutionFlow::Value(r)) => r,
                     other => return other,
                 };
 
-                let res = self.assign_field_on(obj_ref, &stmt.field, new_val, "the target");
+                let res = self.assign_field_on(obj_ref, &stmt.field, val_ref, "the target");
                 if matches!(res, Err(RuntimeFailure)) {
                     return res;
                 }
@@ -906,13 +906,36 @@ impl super::Evaluator {
     /// Asigna `new_val` al campo `field` de la instancia en `obj_ref`, con los
     /// chequeos de setter y de propiedad de sólo lectura. `what` sólo aparece en
     /// el mensaje cuando el receptor no es una instancia.
+    /// `receiver.field = value`, resolved by what the receiver **is**.
+    ///
+    /// DEC-M12-001's principle applies to writing exactly as it does to
+    /// reading: the receiver decides the mechanism, and the field's name never
+    /// does. A class instance goes through setters, getter-only rejection and
+    /// declared-field types; a dict goes to the key of that name. Neither can
+    /// be reached by naming a member the other way round.
     fn assign_field_on(
         &mut self,
         obj_ref: ObjectRef,
         field: &str,
-        new_val: OwnedValue,
+        val_ref: ObjectRef,
         what: &str,
     ) -> EvalResult {
+        // DEC-M12-002 — `d.k = v` is the write `d["k"] = v`, not a second one.
+        //
+        // It is the *same writer*, so the declared value type is enforced on
+        // this path, a key that is not there is created exactly as brackets
+        // create it, and the mutability rules that govern one govern the other.
+        // A separate implementation here is what would let the two drift, and
+        // is how a dot assignment would have become an escape from the type
+        // check.
+        if matches!(self.resolve(obj_ref), Some(ObjectData::Dict { .. })) {
+            return match self.dict_key_write(obj_ref, field, val_ref) {
+                Some(err) => err,
+                None => Ok(ExecutionFlow::Value(self.null_ref)),
+            };
+        }
+
+        let new_val = self.extract(val_ref);
         if let Some(ObjectData::Instance {
             class_name,
             mut fields,
@@ -990,6 +1013,66 @@ impl super::Evaluator {
             let message = format!("'{}' is not a class or interface instance", what);
             self.rt_err_kind("TypeError", message)
         }
+    }
+
+    /// Write one key into a dict slot. The only place a dict key is written by
+    /// assignment, reached by `d[k] = v` and by `d.k = v` alike.
+    ///
+    /// Returns `None` when the write happened and `Some(err)` when the declared
+    /// value type rejected it — so the type check cannot be skipped by picking
+    /// the other spelling, which is the whole point of there being one writer.
+    ///
+    /// A key that is not present is appended, because that is what bracket
+    /// assignment already did: `d["newKey"] = v` creates it, measured before
+    /// this existed, and dot assignment inherits the behaviour rather than
+    /// choosing one.
+    fn dict_key_write(
+        &mut self,
+        dict_ref: ObjectRef,
+        key: &str,
+        val_ref: ObjectRef,
+    ) -> Option<EvalResult> {
+        let (key_type, value_type) = match self.resolve(dict_ref) {
+            Some(ObjectData::Dict {
+                key_type,
+                value_type,
+                ..
+            }) => (key_type.clone(), value_type.clone()),
+            _ => return Some(self.rt_err_kind("TypeError", "Target is not an array or dict")),
+        };
+
+        {
+            let val_data = self.resolve(val_ref).unwrap();
+            if !type_matches(&value_type, val_data) {
+                let tn = val_data.type_name().to_string();
+                return Some(self.rt_err_kind(
+                    "TypeError",
+                    format!(
+                        "Cannot assign '{}' to <{},{}> dict value",
+                        tn, key_type, value_type
+                    ),
+                ));
+            }
+        }
+
+        let owned_val = self.extract(val_ref);
+        let arena = match dict_ref.region {
+            RegionId::Global => &mut self.global_arena,
+            RegionId::Scoped => &mut self.scopes.arena,
+        };
+        if let Some(ObjectData::Dict { entries, index, .. }) = arena.get_mut(dict_ref.index) {
+            // O(1) via the slot-resident hash index; replacing a value in place
+            // keeps the index valid, a push invalidates it by length and it
+            // rebuilds on the next lookup.
+            match index.lookup(entries, key) {
+                Some(i) => entries[i].1 = owned_val,
+                None => {
+                    entries.push((OwnedValue::Str(key.to_string()), owned_val));
+                    index.record_append(key, entries.len() - 1);
+                }
+            }
+        }
+        None
     }
 
     /// The type a field was declared with, or `None` if it carries no

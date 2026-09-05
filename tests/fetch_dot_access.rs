@@ -311,6 +311,48 @@ fn the_call_form_still_reaches_the_method_on_that_response() {
     );
 }
 
+// ── DEC-M12-002 on real response data ────────────────────────────────────────
+
+#[test]
+fn a_parsed_response_is_written_the_way_any_dict_is() {
+    // No provenance rule: the value is a dict held by a `let`, so the ordinary
+    // dict write applies through both spellings.
+    let port = spawn_server();
+    assert_passes(
+        r#"
+        let data = JSON.parse(fetch("http://127.0.0.1:PORT/json"));
+        data.name = "Jonathan";
+        assert(data.name == "Jonathan", "the dot write took");
+        assert(data["name"] == "Jonathan", "and brackets see it");
+
+        data["age"] = 29;
+        assert(data.age == 29, "and the other way round");
+
+        data.newField = "added";
+        assert(data["newField"] == "added", "a new key is created as brackets create it");
+
+        data.address.city = "Cordoba";
+        assert(data["address"]["city"] == "Cordoba", "nested, through the dotted path");
+        "#,
+        port,
+    );
+}
+
+#[test]
+fn writing_a_response_field_named_after_a_method_leaves_the_method_alone() {
+    let port = spawn_server();
+    assert_passes(
+        r#"
+        let data = JSON.parse(fetch("http://127.0.0.1:PORT/json"));
+        data.keys = "overwritten";
+        assert(data.keys == "overwritten", "the field was written");
+        assert(data.keys().length() == 8, "and keys() still works");
+        assert(data.length() == 8, "as does length()");
+        "#,
+        port,
+    );
+}
+
 // ── The control: one path, not two ───────────────────────────────────────────
 
 #[test]

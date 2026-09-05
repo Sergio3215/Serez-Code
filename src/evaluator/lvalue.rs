@@ -268,6 +268,18 @@ fn obj_child<'a>(data: &'a ObjectData, step: &PathStep) -> Option<&'a OwnedValue
                 .find(|(ek, _)| owned_key_str(ek) == want)
                 .map(|(_, v)| v)
         }
+        // DEC-M12-001, in the path walker: a step written with a dot is a
+        // *field* step, but what it means still depends on the receiver it
+        // lands on. On a dict it is the key of that name, exactly as
+        // `PathStep::Key` would be — which is what makes `dic.user.name = v`
+        // reach the same slot as `dic["user"]["name"] = v`.
+        //
+        // Without this the walk simply stopped: `store_path` returned false and
+        // the caller reported that the path did not exist, on a path that did.
+        (ObjectData::Dict { entries, .. }, PathStep::Field(name)) => entries
+            .iter()
+            .find(|(ek, _)| owned_key_str(ek) == *name)
+            .map(|(_, v)| v),
         _ => None,
     }
 }
@@ -291,6 +303,18 @@ fn owned_child<'a>(v: &'a OwnedValue, step: &PathStep) -> Option<&'a OwnedValue>
                 .find(|(ek, _)| owned_key_str(ek) == want)
                 .map(|(_, v)| v)
         }
+        // DEC-M12-001, in the path walker: a step written with a dot is a
+        // *field* step, but what it means still depends on the receiver it
+        // lands on. On a dict it is the key of that name, exactly as
+        // `PathStep::Key` would be — which is what makes `dic.user.name = v`
+        // reach the same slot as `dic["user"]["name"] = v`.
+        //
+        // Without this the walk simply stopped: `store_path` returned false and
+        // the caller reported that the path did not exist, on a path that did.
+        (OwnedValue::Dict { entries, .. }, PathStep::Field(name)) => entries
+            .iter()
+            .find(|(ek, _)| owned_key_str(ek) == *name)
+            .map(|(_, v)| v),
         _ => None,
     }
 }
@@ -317,6 +341,18 @@ fn obj_child_mut<'a>(data: &'a mut ObjectData, step: &PathStep) -> Option<&'a mu
                 .find(|(ek, _)| owned_key_str(ek) == want)
                 .map(|(_, v)| v)
         }
+        // DEC-M12-001, in the path walker: a step written with a dot is a
+        // *field* step, but what it means still depends on the receiver it
+        // lands on. On a dict it is the key of that name, exactly as
+        // `PathStep::Key` would be — which is what makes `dic.user.name = v`
+        // reach the same slot as `dic["user"]["name"] = v`.
+        //
+        // Without this the walk simply stopped: `store_path` returned false and
+        // the caller reported that the path did not exist, on a path that did.
+        (ObjectData::Dict { entries, .. }, PathStep::Field(name)) => entries
+            .iter_mut()
+            .find(|(ek, _)| owned_key_str(ek) == *name)
+            .map(|(_, v)| v),
         _ => None,
     }
 }
@@ -341,6 +377,18 @@ fn owned_child_mut<'a>(v: &'a mut OwnedValue, step: &PathStep) -> Option<&'a mut
                 .find(|(ek, _)| owned_key_str(ek) == want)
                 .map(|(_, v)| v)
         }
+        // DEC-M12-001, in the path walker: a step written with a dot is a
+        // *field* step, but what it means still depends on the receiver it
+        // lands on. On a dict it is the key of that name, exactly as
+        // `PathStep::Key` would be — which is what makes `dic.user.name = v`
+        // reach the same slot as `dic["user"]["name"] = v`.
+        //
+        // Without this the walk simply stopped: `store_path` returned false and
+        // the caller reported that the path did not exist, on a path that did.
+        (OwnedValue::Dict { entries, .. }, PathStep::Field(name)) => entries
+            .iter_mut()
+            .find(|(ek, _)| owned_key_str(ek) == *name)
+            .map(|(_, v)| v),
         _ => None,
     }
 }
