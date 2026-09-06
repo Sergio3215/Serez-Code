@@ -13,6 +13,7 @@
 #![allow(dead_code)]
 
 pub mod ast;
+pub mod capabilities;
 pub mod diagnostic;
 pub mod evaluator;
 pub mod execution;

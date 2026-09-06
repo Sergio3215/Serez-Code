@@ -156,6 +156,19 @@ impl super::Evaluator {
             self.last_error = None;
         }
         let body_result = self.eval_block(&try_stmt.body);
+        if let Ok(ExecutionFlow::Suspend(op_id)) = body_result {
+            if let Some(ctx) = &mut self.suspended_context {
+                ctx.push_frame(crate::evaluator::suspension::ContinuationFrame::Try(
+                    crate::evaluator::suspension::TryContinuation {
+                        catch_var: try_stmt.catch_var.clone(),
+                        catch_body: try_stmt.catch_body.clone(),
+                        finally_body: try_stmt.finally_body.clone(),
+                        remaining_try_statements: Vec::new(),
+                    },
+                ));
+            }
+            return Ok(ExecutionFlow::Suspend(op_id));
+        }
         if has_catch {
             self.try_depth -= 1;
         }
@@ -257,7 +270,7 @@ impl super::Evaluator {
                     let mut catch_continue = false;
                     let mut catch_break_label: Option<String> = None;
                     let mut catch_continue_label: Option<String> = None;
-                    for s in &catch_block.statements {
+                    for (idx, s) in catch_block.statements.iter().enumerate() {
                         match self.eval_statement(s) {
                             Ok(ExecutionFlow::Value(v)) => catch_val = v,
                             Ok(ExecutionFlow::Return(v)) => {
@@ -267,6 +280,22 @@ impl super::Evaluator {
                             Ok(ExecutionFlow::Throw(v)) => {
                                 catch_throw = Some(v);
                                 break;
+                            }
+                            Ok(ExecutionFlow::Suspend(op_id)) => {
+                                let remaining = catch_block.statements[idx + 1..].to_vec();
+                                if let Some(ctx) = &mut self.suspended_context {
+                                    if !remaining.is_empty() {
+                                        ctx.push_frame(crate::evaluator::suspension::ContinuationFrame::Block {
+                                            remaining_statements: remaining,
+                                        });
+                                    }
+                                    if let Some(finally) = &try_stmt.finally_body {
+                                        ctx.push_frame(crate::evaluator::suspension::ContinuationFrame::Block {
+                                            remaining_statements: finally.statements.clone(),
+                                        });
+                                    }
+                                }
+                                return Ok(ExecutionFlow::Suspend(op_id));
                             }
                             Err(RuntimeFailure) => {
                                 catch_error = true;

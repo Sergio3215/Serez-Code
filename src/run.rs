@@ -253,6 +253,7 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
                 Some(RunFailure::InvalidControlFlow(flow))
             }
             evaluator::ProgramOutcome::UnstructuredError => Some(RunFailure::UnstructuredRuntime),
+            evaluator::ProgramOutcome::Suspended(_) => None,
         };
         if std::env::var("SEREZ_ARENA_STATS").is_ok() {
             let (global, scoped) = evaluator.arena_stats();

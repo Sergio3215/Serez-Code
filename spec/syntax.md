@@ -32,6 +32,7 @@ here rather than left to be discovered.
 | `return expr;` · `break;` · `continue;` | |
 | `out expr;` | writes to stdout |
 | `fn T name(params) { }` | `fn* T name()` declares a generator, with `yield` |
+| `async fn T name(params) { }` | asynchronous function (DEC-ASYNC-001) |
 | `class C { }` · `interface I { }` · `enum E { }` | see below |
 | `native fn T name();` | declares a runtime-provided function |
 | `import "path";` | top level only in practice — see `modules.md` |
@@ -44,7 +45,7 @@ Semicolons are **optional**. A statement ends at a newline just as well.
 
 ### A keyword is never an identifier
 
-The 50 reserved words are listed in `lexical-grammar.md`. None of them can
+The 52 reserved words are listed in `lexical-grammar.md`. None of them can
 name a variable, function, parameter, class or field. Three read like
 ordinary names and are reached for by accident — `out`, `get` and `set`:
 

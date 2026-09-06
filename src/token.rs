@@ -135,6 +135,10 @@ pub enum TokenType {
     KwMatch,     // match
     KwUse,       // use
     Pipe,        // |>  (pipe operator: expr |> fn  →  fn(expr))
+
+    // Asynchronous execution (DEC-ASYNC-001)
+    KwAsync,
+    KwAwait,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -217,6 +221,8 @@ pub fn lookup_ident(ident: &str) -> TokenType {
         "yield" => TokenType::KwYield,
         "match" => TokenType::KwMatch,
         "use" => TokenType::KwUse,
+        "async" => TokenType::KwAsync,
+        "await" => TokenType::KwAwait,
         _ => TokenType::Ident,
     }
 }

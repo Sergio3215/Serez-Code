@@ -29,6 +29,19 @@ impl super::Evaluator {
                 let val_ref = match self.eval_expression(&let_stmt.value) {
                     Ok(ExecutionFlow::Value(v)) => v,
                     Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    Ok(ExecutionFlow::Suspend(op_id)) => {
+                        if let Some(ctx) = &mut self.suspended_context {
+                            ctx.push_frame(
+                                crate::evaluator::suspension::ContinuationFrame::Statement(
+                                    crate::evaluator::suspension::StatementContinuation::Let {
+                                        name: let_stmt.name.clone(),
+                                        is_const: let_stmt.is_const,
+                                    },
+                                ),
+                            );
+                        }
+                        return Ok(ExecutionFlow::Suspend(op_id));
+                    }
                     _ => return Err(RuntimeFailure),
                 };
 
@@ -85,6 +98,18 @@ impl super::Evaluator {
                 let val_ref = match self.eval_expression(&assign_stmt.value) {
                     Ok(ExecutionFlow::Value(v)) => v,
                     Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+                    Ok(ExecutionFlow::Suspend(op_id)) => {
+                        if let Some(ctx) = &mut self.suspended_context {
+                            ctx.push_frame(
+                                crate::evaluator::suspension::ContinuationFrame::Statement(
+                                    crate::evaluator::suspension::StatementContinuation::Assign {
+                                        name: assign_stmt.name.clone(),
+                                    },
+                                ),
+                            );
+                        }
+                        return Ok(ExecutionFlow::Suspend(op_id));
+                    }
                     _ => return Err(RuntimeFailure),
                 };
                 let new_data = self.resolve(val_ref).unwrap().clone();
@@ -112,6 +137,7 @@ impl super::Evaluator {
                     body: Rc::new(func_decl.function.body.clone()),
                     captured: Rc::new(captured),
                     is_generator: func_decl.function.is_generator,
+                    is_async: func_decl.function.is_async,
                     bound_class: None,
                 };
                 let func_ref = self.alloc(func_data);
@@ -654,6 +680,16 @@ impl super::Evaluator {
                 match self.eval_expression(&return_stmt.return_value) {
                     Ok(ExecutionFlow::Value(v)) => Ok(ExecutionFlow::Return(v)),
                     Ok(ExecutionFlow::Throw(v)) => Ok(ExecutionFlow::Throw(v)),
+                    Ok(ExecutionFlow::Suspend(op_id)) => {
+                        if let Some(ctx) = &mut self.suspended_context {
+                            ctx.push_frame(
+                                crate::evaluator::suspension::ContinuationFrame::Statement(
+                                    crate::evaluator::suspension::StatementContinuation::Return,
+                                ),
+                            );
+                        }
+                        Ok(ExecutionFlow::Suspend(op_id))
+                    }
                     _ => Err(RuntimeFailure),
                 }
             }
@@ -673,11 +709,29 @@ impl super::Evaluator {
                 }
                 Ok(ExecutionFlow::Return(v)) => Ok(ExecutionFlow::Return(v)),
                 Ok(ExecutionFlow::Throw(v)) => Ok(ExecutionFlow::Throw(v)),
+                Ok(ExecutionFlow::Suspend(op_id)) => {
+                    if let Some(ctx) = &mut self.suspended_context {
+                        ctx.push_frame(crate::evaluator::suspension::ContinuationFrame::Statement(
+                            crate::evaluator::suspension::StatementContinuation::Out,
+                        ));
+                    }
+                    Ok(ExecutionFlow::Suspend(op_id))
+                }
                 Err(RuntimeFailure) => Err(RuntimeFailure),
                 other => other,
             },
 
-            Statement::Expression(expr) => self.eval_expression(expr),
+            Statement::Expression(expr) => match self.eval_expression(expr) {
+                Ok(ExecutionFlow::Suspend(op_id)) => {
+                    if let Some(ctx) = &mut self.suspended_context {
+                        ctx.push_frame(crate::evaluator::suspension::ContinuationFrame::Statement(
+                            crate::evaluator::suspension::StatementContinuation::Expression,
+                        ));
+                    }
+                    Ok(ExecutionFlow::Suspend(op_id))
+                }
+                other => other,
+            },
 
             Statement::Throw(expr) => {
                 let val = match self.eval_expression(expr) {
@@ -1485,7 +1539,7 @@ impl super::Evaluator {
         self.scopes.push();
         let mut result = Ok(ExecutionFlow::Value(self.null_ref));
 
-        for s in &block.statements {
+        for (idx, s) in block.statements.iter().enumerate() {
             match self.eval_statement(s) {
                 Ok(ExecutionFlow::Value(_)) => {} // descartado: ningún caller de cuerpo de loop lo usa
                 Ok(ExecutionFlow::Return(v)) => {
@@ -1507,6 +1561,19 @@ impl super::Evaluator {
                 Ok(ExecutionFlow::ContinueLabel(l)) => {
                     result = Ok(ExecutionFlow::ContinueLabel(l));
                     break;
+                }
+                Ok(ExecutionFlow::Suspend(op_id)) => {
+                    let remaining = block.statements[idx + 1..].to_vec();
+                    if let Some(ctx) = &mut self.suspended_context {
+                        if !remaining.is_empty() {
+                            ctx.push_frame(
+                                crate::evaluator::suspension::ContinuationFrame::Block {
+                                    remaining_statements: remaining,
+                                },
+                            );
+                        }
+                    }
+                    return Ok(ExecutionFlow::Suspend(op_id));
                 }
                 Err(RuntimeFailure) => {
                     result = Err(RuntimeFailure);
@@ -1544,7 +1611,7 @@ impl super::Evaluator {
         self.scopes.push();
         let mut result = Ok(ExecutionFlow::Value(self.null_ref));
 
-        for s in &block.statements {
+        for (idx, s) in block.statements.iter().enumerate() {
             match self.eval_statement(s) {
                 Ok(ExecutionFlow::Value(v)) => result = Ok(ExecutionFlow::Value(v)),
                 Ok(ExecutionFlow::Return(v)) => {
@@ -1567,6 +1634,19 @@ impl super::Evaluator {
                     result = Ok(ExecutionFlow::ContinueLabel(l));
                     break;
                 }
+                Ok(ExecutionFlow::Suspend(op_id)) => {
+                    let remaining = block.statements[idx + 1..].to_vec();
+                    if let Some(ctx) = &mut self.suspended_context {
+                        if !remaining.is_empty() {
+                            ctx.push_frame(
+                                crate::evaluator::suspension::ContinuationFrame::Block {
+                                    remaining_statements: remaining,
+                                },
+                            );
+                        }
+                    }
+                    return Ok(ExecutionFlow::Suspend(op_id));
+                }
                 Err(RuntimeFailure) => {
                     result = Err(RuntimeFailure);
                     break;
@@ -1587,7 +1667,8 @@ impl super::Evaluator {
             | Ok(ExecutionFlow::Continue)
             | Err(RuntimeFailure)
             | Ok(ExecutionFlow::BreakLabel(_))
-            | Ok(ExecutionFlow::ContinueLabel(_)) => None,
+            | Ok(ExecutionFlow::ContinueLabel(_))
+            | Ok(ExecutionFlow::Suspend(_)) => None,
         };
 
         self.scopes.pop();

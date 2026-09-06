@@ -39,6 +39,7 @@ pub enum OwnedValue {
         body: Rc<BlockStatement>, // Rc: cloning a function is O(1), not O(body_size)
         captured: Rc<Vec<(String, ObjectRef)>>,
         is_generator: bool,
+        is_async: bool,
         // Some(clase) si es una referencia a método ligada (`obj.metodo` sin paréntesis):
         // al invocarla hay que restaurar ese contexto de clase, o el cuerpo perdería el
         // acceso a los miembros privados de su propia clase.
@@ -311,6 +312,7 @@ pub enum ObjectData {
         body: Rc<BlockStatement>, // Rc: cloning a function is O(1), not O(body_size)
         captured: Rc<Vec<(String, ObjectRef)>>,
         is_generator: bool,
+        is_async: bool,
         // Ver OwnedValue::Function.bound_class.
         bound_class: Option<String>,
     },

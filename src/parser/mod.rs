@@ -131,6 +131,7 @@ impl Parser {
                 | TokenType::Return
                 | TokenType::Out
                 | TokenType::Function
+                | TokenType::KwAsync
                 | TokenType::While
                 | TokenType::For
                 | TokenType::KwClass
@@ -162,6 +163,9 @@ impl Parser {
             TokenType::Out => self.parse_out_statement(),
             TokenType::LBrace => self.parse_block_statement(),
             TokenType::Function => self.parse_function_statement(),
+            TokenType::KwAsync if self.peek_token.token_type == TokenType::Function => {
+                self.parse_async_function_statement()
+            }
             TokenType::While => self.parse_while_statement(),
             TokenType::KwDo => self.parse_do_while_statement(),
             TokenType::For => self.parse_for_statement(),

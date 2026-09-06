@@ -233,6 +233,7 @@ impl super::Evaluator {
                     body: Rc::new(func_lit.body.clone()),
                     captured: Rc::new(captured),
                     is_generator: func_lit.is_generator,
+                    is_async: func_lit.is_async,
                     bound_class: None,
                 };
                 Ok(ExecutionFlow::Value(self.alloc(func_data)))
@@ -272,6 +273,7 @@ impl super::Evaluator {
                     body: Rc::new(body),
                     captured: Rc::new(captured),
                     is_generator: false,
+                    is_async: false,
                     bound_class: None,
                 })))
             }
@@ -293,393 +295,7 @@ impl super::Evaluator {
                 Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(result))))
             }
 
-            Expression::Call(call_expr) => {
-                // Built-in global functions (intercept before variable lookup)
-                if let Expression::Identifier { name, .. } = call_expr.function.as_ref() {
-                    match name.as_str() {
-                        "parseInt" => return self.eval_parse_int(&call_expr.arguments),
-                        "parseDecimal" => return self.eval_parse_decimal(&call_expr.arguments),
-                        "readLine" => return self.eval_read_line(&call_expr.arguments),
-                        "fetch" if self.lookup_var("fetch").is_none() => {
-                            return self.eval_fetch(&call_expr.arguments);
-                        }
-                        "super" => return self.eval_super_call(&call_expr.arguments),
-                        "assert" => return self.eval_assert(&call_expr.arguments),
-                        "type_of" => return self.eval_type_of(&call_expr.arguments),
-                        "abs" | "sqrt" | "floor" | "ceil" | "round" | "min" | "max" | "pow"
-                        | "log" | "log2" | "log10" => {
-                            return self.eval_math_builtin(name, &call_expr.arguments);
-                        }
-                        "time" => return self.eval_builtin_time(),
-                        "env" => return self.eval_builtin_env(&call_expr.arguments),
-                        "exit" => return self.eval_builtin_exit(&call_expr.arguments),
-                        _ => {}
-                    }
-                    // native fn dispatch: if name is registered as a native function but has no
-                    // variable binding, it must be one of the built-in natives listed above; if it
-                    // reached here there is no Rust implementation for it.
-                    if self.native_fns.contains(name) && self.lookup_var(name).is_none() {
-                        let n = name.clone();
-                        return self.rt_err_kind(
-                            "TypeError",
-                            format!(
-                                "native function '{}' has no Rust implementation registered",
-                                n
-                            ),
-                        );
-                    }
-                }
-
-                if let Some(error) = self.require_call_capacity() {
-                    return error;
-                }
-
-                let func_ref = match self.eval_expression(&call_expr.function) {
-                    Ok(ExecutionFlow::Value(r)) => r,
-                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
-                    _ => return Err(RuntimeFailure),
-                };
-
-                let call_name = match call_expr.function.as_ref() {
-                    Expression::Identifier { name, .. } => name.clone(),
-                    _ => "<anonymous>".to_string(),
-                };
-                let call_line = call_expr.span.line;
-                let call_col = call_expr.span.column;
-                self.call_stack.push(CallFrame {
-                    name: call_name,
-                    line: call_line,
-                    column: call_col,
-                });
-                self.call_depth += 1;
-
-                self.scopes.push();
-
-                let mut func_data = self.resolve(func_ref).cloned();
-                // A non-callable shadow (e.g. a parameter named like an outer
-                // function) must not hide that function from a CALL — reads
-                // still see the shadow, but `name(...)` falls back to the
-                // nearest binding that actually holds a function.
-                if !matches!(func_data, Some(ObjectData::Function { .. })) {
-                    if let Expression::Identifier { name, .. } = call_expr.function.as_ref() {
-                        if let Some(fref) = self.lookup_callable(name) {
-                            func_data = self.resolve(fref).cloned();
-                        }
-                    }
-                }
-                let (return_type, parameters, body, captured, is_generator, bound_class) =
-                    match func_data {
-                        Some(ObjectData::Function {
-                            return_type,
-                            parameters,
-                            body,
-                            captured,
-                            is_generator,
-                            bound_class,
-                        }) => (
-                            return_type,
-                            parameters,
-                            body,
-                            captured,
-                            is_generator,
-                            bound_class,
-                        ),
-                        _ => {
-                            // Raise BEFORE unwinding so the printed call stack still
-                            // shows the failing frame; state is restored either way,
-                            // so a catching try/catch sees a consistent evaluator.
-                            let err =
-                                self.rt_err_kind("TypeError", "Attempt to call a non-function");
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
-                            return err;
-                        }
-                    };
-
-                let mut arg_refs = Vec::new();
-                for arg in &call_expr.arguments {
-                    // Spread: ...expr expands an array into the argument list
-                    if let Expression::Spread { value: inner, .. } = arg {
-                        let spread_ref = match self.eval_expression(inner) {
-                            Ok(ExecutionFlow::Value(r)) => r,
-                            Ok(ExecutionFlow::Throw(v)) => {
-                                let owned = self.extract(v);
-                                self.scopes.pop();
-                                self.call_depth -= 1;
-                                self.call_stack.pop();
-                                return Ok(ExecutionFlow::Throw(self.plant(owned)));
-                            }
-                            _ => {
-                                self.scopes.pop();
-                                self.call_depth -= 1;
-                                self.call_stack.pop();
-                                return Err(RuntimeFailure);
-                            }
-                        };
-                        match self.resolve(spread_ref).cloned() {
-                            Some(ObjectData::Array {
-                                elements: spread_elems,
-                                ..
-                            }) => {
-                                for elem in spread_elems {
-                                    let planted = self.plant(elem);
-                                    arg_refs.push(planted);
-                                }
-                            }
-                            _ => {
-                                let err = self.rt_err_kind(
-                                    "TypeError",
-                                    "Spread in function call requires an array",
-                                );
-                                self.scopes.pop();
-                                self.call_depth -= 1;
-                                self.call_stack.pop();
-                                return err;
-                            }
-                        }
-                        continue;
-                    }
-                    match self.eval_expression(arg) {
-                        Ok(ExecutionFlow::Value(r)) => arg_refs.push(r),
-                        // A throw inside an argument (g() in f(g())) must unwind as a
-                        // THROW, not degrade to a silent Error. Re-plant the payload
-                        // across the pop so it survives this frame's teardown.
-                        Ok(ExecutionFlow::Throw(v)) => {
-                            let owned = self.extract(v);
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
-                            return Ok(ExecutionFlow::Throw(self.plant(owned)));
-                        }
-                        _ => {
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
-                            return Err(RuntimeFailure);
-                        }
-                    }
-                }
-
-                // Check for rest parameter (last param with is_rest=true)
-                let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
-                let required_count = parameters
-                    .iter()
-                    .filter(|p| !p.is_rest && p.default_value.is_none())
-                    .count();
-                let min_params = required_count;
-                let max_params = if has_rest {
-                    usize::MAX
-                } else {
-                    parameters.len()
-                };
-
-                if arg_refs.len() < min_params || arg_refs.len() > max_params {
-                    let expected_str = if has_rest {
-                        format!("at least {}", min_params)
-                    } else if min_params == max_params {
-                        format!("{}", min_params)
-                    } else {
-                        format!("{}-{}", min_params, max_params)
-                    };
-                    // rt_err_kind prints the message + call stack (uncaught case)
-                    // with the failing frame still on it; then unwind.
-                    let err = self.rt_err_kind(
-                        "TypeError",
-                        format!(
-                            "Function expected {} argument(s), got {}",
-                            expected_str,
-                            arg_refs.len()
-                        ),
-                    );
-                    self.scopes.pop();
-                    self.call_depth -= 1;
-                    self.call_stack.pop();
-                    return err;
-                }
-
-                for (i, param) in parameters.iter().enumerate() {
-                    if param.is_rest {
-                        break;
-                    }
-                    if i >= arg_refs.len() {
-                        break;
-                    } // default will be used
-                    let arg_ref = arg_refs[i];
-                    if let Some(expected_type) = &param.type_name {
-                        // Classify before raising: `resolve` holds an immutable
-                        // borrow that must end before a diagnostic is recorded.
-                        let mismatch = match self.resolve(arg_ref) {
-                            Some(data) if type_matches(expected_type.as_str(), data) => None,
-                            Some(data) => Some(data.type_name().to_string()),
-                            None => Some("null".to_string()),
-                        };
-                        if let Some(actual) = mismatch {
-                            let message = format!(
-                                "Parameter '{}' expected '{}' but received '{}'",
-                                param.name, expected_type, actual
-                            );
-                            self.scopes.pop();
-                            self.call_depth -= 1;
-                            self.call_stack.pop();
-                            return self.rt_err_kind("TypeError", message);
-                        }
-                    }
-                }
-
-                // Bind captured environment first — params shadow same-named captures
-                for (name, cap_ref) in captured.iter() {
-                    self.scopes.declare(name.clone(), *cap_ref);
-                }
-
-                for (i, param) in parameters.iter().enumerate() {
-                    if param.is_rest {
-                        // Collect remaining args into an array
-                        let rest_elems: Vec<OwnedValue> = arg_refs[i.min(arg_refs.len())..]
-                            .iter()
-                            .map(|&r| self.extract(r))
-                            .collect();
-                        let rest_ref = self.alloc(ObjectData::Array {
-                            element_type: None,
-                            elements: rest_elems,
-                        });
-                        self.scopes.declare(param.name.clone(), rest_ref);
-                        break;
-                    }
-                    let local_ref = if i < arg_refs.len() {
-                        let arg_data = self.resolve(arg_refs[i]).unwrap().clone();
-                        self.alloc(arg_data)
-                    } else if let Some(default_expr) = &param.default_value {
-                        let default_expr = default_expr.clone();
-                        match self.eval_default_argument(&default_expr) {
-                            DefaultArgumentResult::Value(value) => value,
-                            DefaultArgumentResult::Throw(owned) => {
-                                self.scopes.pop();
-                                self.call_depth -= 1;
-                                self.call_stack.pop();
-                                return Ok(ExecutionFlow::Throw(self.plant(owned)));
-                            }
-                            DefaultArgumentResult::Error => {
-                                self.scopes.pop();
-                                self.call_depth -= 1;
-                                self.call_stack.pop();
-                                return Err(RuntimeFailure);
-                            }
-                        }
-                    } else {
-                        self.null_ref
-                    };
-                    self.scopes.declare(param.name.clone(), local_ref);
-                }
-
-                // Generator: save outer collector, install a fresh one
-                let prev_collector = if is_generator {
-                    let prev = self.yield_collector.take();
-                    self.yield_collector = Some(Vec::new());
-                    prev
-                } else {
-                    None
-                };
-
-                // Referencia a método ligada (`obj.metodo` sin paréntesis): el cuerpo se
-                // ejecuta con el contexto de SU clase, o perdería el acceso a los miembros
-                // privados propios. Se restaura apenas termina el cuerpo.
-                let prev_exec_class = bound_class
-                    .as_ref()
-                    .map(|c| self.executing_class.replace(c.clone()));
-
-                let mut result_ref = self.null_ref;
-                let mut early_throw: Option<OwnedValue> = None;
-                let mut early_error = false;
-                for s in &body.statements {
-                    match self.eval_statement(s) {
-                        Ok(ExecutionFlow::Value(_)) => {} // implicit — function result is null unless explicit return
-                        Ok(ExecutionFlow::Return(v)) => {
-                            result_ref = v;
-                            break;
-                        }
-                        Ok(ExecutionFlow::Throw(v)) => {
-                            early_throw = Some(self.extract(v));
-                            break;
-                        }
-                        Err(RuntimeFailure) => {
-                            early_error = true;
-                            break;
-                        }
-                        Ok(ExecutionFlow::Break)
-                        | Ok(ExecutionFlow::Continue)
-                        | Ok(ExecutionFlow::BreakLabel(_))
-                        | Ok(ExecutionFlow::ContinueLabel(_)) => {
-                            let _ =
-                                self.rt_err("'break'/'continue' cannot be used outside of a loop");
-                            early_error = true;
-                            break;
-                        }
-                    }
-                }
-
-                if let Some(prev) = prev_exec_class {
-                    self.executing_class = prev;
-                }
-
-                // Generator: collect yielded values before popping scope
-                if is_generator {
-                    let collected = self.yield_collector.take().unwrap_or_default();
-                    self.yield_collector = prev_collector;
-                    self.scopes.pop();
-                    self.call_depth -= 1;
-                    self.call_stack.pop();
-                    if early_error {
-                        return Err(RuntimeFailure);
-                    }
-                    if let Some(thrown) = early_throw {
-                        return Ok(ExecutionFlow::Throw(self.plant(thrown)));
-                    }
-                    let arr_ref = self.alloc(ObjectData::Array {
-                        element_type: None,
-                        elements: collected,
-                    });
-                    return Ok(ExecutionFlow::Value(arr_ref));
-                }
-
-                if early_error {
-                    self.scopes.pop();
-                    self.call_depth -= 1;
-                    self.call_stack.pop();
-                    return Err(RuntimeFailure);
-                }
-                if let Some(thrown) = early_throw {
-                    self.scopes.pop();
-                    self.call_depth -= 1;
-                    self.call_stack.pop();
-                    return Ok(ExecutionFlow::Throw(self.plant(thrown)));
-                }
-
-                // Deep-extract ANTES del pop — preserva elementos de arrays anidados
-                let owned = self.extract(result_ref);
-
-                self.scopes.pop(); // Flash Scope: destrucción instantánea de temporales
-                self.call_depth -= 1;
-                self.call_stack.pop();
-                let result_ref = self.plant(owned);
-
-                if let Some(expected_ret) = &return_type {
-                    let mismatch = match self.resolve(result_ref) {
-                        Some(data) if type_matches(expected_ret.as_str(), data) => None,
-                        Some(data) => Some(data.type_name().to_string()),
-                        None => Some("null".to_string()),
-                    };
-                    if let Some(actual) = mismatch {
-                        let message = format!(
-                            "Function expected to return '{expected_ret}' but returned '{actual}'"
-                        );
-                        return self.rt_err_kind("TypeError", message);
-                    }
-                }
-
-                Ok(ExecutionFlow::Value(result_ref))
-            }
-
+            Expression::Call(call_expr) => self.eval_call_internal(call_expr, false),
             Expression::ArrayLiteral(arr) => {
                 let mut owned_elems = Vec::new();
                 for el in &arr.elements {
@@ -901,427 +517,7 @@ impl super::Evaluator {
                 "Entry literal {k,v} is only valid as an argument to a dict method",
             ),
 
-            Expression::DotCall(dot_call) => {
-                // super.method(args) — dispatch to parent class method
-                if let Expression::Identifier { ref name, .. } = *dot_call.object {
-                    if name == "super" {
-                        return self.eval_super_method_call(dot_call);
-                    }
-                    // ── Namespace dispatch (Math / File / JSON) ───────────────
-                    if name == "Math" {
-                        return self.eval_math_namespace(dot_call);
-                    }
-                    if name == "Regex" {
-                        return self.eval_regex_namespace(dot_call);
-                    }
-                    if name == "File" {
-                        return self.eval_file_namespace(dot_call);
-                    }
-                    if name == "JSON" {
-                        return self.eval_json_namespace(dot_call);
-                    }
-                    if name == "Tensor" {
-                        return self.eval_tensor_static(dot_call);
-                    }
-                    if name == "Crypto" {
-                        return self.eval_crypto_namespace(dot_call);
-                    }
-                    if name == "Socket" {
-                        return self.eval_socket_namespace(dot_call);
-                    }
-                    if name == "Binary" {
-                        return self.eval_binary_namespace(dot_call);
-                    }
-                    if name == "GPU" {
-                        return self.eval_gpu_namespace(dot_call);
-                    }
-                    if name == "Memory" {
-                        return self.eval_memory_namespace(dot_call);
-                    }
-                    if name == "Random" {
-                        return self.eval_random_namespace(dot_call);
-                    }
-                    if name == "Autodiff" {
-                        return self.eval_autodiff_namespace(dot_call);
-                    }
-                    if name == "Terminal" {
-                        return self.eval_terminal_namespace(dot_call);
-                    }
-                    if name == "OS" {
-                        return self.eval_os_namespace(dot_call);
-                    }
-                    if name == "Env" {
-                        return self.eval_env_namespace(dot_call);
-                    }
-                    if name == "Time" {
-                        return self.eval_time_namespace(dot_call);
-                    }
-                    if name == "DateTime" {
-                        return self.eval_datetime_namespace(dot_call);
-                    }
-                    if name == "Dec" {
-                        return self.eval_dec_namespace(dot_call);
-                    }
-                    if name == "System" {
-                        return self.eval_system_namespace(dot_call);
-                    }
-                    if name == "Gui" {
-                        return self.eval_gui_namespace(dot_call);
-                    }
-                    if name == "Media" {
-                        #[cfg(feature = "audio")]
-                        return self.eval_media_namespace(dot_call);
-                        #[cfg(not(feature = "audio"))]
-                        return self.rt_err_kind("MediaError", "Media (audio) no disponible: este binario se compilo sin la feature 'audio'");
-                    }
-                    if name == "Task" {
-                        return self.eval_task_namespace(dot_call);
-                    }
-                    // ── Enum variant access: Color.Red ────────────────────────
-                    if let Some(variants) = self.enum_registry.get(name).cloned() {
-                        let variant = dot_call.method.clone();
-                        if variants.contains(&variant) {
-                            return Ok(ExecutionFlow::Value(self.alloc(ObjectData::EnumVariant {
-                                enum_name: name.clone(),
-                                variant,
-                            })));
-                        }
-                        let message =
-                            format!("'{}' is not a variant of enum '{}'", dot_call.method, name);
-                        return self.rt_err_kind("ReferenceError", message);
-                    }
-                    // ── Static method call: ClassName.method(args) ───────────────
-                    if let Some(class) = self.class_registry.get(name).cloned() {
-                        let method_name = dot_call.method.clone();
-                        if let Some(m) = class.static_methods.get(&method_name).cloned() {
-                            // Evaluate arguments
-                            let mut arg_vals = Vec::new();
-                            for arg in &dot_call.arguments {
-                                match self.eval_expression(arg) {
-                                    Ok(ExecutionFlow::Value(v)) => {
-                                        let owned = self.extract(v);
-                                        arg_vals.push(owned);
-                                    }
-                                    Ok(ExecutionFlow::Throw(v)) => {
-                                        return Ok(ExecutionFlow::Throw(v));
-                                    }
-                                    _ => return Err(RuntimeFailure),
-                                }
-                            }
-                            // Create a temporary null instance ref for static dispatch
-                            let fake_ref = self.null_ref;
-                            return self.invoke_method(fake_ref, name, &m, arg_vals, 0, 0);
-                        }
-                        let message = format!(
-                            "Class '{}' has no static method named '{}'",
-                            name, method_name
-                        );
-                        return self.rt_err_kind("ReferenceError", message);
-                    }
-                }
-
-                // Detect chained mutation pattern: instance.field.mutate(args)
-                // After mutation we write the modified array/dict back to the instance field.
-                // The list must name every spelling a mutator answers to: the Set
-                // methods `add` and `delete` were missing while their aliases
-                // `remove`/`clear` were present, so `inst.someSet.add(x)` mutated
-                // the copy planted by the field read and the result was dropped.
-                let writeback_ctx: Option<(Expression, String)> =
-                    if let Expression::DotCall(inner) = dot_call.object.as_ref() {
-                        if inner.arguments.is_empty() {
-                            if MUTATING_COLLECTION_OPS.contains(&dot_call.method.as_str()) {
-                                Some((*inner.object.clone(), inner.method.clone()))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                let obj_ref = match self.eval_expression(&dot_call.object) {
-                    Ok(ExecutionFlow::Value(r)) => r,
-                    Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
-                    _ => return Err(RuntimeFailure),
-                };
-
-                // All Set methods run against the arena slot (methods_set.rs):
-                // no O(N) clone of the receiver per call — even .size() paid
-                // one — and the slot-resident hash index stays warm. Sets never
-                // participated in the dict["key"] writeback (Array-only), but
-                // `instance.field.remove/clear(...)` DOES write the mutated set
-                // back into the field — same as the generic path below.
-                if matches!(self.resolve(obj_ref), Some(ObjectData::Set { .. })) {
-                    // A Set living in a dict slot needs the same writeback an
-                    // Array gets: `d["k"]` planted a copy, so a mutation on it
-                    // is dropped unless it is written back. The context is taken
-                    // BEFORE the method runs and AFTER obj_ref was evaluated —
-                    // the same order the generic path below uses.
-                    let dict_ctx = match self.dict_slot_ctx(dot_call) {
-                        Ok(c) => c,
-                        Err(e) => return e,
-                    };
-                    let nested = if writeback_ctx.is_none() && dict_ctx.is_none() {
-                        self.nested_receiver_path(dot_call)
-                    } else {
-                        None
-                    };
-                    let result = self.eval_set_method_slot(obj_ref, dot_call);
-                    if let Some((inner_obj_expr, field_name)) = writeback_ctx {
-                        self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
-                    }
-                    if let Some((dict_ref, key_str)) = dict_ctx {
-                        self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
-                    }
-                    self.apply_nested_writeback(nested, obj_ref);
-                    return result;
-                }
-
-                // Dicts dispatch against the slot too (methods_dict.rs). The
-                // generic path below deep-cloned every entry per call and then
-                // rewrote the whole slot, so `d.Add(...)` in a loop was O(N²) —
-                // 4000 inserts took 8.4 s while the identical `d[k] = v` took
-                // 73 ms. Same writeback contexts as the Set branch: a dict read
-                // out of a field or out of another dict's slot is a planted
-                // copy, and the mutation has to travel back.
-                if matches!(self.resolve(obj_ref), Some(ObjectData::Dict { .. })) {
-                    // Only a mutator needs the writeback, and taking it is not
-                    // free: it deep-copies the receiver into the enclosing slot.
-                    // The generic path used to pay that on every dict method, so
-                    // `outer["in"].keys()` copied `outer["in"]` back over itself.
-                    // The field writeback (writeback_ctx) is already gated the
-                    // same way, by the MUTATING list above.
-                    const MUTATING: &[&str] = &["Add", "Remove", "RemoveAll", "clear"];
-                    let dict_ctx = if MUTATING.contains(&dot_call.method.as_str()) {
-                        match self.dict_slot_ctx(dot_call) {
-                            Ok(c) => c,
-                            Err(e) => return e,
-                        }
-                    } else {
-                        None
-                    };
-                    let nested = if writeback_ctx.is_none() && dict_ctx.is_none() {
-                        self.nested_receiver_path(dot_call)
-                    } else {
-                        None
-                    };
-                    let result = self.eval_dict_method_slot(obj_ref, dot_call);
-                    if let Some((inner_obj_expr, field_name)) = writeback_ctx {
-                        self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
-                    }
-                    if let Some((dict_ref, key_str)) = dict_ctx {
-                        self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
-                    }
-                    self.apply_nested_writeback(nested, obj_ref);
-                    return result;
-                }
-
-                // Array fast path for the loop builders/drainers: push/pop run
-                // against the arena slot instead of cloning the whole array per
-                // call (the generic path below made `a.push(x)` O(N) — building
-                // an array in a loop was O(N²) in time). Index receivers
-                // (`d["k"].push`, `m[i].push`) keep the generic path: they need
-                // the dict-writeback machinery below.
-                if matches!(dot_call.method.as_str(), "push" | "pop")
-                    && !matches!(dot_call.object.as_ref(), Expression::Index(_))
-                    && matches!(self.resolve(obj_ref), Some(ObjectData::Array { .. }))
-                {
-                    let result = self.eval_array_fast(obj_ref, dot_call);
-                    if let Some((inner_obj_expr, field_name)) = writeback_ctx {
-                        self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
-                    }
-                    return result;
-                }
-
-                // Instances dispatch against the slot as well. The generic clone
-                // below copies EVERY field to service a call that only ever reads
-                // them, so an instance holding a 1000-element array paid that copy
-                // on each `obj.method()`. Mutation never went through the copy —
-                // invoke_method already works off obj_ref — so this only removes
-                // waste. eval_instance_dot pulls the one field it needs, if any,
-                // out of the slot.
-                if let Some(ObjectData::Instance { class_name, .. }) = self.resolve(obj_ref) {
-                    let class_name = class_name.clone();
-
-                    // Un método PROPIO sobre un receptor anidado (`a[i].m()`,
-                    // `o.campo.m()`, `this.celdas[i].m()`) mutaba una copia y la
-                    // tiraba: la lectura del elemento planta un valor nuevo, y
-                    // hasta acá sólo los mutadores built-in de una lista fija
-                    // tenían writeback. Es lo que rompía useEffect en serez-ui
-                    // (`this.effects[i].run()` no persistía `ran`/`cleanup`).
-                    //
-                    // El writeback copia el receptor de vuelta a su contenedor,
-                    // así que se paga sólo si hace falta. Dos condiciones, en
-                    // este orden porque la primera es sintáctica y gratis:
-                    //   1. el receptor es una ruta anidada — una variable suelta
-                    //      ya muta su propio slot y no necesita nada;
-                    //   2. el método puede escribir en `this` (análisis estático
-                    //      cacheado por clase+método, ver lvalue.rs).
-                    let nested_receiver = matches!(
-                        dot_call.object.as_ref(),
-                        Expression::Index(_) | Expression::DotCall(_)
-                    );
-                    let mut self_mut_path = None;
-                    if nested_receiver && (dot_call.has_parens || !dot_call.arguments.is_empty()) {
-                        if let Some(m) = self.find_method(&class_name, &dot_call.method) {
-                            if self.method_mutates_self(&class_name, &m) {
-                                self_mut_path = self.resolve_lvalue_path(dot_call.object.as_ref());
-                            }
-                        }
-                    }
-
-                    let result = self.eval_instance_dot(obj_ref, class_name, dot_call);
-                    if let Some((inner_obj_expr, field_name)) = writeback_ctx {
-                        self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
-                    }
-                    if let Some((root, steps)) = self_mut_path {
-                        let updated = self.extract(obj_ref);
-                        self.store_path(root, &steps, updated);
-                    }
-                    return result;
-                }
-
-                // length() is O(1) on both collections, but the generic path paid
-                // an O(N) clone to read it — and it is the single most common call
-                // in an indexed loop header. No arguments, so there is no
-                // evaluation-order question. Inherently-O(N) methods (indexOf,
-                // join, map…) deliberately stay on the snapshot path below: the
-                // clone does not change their complexity, and moving them would
-                // change when their arguments observe the receiver.
-                if dot_call.method == "length" && dot_call.arguments.is_empty() {
-                    let n = match self.resolve(obj_ref) {
-                        // `a.length` is a property on an array, with or without
-                        // parentheses — documented and used 88 times across the
-                        // corpus and the apps.
-                        Some(ObjectData::Array { elements, .. }) => Some(elements.len() as i64),
-                        // A dict is different, and DEC-M12-001 is why: on a dict
-                        // `d.length` is the key "length", so only the call form
-                        // may be answered here. Without this guard the shortcut
-                        // would reach past the dispatcher and make one key
-                        // unreadable — the precedence bug, relocated.
-                        Some(ObjectData::Dict { entries, .. }) if dot_call.has_parens => {
-                            Some(entries.len() as i64)
-                        }
-                        _ => None,
-                    };
-                    if let Some(n) = n {
-                        return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))));
-                    }
-                }
-
-                let obj_data = match self.resolve(obj_ref) {
-                    Some(d) => d.clone(),
-                    None => {
-                        return self.rt_err_kind("ReferenceError", "Invalid reference in dot call");
-                    }
-                };
-
-                // Optional chaining: return null if object is null
-                if dot_call.is_optional {
-                    if let ObjectData::Null = obj_data {
-                        return Ok(ExecutionFlow::Value(self.null_ref));
-                    }
-                }
-
-                // Detect dict["key"].mutatingMethod() pattern for writeback
-                let dict_writeback_ctx = match self.dict_slot_ctx(dot_call) {
-                    Ok(c) => c,
-                    Err(e) => return e,
-                };
-                let nested_writeback = if writeback_ctx.is_none() && dict_writeback_ctx.is_none() {
-                    self.nested_receiver_path(dot_call)
-                } else {
-                    None
-                };
-
-                let result = match obj_data {
-                    // ── Array methods ─────────────────────────────────────────
-                    ObjectData::Array {
-                        element_type,
-                        elements: ref elems,
-                    } => {
-                        let r = self.eval_array_method(
-                            obj_ref,
-                            element_type.clone(),
-                            elems.clone(),
-                            dot_call,
-                        );
-                        // Writeback: if array came from dict["key"], update the dict entry
-                        if let Some((dict_ref, key_str)) = dict_writeback_ctx {
-                            self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
-                        }
-                        self.apply_nested_writeback(nested_writeback, obj_ref);
-                        r
-                    }
-
-                    // ── String methods ────────────────────────────────────────
-                    ObjectData::Str(ref s) => self.eval_string_method(s.clone(), dot_call),
-
-                    // (Dict methods are intercepted before this match — see the
-                    // slot fast path above; a Dict can never reach here.)
-                    // ── Instance field read / method call ─────────────────────
-                    // Instance is handled by the slot fast path above and never
-                    // reaches this match.
-
-                    // (Set methods are intercepted before this match — see the
-                    // slot fast path above; a Set can never reach here.)
-
-                    // ── Tensor methods ────────────────────────────────────────
-                    ObjectData::Tensor { shape, data, .. } => {
-                        self.eval_tensor_method(obj_ref, shape, data, dot_call)
-                    }
-
-                    // ── Exact decimal methods (round/setScale/abs/...) ─────────
-                    ObjectData::Dec(d) => self.eval_dec_method(d, dot_call),
-
-                    // ── DateTime field getters / methods ──────────────────────
-                    ObjectData::DateTime { epoch_ms, utc } => {
-                        self.eval_datetime_method(epoch_ms, utc, dot_call)
-                    }
-
-                    // ── DateField arithmetic (.add/.reduce/.remove) ───────────
-                    ObjectData::DateField {
-                        epoch_ms,
-                        utc,
-                        field,
-                        value,
-                    } => self.eval_datefield_method(epoch_ms, utc, field, value, dot_call),
-
-                    // ── EnumVariant: no field access, just toString ────────────
-                    ObjectData::EnumVariant { enum_name, variant } => {
-                        if dot_call.method == "toString" {
-                            let s = format!("{}.{}", enum_name, variant);
-                            Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
-                        } else {
-                            let message =
-                                format!("Enum variant has no method '{}'", dot_call.method);
-                            self.rt_err_kind("ReferenceError", message)
-                        }
-                    }
-
-                    // .toString() available on all types
-                    _ if dot_call.method == "toString" => {
-                        let s = self.display(obj_ref);
-                        Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
-                    }
-
-                    _ => {
-                        let actual = obj_data.type_name().to_string();
-                        let message = format!("'.' method call not supported for type '{actual}'");
-                        self.rt_err_kind("TypeError", message)
-                    }
-                };
-
-                // Write back mutated array/dict to its instance field after mutation
-                if let Some((inner_obj_expr, field_name)) = writeback_ctx {
-                    self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
-                }
-
-                result
-            }
-
+            Expression::DotCall(dot_call) => self.eval_dot_call_internal(dot_call, false),
             Expression::New(new_expr) => {
                 // ── Built-in Tensor type ──────────────────────────────────────
                 if new_expr.class_name == "Tensor" {
@@ -1611,6 +807,7 @@ impl super::Evaluator {
                 let block = block.clone();
                 self.eval_unsafe_block(&block)
             }
+            Expression::Await { value, span } => self.eval_await_expression(value, *span),
         }
     }
 
@@ -1648,6 +845,932 @@ impl super::Evaluator {
                 }
                 false
             }
+        }
+    }
+
+    pub(super) fn eval_call_internal(
+        &mut self,
+        call_expr: &ast::CallExpression,
+        is_await: bool,
+    ) -> EvalResult {
+        // Built-in global functions (intercept before variable lookup)
+        if let Expression::Identifier { name, .. } = call_expr.function.as_ref() {
+            match name.as_str() {
+                "parseInt" => return self.eval_parse_int(&call_expr.arguments),
+                "parseDecimal" => return self.eval_parse_decimal(&call_expr.arguments),
+                "readLine" => return self.eval_read_line(&call_expr.arguments),
+                "fetch" if self.lookup_var("fetch").is_none() => {
+                    if is_await {
+                        return self.eval_fetch_async(&call_expr.arguments);
+                    } else {
+                        return self.eval_fetch(&call_expr.arguments);
+                    }
+                }
+                _ if is_await && crate::capabilities::is_sync_only_operation(None, name) => {
+                    return self.rt_err_kind(
+                        "TypeError",
+                        format!(
+                            "operation '{}' is synchronous and does not support 'await'",
+                            name
+                        ),
+                    );
+                }
+                "super" => return self.eval_super_call(&call_expr.arguments),
+                "assert" => return self.eval_assert(&call_expr.arguments),
+                "type_of" => return self.eval_type_of(&call_expr.arguments),
+                "abs" | "sqrt" | "floor" | "ceil" | "round" | "min" | "max" | "pow" | "log"
+                | "log2" | "log10" => {
+                    return self.eval_math_builtin(name, &call_expr.arguments);
+                }
+                "time" => return self.eval_builtin_time(),
+                "env" => return self.eval_builtin_env(&call_expr.arguments),
+                "exit" => return self.eval_builtin_exit(&call_expr.arguments),
+                _ => {}
+            }
+            // native fn dispatch: if name is registered as a native function but has no
+            // variable binding, it must be one of the built-in natives listed above; if it
+            // reached here there is no Rust implementation for it.
+            if self.native_fns.contains(name) && self.lookup_var(name).is_none() {
+                let n = name.clone();
+                return self.rt_err_kind(
+                    "TypeError",
+                    format!(
+                        "native function '{}' has no Rust implementation registered",
+                        n
+                    ),
+                );
+            }
+        }
+
+        if let Some(error) = self.require_call_capacity() {
+            return error;
+        }
+
+        let func_ref = match self.eval_expression(&call_expr.function) {
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
+        };
+
+        let call_name = match call_expr.function.as_ref() {
+            Expression::Identifier { name, .. } => name.clone(),
+            _ => "<anonymous>".to_string(),
+        };
+        let call_line = call_expr.span.line;
+        let call_col = call_expr.span.column;
+        self.call_stack.push(CallFrame {
+            name: call_name.clone(),
+            line: call_line,
+            column: call_col,
+        });
+        self.call_depth += 1;
+
+        self.scopes.push();
+
+        let mut func_data = self.resolve(func_ref).cloned();
+        // A non-callable shadow (e.g. a parameter named like an outer
+        // function) must not hide that function from a CALL — reads
+        // still see the shadow, but `name(...)` falls back to the
+        // nearest binding that actually holds a function.
+        if !matches!(func_data, Some(ObjectData::Function { .. })) {
+            if let Expression::Identifier { name, .. } = call_expr.function.as_ref() {
+                if let Some(fref) = self.lookup_callable(name) {
+                    func_data = self.resolve(fref).cloned();
+                }
+            }
+        }
+        let (return_type, parameters, body, captured, is_generator, is_async, bound_class) =
+            match func_data {
+                Some(ObjectData::Function {
+                    return_type,
+                    parameters,
+                    body,
+                    captured,
+                    is_generator,
+                    is_async,
+                    bound_class,
+                }) => (
+                    return_type,
+                    parameters,
+                    body,
+                    captured,
+                    is_generator,
+                    is_async,
+                    bound_class,
+                ),
+                _ => {
+                    // Raise BEFORE unwinding so the printed call stack still
+                    // shows the failing frame; state is restored either way,
+                    // so a catching try/catch sees a consistent evaluator.
+                    let err = self.rt_err_kind("TypeError", "Attempt to call a non-function");
+                    self.scopes.pop();
+                    self.call_depth -= 1;
+                    self.call_stack.pop();
+                    return err;
+                }
+            };
+
+        if is_await && !is_async {
+            let err = self.rt_err_kind(
+                "TypeError",
+                format!(
+                    "function '{}' is synchronous and does not support 'await'",
+                    call_name
+                ),
+            );
+            self.scopes.pop();
+            self.call_depth -= 1;
+            self.call_stack.pop();
+            return err;
+        }
+
+        if !is_await && is_async {
+            let err = self.rt_err_kind(
+                "TypeError",
+                format!(
+                    "async function '{}' must be awaited with 'await'",
+                    call_name
+                ),
+            );
+            self.scopes.pop();
+            self.call_depth -= 1;
+            self.call_stack.pop();
+            return err;
+        }
+
+        let mut arg_refs = Vec::new();
+        for arg in &call_expr.arguments {
+            // Spread: ...expr expands an array into the argument list
+            if let Expression::Spread { value: inner, .. } = arg {
+                let spread_ref = match self.eval_expression(inner) {
+                    Ok(ExecutionFlow::Value(r)) => r,
+                    Ok(ExecutionFlow::Throw(v)) => {
+                        let owned = self.extract(v);
+                        self.scopes.pop();
+                        self.call_depth -= 1;
+                        self.call_stack.pop();
+                        return Ok(ExecutionFlow::Throw(self.plant(owned)));
+                    }
+                    _ => {
+                        self.scopes.pop();
+                        self.call_depth -= 1;
+                        self.call_stack.pop();
+                        return Err(RuntimeFailure);
+                    }
+                };
+                match self.resolve(spread_ref).cloned() {
+                    Some(ObjectData::Array {
+                        elements: spread_elems,
+                        ..
+                    }) => {
+                        for elem in spread_elems {
+                            let planted = self.plant(elem);
+                            arg_refs.push(planted);
+                        }
+                    }
+                    _ => {
+                        let err = self
+                            .rt_err_kind("TypeError", "Spread in function call requires an array");
+                        self.scopes.pop();
+                        self.call_depth -= 1;
+                        self.call_stack.pop();
+                        return err;
+                    }
+                }
+                continue;
+            }
+            match self.eval_expression(arg) {
+                Ok(ExecutionFlow::Value(r)) => arg_refs.push(r),
+                // A throw inside an argument (g() in f(g())) must unwind as a
+                // THROW, not degrade to a silent Error. Re-plant the payload
+                // across the pop so it survives this frame's teardown.
+                Ok(ExecutionFlow::Throw(v)) => {
+                    let owned = self.extract(v);
+                    self.scopes.pop();
+                    self.call_depth -= 1;
+                    self.call_stack.pop();
+                    return Ok(ExecutionFlow::Throw(self.plant(owned)));
+                }
+                _ => {
+                    self.scopes.pop();
+                    self.call_depth -= 1;
+                    self.call_stack.pop();
+                    return Err(RuntimeFailure);
+                }
+            }
+        }
+
+        // Check for rest parameter (last param with is_rest=true)
+        let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
+        let required_count = parameters
+            .iter()
+            .filter(|p| !p.is_rest && p.default_value.is_none())
+            .count();
+        let min_params = required_count;
+        let max_params = if has_rest {
+            usize::MAX
+        } else {
+            parameters.len()
+        };
+
+        if arg_refs.len() < min_params || arg_refs.len() > max_params {
+            let expected_str = if has_rest {
+                format!("at least {}", min_params)
+            } else if min_params == max_params {
+                format!("{}", min_params)
+            } else {
+                format!("{}-{}", min_params, max_params)
+            };
+            // rt_err_kind prints the message + call stack (uncaught case)
+            // with the failing frame still on it; then unwind.
+            let err = self.rt_err_kind(
+                "TypeError",
+                format!(
+                    "Function expected {} argument(s), got {}",
+                    expected_str,
+                    arg_refs.len()
+                ),
+            );
+            self.scopes.pop();
+            self.call_depth -= 1;
+            self.call_stack.pop();
+            return err;
+        }
+
+        for (i, param) in parameters.iter().enumerate() {
+            if param.is_rest {
+                break;
+            }
+            if i >= arg_refs.len() {
+                break;
+            } // default will be used
+            let arg_ref = arg_refs[i];
+            if let Some(expected_type) = &param.type_name {
+                // Classify before raising: `resolve` holds an immutable
+                // borrow that must end before a diagnostic is recorded.
+                let mismatch = match self.resolve(arg_ref) {
+                    Some(data) if type_matches(expected_type.as_str(), data) => None,
+                    Some(data) => Some(data.type_name().to_string()),
+                    None => Some("null".to_string()),
+                };
+                if let Some(actual) = mismatch {
+                    let message = format!(
+                        "Parameter '{}' expected '{}' but received '{}'",
+                        param.name, expected_type, actual
+                    );
+                    self.scopes.pop();
+                    self.call_depth -= 1;
+                    self.call_stack.pop();
+                    return self.rt_err_kind("TypeError", message);
+                }
+            }
+        }
+
+        // Bind captured environment first — params shadow same-named captures
+        for (name, cap_ref) in captured.iter() {
+            self.scopes.declare(name.clone(), *cap_ref);
+        }
+
+        for (i, param) in parameters.iter().enumerate() {
+            if param.is_rest {
+                // Collect remaining args into an array
+                let rest_elems: Vec<OwnedValue> = arg_refs[i.min(arg_refs.len())..]
+                    .iter()
+                    .map(|&r| self.extract(r))
+                    .collect();
+                let rest_ref = self.alloc(ObjectData::Array {
+                    element_type: None,
+                    elements: rest_elems,
+                });
+                self.scopes.declare(param.name.clone(), rest_ref);
+                break;
+            }
+            let local_ref = if i < arg_refs.len() {
+                let arg_data = self.resolve(arg_refs[i]).unwrap().clone();
+                self.alloc(arg_data)
+            } else if let Some(default_expr) = &param.default_value {
+                let default_expr = default_expr.clone();
+                match self.eval_default_argument(&default_expr) {
+                    DefaultArgumentResult::Value(value) => value,
+                    DefaultArgumentResult::Throw(owned) => {
+                        self.scopes.pop();
+                        self.call_depth -= 1;
+                        self.call_stack.pop();
+                        return Ok(ExecutionFlow::Throw(self.plant(owned)));
+                    }
+                    DefaultArgumentResult::Error => {
+                        self.scopes.pop();
+                        self.call_depth -= 1;
+                        self.call_stack.pop();
+                        return Err(RuntimeFailure);
+                    }
+                }
+            } else {
+                self.null_ref
+            };
+            self.scopes.declare(param.name.clone(), local_ref);
+        }
+
+        // Generator: save outer collector, install a fresh one
+        let prev_collector = if is_generator {
+            let prev = self.yield_collector.take();
+            self.yield_collector = Some(Vec::new());
+            prev
+        } else {
+            None
+        };
+
+        // Referencia a método ligada (`obj.metodo` sin paréntesis): el cuerpo se
+        // ejecuta con el contexto de SU clase, o perdería el acceso a los miembros
+        // privados propios. Se restaura apenas termina el cuerpo.
+        let prev_exec_class = bound_class
+            .as_ref()
+            .map(|c| self.executing_class.replace(c.clone()));
+
+        let mut result_ref = self.null_ref;
+        let mut early_throw: Option<OwnedValue> = None;
+        let mut early_error = false;
+        for (idx, s) in body.statements.iter().enumerate() {
+            match self.eval_statement(s) {
+                Ok(ExecutionFlow::Value(_)) => {} // implicit — function result is null unless explicit return
+                Ok(ExecutionFlow::Return(v)) => {
+                    result_ref = v;
+                    break;
+                }
+                Ok(ExecutionFlow::Throw(v)) => {
+                    early_throw = Some(self.extract(v));
+                    break;
+                }
+                Ok(ExecutionFlow::Suspend(op_id)) => {
+                    let remaining = body.statements[idx + 1..].to_vec();
+                    if let Some(ctx) = &mut self.suspended_context {
+                        if !remaining.is_empty() {
+                            ctx.push_frame(
+                                crate::evaluator::suspension::ContinuationFrame::Block {
+                                    remaining_statements: remaining,
+                                },
+                            );
+                        }
+                        ctx.push_frame(crate::evaluator::suspension::ContinuationFrame::Function(
+                            crate::evaluator::suspension::FunctionContinuation {
+                                call_name: call_name.clone(),
+                                return_type: return_type.clone(),
+                                is_async,
+                                remaining_caller_statements: Vec::new(),
+                                caller_statement: None,
+                            },
+                        ));
+                    }
+                    if let Some(prev) = prev_exec_class {
+                        self.executing_class = prev;
+                    }
+                    return Ok(ExecutionFlow::Suspend(op_id));
+                }
+                Err(RuntimeFailure) => {
+                    early_error = true;
+                    break;
+                }
+                Ok(ExecutionFlow::Break)
+                | Ok(ExecutionFlow::Continue)
+                | Ok(ExecutionFlow::BreakLabel(_))
+                | Ok(ExecutionFlow::ContinueLabel(_)) => {
+                    let _ = self.rt_err("'break'/'continue' cannot be used outside of a loop");
+                    early_error = true;
+                    break;
+                }
+            }
+        }
+
+        if let Some(prev) = prev_exec_class {
+            self.executing_class = prev;
+        }
+
+        // Generator: collect yielded values before popping scope
+        if is_generator {
+            let collected = self.yield_collector.take().unwrap_or_default();
+            self.yield_collector = prev_collector;
+            self.scopes.pop();
+            self.call_depth -= 1;
+            self.call_stack.pop();
+            if early_error {
+                return Err(RuntimeFailure);
+            }
+            if let Some(thrown) = early_throw {
+                return Ok(ExecutionFlow::Throw(self.plant(thrown)));
+            }
+            let arr_ref = self.alloc(ObjectData::Array {
+                element_type: None,
+                elements: collected,
+            });
+            return Ok(ExecutionFlow::Value(arr_ref));
+        }
+
+        if early_error {
+            self.scopes.pop();
+            self.call_depth -= 1;
+            self.call_stack.pop();
+            return Err(RuntimeFailure);
+        }
+        if let Some(thrown) = early_throw {
+            self.scopes.pop();
+            self.call_depth -= 1;
+            self.call_stack.pop();
+            return Ok(ExecutionFlow::Throw(self.plant(thrown)));
+        }
+
+        // Deep-extract ANTES del pop — preserva elementos de arrays anidados
+        let owned = self.extract(result_ref);
+
+        self.scopes.pop(); // Flash Scope: destrucción instantánea de temporales
+        self.call_depth -= 1;
+        self.call_stack.pop();
+        let result_ref = self.plant(owned);
+
+        if let Some(expected_ret) = &return_type {
+            let mismatch = match self.resolve(result_ref) {
+                Some(data) if type_matches(expected_ret.as_str(), data) => None,
+                Some(data) => Some(data.type_name().to_string()),
+                None => Some("null".to_string()),
+            };
+            if let Some(actual) = mismatch {
+                let message =
+                    format!("Function expected to return '{expected_ret}' but returned '{actual}'");
+                return self.rt_err_kind("TypeError", message);
+            }
+        }
+
+        Ok(ExecutionFlow::Value(result_ref))
+    }
+
+    pub(super) fn eval_dot_call_internal(
+        &mut self,
+        dot_call: &ast::DotCallExpression,
+        is_await: bool,
+    ) -> EvalResult {
+        if is_await {
+            if let Expression::Identifier { ref name, .. } = *dot_call.object {
+                if let Some(crate::capabilities::OperationCapability::SyncOnly) =
+                    crate::capabilities::lookup_namespace_capability(name, &dot_call.method)
+                {
+                    let message = format!(
+                        "operation '{}.{}' is synchronous and does not support 'await'",
+                        name, dot_call.method
+                    );
+                    return self.rt_err_kind("TypeError", message);
+                }
+            }
+        }
+        // super.method(args) — dispatch to parent class method
+        if let Expression::Identifier { ref name, .. } = *dot_call.object {
+            if name == "super" {
+                return self.eval_super_method_call(dot_call);
+            }
+            // ── Namespace dispatch (Math / File / JSON) ───────────────
+            if name == "Math" {
+                return self.eval_math_namespace(dot_call);
+            }
+            if name == "Regex" {
+                return self.eval_regex_namespace(dot_call);
+            }
+            if name == "File" {
+                return self.eval_file_namespace(dot_call);
+            }
+            if name == "JSON" {
+                return self.eval_json_namespace(dot_call);
+            }
+            if name == "Tensor" {
+                return self.eval_tensor_static(dot_call);
+            }
+            if name == "Crypto" {
+                return self.eval_crypto_namespace(dot_call);
+            }
+            if name == "Socket" {
+                return self.eval_socket_namespace(dot_call);
+            }
+            if name == "Binary" {
+                return self.eval_binary_namespace(dot_call);
+            }
+            if name == "GPU" {
+                return self.eval_gpu_namespace(dot_call);
+            }
+            if name == "Memory" {
+                return self.eval_memory_namespace(dot_call);
+            }
+            if name == "Random" {
+                return self.eval_random_namespace(dot_call);
+            }
+            if name == "Autodiff" {
+                return self.eval_autodiff_namespace(dot_call);
+            }
+            if name == "Terminal" {
+                return self.eval_terminal_namespace(dot_call);
+            }
+            if name == "OS" {
+                return self.eval_os_namespace(dot_call);
+            }
+            if name == "Env" {
+                return self.eval_env_namespace(dot_call);
+            }
+            if name == "Time" {
+                return self.eval_time_namespace(dot_call);
+            }
+            if name == "DateTime" {
+                return self.eval_datetime_namespace(dot_call);
+            }
+            if name == "Dec" {
+                return self.eval_dec_namespace(dot_call);
+            }
+            if name == "System" {
+                return self.eval_system_namespace(dot_call);
+            }
+            if name == "Gui" {
+                return self.eval_gui_namespace(dot_call);
+            }
+            if name == "Media" {
+                #[cfg(feature = "audio")]
+                return self.eval_media_namespace(dot_call);
+                #[cfg(not(feature = "audio"))]
+                return self.rt_err_kind(
+                    "MediaError",
+                    "Media (audio) no disponible: este binario se compilo sin la feature 'audio'",
+                );
+            }
+            if name == "Task" {
+                return self.eval_task_namespace(dot_call);
+            }
+            // ── Enum variant access: Color.Red ────────────────────────
+            if let Some(variants) = self.enum_registry.get(name).cloned() {
+                let variant = dot_call.method.clone();
+                if variants.contains(&variant) {
+                    return Ok(ExecutionFlow::Value(self.alloc(ObjectData::EnumVariant {
+                        enum_name: name.clone(),
+                        variant,
+                    })));
+                }
+                let message = format!("'{}' is not a variant of enum '{}'", dot_call.method, name);
+                return self.rt_err_kind("ReferenceError", message);
+            }
+            // ── Static method call: ClassName.method(args) ───────────────
+            if let Some(class) = self.class_registry.get(name).cloned() {
+                let method_name = dot_call.method.clone();
+                if let Some(m) = class.static_methods.get(&method_name).cloned() {
+                    if is_await && !m.is_async {
+                        let message = format!(
+                            "method '{}' is synchronous and does not support 'await'",
+                            method_name
+                        );
+                        return self.rt_err_kind("TypeError", message);
+                    }
+                    if !is_await && m.is_async {
+                        let message = format!(
+                            "async method '{}' must be awaited with 'await'",
+                            method_name
+                        );
+                        return self.rt_err_kind("TypeError", message);
+                    }
+                    // Evaluate arguments
+                    let mut arg_vals = Vec::new();
+                    for arg in &dot_call.arguments {
+                        match self.eval_expression(arg) {
+                            Ok(ExecutionFlow::Value(v)) => {
+                                let owned = self.extract(v);
+                                arg_vals.push(owned);
+                            }
+                            Ok(ExecutionFlow::Throw(v)) => {
+                                return Ok(ExecutionFlow::Throw(v));
+                            }
+                            _ => return Err(RuntimeFailure),
+                        }
+                    }
+                    // Create a temporary null instance ref for static dispatch
+                    let fake_ref = self.null_ref;
+                    return self.invoke_method(fake_ref, name, &m, arg_vals, 0, 0);
+                }
+                let message = format!(
+                    "Class '{}' has no static method named '{}'",
+                    name, method_name
+                );
+                return self.rt_err_kind("ReferenceError", message);
+            }
+        }
+
+        // Detect chained mutation pattern: instance.field.mutate(args)
+        // After mutation we write the modified array/dict back to the instance field.
+        // The list must name every spelling a mutator answers to: the Set
+        // methods `add` and `delete` were missing while their aliases
+        // `remove`/`clear` were present, so `inst.someSet.add(x)` mutated
+        // the copy planted by the field read and the result was dropped.
+        let writeback_ctx: Option<(Expression, String)> =
+            if let Expression::DotCall(inner) = dot_call.object.as_ref() {
+                if inner.arguments.is_empty() {
+                    if MUTATING_COLLECTION_OPS.contains(&dot_call.method.as_str()) {
+                        Some((*inner.object.clone(), inner.method.clone()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        let obj_ref = match self.eval_expression(&dot_call.object) {
+            Ok(ExecutionFlow::Value(r)) => r,
+            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
+            _ => return Err(RuntimeFailure),
+        };
+
+        // All Set methods run against the arena slot (methods_set.rs):
+        // no O(N) clone of the receiver per call — even .size() paid
+        // one — and the slot-resident hash index stays warm. Sets never
+        // participated in the dict["key"] writeback (Array-only), but
+        // `instance.field.remove/clear(...)` DOES write the mutated set
+        // back into the field — same as the generic path below.
+        if matches!(self.resolve(obj_ref), Some(ObjectData::Set { .. })) {
+            // A Set living in a dict slot needs the same writeback an
+            // Array gets: `d["k"]` planted a copy, so a mutation on it
+            // is dropped unless it is written back. The context is taken
+            // BEFORE the method runs and AFTER obj_ref was evaluated —
+            // the same order the generic path below uses.
+            let dict_ctx = match self.dict_slot_ctx(dot_call) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let nested = if writeback_ctx.is_none() && dict_ctx.is_none() {
+                self.nested_receiver_path(dot_call)
+            } else {
+                None
+            };
+            let result = self.eval_set_method_slot(obj_ref, dot_call);
+            if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+                self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+            }
+            if let Some((dict_ref, key_str)) = dict_ctx {
+                self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
+            }
+            self.apply_nested_writeback(nested, obj_ref);
+            return result;
+        }
+
+        // Dicts dispatch against the slot too (methods_dict.rs). The
+        // generic path below deep-cloned every entry per call and then
+        // rewrote the whole slot, so `d.Add(...)` in a loop was O(N²) —
+        // 4000 inserts took 8.4 s while the identical `d[k] = v` took
+        // 73 ms. Same writeback contexts as the Set branch: a dict read
+        // out of a field or out of another dict's slot is a planted
+        // copy, and the mutation has to travel back.
+        if matches!(self.resolve(obj_ref), Some(ObjectData::Dict { .. })) {
+            // Only a mutator needs the writeback, and taking it is not
+            // free: it deep-copies the receiver into the enclosing slot.
+            // The generic path used to pay that on every dict method, so
+            // `outer["in"].keys()` copied `outer["in"]` back over itself.
+            // The field writeback (writeback_ctx) is already gated the
+            // same way, by the MUTATING list above.
+            const MUTATING: &[&str] = &["Add", "Remove", "RemoveAll", "clear"];
+            let dict_ctx = if MUTATING.contains(&dot_call.method.as_str()) {
+                match self.dict_slot_ctx(dot_call) {
+                    Ok(c) => c,
+                    Err(e) => return e,
+                }
+            } else {
+                None
+            };
+            let nested = if writeback_ctx.is_none() && dict_ctx.is_none() {
+                self.nested_receiver_path(dot_call)
+            } else {
+                None
+            };
+            let result = self.eval_dict_method_slot(obj_ref, dot_call);
+            if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+                self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+            }
+            if let Some((dict_ref, key_str)) = dict_ctx {
+                self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
+            }
+            self.apply_nested_writeback(nested, obj_ref);
+            return result;
+        }
+
+        // Array fast path for the loop builders/drainers: push/pop run
+        // against the arena slot instead of cloning the whole array per
+        // call (the generic path below made `a.push(x)` O(N) — building
+        // an array in a loop was O(N²) in time). Index receivers
+        // (`d["k"].push`, `m[i].push`) keep the generic path: they need
+        // the dict-writeback machinery below.
+        if matches!(dot_call.method.as_str(), "push" | "pop")
+            && !matches!(dot_call.object.as_ref(), Expression::Index(_))
+            && matches!(self.resolve(obj_ref), Some(ObjectData::Array { .. }))
+        {
+            let result = self.eval_array_fast(obj_ref, dot_call);
+            if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+                self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+            }
+            return result;
+        }
+
+        // Instances dispatch against the slot as well. The generic clone
+        // below copies EVERY field to service a call that only ever reads
+        // them, so an instance holding a 1000-element array paid that copy
+        // on each `obj.method()`. Mutation never went through the copy —
+        // invoke_method already works off obj_ref — so this only removes
+        // waste. eval_instance_dot pulls the one field it needs, if any,
+        // out of the slot.
+        if let Some(ObjectData::Instance { class_name, .. }) = self.resolve(obj_ref) {
+            let class_name = class_name.clone();
+
+            // Un método PROPIO sobre un receptor anidado (`a[i].m()`,
+            // `o.campo.m()`, `this.celdas[i].m()`) mutaba una copia y la
+            // tiraba: la lectura del elemento planta un valor nuevo, y
+            // hasta acá sólo los mutadores built-in de una lista fija
+            // tenían writeback. Es lo que rompía useEffect en serez-ui
+            // (`this.effects[i].run()` no persistía `ran`/`cleanup`).
+            //
+            // El writeback copia el receptor de vuelta a su contenedor,
+            // así que se paga sólo si hace falta. Dos condiciones, en
+            // este orden porque la primera es sintáctica y gratis:
+            //   1. el receptor es una ruta anidada — una variable suelta
+            //      ya muta su propio slot y no necesita nada;
+            //   2. el método puede escribir en `this` (análisis estático
+            //      cacheado por clase+método, ver lvalue.rs).
+            let nested_receiver = matches!(
+                dot_call.object.as_ref(),
+                Expression::Index(_) | Expression::DotCall(_)
+            );
+            let mut self_mut_path = None;
+            if nested_receiver && (dot_call.has_parens || !dot_call.arguments.is_empty()) {
+                if let Some(m) = self.find_method(&class_name, &dot_call.method) {
+                    if self.method_mutates_self(&class_name, &m) {
+                        self_mut_path = self.resolve_lvalue_path(dot_call.object.as_ref());
+                    }
+                }
+            }
+
+            let result = self.eval_instance_dot_with(obj_ref, class_name, dot_call, is_await);
+            if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+                self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+            }
+            if let Some((root, steps)) = self_mut_path {
+                let updated = self.extract(obj_ref);
+                self.store_path(root, &steps, updated);
+            }
+            return result;
+        }
+
+        // length() is O(1) on both collections, but the generic path paid
+        // an O(N) clone to read it — and it is the single most common call
+        // in an indexed loop header. No arguments, so there is no
+        // evaluation-order question. Inherently-O(N) methods (indexOf,
+        // join, map…) deliberately stay on the snapshot path below: the
+        // clone does not change their complexity, and moving them would
+        // change when their arguments observe the receiver.
+        if dot_call.method == "length" && dot_call.arguments.is_empty() {
+            let n = match self.resolve(obj_ref) {
+                // `a.length` is a property on an array, with or without
+                // parentheses — documented and used 88 times across the
+                // corpus and the apps.
+                Some(ObjectData::Array { elements, .. }) => Some(elements.len() as i64),
+                // A dict is different, and DEC-M12-001 is why: on a dict
+                // `d.length` is the key "length", so only the call form
+                // may be answered here. Without this guard the shortcut
+                // would reach past the dispatcher and make one key
+                // unreadable — the precedence bug, relocated.
+                Some(ObjectData::Dict { entries, .. }) if dot_call.has_parens => {
+                    Some(entries.len() as i64)
+                }
+                _ => None,
+            };
+            if let Some(n) = n {
+                return Ok(ExecutionFlow::Value(self.alloc(ObjectData::Integer(n))));
+            }
+        }
+
+        if is_await {
+            let message = format!(
+                "operation '{}' is synchronous and does not support 'await'",
+                dot_call.method
+            );
+            return self.rt_err_kind("TypeError", message);
+        }
+
+        let obj_data = match self.resolve(obj_ref) {
+            Some(d) => d.clone(),
+            None => {
+                return self.rt_err_kind("ReferenceError", "Invalid reference in dot call");
+            }
+        };
+
+        // Optional chaining: return null if object is null
+        if dot_call.is_optional {
+            if let ObjectData::Null = obj_data {
+                return Ok(ExecutionFlow::Value(self.null_ref));
+            }
+        }
+
+        // Detect dict["key"].mutatingMethod() pattern for writeback
+        let dict_writeback_ctx = match self.dict_slot_ctx(dot_call) {
+            Ok(c) => c,
+            Err(e) => return e,
+        };
+        let nested_writeback = if writeback_ctx.is_none() && dict_writeback_ctx.is_none() {
+            self.nested_receiver_path(dot_call)
+        } else {
+            None
+        };
+
+        let result = match obj_data {
+            // ── Array methods ─────────────────────────────────────────
+            ObjectData::Array {
+                element_type,
+                elements: ref elems,
+            } => {
+                let r =
+                    self.eval_array_method(obj_ref, element_type.clone(), elems.clone(), dot_call);
+                // Writeback: if array came from dict["key"], update the dict entry
+                if let Some((dict_ref, key_str)) = dict_writeback_ctx {
+                    self.apply_dict_writeback(dict_ref, &key_str, obj_ref);
+                }
+                self.apply_nested_writeback(nested_writeback, obj_ref);
+                r
+            }
+
+            // ── String methods ────────────────────────────────────────
+            ObjectData::Str(ref s) => self.eval_string_method(s.clone(), dot_call),
+
+            // (Dict methods are intercepted before this match — see the
+            // slot fast path above; a Dict can never reach here.)
+            // ── Instance field read / method call ─────────────────────
+            // Instance is handled by the slot fast path above and never
+            // reaches this match.
+
+            // (Set methods are intercepted before this match — see the
+            // slot fast path above; a Set can never reach here.)
+
+            // ── Tensor methods ────────────────────────────────────────
+            ObjectData::Tensor { shape, data, .. } => {
+                self.eval_tensor_method(obj_ref, shape, data, dot_call)
+            }
+
+            // ── Exact decimal methods (round/setScale/abs/...) ─────────
+            ObjectData::Dec(d) => self.eval_dec_method(d, dot_call),
+
+            // ── DateTime field getters / methods ──────────────────────
+            ObjectData::DateTime { epoch_ms, utc } => {
+                self.eval_datetime_method(epoch_ms, utc, dot_call)
+            }
+
+            // ── DateField arithmetic (.add/.reduce/.remove) ───────────
+            ObjectData::DateField {
+                epoch_ms,
+                utc,
+                field,
+                value,
+            } => self.eval_datefield_method(epoch_ms, utc, field, value, dot_call),
+
+            // ── EnumVariant: no field access, just toString ────────────
+            ObjectData::EnumVariant { enum_name, variant } => {
+                if dot_call.method == "toString" {
+                    let s = format!("{}.{}", enum_name, variant);
+                    Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
+                } else {
+                    let message = format!("Enum variant has no method '{}'", dot_call.method);
+                    self.rt_err_kind("ReferenceError", message)
+                }
+            }
+
+            // .toString() available on all types
+            _ if dot_call.method == "toString" => {
+                let s = self.display(obj_ref);
+                Ok(ExecutionFlow::Value(self.alloc(ObjectData::Str(s))))
+            }
+
+            _ => {
+                let actual = obj_data.type_name().to_string();
+                let message = format!("'.' method call not supported for type '{actual}'");
+                self.rt_err_kind("TypeError", message)
+            }
+        };
+
+        // Write back mutated array/dict to its instance field after mutation
+        if let Some((inner_obj_expr, field_name)) = writeback_ctx {
+            self.apply_field_writeback(&inner_obj_expr, &field_name, obj_ref);
+        }
+
+        result
+    }
+
+    pub(super) fn eval_await_expression(
+        &mut self,
+        value: &Expression,
+        _span: crate::span::Span,
+    ) -> EvalResult {
+        match value {
+            Expression::Call(call_expr) => self.eval_call_internal(call_expr, true),
+            Expression::DotCall(dot_call) => self.eval_dot_call_internal(dot_call, true),
+            _ => self.rt_err_kind(
+                "TypeError",
+                "operand of 'await' must be an asynchronous operation or async function/method call",
+            ),
         }
     }
 }

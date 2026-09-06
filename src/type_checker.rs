@@ -129,6 +129,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 })
             }
+            Expression::Await { value, .. } => self.infer_type(value),
             _ => None,
         }
     }
@@ -286,6 +287,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
             }
+            Expression::Await { value, .. } => self.check_expression(value, expected_return),
             _ => {}
         }
     }

@@ -361,6 +361,7 @@ fn collect_expression(
                 collect_expression(argument, depth, block, out);
             }
         }
+        Expression::Await { value, .. } => collect_expression(value, depth, container, out),
         _ => {}
     }
 }

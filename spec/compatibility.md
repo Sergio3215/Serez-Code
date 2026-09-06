@@ -9,7 +9,7 @@ Other spec documents refer to "the deprecation policy". This is it.
 ## Two version numbers
 
 **Runtime version** — the number `sz --version` prints and `Cargo.toml`
-declares. It is currently `11.0.0`. A release is a git tag `vX.Y.Z`; the release
+declares. It is currently `11.1.0`. A release is a git tag `vX.Y.Z`; the release
 workflow refuses to publish when the tag and the Cargo version disagree, so the
 printed version is always the version that was built.
 

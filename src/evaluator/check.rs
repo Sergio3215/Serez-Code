@@ -233,6 +233,7 @@ impl super::Evaluator {
             ast::Expression::SizeOf { target: _, .. } => 8,
             ast::Expression::AddressOf { value: inner, .. } => 8 + self.estimate_expression(inner),
             ast::Expression::Deref { value: inner, .. } => 8 + self.estimate_expression(inner),
+            ast::Expression::Await { value: inner, .. } => 8 + self.estimate_expression(inner),
             ast::Expression::Match(m) => {
                 let subject_cost = self.estimate_expression(&m.subject);
                 let arms_cost: usize = m

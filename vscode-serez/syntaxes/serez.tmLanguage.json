@@ -88,7 +88,7 @@
       "patterns": [
         {
           "name": "keyword.control.serez",
-          "match": "\\b(if|else|while|do|for|in|switch|case|default|break|continue|return|try|catch|finally|throw|match|yield)\\b"
+          "match": "\\b(if|else|while|do|for|in|switch|case|default|break|continue|return|try|catch|finally|throw|match|yield|await)\\b"
         },
         {
           "name": "keyword.declaration.serez",
@@ -96,7 +96,7 @@
         },
         {
           "name": "keyword.modifier.serez",
-          "match": "\\b(public|private|static|abstract|sealed|get|set|unsafe)\\b"
+          "match": "\\b(public|private|static|abstract|sealed|get|set|unsafe|async)\\b"
         },
         {
           "name": "keyword.control.import.serez",

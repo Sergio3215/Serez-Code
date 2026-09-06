@@ -109,6 +109,7 @@ pub struct FunctionLiteral {
     pub parameters: Vec<Parameter>,
     pub body: BlockStatement,
     pub is_generator: bool,
+    pub is_async: bool,
     pub span: Span,
 }
 
@@ -244,6 +245,7 @@ pub struct ClassMethod {
     pub is_getter: bool,
     pub is_setter: bool,
     pub is_static: bool,
+    pub is_async: bool,
     pub return_type: Option<String>,
     pub parameters: Vec<Parameter>,
     pub body: BlockStatement,
@@ -385,6 +387,10 @@ pub enum Expression {
         value: Box<Expression>,
         span: Span,
     }, // *ptr
+    Await {
+        value: Box<Expression>,
+        span: Span,
+    }, // await expr (DEC-ASYNC-001)
     Match(Box<MatchExpression>), // match expr { pat => body, ... }
     UnsafeBlock(BlockStatement), // unsafe { ... } as expression
 }

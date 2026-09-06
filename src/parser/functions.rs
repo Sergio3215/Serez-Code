@@ -28,11 +28,28 @@ use crate::token::TokenType;
 
 impl Parser {
     pub(super) fn parse_function_statement(&mut self) -> Option<Statement> {
-        // The `fn` keyword, before the optional `*` is consumed.
         let open = self.current_token.span;
+        self.parse_function_statement_internal(false, open)
+    }
+
+    pub(super) fn parse_async_function_statement(&mut self) -> Option<Statement> {
+        let open = self.current_token.span;
+        self.next_token(); // consume 'async', current becomes 'fn'
+        self.parse_function_statement_internal(true, open)
+    }
+
+    fn parse_function_statement_internal(
+        &mut self,
+        is_async: bool,
+        open: crate::span::Span,
+    ) -> Option<Statement> {
         // fn* generator syntax: consume the '*'
         let is_generator = self.peek_token.token_type == TokenType::Asterisk;
         if is_generator {
+            if is_async {
+                self.parser_error("Generators cannot be declared async");
+                return None;
+            }
             self.next_token();
         } // consume '*'
 
@@ -93,6 +110,7 @@ impl Parser {
                 parameters,
                 body,
                 is_generator,
+                is_async,
                 span: self.span_to_here(open),
             };
 
@@ -125,6 +143,7 @@ impl Parser {
                 parameters,
                 body,
                 is_generator,
+                is_async,
                 span: self.span_to_here(open),
             };
 
@@ -333,6 +352,7 @@ impl Parser {
             parameters,
             body,
             is_generator: false,
+            is_async: false,
             span: self.span_to_here(open),
         }))
     }

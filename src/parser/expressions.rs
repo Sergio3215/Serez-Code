@@ -229,6 +229,16 @@ impl Parser {
             // sizeof(type | expr)
             TokenType::KwSizeof => self.parse_sizeof_expression(),
 
+            // await expr (DEC-ASYNC-001)
+            TokenType::KwAwait => {
+                self.next_token();
+                let inner = self.parse_expression(Precedence::Prefix)?;
+                Some(Expression::Await {
+                    value: Box::new(inner),
+                    span: self.span_to_here(open),
+                })
+            }
+
             // Zero-param lambda: () => body
             TokenType::LParen if self.peek_token.token_type == TokenType::RParen => {
                 self.next_token(); // consume ')'
@@ -391,8 +401,53 @@ impl Parser {
                     parameters,
                     body,
                     is_generator: false,
+                    is_async: false,
                     span: self.span_to_here(open),
                 }))
+            }
+
+            // Anonymous async function literal: async fn(...) { ... }
+            TokenType::KwAsync => {
+                if self.peek_token.token_type == TokenType::Function {
+                    self.next_token(); // consume 'async', current = 'fn'
+                    let mut return_type = None;
+                    if is_type_keyword(&self.peek_token.token_type) {
+                        self.next_token();
+                        return_type = Some(self.current_token.literal.clone());
+                    }
+
+                    if self.peek_token.token_type != TokenType::LParen {
+                        self.parser_error("Expected '(' after 'async fn'");
+                        return None;
+                    }
+                    self.next_token();
+
+                    let parameters = self.parse_function_parameters()?;
+
+                    if self.peek_token.token_type != TokenType::LBrace {
+                        self.parser_error("Expected '{' after parameter list");
+                        return None;
+                    }
+                    self.next_token();
+
+                    let body_stmt = self.parse_block_statement()?;
+                    let body = match body_stmt {
+                        Statement::Block(b) => b,
+                        _ => return None,
+                    };
+
+                    Some(Expression::FunctionLiteral(FunctionLiteral {
+                        return_type,
+                        parameters,
+                        body,
+                        is_generator: false,
+                        is_async: true,
+                        span: self.span_to_here(open),
+                    }))
+                } else {
+                    self.parser_error("Expected 'fn' after 'async'");
+                    None
+                }
             }
 
             TokenType::KwMatch => self.parse_match_expression(),

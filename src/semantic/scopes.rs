@@ -864,7 +864,8 @@ impl Walker {
 
             Expression::Spread { value, .. }
             | Expression::AddressOf { value, .. }
-            | Expression::Deref { value, .. } => self.expression(value, UseKind::Read),
+            | Expression::Deref { value, .. }
+            | Expression::Await { value, .. } => self.expression(value, UseKind::Read),
 
             Expression::SizeOf { target, .. } => {
                 if let SizeOfTarget::Expr(e) = target {

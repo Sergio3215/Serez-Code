@@ -13,11 +13,44 @@ use std::rc::Rc;
 
 /// An HTTP response, normalised so `fetch` reads the same whether the bytes came
 /// from ureq or from the browser. Header names are lowercased.
-pub(super) struct FetchResponse {
+#[derive(Debug, Clone)]
+pub struct FetchResponse {
     pub status: u16,
     pub status_text: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+}
+
+pub(super) struct PreparedFetch {
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body_str: String,
+    pub timeout_secs: u64,
+    pub full: bool,
+    pub binary: bool,
+}
+
+#[cfg(any(test, debug_assertions))]
+pub static SYNC_FETCH_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(any(test, debug_assertions))]
+pub static ASYNC_FETCH_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(any(test, debug_assertions))]
+pub fn test_get_fetch_transport_counts() -> (usize, usize) {
+    (
+        SYNC_FETCH_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+        ASYNC_FETCH_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+    )
+}
+
+#[cfg(any(test, debug_assertions))]
+pub fn test_reset_fetch_transport_counts() {
+    SYNC_FETCH_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    ASYNC_FETCH_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
 }
 
 impl super::Evaluator {
@@ -581,21 +614,13 @@ impl super::Evaluator {
     //   { full: true }   → returns Dict<string, any> { status, ok, statusText, headers, body }
     //                      and does NOT throw on status.
     //   { binary: true } → body is returned as a byte array [int] instead of a string.
-    pub(super) fn eval_fetch(&mut self, args: &[ast::Expression]) -> EvalResult {
-        // Gated by lockdown since DEC-M7-006. It used to be exempt, on the
-        // reasoning that lockdown was about the machine's own capabilities and
-        // the network was a separate question — but the request goes out from the
-        // host's network position, which is the usual SSRF shape: cloud metadata
-        // endpoints, services bound to localhost, the host as an open relay. A
-        // mode called "untrusted source" that leaves that open is a name doing
-        // more work than the code.
-        //
-        // Blocked by default under lockdown, reachable only through an explicit
-        // allowlist the *embedder* sets. The check is below rather than here,
-        // because it needs the URL — and it is applied again to every redirect
-        // hop, or an allowed host could hand the request to a forbidden one.
+
+    fn prepare_fetch_request(
+        &mut self,
+        args: &[ast::Expression],
+    ) -> Result<PreparedFetch, EvalResult> {
         if args.is_empty() || args.len() > 4 {
-            return self.rt_err_kind("RuntimeError", "fetch(url, [method], [body], [options])");
+            return Err(self.rt_err_kind("RuntimeError", "fetch(url, [method], [body], [options])"));
         }
 
         // ── arg[0]: url (required, string) ────────────────────────────────────
@@ -606,11 +631,11 @@ impl super::Evaluator {
                     let msg = self.alloc(ObjectData::Str(
                         "❌ fetch: url must be a string".to_string(),
                     ));
-                    return Ok(ExecutionFlow::Throw(msg));
+                    return Err(Ok(ExecutionFlow::Throw(msg)));
                 }
             },
-            Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
-            _ => return Err(RuntimeFailure),
+            Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
+            _ => return Err(Err(RuntimeFailure)),
         };
 
         // ── args[1..]: 1st string = method, 2nd string = body, dict = options ──
@@ -621,8 +646,8 @@ impl super::Evaluator {
         for arg in &args[1..] {
             let r = match self.eval_expression(arg) {
                 Ok(ExecutionFlow::Value(r)) => r,
-                Ok(ExecutionFlow::Throw(v)) => return Ok(ExecutionFlow::Throw(v)),
-                _ => return Err(RuntimeFailure),
+                Ok(ExecutionFlow::Throw(v)) => return Err(Ok(ExecutionFlow::Throw(v))),
+                _ => return Err(Err(RuntimeFailure)),
             };
             match self.resolve(r).cloned() {
                 Some(ObjectData::Str(s)) => {
@@ -636,7 +661,7 @@ impl super::Evaluator {
                             "❌ fetch: too many string arguments (expected method, body)"
                                 .to_string(),
                         ));
-                        return Ok(ExecutionFlow::Throw(msg));
+                        return Err(Ok(ExecutionFlow::Throw(msg)));
                     }
                 }
                 Some(d @ ObjectData::Dict { .. }) => {
@@ -644,14 +669,14 @@ impl super::Evaluator {
                         let msg = self.alloc(ObjectData::Str(
                             "❌ fetch: options dict provided more than once".to_string(),
                         ));
-                        return Ok(ExecutionFlow::Throw(msg));
+                        return Err(Ok(ExecutionFlow::Throw(msg)));
                     }
                     options = Some(d);
                 }
                 _ => {
                     let msg = self.alloc(ObjectData::Str(
                         "❌ fetch: arguments after url must be strings (method/body) or a dict (options)".to_string()));
-                    return Ok(ExecutionFlow::Throw(msg));
+                    return Err(Ok(ExecutionFlow::Throw(msg)));
                 }
             }
         }
@@ -674,7 +699,7 @@ impl super::Evaluator {
                             let msg = self.alloc(ObjectData::Str(
                                 "❌ fetch: header names must be strings".to_string(),
                             ));
-                            return Ok(ExecutionFlow::Throw(msg));
+                            return Err(Ok(ExecutionFlow::Throw(msg)));
                         }
                     };
                     let value = v.display_str();
@@ -687,7 +712,7 @@ impl super::Evaluator {
                             "❌ fetch: illegal control character in header '{}'",
                             name
                         )));
-                        return Ok(ExecutionFlow::Throw(msg));
+                        return Err(Ok(ExecutionFlow::Throw(msg)));
                     }
                     headers.push((name, value));
                 }
@@ -712,7 +737,7 @@ impl super::Evaluator {
                 "❌ fetch: only http:// and https:// URLs are allowed (got: {})",
                 url
             )));
-            return Ok(ExecutionFlow::Throw(msg));
+            return Err(Ok(ExecutionFlow::Throw(msg)));
         }
 
         // Reject control characters (header injection, etc.)
@@ -723,7 +748,7 @@ impl super::Evaluator {
             let msg = self.alloc(ObjectData::Str(
                 "❌ fetch: URL contains illegal control characters".to_string(),
             ));
-            return Ok(ExecutionFlow::Throw(msg));
+            return Err(Ok(ExecutionFlow::Throw(msg)));
         }
 
         // Reject suspiciously long URLs
@@ -731,7 +756,7 @@ impl super::Evaluator {
             let msg = self.alloc(ObjectData::Str(
                 "❌ fetch: URL exceeds maximum length (2048)".to_string(),
             ));
-            return Ok(ExecutionFlow::Throw(msg));
+            return Err(Ok(ExecutionFlow::Throw(msg)));
         }
 
         // Reject malformed methods (spaces / control chars would be header smuggling)
@@ -740,30 +765,101 @@ impl super::Evaluator {
                 "❌ fetch: invalid HTTP method '{}'",
                 method
             )));
-            return Ok(ExecutionFlow::Throw(msg));
+            return Err(Ok(ExecutionFlow::Throw(msg)));
         }
 
-        // DEC-M7-006 — the lockdown gate. Not catchable as an ordinary throw:
-        // it is a security refusal, so it goes through `fatal_err_kind` the way
-        // every other denied capability does, and `try/catch` cannot turn it
-        // back into control flow.
+        // DEC-M7-006 — lockdown gate.
         if !self.security.allows_fetch(&url) {
             let host = crate::permissions::host_of(&url).unwrap_or_else(|| "<unparseable>".into());
             let message = format!(
                 "fetch to '{host}' is not available here — this code runs as untrusted \
                  source, and the network is closed unless the host allows it explicitly."
             );
-            return self.fatal_err_kind("PermissionError", message);
+            return Err(self.fatal_err_kind("PermissionError", message));
         }
 
-        // ── Perform the request ───────────────────────────────────────────────
-        // Everything above is parsing and validation and is the same everywhere.
-        // Only the transport differs: ureq natively, a synchronous XHR in the
-        // browser. See `fetch_transport` for both.
-        match self.fetch_transport_checked(&method, &url, &headers, &body_str, timeout_secs) {
+        Ok(PreparedFetch {
+            method,
+            url,
+            headers,
+            body_str,
+            timeout_secs,
+            full,
+            binary,
+        })
+    }
+
+    /// Synchronous path: fetch(url)
+    pub(super) fn eval_fetch(&mut self, args: &[ast::Expression]) -> EvalResult {
+        #[cfg(any(test, debug_assertions))]
+        SYNC_FETCH_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let req = match self.prepare_fetch_request(args) {
+            Ok(r) => r,
+            Err(e) => return e,
+        };
+        let transport_res = self.fetch_transport_checked(
+            &req.method,
+            &req.url,
+            &req.headers,
+            &req.body_str,
+            req.timeout_secs,
+        );
+        self.finish_fetch_response(transport_res, req.full, req.binary)
+    }
+
+    /// Asynchronous path: await fetch(url) (DEC-ASYNC-001)
+    pub(super) fn eval_fetch_async(&mut self, args: &[ast::Expression]) -> EvalResult {
+        #[cfg(any(test, debug_assertions))]
+        ASYNC_FETCH_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let req = match self.prepare_fetch_request(args) {
+            Ok(r) => r,
+            Err(e) => return e,
+        };
+
+        let runtime = super::async_runtime::get_runtime();
+        let entry = match runtime.allocate_operation(req.timeout_secs) {
+            Ok(e) => e,
+            Err(err) => return self.fatal_err_kind("ResourceError", format!("fetch: {err}")),
+        };
+
+        let op_id = entry.id;
+        let token = std::sync::Arc::clone(&entry.cancellation_token);
+        let deadline = entry.deadline;
+        let security = self.security.clone();
+        let method = req.method.clone();
+        let url = req.url.clone();
+        let headers = req.headers.clone();
+        let body_str = req.body_str.clone();
+
+        runtime.submit_io_task(move || {
+            let res = Self::perform_fetch_transport_checked_deadline(
+                &security,
+                &method,
+                &url,
+                &headers,
+                &body_str,
+                deadline,
+                Some(&token),
+            );
+            super::async_runtime::get_runtime().complete(op_id, res);
+        });
+
+        self.suspended_context = Some(super::suspension::SuspendedContext::new(
+            op_id, req.full, req.binary,
+        ));
+        Ok(ExecutionFlow::Suspend(op_id))
+    }
+
+    pub(crate) fn finish_fetch_response(
+        &mut self,
+        transport_res: Result<FetchResponse, String>,
+        full: bool,
+        binary: bool,
+    ) -> EvalResult {
+        match transport_res {
             Ok(resp) => {
-                // 4xx/5xx: in `full` mode build the response object anyway;
-                // otherwise throw, embedding the body so the detail isn't lost.
                 if resp.status >= 400 && !full {
                     let detail = if binary {
                         None
@@ -779,10 +875,6 @@ impl super::Evaluator {
                 }
                 self.fetch_make_value(resp, full, binary)
             }
-            // A resource ceiling is fatal, like every other entry in
-            // `spec/limits.md`; `try/catch` must not be able to turn a
-            // memory-exhaustion guard into ordinary control flow. Every other
-            // transport failure keeps the catchable throw it always had.
             Err(e) if e == super::OVER_THE_READ_CEILING => {
                 self.fatal_err_kind("ResourceError", format!("fetch: {e}"))
             }
@@ -887,23 +979,68 @@ impl super::Evaluator {
         if !self.security.lockdown {
             return self.fetch_transport(method, url, headers, body, timeout_secs);
         }
+        Self::perform_fetch_transport_checked(
+            &self.security,
+            method,
+            url,
+            headers,
+            body,
+            timeout_secs,
+        )
+    }
 
-        // Same ceiling ureq uses by default, so a legitimate chain that worked
-        // before still works.
+    fn perform_fetch_transport_checked(
+        security: &crate::permissions::SecurityPolicy,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        timeout_secs: u64,
+    ) -> Result<FetchResponse, String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        Self::perform_fetch_transport_checked_deadline(
+            security, method, url, headers, body, deadline, None,
+        )
+    }
+
+    fn perform_fetch_transport_checked_deadline(
+        security: &crate::permissions::SecurityPolicy,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        deadline: std::time::Instant,
+        cancellation_token: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<FetchResponse, String> {
         const MAX_REDIRECTS: usize = 5;
         let mut current = url.to_string();
         for _ in 0..=MAX_REDIRECTS {
-            // Re-checked every hop, including the first: this function must be
-            // safe on its own rather than because a caller checked once.
-            if !self.security.allows_fetch(&current) {
+            if let Some(token) = cancellation_token {
+                if token.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err("operation cancelled".to_string());
+                }
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Err("request timed out".to_string());
+            }
+            let remaining = deadline.duration_since(now);
+
+            if !security.allows_fetch(&current) {
                 let host =
                     crate::permissions::host_of(&current).unwrap_or_else(|| "<unparseable>".into());
                 return Err(format!(
                     "redirected to '{host}', which this code is not allowed to reach"
                 ));
             }
-            let resp =
-                self.fetch_transport_no_redirect(method, &current, headers, body, timeout_secs)?;
+            let resp = Self::perform_fetch_transport_duration(
+                method,
+                &current,
+                headers,
+                body,
+                remaining,
+                Some(0),
+            )?;
             if !matches!(resp.status, 301 | 302 | 303 | 307 | 308) {
                 return Ok(resp);
             }
@@ -913,8 +1050,6 @@ impl super::Evaluator {
                 .find(|(name, _)| name == "location")
                 .map(|(_, value)| value.clone())
             else {
-                // A redirect status with no Location is not a redirect anyone can
-                // follow; hand the response back rather than inventing a target.
                 return Ok(resp);
             };
             current = match crate::permissions::resolve_location(&current, &location) {
@@ -961,11 +1096,38 @@ impl super::Evaluator {
         timeout_secs: u64,
         redirects: Option<u32>,
     ) -> Result<FetchResponse, String> {
-        use std::io::Read;
+        Self::perform_fetch_transport_with(method, url, headers, body, timeout_secs, redirects)
+    }
 
+    fn perform_fetch_transport_with(
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        timeout_secs: u64,
+        redirects: Option<u32>,
+    ) -> Result<FetchResponse, String> {
+        Self::perform_fetch_transport_duration(
+            method,
+            url,
+            headers,
+            body,
+            std::time::Duration::from_secs(timeout_secs),
+            redirects,
+        )
+    }
+
+    fn perform_fetch_transport_duration(
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        timeout: std::time::Duration,
+        redirects: Option<u32>,
+    ) -> Result<FetchResponse, String> {
         let mut builder = ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(timeout_secs.min(30)))
-            .timeout(std::time::Duration::from_secs(timeout_secs));
+            .timeout_connect(timeout.min(std::time::Duration::from_secs(30)))
+            .timeout(timeout);
         if let Some(limit) = redirects {
             builder = builder.redirects(limit);
         }
@@ -1001,7 +1163,23 @@ impl super::Evaluator {
         } {
             Ok(r) => r,
             Err(ureq::Error::Status(_, r)) => r,
-            Err(e) => return Err(format!("request failed: {}", e)),
+            Err(ureq::Error::Transport(t)) => {
+                let err_str = t.to_string();
+                let is_timeout = err_str.contains("10060")
+                    || err_str.to_lowercase().contains("timed out")
+                    || err_str.to_lowercase().contains("timeout")
+                    || std::error::Error::source(&t)
+                        .and_then(|s| s.downcast_ref::<std::io::Error>())
+                        .map(|io| {
+                            io.kind() == std::io::ErrorKind::TimedOut
+                                || io.raw_os_error() == Some(10060)
+                        })
+                        .unwrap_or(false);
+                if is_timeout {
+                    return Err("request timed out".to_string());
+                }
+                return Err(format!("request failed: {}", err_str));
+            }
         };
 
         let status = resp.status();

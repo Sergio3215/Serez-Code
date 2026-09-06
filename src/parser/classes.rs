@@ -186,13 +186,20 @@ impl Parser {
             };
             self.next_token(); // after visibility
 
-            // Check for static modifier
-            let is_static = if self.current_token.token_type == TokenType::KwStatic {
-                self.next_token();
-                true
-            } else {
-                false
-            };
+            // Check for static and async modifiers
+            let mut is_static = false;
+            let mut is_async = false;
+            loop {
+                if self.current_token.token_type == TokenType::KwStatic && !is_static {
+                    is_static = true;
+                    self.next_token();
+                } else if self.current_token.token_type == TokenType::KwAsync && !is_async {
+                    is_async = true;
+                    self.next_token();
+                } else {
+                    break;
+                }
+            }
 
             // Check for getter/setter
             let is_getter = if self.current_token.token_type == TokenType::KwGet {
@@ -240,6 +247,11 @@ impl Parser {
                 None
             };
 
+            // Optional 'fn' keyword (e.g. public async fn methodName())
+            if self.current_token.token_type == TokenType::Function {
+                self.next_token();
+            }
+
             // Member name (constructor or method) — allow keywords as names (e.g. "get", "set")
             if !self.current_token_is_name() {
                 self.parser_error("Expected method name in class body");
@@ -280,6 +292,10 @@ impl Parser {
 
             if member_name == name && !is_getter && !is_setter {
                 // Constructor
+                if is_async {
+                    self.parser_error("Class constructors cannot be declared async");
+                    return None;
+                }
                 if constructor.is_some() {
                     self.parser_error(&format!("Duplicate constructor in class '{}'", name));
                     return None;
@@ -298,6 +314,7 @@ impl Parser {
                     is_getter,
                     is_setter,
                     is_static,
+                    is_async,
                     return_type,
                     parameters,
                     body,

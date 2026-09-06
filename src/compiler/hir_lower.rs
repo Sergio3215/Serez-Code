@@ -680,6 +680,7 @@ impl HirLowerer {
             Expression::Spread { value: _, .. } => self.unsupported_expr("spread expressions"),
             Expression::Match(_) => self.unsupported_expr("match expressions"),
             Expression::UnsafeBlock(_) => self.unsupported_expr("unsafe expressions"),
+            Expression::Await { .. } => self.unsupported_expr("await expressions"),
         }
     }
 
@@ -830,6 +831,7 @@ mod tests {
                     .collect(),
                 body: block(body),
                 is_generator: false,
+                is_async: false,
             },
             span: crate::span::Span::unknown(),
         })

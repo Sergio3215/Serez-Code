@@ -1,5 +1,18 @@
+pub(crate) mod async_runtime;
+pub(crate) mod suspension;
+pub use async_runtime::AsyncOperationId;
 mod binary_ops;
 mod builtins;
+#[cfg(any(test, debug_assertions))]
+pub use async_runtime::{
+    ACTIVE_WORKER_THREADS, ASYNC_IO_MAX_WORKERS, ASYNC_MAX_PENDING_OPERATIONS,
+    CANCELLED_OPERATIONS_COUNT, COMPLETED_OPERATIONS_COUNT, PENDING_OPERATIONS_COUNT,
+    TIMED_OUT_OPERATIONS_COUNT, get_runtime, test_reset_async_metrics,
+};
+#[cfg(any(test, debug_assertions))]
+pub use builtins::{
+    FetchResponse, test_get_fetch_transport_counts, test_reset_fetch_transport_counts,
+};
 mod check;
 mod classes;
 mod control;
@@ -281,6 +294,8 @@ pub enum ExecutionFlow {
     ContinueLabel(String),
     /// A user `throw` — propagates to the nearest `try/catch`.
     Throw(ObjectRef),
+    /// Logical suspension yielding to the scheduler without blocking the evaluator.
+    Suspend(async_runtime::AsyncOperationId),
 }
 
 /// A real runtime failure: the evaluation cannot continue.
@@ -393,6 +408,8 @@ pub enum ProgramOutcome {
     /// A legacy `Err(RuntimeFailure)` path that did not call `rt_err_kind`.
     /// This remains explicit until those producers are migrated one by one.
     UnstructuredError,
+    /// Logical suspension yielding to the scheduler without blocking the evaluator.
+    Suspended(async_runtime::AsyncOperationId),
 }
 
 impl ProgramOutcome {
@@ -515,6 +532,7 @@ pub struct Evaluator {
     // ──────────────────────────────────────────────────────────────────────────
     // Dispatch caches. Two fields until M6.3; see `DispatchCaches`.
     dispatch: DispatchCaches,
+    pub(crate) suspended_context: Option<suspension::SuspendedContext>,
 }
 
 // ── Free-identifier collection (for consistent lambda capture, B-83) ──────────
@@ -588,7 +606,8 @@ fn collect_idents_expr(e: &crate::ast::Expression, out: &mut Vec<String>) {
         }
         | Ex::Spread { value: inner, .. }
         | Ex::AddressOf { value: inner, .. }
-        | Ex::Deref { value: inner, .. } => collect_idents_expr(inner, out),
+        | Ex::Deref { value: inner, .. }
+        | Ex::Await { value: inner, .. } => collect_idents_expr(inner, out),
         Ex::Infix(i) => {
             collect_idents_expr(&i.left, out);
             collect_idents_expr(&i.right, out);
@@ -758,7 +777,16 @@ impl Evaluator {
             diagnostic_capture_depth: 0,
             value_depth_exceeded: std::cell::Cell::new(false),
             dispatch: DispatchCaches::default(),
+            suspended_context: None,
         }
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.suspended_context.is_some()
+    }
+
+    pub fn suspended_operation_id(&self) -> Option<async_runtime::AsyncOperationId> {
+        self.suspended_context.as_ref().map(|c| c.op_id)
     }
 
     /// Raise a recoverable runtime error with the default kind ("RuntimeError").
@@ -1418,7 +1446,7 @@ impl Evaluator {
 
     // Extrae un valor completo de la arena a un OwnedValue independiente.
     // Debe llamarse ANTES de scopes.pop() para que los índices aún sean válidos.
-    fn extract(&self, obj_ref: ObjectRef) -> OwnedValue {
+    pub fn extract(&self, obj_ref: ObjectRef) -> OwnedValue {
         self.extract_inner(obj_ref, 0)
     }
 
@@ -1510,6 +1538,7 @@ impl Evaluator {
                 body,
                 captured,
                 is_generator,
+                is_async,
                 bound_class,
             }) => OwnedValue::Function {
                 return_type: return_type.clone(),
@@ -1517,6 +1546,7 @@ impl Evaluator {
                 body: body.clone(),
                 captured: captured.clone(),
                 is_generator: *is_generator,
+                is_async: *is_async,
                 bound_class: bound_class.clone(),
             },
             Some(ObjectData::Instance { class_name, fields }) => OwnedValue::Instance {
@@ -1590,6 +1620,7 @@ impl Evaluator {
                 body,
                 captured,
                 is_generator,
+                is_async,
                 bound_class,
             } => self.alloc(ObjectData::Function {
                 return_type,
@@ -1597,6 +1628,7 @@ impl Evaluator {
                 body,
                 captured,
                 is_generator,
+                is_async,
                 bound_class,
             }),
             OwnedValue::Instance { class_name, fields } => {
@@ -1714,6 +1746,7 @@ impl Evaluator {
                 body,
                 captured,
                 is_generator,
+                is_async,
                 bound_class,
             } => {
                 let idx = self.global_arena.alloc(ObjectData::Function {
@@ -1722,6 +1755,7 @@ impl Evaluator {
                     body,
                     captured,
                     is_generator,
+                    is_async,
                     bound_class,
                 });
                 ObjectRef {
@@ -1832,9 +1866,383 @@ impl Evaluator {
     pub fn eval_program_outcome(&mut self, program: &Program) -> ProgramOutcome {
         let starting_error_generation = self.error_generation;
         self.diagnostic_capture_depth += 1;
+        let mut outcome = self.eval_program_outcome_inner(program, starting_error_generation);
+        while let ProgramOutcome::Suspended(op_id) = outcome {
+            outcome = self.drive_suspended_operation(op_id, starting_error_generation);
+        }
+        self.diagnostic_capture_depth -= 1;
+        outcome
+    }
+
+    /// Evaluates the program step-by-step: if an async operation is reached,
+    /// returns `ProgramOutcome::Suspended(op_id)` immediately without blocking,
+    /// yielding the thread and capturing the continuation state.
+    pub fn eval_program_outcome_step(&mut self, program: &Program) -> ProgramOutcome {
+        let starting_error_generation = self.error_generation;
+        self.diagnostic_capture_depth += 1;
         let outcome = self.eval_program_outcome_inner(program, starting_error_generation);
         self.diagnostic_capture_depth -= 1;
         outcome
+    }
+
+    /// Drives a suspended async operation to completion by waiting on Condvar notification
+    /// and resuming the captured continuation frames.
+    pub fn drive_suspended_operation(
+        &mut self,
+        op_id: async_runtime::AsyncOperationId,
+        starting_error_generation: u64,
+    ) -> ProgramOutcome {
+        let runtime = async_runtime::get_runtime();
+        let entry = match runtime.get_operation(op_id) {
+            Some(e) => e,
+            None => return ProgramOutcome::UnstructuredError,
+        };
+
+        let wait_res = runtime.wait_for_completion(&entry);
+        runtime.remove_operation(op_id);
+
+        let ctx = match self.suspended_context.take() {
+            Some(c) => c,
+            None => return ProgramOutcome::UnstructuredError,
+        };
+
+        let flow = self.finish_fetch_response(wait_res, ctx.full, ctx.binary);
+        self.resume_suspended_context(ctx.frames, flow, starting_error_generation)
+    }
+
+    /// Public resume entry point for schedulers or tests.
+    pub fn resume_suspended_outcome(
+        &mut self,
+        op_id: async_runtime::AsyncOperationId,
+    ) -> ProgramOutcome {
+        let starting_error_generation = self.error_generation;
+        self.diagnostic_capture_depth += 1;
+        let outcome = self.drive_suspended_operation(op_id, starting_error_generation);
+        self.diagnostic_capture_depth -= 1;
+        outcome
+    }
+
+    fn resume_suspended_context(
+        &mut self,
+        frames: Vec<suspension::ContinuationFrame>,
+        initial_flow: EvalResult,
+        starting_error_generation: u64,
+    ) -> ProgramOutcome {
+        let mut current_flow = initial_flow;
+
+        for (i, frame) in frames.iter().enumerate() {
+            match frame {
+                suspension::ContinuationFrame::Statement(stmt_cont) => {
+                    if let Ok(ExecutionFlow::Value(val_ref)) = current_flow {
+                        match stmt_cont {
+                            suspension::StatementContinuation::Let { name, is_const } => {
+                                let fresh_data = match self.resolve(val_ref) {
+                                    Some(d) => d.clone(),
+                                    None => ObjectData::Null,
+                                };
+                                let fresh_ref = self.alloc(fresh_data);
+                                if self.scopes.is_empty() {
+                                    self.global_bindings.insert(name.clone(), fresh_ref);
+                                } else {
+                                    self.scopes.declare(name.clone(), fresh_ref);
+                                }
+                                if *is_const {
+                                    self.const_names.insert(name.clone());
+                                }
+                                current_flow = Ok(ExecutionFlow::Value(self.null_ref));
+                            }
+                            suspension::StatementContinuation::Assign { name } => {
+                                let fresh_data = match self.resolve(val_ref) {
+                                    Some(d) => d.clone(),
+                                    None => ObjectData::Null,
+                                };
+                                if let Some(r) = self.scopes.assign(name, fresh_data.clone()) {
+                                    if r.region == RegionId::Global {
+                                        self.global_arena.update(r.index, fresh_data);
+                                    }
+                                    current_flow = Ok(ExecutionFlow::Value(r));
+                                } else if let Some(&existing_ref) = self.global_bindings.get(name) {
+                                    self.global_arena.update(existing_ref.index, fresh_data);
+                                    current_flow = Ok(ExecutionFlow::Value(existing_ref));
+                                } else {
+                                    current_flow = self.rt_err_kind(
+                                        "ReferenceError",
+                                        format!("Undeclared variable: {}", name),
+                                    );
+                                }
+                            }
+                            suspension::StatementContinuation::Expression => {
+                                current_flow = Ok(ExecutionFlow::Value(val_ref));
+                            }
+                            suspension::StatementContinuation::Return => {
+                                current_flow = Ok(ExecutionFlow::Return(val_ref));
+                            }
+                            suspension::StatementContinuation::Out => {
+                                match self.fmt_value(val_ref) {
+                                    Ok(s) => println!("{}", s),
+                                    Err(e) => {
+                                        current_flow = e;
+                                    }
+                                }
+                                if current_flow.is_ok() {
+                                    current_flow = Ok(ExecutionFlow::Value(self.null_ref));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                suspension::ContinuationFrame::Block {
+                    remaining_statements,
+                } => {
+                    if matches!(current_flow, Ok(ExecutionFlow::Value(_))) {
+                        for (idx, s) in remaining_statements.iter().enumerate() {
+                            let scratch_mark = match s {
+                                Statement::Out(_) => Some(self.global_arena.watermark()),
+                                _ => None,
+                            };
+                            match self.eval_statement(s) {
+                                Ok(ExecutionFlow::Value(v)) => {
+                                    current_flow = Ok(ExecutionFlow::Value(v));
+                                    if let Some(mark) = scratch_mark {
+                                        self.global_arena.reset_to(mark);
+                                    }
+                                }
+                                Ok(ExecutionFlow::Return(v)) => {
+                                    current_flow = Ok(ExecutionFlow::Return(v));
+                                    if let Some(mark) = scratch_mark {
+                                        self.global_arena.reset_to(mark);
+                                    }
+                                    break;
+                                }
+                                Ok(ExecutionFlow::Suspend(new_op_id)) => {
+                                    let rem = remaining_statements[idx + 1..].to_vec();
+                                    if let Some(ctx) = &mut self.suspended_context {
+                                        if !rem.is_empty() {
+                                            ctx.push_frame(suspension::ContinuationFrame::Block {
+                                                remaining_statements: rem,
+                                            });
+                                        }
+                                        for outer_frame in &frames[i + 1..] {
+                                            ctx.push_frame(outer_frame.clone());
+                                        }
+                                    }
+                                    return ProgramOutcome::Suspended(new_op_id);
+                                }
+                                Ok(flow) => {
+                                    current_flow = Ok(flow);
+                                    if let Some(mark) = scratch_mark {
+                                        self.global_arena.reset_to(mark);
+                                    }
+                                    break;
+                                }
+                                Err(err) => {
+                                    current_flow = Err(err);
+                                    if let Some(mark) = scratch_mark {
+                                        self.global_arena.reset_to(mark);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    let is_top_level = (i == frames.len() - 1) && self.scopes.is_empty();
+                    if !is_top_level {
+                        let owned = match &current_flow {
+                            Ok(ExecutionFlow::Return(v)) | Ok(ExecutionFlow::Throw(v)) => {
+                                Some(self.extract(*v))
+                            }
+                            _ => None,
+                        };
+                        self.scopes.pop();
+                        if let Some(val) = owned {
+                            let promoted = self.plant(val);
+                            match current_flow {
+                                Ok(ExecutionFlow::Return(_)) => {
+                                    current_flow = Ok(ExecutionFlow::Return(promoted));
+                                }
+                                Ok(ExecutionFlow::Throw(_)) => {
+                                    current_flow = Ok(ExecutionFlow::Throw(promoted));
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                    }
+                }
+
+                suspension::ContinuationFrame::Function(func_cont) => {
+                    let ret_val = match &current_flow {
+                        Ok(ExecutionFlow::Return(v)) => *v,
+                        _ => self.null_ref,
+                    };
+
+                    if let Some(expected_type) = &func_cont.return_type {
+                        let mismatch = match self.resolve(ret_val) {
+                            Some(data) if type_matches(expected_type.as_str(), data) => None,
+                            Some(data) => Some(data.type_name().to_string()),
+                            None => Some("null".to_string()),
+                        };
+                        if let Some(actual) = mismatch {
+                            let msg = format!(
+                                "Function '{}' returned type '{}' but expected '{}'",
+                                func_cont.call_name, actual, expected_type
+                            );
+                            current_flow = self.rt_err_kind("TypeError", msg);
+                        }
+                    }
+
+                    let owned = match &current_flow {
+                        Ok(ExecutionFlow::Return(v)) | Ok(ExecutionFlow::Value(v)) => {
+                            Some(self.extract(*v))
+                        }
+                        Ok(ExecutionFlow::Throw(v)) => Some(self.extract(*v)),
+                        _ => None,
+                    };
+                    self.scopes.pop();
+                    self.call_depth -= 1;
+                    self.call_stack.pop();
+
+                    if let Some(val) = owned {
+                        let promoted = self.plant(val);
+                        match current_flow {
+                            Ok(ExecutionFlow::Return(_)) | Ok(ExecutionFlow::Value(_)) => {
+                                current_flow = Ok(ExecutionFlow::Value(promoted));
+                            }
+                            Ok(ExecutionFlow::Throw(_)) => {
+                                current_flow = Ok(ExecutionFlow::Throw(promoted));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                suspension::ContinuationFrame::Try(try_cont) => {
+                    let has_catch = try_cont.catch_body.is_some();
+                    if has_catch {
+                        self.try_depth -= 1;
+                    }
+                    let caught_value = match &current_flow {
+                        Ok(ExecutionFlow::Throw(v)) => Some(*v),
+                        Err(RuntimeFailure)
+                            if has_catch
+                                && self.last_error.as_ref().is_some_and(|p| p.catchable) =>
+                        {
+                            let error = self.last_error.take().unwrap().error;
+                            let span = match error.stack.first() {
+                                Some(frame) => OwnedValue::Str(format!(
+                                    "{}:{}",
+                                    frame.span.line, frame.span.column
+                                )),
+                                None => OwnedValue::Null,
+                            };
+                            let stack = error
+                                .stack
+                                .into_iter()
+                                .map(|frame| {
+                                    OwnedValue::Str(format!(
+                                        "{} at {}:{}",
+                                        frame.name, frame.span.line, frame.span.column
+                                    ))
+                                })
+                                .collect();
+                            let notes = error.notes.into_iter().map(OwnedValue::Str).collect();
+                            let err_ref = self.alloc(ObjectData::Instance {
+                                class_name: "Error".to_string(),
+                                fields: vec![
+                                    ("code".to_string(), OwnedValue::Str(error.code.to_string())),
+                                    (
+                                        "kind".to_string(),
+                                        OwnedValue::Str(error.kind.unwrap_or_default()),
+                                    ),
+                                    ("message".to_string(), OwnedValue::Str(error.message)),
+                                    ("span".to_string(), span),
+                                    (
+                                        "stack".to_string(),
+                                        OwnedValue::Array {
+                                            element_type: Some("string".to_string()),
+                                            elements: stack,
+                                        },
+                                    ),
+                                    (
+                                        "notes".to_string(),
+                                        OwnedValue::Array {
+                                            element_type: Some("string".to_string()),
+                                            elements: notes,
+                                        },
+                                    ),
+                                ],
+                            });
+                            Some(err_ref)
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(c_val) = caught_value {
+                        if let Some(catch_body) = &try_cont.catch_body {
+                            self.scopes.push();
+                            if let Some(var_name) = &try_cont.catch_var {
+                                self.scopes.declare(var_name.clone(), c_val);
+                            }
+                            let catch_res = self.eval_block_discard(catch_body);
+                            let owned = match &catch_res {
+                                Ok(ExecutionFlow::Return(v)) | Ok(ExecutionFlow::Throw(v)) => {
+                                    Some(self.extract(*v))
+                                }
+                                _ => None,
+                            };
+                            self.scopes.pop();
+                            if let Some(val) = owned {
+                                let promoted = self.plant(val);
+                                match catch_res {
+                                    Ok(ExecutionFlow::Return(_)) => {
+                                        current_flow = Ok(ExecutionFlow::Return(promoted));
+                                    }
+                                    Ok(ExecutionFlow::Throw(_)) => {
+                                        current_flow = Ok(ExecutionFlow::Throw(promoted));
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            } else {
+                                current_flow = catch_res;
+                            }
+                        }
+                    }
+
+                    if let Some(finally_body) = &try_cont.finally_body {
+                        let fin_res = self.eval_block_discard(finally_body);
+                        if !matches!(fin_res, Ok(ExecutionFlow::Value(_))) {
+                            current_flow = fin_res;
+                        }
+                    }
+                }
+            }
+        }
+
+        match current_flow {
+            Ok(ExecutionFlow::Value(v)) => ProgramOutcome::Value(v),
+            Ok(ExecutionFlow::Return(_)) => {
+                ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Return)
+            }
+            Ok(ExecutionFlow::Break) | Ok(ExecutionFlow::BreakLabel(_)) => {
+                ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Break)
+            }
+            Ok(ExecutionFlow::Continue) | Ok(ExecutionFlow::ContinueLabel(_)) => {
+                ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Continue)
+            }
+            Ok(ExecutionFlow::Throw(r)) => {
+                let msg = self.display(r);
+                ProgramOutcome::UncaughtException { message: msg }
+            }
+            Err(RuntimeFailure) => {
+                if self.error_generation != starting_error_generation {
+                    if let Some(pending) = self.last_error.clone() {
+                        return ProgramOutcome::RuntimeError(pending.error);
+                    }
+                }
+                ProgramOutcome::UnstructuredError
+            }
+            Ok(ExecutionFlow::Suspend(op_id)) => ProgramOutcome::Suspended(op_id),
+        }
     }
 
     fn eval_program_outcome_inner(
@@ -1843,7 +2251,7 @@ impl Evaluator {
         starting_error_generation: u64,
     ) -> ProgramOutcome {
         let mut result = self.null_ref;
-        for statement in &program.statements {
+        for (idx, statement) in program.statements.iter().enumerate() {
             // Out statements at top level produce values that are immediately consumed
             // (printed) and never retained. Use a scratch watermark so display
             // temporaries don't accumulate in the global arena for the program lifetime.
@@ -1884,6 +2292,20 @@ impl Evaluator {
                         self.global_arena.reset_to(mark);
                     }
                     return ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Continue);
+                }
+                Ok(ExecutionFlow::Suspend(op_id)) => {
+                    if let Some(mark) = scratch_mark {
+                        self.global_arena.reset_to(mark);
+                    }
+                    let remaining = program.statements[idx + 1..].to_vec();
+                    if !remaining.is_empty() {
+                        if let Some(ctx) = &mut self.suspended_context {
+                            ctx.push_frame(suspension::ContinuationFrame::Block {
+                                remaining_statements: remaining,
+                            });
+                        }
+                    }
+                    return ProgramOutcome::Suspended(op_id);
                 }
                 Err(RuntimeFailure) => {
                     if let Some(mark) = scratch_mark {
@@ -1939,7 +2361,8 @@ impl Evaluator {
             ProgramOutcome::RuntimeError(_)
             | ProgramOutcome::UncaughtException { .. }
             | ProgramOutcome::InvalidControlFlow(_)
-            | ProgramOutcome::UnstructuredError => None,
+            | ProgramOutcome::UnstructuredError
+            | ProgramOutcome::Suspended(_) => None,
         }
     }
 
@@ -2000,6 +2423,12 @@ in the program that was run. Please report it."
             }
             ProgramOutcome::InvalidControlFlow(InvalidControlFlow::Continue) => {
                 eprintln!("❌ FLASH SCOPE ERROR: 'continue' cannot be used outside of a loop.");
+            }
+            ProgramOutcome::Suspended(op_id) => {
+                eprintln!(
+                    "❌ SUSPENDED: execution paused on async operation {:?}",
+                    op_id
+                );
             }
         }
     }
@@ -2174,6 +2603,13 @@ in the program that was run. Please report it."
                     error = true;
                     break;
                 }
+                Ok(ExecutionFlow::Suspend(_)) => {
+                    let message =
+                        format!("operator method '{method_name}' cannot suspend execution");
+                    let _ = self.rt_err(message);
+                    error = true;
+                    break;
+                }
             }
         }
 
@@ -2206,6 +2642,8 @@ in the program that was run. Please report it."
                 body,
                 captured,
                 bound_class,
+                return_type,
+                is_async,
                 ..
             }) => {
                 let has_rest = parameters.last().map(|p| p.is_rest).unwrap_or(false);
@@ -2277,7 +2715,7 @@ in the program that was run. Please report it."
                 }
                 let mut result_ref = self.null_ref;
                 let mut fn_throw: Option<ObjectRef> = None;
-                for s in &body.statements {
+                for (idx, s) in body.statements.iter().enumerate() {
                     match self.eval_statement(s) {
                         Ok(ExecutionFlow::Value(_)) => {} // only explicit return contributes result
                         Ok(ExecutionFlow::Return(v)) => {
@@ -2287,6 +2725,33 @@ in the program that was run. Please report it."
                         Ok(ExecutionFlow::Throw(v)) => {
                             fn_throw = Some(v);
                             break;
+                        }
+                        Ok(ExecutionFlow::Suspend(op_id)) => {
+                            let remaining = body.statements[idx + 1..].to_vec();
+                            if let Some(ctx) = &mut self.suspended_context {
+                                if !remaining.is_empty() {
+                                    ctx.push_frame(
+                                        crate::evaluator::suspension::ContinuationFrame::Block {
+                                            remaining_statements: remaining,
+                                        },
+                                    );
+                                }
+                                ctx.push_frame(
+                                    crate::evaluator::suspension::ContinuationFrame::Function(
+                                        crate::evaluator::suspension::FunctionContinuation {
+                                            call_name: "<callback>".to_string(),
+                                            return_type: return_type.clone(),
+                                            is_async,
+                                            remaining_caller_statements: Vec::new(),
+                                            caller_statement: None,
+                                        },
+                                    ),
+                                );
+                            }
+                            if let Some(prev) = prev_exec_class {
+                                self.executing_class = prev;
+                            }
+                            return Ok(ExecutionFlow::Suspend(op_id));
                         }
                         Err(RuntimeFailure) => {
                             self.call_depth -= 1;

@@ -6,12 +6,57 @@ Order: most recent to oldest.
 ---
 
 ## [Unreleased]
+**Target:** v11.2.0 (branch `improve`)
 
-Everything below landed **after** `v10.0.0` (`d8662c2`, 2026-08-31). The
-boundary is the tag, not a memory of it: `CHANGELOG.md` was byte-identical at
-`d8662c2` and at the time this section was opened, so the whole of what was
-filed under `[Unreleased] — maturity hardening` is the 10.0.0 release and is now
-under its own heading below.
+### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+### Security
+
+---
+
+## [v11.1.0] — 2026-09-06
+
+### Added
+- **Async/await language support (DEC-ASYNC-001)**:
+  - Reserved keywords `async` and `await`.
+  - Asynchronous function declarations (`async fn <type?> <name>(<params>) { ... }`), literals (`async fn(<params>) { ... }`), and class methods (`public async <type?> <name>(<params>) { ... }`).
+  - Prefix unary expression `await <expr>`.
+  - Dual sync/async execution architecture for I/O operations (`fetch(url)` vs `await fetch(url)`), without exposing `Promise` or `Future` wrapper types in user space.
+  - Compile-time (`SZ8000`) and runtime (`SZ4002`) capability validation distinguishing operations supporting asynchronous execution from synchronous-only operations.
+
+### Changed
+- **Runtime async con suspensión lógica real**:
+  - Replaced thread-blocking evaluator waits with logical continuation frames (`ContinuationFrame::Statement`, `Block`, `Function`, `Try`), allowing the runtime to yield control and resume without blocking host execution threads.
+  - Stepped evaluation and resumption preserving local variables, arenas, and execution context across suspension points.
+- **Bounded async I/O worker pool**:
+  - Fixed-size shared background worker pool (`ASYNC_IO_MAX_WORKERS = 4`) replacing unbounded OS thread creation.
+  - Notification-driven completion via condition variables eliminating busy-waiting polling loops and achieving 0% idle CPU usage.
+
+### Fixed
+- **Timeout global a través de redirects**:
+  - Absolute shared deadline across HTTP redirects (`start_time + timeout_secs`), preventing redirect hops from resetting operation timeouts.
+- **Cleanup de operaciones async**:
+  - Deterministic cleanup and resource reclamation upon operation completion, timeout, or cancellation.
+- **Eliminación de thread-per-await**:
+  - Tasks dispatched to bounded worker pool instead of allocating dedicated OS threads per await expression.
+- **Eliminación del polling del Evaluator**:
+  - Evaluator suspension yields directly to host schedulers with zero-polling continuation notifications.
+
+### Security / Performance
+- **Límite de operaciones async pendientes**:
+  - Global ceiling of 256 pending concurrent async operations (`DEFAULT_MAX_PENDING_ASYNC_OPERATIONS`), deterministically raising structured `ResourceError` (`SZ6001`) if exceeded.
+- **Cancellation and late completion safety**:
+  - Atomic cancellation tokens aborting in-flight transfers and safely discarding late-arriving results without corrupting evaluator state or leaking memory.
+
+---
+
+## [v11.0.0] — 2026-09-05 — Stable Release
+
+Everything below landed **after** `v10.0.0` (`d8662c2`, 2026-08-31) and represents the stable `v11.0.0` release.
+
 
 Most of the work in this window is internal — the M0–M10 maturity roadmap (a
 parser split into fourteen files, spans on every AST node, five diagnostic types

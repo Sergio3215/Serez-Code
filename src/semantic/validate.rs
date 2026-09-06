@@ -65,11 +65,11 @@
 //! reason the change carries no risk to the runtime: nothing in the evaluation
 //! model moved.
 
-use crate::ast::{Program, Statement};
+use crate::ast::{self, Expression, Program, Statement};
 use crate::diagnostic::{Diagnostic, Phase};
 use crate::semantic::scopes::{self, UseKind};
 use crate::span::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Generic semantic diagnostic: a meaning-level rejection not yet given a
 /// narrower code.
@@ -143,6 +143,7 @@ pub fn validate_in(
     check_inheritance(program, &scopes, &mut findings);
     check_names(&scopes, &mut findings);
     check_declaration_order(&scopes, &mut findings);
+    check_async_await(program, &mut findings);
 
     findings.sort_by_key(|d| (d.span.line, d.span.column));
     findings
@@ -502,6 +503,399 @@ fn reject_if_reserved(name: &str, what: &str, span: Span, findings: &mut Vec<Dia
             span,
             format!("'{name}' is a reserved system namespace and cannot be used as {what}"),
         ));
+    }
+}
+
+// ── DEC-ASYNC-001: Async/await contracts ───────────────────────────────────
+
+fn check_async_await(program: &Program, findings: &mut Vec<Diagnostic>) {
+    let mut async_fns = HashSet::new();
+    collect_async_declarations(program, &mut async_fns);
+
+    for stmt in &program.statements {
+        check_async_statement(stmt, &async_fns, findings);
+    }
+}
+
+fn collect_async_declarations(program: &Program, async_fns: &mut HashSet<String>) {
+    for stmt in &program.statements {
+        collect_async_fn_stmt(stmt, async_fns);
+    }
+}
+
+fn collect_async_fn_stmt(stmt: &Statement, async_fns: &mut HashSet<String>) {
+    match stmt {
+        Statement::FunctionDeclaration(f) => {
+            if f.function.is_async {
+                async_fns.insert(f.name.clone());
+            }
+            for s in &f.function.body.statements {
+                collect_async_fn_stmt(s, async_fns);
+            }
+        }
+        Statement::Export(inner) => collect_async_fn_stmt(inner, async_fns),
+        Statement::ClassDeclaration(c) => {
+            if let Some(ctor) = &c.constructor {
+                for s in &ctor.body.statements {
+                    collect_async_fn_stmt(s, async_fns);
+                }
+            }
+            for m in &c.methods {
+                for s in &m.body.statements {
+                    collect_async_fn_stmt(s, async_fns);
+                }
+            }
+        }
+        Statement::Block(b) | Statement::Unsafe(b) => {
+            for s in &b.statements {
+                collect_async_fn_stmt(s, async_fns);
+            }
+        }
+        Statement::While(w) | Statement::DoWhile(w) => {
+            for s in &w.body.statements {
+                collect_async_fn_stmt(s, async_fns);
+            }
+        }
+        Statement::For(f) => {
+            for s in &f.body.statements {
+                collect_async_fn_stmt(s, async_fns);
+            }
+        }
+        Statement::ForEach(f) => {
+            for s in &f.body.statements {
+                collect_async_fn_stmt(s, async_fns);
+            }
+        }
+        Statement::Switch(sw) => {
+            for case in &sw.cases {
+                for s in &case.body.statements {
+                    collect_async_fn_stmt(s, async_fns);
+                }
+            }
+            if let Some(def) = &sw.default {
+                for s in &def.statements {
+                    collect_async_fn_stmt(s, async_fns);
+                }
+            }
+        }
+        Statement::Try(t) => {
+            for s in &t.body.statements {
+                collect_async_fn_stmt(s, async_fns);
+            }
+            if let Some(cb) = &t.catch_body {
+                for s in &cb.statements {
+                    collect_async_fn_stmt(s, async_fns);
+                }
+            }
+            if let Some(fb) = &t.finally_body {
+                for s in &fb.statements {
+                    collect_async_fn_stmt(s, async_fns);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sync_only_builtin(expr: &Expression) -> Option<String> {
+    match expr {
+        Expression::Call(call) => {
+            if let Expression::Identifier { name, .. } = call.function.as_ref() {
+                if crate::capabilities::is_sync_only_operation(None, name) {
+                    return Some(name.clone());
+                }
+            }
+            None
+        }
+        Expression::DotCall(dot) => {
+            if let Expression::Identifier { name, .. } = dot.object.as_ref() {
+                if crate::capabilities::is_sync_only_operation(Some(name), &dot.method) {
+                    return Some(format!("{}.{}", name, dot.method));
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn check_async_expr(
+    expr: &Expression,
+    in_await: bool,
+    async_fns: &HashSet<String>,
+    findings: &mut Vec<Diagnostic>,
+) {
+    match expr {
+        Expression::Await { value, span } => {
+            if let Some(op_name) = is_sync_only_builtin(value) {
+                findings.push(Diagnostic::frontend(
+                    SZ_SEMANTIC_ERROR,
+                    Phase::Semantic,
+                    *span,
+                    format!(
+                        "operation '{}' is synchronous and does not support 'await'",
+                        op_name
+                    ),
+                ));
+            }
+            check_async_expr(value, true, async_fns, findings);
+        }
+        Expression::Call(call) => {
+            match call.function.as_ref() {
+                Expression::Identifier { name, span } => {
+                    if !in_await && async_fns.contains(name) {
+                        findings.push(Diagnostic::frontend(
+                            SZ_SEMANTIC_ERROR,
+                            Phase::Semantic,
+                            *span,
+                            format!("async function '{}' must be awaited at call site", name),
+                        ));
+                    }
+                }
+                Expression::FunctionLiteral(func) => {
+                    if !in_await && func.is_async {
+                        findings.push(Diagnostic::frontend(
+                            SZ_SEMANTIC_ERROR,
+                            Phase::Semantic,
+                            func.span,
+                            "async function must be awaited at call site".to_string(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+            check_async_expr(&call.function, false, async_fns, findings);
+            for arg in &call.arguments {
+                check_async_expr(arg, false, async_fns, findings);
+            }
+        }
+        Expression::DotCall(dot) => {
+            check_async_expr(&dot.object, false, async_fns, findings);
+            for arg in &dot.arguments {
+                check_async_expr(arg, false, async_fns, findings);
+            }
+        }
+        Expression::Infix(infix) => {
+            check_async_expr(&infix.left, false, async_fns, findings);
+            check_async_expr(&infix.right, false, async_fns, findings);
+        }
+        Expression::Prefix { right, .. }
+        | Expression::AddressOf { value: right, .. }
+        | Expression::Deref { value: right, .. }
+        | Expression::Spread { value: right, .. } => {
+            check_async_expr(right, false, async_fns, findings);
+        }
+        Expression::Index(idx) => {
+            check_async_expr(&idx.left, false, async_fns, findings);
+            check_async_expr(&idx.index, false, async_fns, findings);
+        }
+        Expression::Ternary(t) => {
+            check_async_expr(&t.condition, false, async_fns, findings);
+            check_async_expr(&t.then_expr, false, async_fns, findings);
+            check_async_expr(&t.else_expr, false, async_fns, findings);
+        }
+        Expression::If(i) => {
+            check_async_expr(&i.condition, false, async_fns, findings);
+            for s in &i.consequence.statements {
+                check_async_statement(s, async_fns, findings);
+            }
+            if let Some(alt) = &i.alternative {
+                for s in &alt.statements {
+                    check_async_statement(s, async_fns, findings);
+                }
+            }
+        }
+        Expression::ArrayLiteral(arr) => {
+            for elem in &arr.elements {
+                check_async_expr(elem, false, async_fns, findings);
+            }
+        }
+        Expression::DictLiteral(dict) => {
+            for (k, v) in &dict.entries {
+                check_async_expr(k, false, async_fns, findings);
+                check_async_expr(v, false, async_fns, findings);
+            }
+        }
+        Expression::EntryLiteral { key, value, .. } => {
+            check_async_expr(key, false, async_fns, findings);
+            check_async_expr(value, false, async_fns, findings);
+        }
+        Expression::InterpolatedString { parts, .. } => {
+            for part in parts {
+                if let ast::StringPart::Expr(e) = part {
+                    check_async_expr(e, false, async_fns, findings);
+                }
+            }
+        }
+        Expression::New(new_expr) => match &new_expr.args {
+            ast::NewArgs::Positional(args) => {
+                for arg in args {
+                    check_async_expr(arg, false, async_fns, findings);
+                }
+            }
+            ast::NewArgs::Fields(fields) => {
+                for (_, expr) in fields {
+                    check_async_expr(expr, false, async_fns, findings);
+                }
+            }
+        },
+        Expression::ObjectPatch { fields, .. } => {
+            for (_, expr) in fields {
+                check_async_expr(expr, false, async_fns, findings);
+            }
+        }
+        Expression::FunctionLiteral(func) => {
+            for s in &func.body.statements {
+                check_async_statement(s, async_fns, findings);
+            }
+        }
+        Expression::Lambda(lambda) => match &lambda.body {
+            ast::LambdaBody::Expr(e) => check_async_expr(e, false, async_fns, findings),
+            ast::LambdaBody::Block(b) => {
+                for s in &b.statements {
+                    check_async_statement(s, async_fns, findings);
+                }
+            }
+        },
+        Expression::Match(m) => {
+            check_async_expr(&m.subject, false, async_fns, findings);
+            for arm in &m.arms {
+                if let Some(g) = &arm.guard {
+                    check_async_expr(g, false, async_fns, findings);
+                }
+                for s in &arm.body.statements {
+                    check_async_statement(s, async_fns, findings);
+                }
+            }
+        }
+        Expression::UnsafeBlock(b) => {
+            for s in &b.statements {
+                check_async_statement(s, async_fns, findings);
+            }
+        }
+        Expression::SizeOf {
+            target: ast::SizeOfTarget::Expr(e),
+            ..
+        } => {
+            check_async_expr(e, false, async_fns, findings);
+        }
+        _ => {}
+    }
+}
+
+fn check_async_statement(
+    stmt: &Statement,
+    async_fns: &HashSet<String>,
+    findings: &mut Vec<Diagnostic>,
+) {
+    match stmt {
+        Statement::Expression(e) => check_async_expr(e, false, async_fns, findings),
+        Statement::Let(l) => check_async_expr(&l.value, false, async_fns, findings),
+        Statement::Assign(a) => check_async_expr(&a.value, false, async_fns, findings),
+        Statement::Return(r) => {
+            check_async_expr(&r.return_value, false, async_fns, findings);
+        }
+        Statement::Throw(e) | Statement::Yield(e) => {
+            check_async_expr(e, false, async_fns, findings)
+        }
+        Statement::Out(o) => check_async_expr(&o.value, false, async_fns, findings),
+        Statement::IndexAssign(ia) => {
+            check_async_expr(&ia.target, false, async_fns, findings);
+            check_async_expr(&ia.index, false, async_fns, findings);
+            check_async_expr(&ia.value, false, async_fns, findings);
+        }
+        Statement::FieldAssign(fa) => {
+            check_async_expr(&fa.value, false, async_fns, findings);
+        }
+        Statement::NestedFieldAssign(nfa) => {
+            check_async_expr(&nfa.object, false, async_fns, findings);
+            check_async_expr(&nfa.value, false, async_fns, findings);
+        }
+        Statement::DerefAssign { ptr, value } => {
+            check_async_expr(ptr, false, async_fns, findings);
+            check_async_expr(value, false, async_fns, findings);
+        }
+        Statement::LetDestructureArray(lda) => {
+            check_async_expr(&lda.value, false, async_fns, findings);
+        }
+        Statement::LetDestructureDict(ldd) => {
+            check_async_expr(&ldd.value, false, async_fns, findings);
+        }
+        Statement::While(w) | Statement::DoWhile(w) => {
+            check_async_expr(&w.condition, false, async_fns, findings);
+            for s in &w.body.statements {
+                check_async_statement(s, async_fns, findings);
+            }
+        }
+        Statement::For(f) => {
+            check_async_expr(&f.init.value, false, async_fns, findings);
+            check_async_expr(&f.condition, false, async_fns, findings);
+            check_async_expr(&f.update.value, false, async_fns, findings);
+            for s in &f.body.statements {
+                check_async_statement(s, async_fns, findings);
+            }
+        }
+        Statement::ForEach(fe) => {
+            check_async_expr(&fe.iterable, false, async_fns, findings);
+            for s in &fe.body.statements {
+                check_async_statement(s, async_fns, findings);
+            }
+        }
+        Statement::Switch(sw) => {
+            check_async_expr(&sw.value, false, async_fns, findings);
+            for case in &sw.cases {
+                for v in &case.values {
+                    check_async_expr(v, false, async_fns, findings);
+                }
+                for s in &case.body.statements {
+                    check_async_statement(s, async_fns, findings);
+                }
+            }
+            if let Some(def) = &sw.default {
+                for s in &def.statements {
+                    check_async_statement(s, async_fns, findings);
+                }
+            }
+        }
+        Statement::Try(t) => {
+            for s in &t.body.statements {
+                check_async_statement(s, async_fns, findings);
+            }
+            if let Some(cb) = &t.catch_body {
+                for s in &cb.statements {
+                    check_async_statement(s, async_fns, findings);
+                }
+            }
+            if let Some(fb) = &t.finally_body {
+                for s in &fb.statements {
+                    check_async_statement(s, async_fns, findings);
+                }
+            }
+        }
+        Statement::FunctionDeclaration(f) => {
+            for s in &f.function.body.statements {
+                check_async_statement(s, async_fns, findings);
+            }
+        }
+        Statement::ClassDeclaration(c) => {
+            if let Some(ctor) = &c.constructor {
+                for s in &ctor.body.statements {
+                    check_async_statement(s, async_fns, findings);
+                }
+            }
+            for m in &c.methods {
+                for s in &m.body.statements {
+                    check_async_statement(s, async_fns, findings);
+                }
+            }
+        }
+        Statement::Block(b) | Statement::Unsafe(b) => {
+            for s in &b.statements {
+                check_async_statement(s, async_fns, findings);
+            }
+        }
+        Statement::Export(inner) => check_async_statement(inner, async_fns, findings),
+        _ => {}
     }
 }
 
@@ -938,5 +1332,56 @@ mod tests {
         let p = program("enum Colour { Red, Green }\n");
         assert!(validate(&p).is_empty());
         assert_eq!(p.statements.len(), 1, "the tree is what was handed over");
+    }
+
+    // ── DEC-ASYNC-001: Async/await contracts ───────────────────────────────
+
+    #[test]
+    fn unawaited_call_to_async_fn_is_rejected() {
+        let findings = validate(&program("async fn doWork() { return 1; }\ndoWork();\n"));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, SZ_SEMANTIC_ERROR);
+        assert!(
+            findings[0]
+                .message
+                .contains("async function 'doWork' must be awaited"),
+            "unexpected message: {}",
+            findings[0].message
+        );
+    }
+
+    #[test]
+    fn awaited_call_to_async_fn_is_accepted() {
+        let findings = validate(&program(
+            "async fn doWork() { return 1; }\nawait doWork();\n",
+        ));
+        assert!(findings.is_empty(), "unexpected findings: {:?}", findings);
+    }
+
+    #[test]
+    fn awaiting_sync_only_builtins_is_rejected() {
+        for src in [
+            "await parseInt(\"42\");\n",
+            "await Math.sqrt(16);\n",
+            "await JSON.parse(\"{}\");\n",
+            "await assert(true, \"ok\");\n",
+        ] {
+            let findings = validate(&program(src));
+            assert_eq!(findings.len(), 1, "expected 1 finding for {src}");
+            assert_eq!(findings[0].code, SZ_SEMANTIC_ERROR);
+            assert!(
+                findings[0]
+                    .message
+                    .contains("is synchronous and does not support 'await'"),
+                "unexpected message for {src}: {}",
+                findings[0].message
+            );
+        }
+    }
+
+    #[test]
+    fn dual_path_fetch_is_accepted_with_or_without_await() {
+        assert!(validate(&program("fetch(\"https://example.com\");\n")).is_empty());
+        assert!(validate(&program("await fetch(\"https://example.com\");\n")).is_empty());
     }
 }

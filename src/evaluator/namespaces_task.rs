@@ -90,6 +90,10 @@ fn worker_outcome(outcome: ProgramOutcome) -> Result<(), String> {
             Err(format!("Invalid top-level control flow: {:?}", flow))
         }
         ProgramOutcome::UnstructuredError => Err("Unstructured runtime failure".to_string()),
+        ProgramOutcome::Suspended(id) => Err(format!(
+            "Worker suspended unexpectedly on operation {:?}",
+            id
+        )),
     }
 }
 

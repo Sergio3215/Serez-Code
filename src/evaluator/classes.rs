@@ -293,6 +293,11 @@ impl super::Evaluator {
                         body_error = true;
                         break;
                     }
+                    Ok(ExecutionFlow::Suspend(_)) => {
+                        let _ = self.rt_err("constructor cannot await or suspend execution");
+                        body_error = true;
+                        break;
+                    }
                 }
             }
 
@@ -595,6 +600,11 @@ impl super::Evaluator {
                     error = true;
                     break;
                 }
+                Ok(ExecutionFlow::Suspend(_)) => {
+                    let _ = self.rt_err("constructor cannot await or suspend execution");
+                    error = true;
+                    break;
+                }
             }
         }
 
@@ -755,7 +765,7 @@ impl super::Evaluator {
         let mut result_ref = self.null_ref;
         let mut error = false;
         let mut method_throw: Option<ObjectRef> = None;
-        for stmt in &method.body.statements {
+        for (idx, stmt) in method.body.statements.iter().enumerate() {
             match self.eval_statement(stmt) {
                 Ok(ExecutionFlow::Value(_)) => {}
                 Ok(ExecutionFlow::Return(v)) => {
@@ -765,6 +775,29 @@ impl super::Evaluator {
                 Ok(ExecutionFlow::Throw(v)) => {
                     method_throw = Some(v);
                     break;
+                }
+                Ok(ExecutionFlow::Suspend(op_id)) => {
+                    let remaining = method.body.statements[idx + 1..].to_vec();
+                    if let Some(ctx) = &mut self.suspended_context {
+                        if !remaining.is_empty() {
+                            ctx.push_frame(
+                                crate::evaluator::suspension::ContinuationFrame::Block {
+                                    remaining_statements: remaining,
+                                },
+                            );
+                        }
+                        ctx.push_frame(crate::evaluator::suspension::ContinuationFrame::Function(
+                            crate::evaluator::suspension::FunctionContinuation {
+                                call_name: format!("{}::{}", parent_name, dot_call.method),
+                                return_type: method.return_type.clone(),
+                                is_async: method.is_async,
+                                remaining_caller_statements: Vec::new(),
+                                caller_statement: None,
+                            },
+                        ));
+                    }
+                    self.executing_class = old_executing_class;
+                    return Ok(ExecutionFlow::Suspend(op_id));
                 }
                 Err(RuntimeFailure) => {
                     error = true;
@@ -877,6 +910,16 @@ impl super::Evaluator {
         class_name: String,
         dot_call: &ast::DotCallExpression,
     ) -> EvalResult {
+        self.eval_instance_dot_with(obj_ref, class_name, dot_call, false)
+    }
+
+    pub(super) fn eval_instance_dot_with(
+        &mut self,
+        obj_ref: ObjectRef,
+        class_name: String,
+        dot_call: &ast::DotCallExpression,
+        is_await: bool,
+    ) -> EvalResult {
         let method_name = &dot_call.method;
 
         // Field read: no parens and no args and field exists → return value (not call)
@@ -917,6 +960,7 @@ impl super::Evaluator {
                     body: Rc::new(m.body.clone()),
                     captured: Rc::new(vec![("this".to_string(), obj_ref)]),
                     is_generator: false,
+                    is_async: m.is_async,
                     // The body runs as its declaring class, so a `Parent` method
                     // called through a `Derived` reference still reaches
                     // `Parent`'s private members. Binding the receiver's class
@@ -930,6 +974,20 @@ impl super::Evaluator {
         let method = self.find_method(&class_name, method_name);
         match method {
             Some(m) => {
+                if is_await && !m.is_async {
+                    let message = format!(
+                        "method '{}' is synchronous and does not support 'await'",
+                        method_name
+                    );
+                    return self.rt_err_kind("TypeError", message);
+                }
+                if !is_await && m.is_async {
+                    let message = format!(
+                        "async method '{}' must be awaited with 'await'",
+                        method_name
+                    );
+                    return self.rt_err_kind("TypeError", message);
+                }
                 let args_exprs = dot_call.arguments.clone();
                 let mut arg_vals: Vec<OwnedValue> = Vec::new();
                 for expr in &args_exprs {
@@ -1236,7 +1294,7 @@ impl super::Evaluator {
         let mut result_ref = self.null_ref;
         let mut error = false;
         let mut method_throw: Option<ObjectRef> = None;
-        for stmt in &m.body.statements {
+        for (idx, stmt) in m.body.statements.iter().enumerate() {
             match self.eval_statement(stmt) {
                 Ok(ExecutionFlow::Value(_)) => {}
                 Ok(ExecutionFlow::Return(v)) => {
@@ -1246,6 +1304,29 @@ impl super::Evaluator {
                 Ok(ExecutionFlow::Throw(v)) => {
                     method_throw = Some(v);
                     break;
+                }
+                Ok(ExecutionFlow::Suspend(op_id)) => {
+                    let remaining = m.body.statements[idx + 1..].to_vec();
+                    if let Some(ctx) = &mut self.suspended_context {
+                        if !remaining.is_empty() {
+                            ctx.push_frame(
+                                crate::evaluator::suspension::ContinuationFrame::Block {
+                                    remaining_statements: remaining,
+                                },
+                            );
+                        }
+                        ctx.push_frame(crate::evaluator::suspension::ContinuationFrame::Function(
+                            crate::evaluator::suspension::FunctionContinuation {
+                                call_name: format!("{}::{}", class_name, method_name),
+                                return_type: m.return_type.clone(),
+                                is_async: m.is_async,
+                                remaining_caller_statements: Vec::new(),
+                                caller_statement: None,
+                            },
+                        ));
+                    }
+                    self.executing_class = old_executing_class;
+                    return Ok(ExecutionFlow::Suspend(op_id));
                 }
                 Err(RuntimeFailure) => {
                     error = true;

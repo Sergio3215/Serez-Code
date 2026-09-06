@@ -523,7 +523,8 @@ fn writes_self_expr(e: &ast::Expression, found: &mut bool) {
         }
         | Ex::Spread { value: inner, .. }
         | Ex::AddressOf { value: inner, .. }
-        | Ex::Deref { value: inner, .. } => writes_self_expr(inner, found),
+        | Ex::Deref { value: inner, .. }
+        | Ex::Await { value: inner, .. } => writes_self_expr(inner, found),
         Ex::Infix(i) => {
             writes_self_expr(&i.left, found);
             writes_self_expr(&i.right, found);
@@ -692,7 +693,8 @@ fn calls_super_expr(e: &ast::Expression, found: &mut bool) {
         }
         | Ex::Spread { value: inner, .. }
         | Ex::AddressOf { value: inner, .. }
-        | Ex::Deref { value: inner, .. } => calls_super_expr(inner, found),
+        | Ex::Deref { value: inner, .. }
+        | Ex::Await { value: inner, .. } => calls_super_expr(inner, found),
         Ex::Infix(i) => {
             calls_super_expr(&i.left, found);
             calls_super_expr(&i.right, found);
