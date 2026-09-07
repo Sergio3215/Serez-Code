@@ -60,3 +60,4 @@ documentacion-internal-082026.md
 tests/~*.sz
 status
 audit
+ci-gates.ps1
