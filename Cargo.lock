@@ -1875,27 +1875,26 @@ dependencies = [
 
 [[package]]
 name = "inkwell"
-version = "0.4.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b597a7b2cdf279aeef6d7149071e35e4bc87c2cf05a5b7f2d731300bffe587ea"
+checksum = "30932a1258d02e3c7344618abcdbb5dca03e0f8d2ad34496067d1f371cfceda6"
 dependencies = [
- "either",
+ "bitflags 2.11.1",
  "inkwell_internals",
  "libc",
  "llvm-sys",
- "once_cell",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "inkwell_internals"
-version = "0.9.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fa4d8d74483041a882adaa9a29f633253a66dde85055f0495c121620ac484b2"
+checksum = "04a85f1cf8de4f1df2ebd93b6afe957fa2acd0081c97dabfa41651eeeb44756e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -4027,6 +4026,17 @@ name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",
