@@ -30,8 +30,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, not `@stable`. This action does not read `rust-toolchain.toml`,
+      # so the version lives in both places and they have to move together.
+      # `@stable` meant the runner installed whatever Rust shipped that week,
+      # which is how the Clippy gate started failing on lints that do not exist
+      # in the toolchain this repository is developed against — see the file for
+      # the full account. A gate that compares against a committed baseline is
+      # only as reproducible as the Clippy that produces it.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.87.0
         with:
           components: clippy, rustfmt
 
@@ -123,8 +130,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned to match `rust-toolchain.toml`; this action does not read it.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.87.0
 
       - name: Install ALSA
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config

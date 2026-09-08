@@ -33,8 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned to match `rust-toolchain.toml`; this action does not read it.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.87.0
 
       - name: Install ALSA
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config

@@ -1,0 +1,33 @@
+# The toolchain this repository is built and linted with, for everyone.
+#
+# Until this file existed, CI installed `dtolnay/rust-toolchain@stable`, which
+# resolves to whatever stable Rust is on the day the job runs, while a developer
+# machine kept whatever `rustup` last downloaded. The two drifted, and the thing
+# that noticed was the Clippy gate: `tools/clippy_baseline.py --check` compares
+# per-warning identities against `clippy-baseline.txt`, so a newer Clippy with
+# new lints reports them all as new debt. `clippy::manual_is_multiple_of`,
+# `clippy::manual_checked_ops` and `clippy::chunks_exact_to_as_chunks` do not
+# exist in Clippy 0.1.87 at all — they cannot be debt this tree incurred — and
+# lints that do exist here, such as `collapsible_if` and `question_mark`, widened
+# what they match in later releases. None of that is a regression in this
+# repository, but the gate cannot tell the difference, and refreshing the
+# baseline to absorb it would have silently banked warnings nobody introduced.
+#
+# `rustup` reads this file, so a bare `cargo`, `cargo clippy` or `cargo fmt`
+# selects 1.87.0 whatever the machine's default toolchain is. That is the point:
+# the baseline in `clippy-baseline.txt` is only meaningful against a fixed Clippy.
+#
+# `dtolnay/rust-toolchain` does **not** read this file, so the workflows pin the
+# same version in their `uses:` line. When this version moves, those move with
+# it — `.github/workflows/{ci,release,ecosystem-daily}.yml` — and the baseline
+# has to be re-checked, because a new Clippy legitimately sees different things.
+[toolchain]
+channel = "1.87.0"
+# `cargo fmt --check` and the Clippy gate both run before anything else in CI,
+# so neither component is optional. Naming them here means a fresh clone gets
+# them without a separate `rustup component add`.
+components = ["clippy", "rustfmt"]
+# The release matrix installs its cross-compilation targets in the workflow,
+# where they belong: listing them here would make every clone download four
+# standard libraries to run `cargo test`.
+profile = "minimal"
