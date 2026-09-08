@@ -115,9 +115,16 @@ jobs:
         shell: bash
         run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.asset }}
 
+      # `--locked` builds cargo-wix against its own committed lockfile. Without
+      # it cargo resolves the dependency tree fresh, and a transitive crate that
+      # has since raised its MSRV — `encoding_rs` 0.8.40, which wants Rust 1.88 —
+      # stops the install dead on the 1.87.0 this repository is pinned to. The
+      # tool is a packaging step, not something whose dependencies we want to
+      # float: the lockfile is the version the cargo-wix authors shipped and
+      # tested. Cargo's own advice on that failure is this flag.
       - name: Install cargo-wix (Windows only)
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: cargo install cargo-wix --no-default-features
+        run: cargo install cargo-wix --locked --no-default-features
 
       - name: Build MSI installer (Windows only)
         if: matrix.target == 'x86_64-pc-windows-msvc'

@@ -776,7 +776,7 @@ output change is intentional, and review the diff before committing.
 
 ### Local release
 
-Producing the `.msi` locally requires WiX Toolset v3 + `cargo install cargo-wix`.
+Producing the `.msi` locally requires WiX Toolset v3 + `cargo install cargo-wix --locked`.
 In practice the `.msi` is generated automatically via GitHub Actions when a tag
 is pushed.
 
