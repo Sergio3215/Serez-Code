@@ -19,7 +19,7 @@ jobs:
       # The tag path runs the same baseline gate as CI, so it needs the same
       # Clippy CI used, or a release could fail on lints a pull request never saw.
       - name: Install Rust quality components
-        uses: dtolnay/rust-toolchain@1.87.0
+        uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: clippy, rustfmt
 
@@ -96,7 +96,7 @@ jobs:
 
       # Pinned to match `rust-toolchain.toml`; this action does not read it.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.87.0
+        uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: ${{ matrix.target }}
 
