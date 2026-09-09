@@ -225,7 +225,8 @@ fn runtime_error_code(kind: &str) -> &'static str {
 }
 
 use crate::ast::{self, Program, Statement};
-use crate::diagnostic::{Diagnostic, Phase, Severity};
+use crate::diagnostic::{Diagnostic, Origin, Phase, Severity};
+use crate::environment::{Capability, Environment};
 use crate::region::{Arena, ObjectData, ObjectRef, OwnedValue, RegionId};
 use crate::render;
 use crate::scope::ScopeStack;
@@ -471,6 +472,10 @@ pub struct Evaluator {
     // Two fields until M6.3. See `permissions::SecurityPolicy` for why the
     // manifest and lockdown are one thing, and how they differ.
     security: crate::permissions::SecurityPolicy,
+    /// Which environment this is, for the **wording** of a refusal and nothing
+    /// else. Deliberately beside `security` rather than inside it: it must not
+    /// be reachable from a gate. See `crate::environment`.
+    environment: Environment,
     // ── Autodiff tape ─────────────────────────────────────────────────────────
     // Five fields until M6.1; see `namespaces_autodiff::AutodiffTape` for why
     // they are one thing, and why `tensor_id_counter` is not part of it.
@@ -745,6 +750,7 @@ impl Evaluator {
             gpu: crate::handles::HandleRegistry::new(),
             memory: crate::handles::HandleRegistry::new(),
             security: crate::permissions::SecurityPolicy::default(),
+            environment: Environment::default(),
             autodiff: namespaces_autodiff::AutodiffTape::new(),
             tensor_id_counter: 1,
             gui: namespaces_gui::GuiRuntime::default(),
@@ -777,7 +783,7 @@ impl Evaluator {
         kind: impl Into<String>,
         msg: impl Into<String>,
     ) -> EvalResult {
-        self.record_runtime_error(kind.into(), msg.into(), true)
+        self.record_runtime_error(kind.into(), msg.into(), true, Origin::Program)
     }
 
     /// Raise a structured runtime error that `try/catch` must not consume.
@@ -791,7 +797,7 @@ impl Evaluator {
         kind: impl Into<String>,
         msg: impl Into<String>,
     ) -> EvalResult {
-        self.record_runtime_error(kind.into(), msg.into(), false)
+        self.record_runtime_error(kind.into(), msg.into(), false, Origin::Program)
     }
 
     fn record_runtime_error(
@@ -799,6 +805,7 @@ impl Evaluator {
         kind: String,
         message: String,
         catchable: bool,
+        origin: Origin,
     ) -> EvalResult {
         let code = runtime_error_code(&kind);
         // `Span::unknown()` when there is no frame: an empty call stack means
@@ -825,6 +832,7 @@ impl Evaluator {
             kind: Some(kind),
             message,
             span,
+            origin,
             stack,
             notes: Vec::new(),
         };
@@ -986,6 +994,20 @@ impl Evaluator {
         if self.security.allows(permission) {
             return None;
         }
+        // In the online beta the advice below is advice nobody can take: there
+        // is no serez.json to edit, and `use permissions` is refused by the same
+        // lockdown that emptied the permission set in the first place. So the
+        // capability is not missing a declaration — it is one the environment
+        // does not offer, which is a different sentence.
+        //
+        // A permission with no entry in the table falls through to the ordinary
+        // message. That is deliberate: a name nothing here recognises is exactly
+        // where a reassuring sentence would be a made-up one.
+        if self.online_beta_limits_capabilities() {
+            if let Some(capability) = Capability::for_permission(permission) {
+                return Some(self.deny_as_beta_limitation(capability, "PermissionError", false));
+            }
+        }
         Some(self.fatal_err_kind(
             "PermissionError",
             format!(
@@ -1066,6 +1088,68 @@ impl Evaluator {
         self.security.lockdown
     }
 
+    /// Say which environment this is, so a refusal can be worded for the person
+    /// who will read it.
+    ///
+    /// For the **embedder**, like [`Self::allow_fetch_hosts`] and for the same
+    /// reason: a program that could set this would be choosing how its own
+    /// failures are described. It grants nothing, closes nothing and is not
+    /// consulted by any gate — see `crate::environment`.
+    pub fn set_environment(&mut self, environment: Environment) {
+        self.environment = environment;
+    }
+
+    pub fn environment(&self) -> Environment {
+        self.environment
+    }
+
+    /// Is a capability that is off right now off *because this is the online
+    /// beta*?
+    ///
+    /// Both halves are required, and the second is the one that keeps the
+    /// distinction honest. Lockdown is what actually closes these capabilities;
+    /// the environment only says who the reader is. Without the lockdown check a
+    /// playground handed a permission set could announce a capability that was
+    /// genuinely granted and then refused for some other reason as a beta
+    /// limitation, which is the false positive this change exists to avoid.
+    pub(crate) fn online_beta_limits_capabilities(&self) -> bool {
+        self.environment.is_online_beta() && self.security.lockdown
+    }
+
+    /// Refuse `capability` as a limitation of the online beta.
+    ///
+    /// Keeps the `kind`, the diagnostic code and the catchability of the gate
+    /// that called it: `spec/compatibility.md` promises codes and kinds are
+    /// stable, and a refusal that became catchable because it was reworded would
+    /// be a security change wearing a UX change's clothes. Only the text and the
+    /// headline differ.
+    pub(crate) fn deny_as_beta_limitation(
+        &mut self,
+        capability: Capability,
+        kind: &str,
+        catchable: bool,
+    ) -> EvalResult {
+        self.deny_with_beta_message(kind, capability.limitation(), catchable)
+    }
+
+    /// [`Self::deny_as_beta_limitation`] for the one gate whose first sentence
+    /// is not a capability's own — `fetch` against a beta that opened a short
+    /// list of hosts. The text is still built by `environment::limitation`; only
+    /// its subject differs.
+    pub(crate) fn deny_with_beta_message(
+        &mut self,
+        kind: &str,
+        message: String,
+        catchable: bool,
+    ) -> EvalResult {
+        self.record_runtime_error(
+            kind.to_string(),
+            message,
+            catchable,
+            Origin::EnvironmentLimit,
+        )
+    }
+
     /// Set how many values one generator call may accumulate.
     ///
     /// For the **host**. There is deliberately no way for a running program to
@@ -1081,9 +1165,25 @@ impl Evaluator {
     /// surface: `File`, `import` and the autodiff weight files reach the disk
     /// without any permission being declared, unlike OS/Socket/Task/Gui/Media/Time.
     /// Returns `Some(err)` to be propagated, `None` when not under lockdown.
-    pub(crate) fn deny_in_lockdown(&mut self, what: &str, hint: &str) -> Option<EvalResult> {
+    ///
+    /// `capability` names the same refusal for a reader who is not running this
+    /// locally; `what` and `hint` are the wording for one who is. Which of the
+    /// two they get is decided here rather than at the call site, so a gate
+    /// stays a gate and does not acquire an opinion about its audience.
+    pub(crate) fn deny_in_lockdown(
+        &mut self,
+        capability: Capability,
+        what: &str,
+        hint: &str,
+    ) -> Option<EvalResult> {
         if !self.security.lockdown {
             return None;
+        }
+        if self.online_beta_limits_capabilities() {
+            // Catchable, exactly as the line below is: `spec/security.md` splits
+            // these three from `use permissions` on that property, and rewording
+            // a refusal must not move it across the split.
+            return Some(self.deny_as_beta_limitation(capability, "PermissionError", true));
         }
         Some(self.rt_err_kind(
             "PermissionError",

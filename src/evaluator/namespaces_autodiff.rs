@@ -2675,6 +2675,7 @@ impl super::Evaluator {
             // namespace is pure computation and stays available under lockdown.
             "saveWeights" | "loadWeights" if self.security.lockdown => {
                 match self.deny_in_lockdown(
+                    crate::environment::Capability::ModelWeights,
                     "Autodiff.saveWeights / Autodiff.loadWeights",
                     "this code runs with no filesystem access.",
                 ) {

@@ -69,6 +69,14 @@ pub struct RunOpts {
     /// A host setting, like `fetch_allowlist`: a running program has no way to
     /// raise it.
     pub generator_yield_limit: Option<usize>,
+    /// Which environment this run is, for the **wording** of a refusal.
+    ///
+    /// Grants nothing and closes nothing: a capability that is off is off in
+    /// every environment, and this only decides whether the refusal is phrased
+    /// for someone debugging a local runtime or for someone meeting the language
+    /// on a web page. `Local` is the default, so `sz file.sz` and a terminal
+    /// `sz --eval` are unchanged. See [`crate::environment`].
+    pub environment: crate::environment::Environment,
 }
 
 impl Default for RunOpts {
@@ -81,6 +89,7 @@ impl Default for RunOpts {
             check_only: false,
             fetch_allowlist: Vec::new(),
             generator_yield_limit: None,
+            environment: crate::environment::Environment::Local,
         }
     }
 }
@@ -209,6 +218,7 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
     evaluator.set_permissions(opts.permissions);
     evaluator.set_lockdown(opts.lockdown);
     evaluator.allow_fetch_hosts(&opts.fetch_allowlist);
+    evaluator.set_environment(opts.environment);
     if let Some(limit) = opts.generator_yield_limit {
         evaluator.set_generator_yield_limit(limit);
     }
@@ -329,6 +339,9 @@ pub fn run_file(file_path: &str, is_check: bool) -> i32 {
             // `fetch` is unrestricted here exactly as it always was.
             fetch_allowlist: Vec::new(),
             generator_yield_limit: None,
+            // A file on this machine is a local run by definition; there is no
+            // other environment `sz file.sz` can be.
+            environment: crate::environment::Environment::Local,
         },
     )
     .exit_code
@@ -376,13 +389,23 @@ fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
 /// `fetch_allowlist` is the CLI's `--allow-fetch`: under lockdown the network is
 /// closed, and this is the only thing that opens it. Empty is the default and
 /// means no outbound request at all.
-pub fn run_eval(src: String, is_check: bool, fetch_allowlist: Vec<String>) -> i32 {
+///
+/// `environment` is the CLI's `--online-beta`. It is the same door either way
+/// — the online playground is a hosted `sz --eval` — so the only thing it changes
+/// is who the refusals are written for. See [`crate::environment`].
+pub fn run_eval(
+    src: String,
+    is_check: bool,
+    fetch_allowlist: Vec<String>,
+    environment: crate::environment::Environment,
+) -> i32 {
     run_source(
         src,
         "<eval>",
         RunOpts {
             check_only: is_check,
             fetch_allowlist,
+            environment,
             ..RunOpts::sandboxed()
         },
     )

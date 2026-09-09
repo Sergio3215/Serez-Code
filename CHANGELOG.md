@@ -26,6 +26,53 @@ that carries the evidence. **Four of them are breaking** and are marked as such;
 each was measured against the corpus and all eight official packages before it
 landed, and the count is in the entry.
 
+### The online beta playground says what it is, instead of reading as a broken language
+
+- The playground is a hosted `sz --eval`, so a snippet runs under lockdown and
+  every capability lockdown closes comes back refused. The refusals were written
+  for someone at a terminal: `fetch to 'pokeapi.co' is not available here — this
+  code runs as untrusted source, and the network is closed unless the host allows
+  it explicitly`. Every word of it is true, and for a reader whose first contact
+  with Serez Code is a web page it reads as *`fetch` is broken*.
+- A run can now say which environment it is — `sz --eval … --online-beta`,
+  `SEREZ_ONLINE_BETA=1`, `run::RunOpts::environment`, or
+  `Evaluator::set_environment` — and in the online beta a capability lockdown
+  closed is announced as a limitation of that environment:
+
+  ```text
+  ❌ BETA LIMITATION [SZ6001]:
+  Network access is disabled in this online beta environment.
+
+  This playground is intended for quick testing and does not expose all Serez
+  Code capabilities.
+
+  To use `fetch` and the full Serez Code runtime, install Serez Code locally
+  from serezcode.org.
+  ```
+
+- All fourteen capabilities the playground withholds are covered, not just
+  `fetch`: the filesystem, `import` and packages, model weight files,
+  `use permissions`, and the nine guarded namespaces (`OS`, `Terminal`, `Env`,
+  `System`, `Socket`, `Media`, `Gui`, `Task`, `Time`/`DateTime`). The text lives
+  in one table (`environment::Capability`) rather than at the call sites.
+- **It grants nothing and closes nothing.** The setting is not consulted by any
+  gate and does not live in `SecurityPolicy`; it applies only where a refusal has
+  already happened. Code, kind and catchability are identical in both
+  environments — `SZ6001` stays `SZ6001`, a catchable refusal stays catchable,
+  and `use permissions` stays a fatal `SZ6004`. Stack frames and their positions
+  print underneath as before.
+- **Off by default, so nothing else moved.** `sz file.sz` and a terminal
+  `sz --eval` produce byte-identical diagnostics; in particular a local run that
+  is missing a permission still says so and still names `serez.json`, because
+  there that is advice the reader can act on. An ordinary programming mistake is
+  never reported as a limitation of the environment, in either.
+- `run::run_eval` takes the environment as a fourth argument. Embedders that
+  call it directly need one more parameter; `run_source` and `RunOpts` are
+  additive.
+- `spec/cli.md` also stopped saying `fetch` is not closed under lockdown, which
+  had been wrong since `649ba49` below.
+- `tests/beta_limitations.rs` asserts both directions.
+
 ### BREAKING — `fetch` is closed under lockdown, and opened only by an allowlist
 
 - `649ba49`. Lockdown is the profile for source you did not write — `sz --eval`,

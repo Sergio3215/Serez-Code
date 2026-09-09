@@ -362,6 +362,28 @@ payload in both cases, but the evaluator records an internal recoverability bit:
   unchanged and abort the complete program, so user code cannot retry an
   allocation limit in a loop or convert a denied operation into normal flow.
 
+### The one headline that is not an `ERROR`
+
+A refusal is normally rendered `❌ ERROR [SZxxxx]: <message>`. There is one
+exception, and it is a **presentation** rule rather than a new category:
+
+```text
+❌ BETA LIMITATION [SZ6001]:
+Network access is disabled in this online beta environment.
+```
+
+It is used when a capability was refused *because the run is on the online beta
+playground*, which is a hosted `sz --eval` and therefore under lockdown. The
+reader there is meeting the language for the first time, and announcing a
+capability that works as an `ERROR` invites the conclusion that the language is
+broken. `security.md` defines when it applies and `cli.md` documents the switch
+that turns it on.
+
+Everything a consumer matches on is unchanged: the same code, the same kind, the
+same recoverability, the same stack frames underneath. The wording was never part
+of the contract — this is the case that makes use of that. Outside the online
+beta the headline is `❌ ERROR` exactly as before.
+
 The following fatal producers are migrated and covered by regressions:
 
 - string repetition, call depth, Tensor element counts, `Memory.alloc`, GPU

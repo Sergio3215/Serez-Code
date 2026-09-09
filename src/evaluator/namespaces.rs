@@ -142,6 +142,7 @@ impl super::Evaluator {
         // it reads, writes, deletes and renames with nothing declared. Fine for a
         // program you wrote; not fine for source that arrived from elsewhere.
         if let Some(err) = self.deny_in_lockdown(
+            crate::environment::Capability::Filesystem,
             "File",
             "this code runs with no filesystem access. Install Serez-Code to read and write files.",
         ) {

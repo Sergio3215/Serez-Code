@@ -58,6 +58,8 @@ code. See `errors.md` for the ranges.
 | `sz --watch <file>` | Re-runs the file whenever it changes. |
 | `sz --eval "<code>"` / `sz -e "<code>"` | Runs a snippet. |
 | `sz --eval -` | Reads the snippet from stdin. |
+| `sz --eval … --allow-fetch <hosts>` | Opens named hosts to `fetch`. Repeatable, comma-separated. See `security.md`. |
+| `sz --eval … --online-beta` | Words the refusals for the online beta playground. Grants nothing. |
 | `sz` | Starts the REPL. |
 | `sz --version` | Prints `Serez-Code vX.Y.Z`. |
 | `sz --help` / `sz -h` / `sz help` | Prints usage on stdout, exit 0. |
@@ -70,11 +72,41 @@ before the file is read.
 A snippet has no manifest behind it, so it cannot declare permissions and
 cannot grant itself any. `use permissions` inside `--eval` is refused with a
 fatal `SecurityError` (`SZ6004`). `File`, `import` and Autodiff weight I/O are
-closed. `fetch` is deliberately **not** closed — see `security.md`, which also
-states plainly that lockdown is not a sandbox.
+closed. `fetch` is closed too since DEC-M7-006, and `--allow-fetch` is the only
+thing that opens it — see `security.md`, which also states plainly that lockdown
+is not a sandbox.
 
 Running your own file is unaffected: `sz file.sz` still honours an inline
 `use permissions` block.
+
+### `--online-beta` changes the wording, not the rules
+
+The online beta playground is a hosted `sz --eval`: same binary, same lockdown,
+same refusals. What differs is the reader — someone whose first contact with the
+language is a web page, for whom `this code runs as untrusted source` reads as
+*the language is broken*. `--online-beta` says so, and a capability lockdown
+closed is then announced as a limitation of that environment:
+
+```text
+❌ BETA LIMITATION [SZ6001]:
+Network access is disabled in this online beta environment.
+
+This playground is intended for quick testing and does not expose all Serez Code
+capabilities.
+
+To use `fetch` and the full Serez Code runtime, install Serez Code locally from
+serezcode.org.
+```
+
+`SEREZ_ONLINE_BETA=1` is the same switch for a deployment that sets a variable
+more easily than an argument vector.
+
+**It grants nothing and closes nothing.** The diagnostic code, the kind, and
+whether `try/catch` may consume the refusal are all unchanged; only the headline
+and the message differ. It is off by default, so `sz file.sz` and a terminal
+`sz --eval` keep the diagnostics they have always had — in particular, a local
+run that is missing a permission stays a permission error, because on that
+machine declaring it is something the reader can actually do.
 
 ### `.szx` is translated before it runs
 

@@ -14,6 +14,7 @@
 
 pub mod ast;
 pub mod diagnostic;
+pub mod environment;
 pub mod evaluator;
 pub mod execution;
 pub mod handles;

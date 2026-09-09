@@ -23,9 +23,19 @@
 //! ❌ TYPE ERROR [SZ3000] [line 2:6]: Wrong argument type
 //! ❌ TYPE ERROR [SZ3000]: Wrong argument type
 //! ❌ ERROR [SZ4003]: Index out of bounds
+//! ❌ BETA LIMITATION [SZ6001]:
+//! Network access is disabled in this online beta environment.
 //! ```
 //!
-//! Three differences, all pre-existing, all preserved here rather than tidied:
+//! The last one is the only headline that is not an `ERROR`, and it is the only
+//! one whose message starts on the next line. Both follow from
+//! [`Diagnostic::origin`]: it names a capability the online beta playground
+//! withholds, the reader is meeting the language for the first time, and the
+//! text they need is three paragraphs rather than a clause. See
+//! `crate::environment` for what it says and why.
+//!
+//! Three further differences, all pre-existing, all preserved here rather than
+//! tidied:
 //!
 //!   * **Runtime failures carry no position bracket**, though they have a span.
 //!     The frames printed underneath carry the position instead, so a bracket
@@ -43,7 +53,7 @@
 //! what the caller passes in [`Context`]. Only the first is a real decision, so
 //! only the first is written down as one.
 
-use crate::diagnostic::{Diagnostic, Phase};
+use crate::diagnostic::{Diagnostic, Origin, Phase};
 
 /// What the caller knows about where the diagnostic came from.
 ///
@@ -58,6 +68,35 @@ pub struct Context<'a> {
     /// The source, split by line, for the snippet and caret. Empty means no
     /// snippet is printed at all.
     pub source_lines: &'a [String],
+}
+
+impl Origin {
+    /// The words between `❌` and the `[SZxxxx]` bracket.
+    ///
+    /// `None` for the ordinary case, where the headline is built from the phase
+    /// — `ERROR`, `PARSER ERROR`, `TYPE ERROR`. An environment limitation
+    /// replaces the whole of it, phase word included: the phase is a fact about
+    /// the *runtime's* pipeline, and a reader being told that the playground
+    /// does not do networking has no use for it.
+    ///
+    /// It deliberately does not contain the word `ERROR`. That is the entire
+    /// point — see `crate::environment`.
+    fn headline(&self) -> Option<&'static str> {
+        match self {
+            Origin::Program => None,
+            Origin::EnvironmentLimit => Some("BETA LIMITATION"),
+        }
+    }
+
+    /// Does the message start on the line after the headline?
+    ///
+    /// An ordinary diagnostic is one line and reads as one sentence, so it stays
+    /// on the headline. An environment limitation is three paragraphs, and
+    /// hanging the first of them off `: ` would bury the sentence that answers
+    /// the reader's actual question in the middle of a line.
+    fn message_on_its_own_line(&self) -> bool {
+        matches!(self, Origin::EnvironmentLimit)
+    }
 }
 
 impl Phase {
@@ -79,11 +118,17 @@ impl Phase {
 /// the whole thing with a single `eprintln!("{}", …)`.
 pub fn render(diagnostic: &Diagnostic, context: &Context<'_>) -> String {
     let mut out = String::from("❌ ");
-    if let Some(label) = diagnostic.phase.label() {
-        out.push_str(label);
-        out.push(' ');
+    match diagnostic.origin.headline() {
+        Some(headline) => out.push_str(headline),
+        None => {
+            if let Some(label) = diagnostic.phase.label() {
+                out.push_str(label);
+                out.push(' ');
+            }
+            out.push_str("ERROR");
+        }
     }
-    out.push_str("ERROR [");
+    out.push_str(" [");
     out.push_str(diagnostic.code);
     out.push(']');
 
@@ -98,7 +143,12 @@ pub fn render(diagnostic: &Diagnostic, context: &Context<'_>) -> String {
         }
     }
 
-    out.push_str(": ");
+    out.push(':');
+    out.push_str(if diagnostic.origin.message_on_its_own_line() {
+        "\n"
+    } else {
+        " "
+    });
     out.push_str(&diagnostic.message);
 
     if let Some(source) = context
@@ -191,6 +241,47 @@ mod tests {
             render(&d, &Context::default()),
             "❌ ERROR [SZ4003]: Out of bounds"
         );
+    }
+
+    #[test]
+    fn an_environment_limitation_is_not_announced_as_an_error() {
+        // The shape the playground shows a first-time reader. `ERROR` is absent
+        // on purpose: the capability works, this environment does not have it.
+        let message = crate::environment::Capability::Network.limitation();
+        let mut d = Diagnostic::frontend(
+            "SZ6001",
+            Phase::Runtime,
+            Span::point(3, 11),
+            message.clone(),
+        );
+        d.origin = Origin::EnvironmentLimit;
+        d.kind = Some("PermissionError".to_string());
+
+        let out = render(&d, &Context::default());
+        assert_eq!(out, format!("❌ BETA LIMITATION [SZ6001]:\n{message}"));
+        assert!(
+            !out.contains("ERROR"),
+            "the playground must not announce a working capability as an error: {out}"
+        );
+        // The three lines a first-time reader needs, in the order the questions
+        // arrive in. `environment` owns the text; this owns the frame around it.
+        assert!(out.starts_with("❌ BETA LIMITATION [SZ6001]:\n"), "{out}");
+        assert!(
+            out.contains("\n\nThis playground is intended for quick testing"),
+            "{out}"
+        );
+        assert!(out.ends_with("install Serez Code locally from serezcode.org."));
+    }
+
+    #[test]
+    fn the_code_and_the_bracket_survive_the_new_headline() {
+        // The headline is the only thing that changes. Tooling classifies on the
+        // code, and `compatibility.md` promises the code does not move.
+        let mut d = Diagnostic::frontend("SZ2000", Phase::Parser, Span::point(1, 5), "m");
+        d.origin = Origin::EnvironmentLimit;
+        let out = render(&d, &Context::default());
+        assert!(out.starts_with("❌ BETA LIMITATION [SZ2000]"), "{out}");
+        assert!(out.contains("[line 1:5]"), "a position still prints: {out}");
     }
 
     #[test]

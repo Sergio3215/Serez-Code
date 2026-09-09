@@ -749,6 +749,24 @@ impl super::Evaluator {
         // back into control flow.
         if !self.security.allows_fetch(&url) {
             let host = crate::permissions::host_of(&url).unwrap_or_else(|| "<unparseable>".into());
+            if self.online_beta_limits_capabilities() {
+                use crate::environment::Capability;
+                // Two shapes, because the beta can be run either way and only
+                // one of them is true at a time. With no host opened the network
+                // is simply off; with a short list opened, saying so would be
+                // wrong, so the sentence narrows to the host that was asked for
+                // — still built by `environment::limitation`, so there stays
+                // one place where the three paragraphs live.
+                let message = if self.security.fetch_allowlist.is_empty() {
+                    Capability::Network.limitation()
+                } else {
+                    crate::environment::limitation(
+                        &format!("Network access to '{host}'"),
+                        Capability::Network.example(),
+                    )
+                };
+                return self.deny_with_beta_message("PermissionError", message, false);
+            }
             let message = format!(
                 "fetch to '{host}' is not available here — this code runs as untrusted \
                  source, and the network is closed unless the host allows it explicitly."

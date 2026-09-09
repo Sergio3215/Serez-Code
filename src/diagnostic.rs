@@ -33,6 +33,12 @@
 //! - **`span`** is where. `spec/errors.md` types the caught `Error.span` as
 //!   `"line:column"` or null, which is why an unknown span stays representable
 //!   rather than being forced to `0:0`.
+//! - **`origin`** is *whose* limitation it is. Everything the language has ever
+//!   reported is [`Origin::Program`]; the one exception is a capability the
+//!   online beta playground withholds, which is announced as a limitation of
+//!   that environment rather than as an error. It changes the headline word and
+//!   nothing else — not the code, not the kind, not whether a `try/catch` may
+//!   consume it. See `crate::environment`.
 //!
 //! # What is deliberately not here
 //!
@@ -96,6 +102,29 @@ impl Phase {
     }
 }
 
+/// Why a diagnostic exists, when the reason changes how it must be announced.
+///
+/// Not a second severity and not a second phase: both of those describe the
+/// *failure*. This describes whose limitation the reader is looking at, which is
+/// the one thing the existing model could not express — a `fetch` refused in the
+/// online playground and a `fetch` refused on a locked-down local run are the
+/// same code, the same kind and the same catchability, and they are not the same
+/// news.
+///
+/// See `environment` for the four cases and why only one of them is new.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Origin {
+    /// The program, or a rule the runtime enforces wherever it runs. Everything
+    /// the language has ever reported.
+    #[default]
+    Program,
+    /// A capability Serez Code has, switched off by the environment this code
+    /// happens to be running in. Only `environment::Environment::OnlineBeta`
+    /// produces it, and it exists to keep such a refusal from reading as a
+    /// defect in the language.
+    EnvironmentLimit,
+}
+
 /// One frame of a runtime stack trace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
@@ -120,6 +149,9 @@ pub struct Diagnostic {
     /// Where. May be [`Span::unknown`], which renders as no position at all
     /// rather than as `0:0`.
     pub span: Span,
+    /// Whose limitation this is. [`Origin::Program`] for everything except an
+    /// online-beta refusal; see [`Origin`].
+    pub origin: Origin,
     /// Innermost-first runtime frames. Empty for frontend diagnostics.
     pub stack: Vec<Frame>,
     /// Additional explanation.
@@ -152,6 +184,7 @@ impl Diagnostic {
             kind: None,
             message: message.into(),
             span,
+            origin: Origin::Program,
             stack: Vec::new(),
             notes: Vec::new(),
         }
@@ -196,6 +229,16 @@ mod tests {
         assert_eq!(Phase::Parser.label(), Some("PARSER"));
         assert_eq!(Phase::Lexer.label(), Some("LEXER"));
         assert_eq!(Phase::Type.label(), Some("TYPE"));
+    }
+
+    #[test]
+    fn a_diagnostic_is_the_programs_business_unless_something_says_otherwise() {
+        // The default matters more than it looks: every producer in the crate
+        // builds diagnostics without naming an origin, so a wrong default would
+        // silently re-announce ordinary errors as environment limitations.
+        assert_eq!(Origin::default(), Origin::Program);
+        let d = Diagnostic::frontend("SZ2000", Phase::Parser, Span::unknown(), "x");
+        assert_eq!(d.origin, Origin::Program);
     }
 
     #[test]

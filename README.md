@@ -186,15 +186,24 @@ echo 'let x = 10; out x * x;' | sz --eval -
 stdin, which saves you from escaping quotes and newlines through the shell.
 
 Because there is no file, there is no `serez.json` to read permissions from, and
-snippets run under **lockdown**: `use permissions { … }` is refused instead of
-granting itself the permissions it asks for, and `File`, `import` and Autodiff's
-weight files — which are otherwise reachable with nothing declared — are denied.
-All of them as catchable `PermissionError`s. Running `sz script.sz` is unaffected;
-declaring permissions inline in your own file still works.
+snippets run under **lockdown**: `File`, `import` and Autodiff's weight files —
+which are otherwise reachable with nothing declared — are denied as catchable
+`PermissionError`s, and `use permissions { … }` is refused instead of granting
+itself the permissions it asks for, as a fatal `SecurityError` that `try/catch`
+cannot consume. `fetch` is closed too, and `--allow-fetch host` is the only thing
+that opens it. Running `sz script.sz` is unaffected; declaring permissions inline
+in your own file still works.
 
-Lockdown is not a sandbox against a hostile program: `fetch` still reaches the
-network from wherever `sz` is running. Don't feed `--eval` source you don't trust
-without real isolation around the process.
+Lockdown is not a sandbox against a hostile program: an allowed host is still
+reached from wherever `sz` is running, and there is no memory or CPU ceiling.
+Don't feed `--eval` source you don't trust without real isolation around the
+process.
+
+If you are embedding `--eval` behind a web page, add `--online-beta` (or
+`SEREZ_ONLINE_BETA=1`). It changes nothing about what runs — it words the
+refusals for someone who has never seen the language, so a capability the
+environment does not expose reads as `❌ BETA LIMITATION` and points at
+serezcode.org instead of reading as a broken `fetch`. See `spec/cli.md`.
 
 ### Watch mode (auto-rerun on save)
 

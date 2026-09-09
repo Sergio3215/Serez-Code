@@ -321,6 +321,40 @@ The split between catchable and fatal is deliberate and pinned by
 `lockdown_denials_split_into_catchable_and_fatal` in `tests/runtime_outcome.rs`.
 Unifying it in either direction would be a semantic change.
 
+### Who a refusal is written for
+
+Lockdown decides *what* is refused. It does not decide who is reading the
+refusal, and the two audiences are not alike: someone who typed `sz --eval` at a
+terminal is debugging a runtime they installed, and someone on the online beta
+playground — a hosted `sz --eval` — may never have seen the language before.
+
+`--online-beta` (or `SEREZ_ONLINE_BETA=1`), `run::RunOpts::environment` and
+`Evaluator::set_environment` say which of the two it is. In the online beta a
+capability lockdown closed is announced as a limitation of that environment:
+
+```text
+❌ BETA LIMITATION [SZ6001]:
+Network access is disabled in this online beta environment.
+…
+To use `fetch` and the full Serez Code runtime, install Serez Code locally from
+serezcode.org.
+```
+
+**This is a diagnostics setting, not a security one.** It is set by the embedder
+like the fetch allowlist, and for the same reason — a program that could set it
+would be choosing how its own failures are described — but unlike the allowlist
+it grants nothing and closes nothing. It is not consulted by any gate, it does
+not live in `SecurityPolicy`, and it applies only where lockdown has *already*
+refused something. The diagnostic code, the kind, and whether `try/catch` may
+consume the refusal are identical in both environments.
+
+Outside the online beta nothing changed. In particular a local run that lacks a
+permission keeps saying so, and keeps naming `serez.json`: there the reader can
+declare it, which is the whole difference between the two messages.
+
+`tests/beta_limitations.rs` asserts both directions, including that no ordinary
+programming mistake is ever reported as a limitation of the environment.
+
 ### `fetch` under lockdown
 
 **Closed by default.** A `fetch` under lockdown is refused with fatal

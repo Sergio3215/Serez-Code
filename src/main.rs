@@ -2,6 +2,7 @@
 //! that actually runs code lives in the library (see `src/lib.rs`), so `--eval`
 //! and the wasm build share one pipeline with `sz file.sz`.
 
+use serez_code::environment::Environment;
 use serez_code::evaluator;
 use serez_code::package_manager;
 use serez_code::repl;
@@ -49,6 +50,31 @@ fn collect_allow_fetch(args: &[String]) -> Vec<String> {
     hosts
 }
 
+/// Which environment the snippet is running in, for the wording of its refusals.
+///
+/// The online playground is a hosted `sz --eval`: same binary, same lockdown,
+/// same refusals, and a reader who has never seen the language. `--online-beta`
+/// is how it says so. It grants nothing and closes nothing — see
+/// `serez_code::environment` — so it is safe for anyone to pass and useless to
+/// pass anywhere but a playground.
+///
+/// `SEREZ_ONLINE_BETA=1` does the same, for a deployment that can set a
+/// variable more easily than it can change an argument vector. Reading it here
+/// rather than in the library keeps the interpreter free of any idea that a web
+/// front end exists.
+fn eval_environment(args: &[String]) -> Environment {
+    let flagged = args.iter().any(|a| a == "--online-beta");
+    let from_env = matches!(
+        env::var("SEREZ_ONLINE_BETA").as_deref(),
+        Ok("1") | Ok("true")
+    );
+    if flagged || from_env {
+        Environment::OnlineBeta
+    } else {
+        Environment::Local
+    }
+}
+
 /// Read the whole of stdin, for `sz --eval -`. Passing a multi-line snippet as an
 /// argv string means fighting the shell over quotes, newlines and `$`; a pipe
 /// doesn't have that problem.
@@ -85,6 +111,12 @@ USAGE
                                  separate). Under lockdown the network is closed
                                  unless this names the host; redirects are
                                  checked against the same list.
+  sz --eval .. --online-beta     Word the refusals for the online beta
+                                 playground: a capability lockdown closes is
+                                 reported as a limitation of that environment
+                                 rather than as a runtime error. Grants nothing
+                                 and closes nothing. SEREZ_ONLINE_BETA=1 does
+                                 the same.
   sz                             Start the REPL
   sz --version                   Print the version
   sz --help                      Print this message
@@ -256,6 +288,7 @@ fn run() -> i32 {
             // It is a *host* flag, not something the snippet can write, which is
             // the whole point — the snippet is the untrusted party here.
             let allow_fetch = collect_allow_fetch(&args);
+            let environment = eval_environment(&args);
             let src = match args.get(i + 1) {
                 Some(a) if a == "-" => match read_stdin() {
                     Some(s) => s,
@@ -269,7 +302,7 @@ fn run() -> i32 {
                     return 1;
                 }
             };
-            return run_eval(src, is_check, allow_fetch);
+            return run_eval(src, is_check, allow_fetch, environment);
         }
 
         for arg in args.iter().skip(1) {
