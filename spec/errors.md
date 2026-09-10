@@ -372,17 +372,17 @@ exception, and it is a **presentation** rule rather than a new category:
 Network access is disabled in this online beta environment.
 ```
 
-It is used when a capability was refused *because the run is on the online beta
-playground*, which is a hosted `sz --eval` and therefore under lockdown. The
-reader there is meeting the language for the first time, and announcing a
-capability that works as an `ERROR` invites the conclusion that the language is
-broken. `security.md` defines when it applies and `cli.md` documents the switch
-that turns it on.
+It is used when a capability was refused by lockdown *under `sz --eval`*, which
+is the execution mode the online beta playground runs. The reader there is
+meeting the language for the first time, and announcing a capability that works
+as an `ERROR` invites the conclusion that the language is broken. `security.md`
+defines when it applies and `cli.md` documents the mode it follows from; there
+is no flag to turn it on.
 
 Everything a consumer matches on is unchanged: the same code, the same kind, the
 same recoverability, the same stack frames underneath. The wording was never part
-of the contract — this is the case that makes use of that. Outside the online
-beta the headline is `❌ ERROR` exactly as before.
+of the contract — this is the case that makes use of that. Outside `--eval` the
+headline is `❌ ERROR` exactly as before.
 
 The following fatal producers are migrated and covered by regressions:
 

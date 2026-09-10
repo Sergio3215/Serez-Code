@@ -13,8 +13,7 @@
 # Sites are deduplicated by (lint, file, line, column) before being
 # fingerprinted and paths use forward slashes, so this file is identical on
 # all three runners.
-# total sites: 180
-clippy::derivable_impls	src/run.rs	a6a97fb564f1	1	impl Default for RunOpts {
+# total sites: 173
 clippy::doc_lazy_continuation	src/evaluator/namespaces_gui/render.rs	46f9e806e1cd	1	doc quote line without `>` marker
 clippy::doc_lazy_continuation	src/evaluator/namespaces_gui/render.rs	b0e5817f1fc5	1	doc list item without indentation
 clippy::doc_lazy_continuation	src/package_manager.rs	e7f832cca0a9	1	doc list item without indentation
@@ -55,12 +54,6 @@ clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	b15145
 clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	bb1b85a87ada	1	&format!("Gui.{}: invalid argument types", method)
 clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	d850dc97ae41	1	&format!(
 clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_gui.rs	dd813381edad	1	&format!("Gui.nodeSet: wrong value type for prop '{}'", prop)
-clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	310bf9c06252	1	&format!("Media.{}: unknown method", o)
-clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	4d80a047e24b	1	&format!(
-clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	b94722042395	1	&format!("Media.playSound: cannot create playback sink: {}", e)
-clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	ba300b959e9b	1	&format!("Media.playSound: cannot open '{}': {}", path, e)
-clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	e0471306cb6f	1	&format!("Media.{}(id) requires 1 argument", method)
-clippy::needless_borrows_for_generic_args	src/evaluator/namespaces_media.rs	e520038a328e	1	&format!("Media.{} id must be an integer", method)
 clippy::needless_borrows_for_generic_args	tests/filesystem_reach.rs	2d8cdf0acde2	1	&project.join("data.txt")
 clippy::needless_late_init	src/evaluator/namespaces_regex.rs	bd72d262afca	1	let cap;
 clippy::needless_range_loop	src/evaluator/methods_tensor.rs	196590d375b4	1	0..data.len()

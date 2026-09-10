@@ -324,13 +324,17 @@ Unifying it in either direction would be a semantic change.
 ### Who a refusal is written for
 
 Lockdown decides *what* is refused. It does not decide who is reading the
-refusal, and the two audiences are not alike: someone who typed `sz --eval` at a
-terminal is debugging a runtime they installed, and someone on the online beta
-playground — a hosted `sz --eval` — may never have seen the language before.
+refusal, and the two audiences are not alike. Someone running their own file has
+a `serez.json` on disk and can declare what the program needs. Someone whose
+code arrived as a string — `sz --eval`, which is what the online beta playground
+runs — has no such file, so `declare it in serez.json` names nothing they can
+open, and they may never have seen the language before.
 
-`--online-beta` (or `SEREZ_ONLINE_BETA=1`), `run::RunOpts::environment` and
-`Evaluator::set_environment` say which of the two it is. In the online beta a
-capability lockdown closed is announced as a limitation of that environment:
+The entry point already says which of the two it is, so nothing is passed:
+`run::RunMode::Eval` — what `run::run_eval` and `run::RunOpts::sandboxed` carry,
+and what `Evaluator::set_run_mode` accepts — means a run with no file and
+therefore no `serez.json` to be sent to. Under it, a capability lockdown closed
+is announced as a limitation of the environment:
 
 ```text
 ❌ BETA LIMITATION [SZ6001]:
@@ -345,10 +349,11 @@ like the fetch allowlist, and for the same reason — a program that could set i
 would be choosing how its own failures are described — but unlike the allowlist
 it grants nothing and closes nothing. It is not consulted by any gate, it does
 not live in `SecurityPolicy`, and it applies only where lockdown has *already*
-refused something. The diagnostic code, the kind, and whether `try/catch` may
-consume the refusal are identical in both environments.
+refused something (`Evaluator::eval_limits_capabilities` is the conjunction:
+eval mode **and** lockdown). The diagnostic code, the kind, and whether
+`try/catch` may consume the refusal are identical in both modes.
 
-Outside the online beta nothing changed. In particular a local run that lacks a
+Outside `--eval` nothing changed. In particular a local run that lacks a
 permission keeps saying so, and keeps naming `serez.json`: there the reader can
 declare it, which is the whole difference between the two messages.
 

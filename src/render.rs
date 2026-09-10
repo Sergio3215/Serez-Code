@@ -29,10 +29,10 @@
 //!
 //! The last one is the only headline that is not an `ERROR`, and it is the only
 //! one whose message starts on the next line. Both follow from
-//! [`Diagnostic::origin`]: it names a capability the online beta playground
-//! withholds, the reader is meeting the language for the first time, and the
-//! text they need is three paragraphs rather than a clause. See
-//! `crate::environment` for what it says and why.
+//! [`Diagnostic::origin`]: it names a capability an `--eval` run withholds, the
+//! reader is meeting the language for the first time, and the text they need is
+//! three paragraphs rather than a clause. See `crate::environment` for what it
+//! says and why.
 //!
 //! Three further differences, all pre-existing, all preserved here rather than
 //! tidied:

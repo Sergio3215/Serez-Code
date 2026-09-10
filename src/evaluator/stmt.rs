@@ -179,11 +179,11 @@ impl super::Evaluator {
                 // program would otherwise fail later with a confusing permission
                 // error on a line that looks properly declared.
                 if self.security.lockdown {
-                    // Fatal in both environments, and `SecurityError` /
-                    // `SZ6004` in both: this gate refuses to hand out
-                    // capability rather than refusing an action, and that
-                    // distinction is `spec/security.md`'s, not the wording's.
-                    if self.online_beta_limits_capabilities() {
+                    // Fatal in both modes, and `SecurityError` / `SZ6004` in
+                    // both: this gate refuses to hand out capability rather than
+                    // refusing an action, and that distinction is
+                    // `spec/security.md`'s, not the wording's.
+                    if self.eval_limits_capabilities() {
                         return self.deny_as_beta_limitation(
                             crate::environment::Capability::PermissionGrants,
                             "SecurityError",

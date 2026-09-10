@@ -34,9 +34,9 @@
 //!   `"line:column"` or null, which is why an unknown span stays representable
 //!   rather than being forced to `0:0`.
 //! - **`origin`** is *whose* limitation it is. Everything the language has ever
-//!   reported is [`Origin::Program`]; the one exception is a capability the
-//!   online beta playground withholds, which is announced as a limitation of
-//!   that environment rather than as an error. It changes the headline word and
+//!   reported is [`Origin::Program`]; the one exception is a capability an
+//!   `--eval` run withholds, which is announced as a limitation of that
+//!   environment rather than as an error. It changes the headline word and
 //!   nothing else — not the code, not the kind, not whether a `try/catch` may
 //!   consume it. See `crate::environment`.
 //!
@@ -106,10 +106,9 @@ impl Phase {
 ///
 /// Not a second severity and not a second phase: both of those describe the
 /// *failure*. This describes whose limitation the reader is looking at, which is
-/// the one thing the existing model could not express — a `fetch` refused in the
-/// online playground and a `fetch` refused on a locked-down local run are the
-/// same code, the same kind and the same catchability, and they are not the same
-/// news.
+/// the one thing the existing model could not express — a `fetch` refused under
+/// `--eval` and a `fetch` refused on a locked-down local run are the same code,
+/// the same kind and the same catchability, and they are not the same news.
 ///
 /// See `environment` for the four cases and why only one of them is new.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -119,9 +118,9 @@ pub enum Origin {
     #[default]
     Program,
     /// A capability Serez Code has, switched off by the environment this code
-    /// happens to be running in. Only `environment::Environment::OnlineBeta`
-    /// produces it, and it exists to keep such a refusal from reading as a
-    /// defect in the language.
+    /// happens to be running in. Only a lockdown refusal under
+    /// `run::RunMode::Eval` produces it, and it exists to keep such a refusal
+    /// from reading as a defect in the language.
     EnvironmentLimit,
 }
 
@@ -149,8 +148,8 @@ pub struct Diagnostic {
     /// Where. May be [`Span::unknown`], which renders as no position at all
     /// rather than as `0:0`.
     pub span: Span,
-    /// Whose limitation this is. [`Origin::Program`] for everything except an
-    /// online-beta refusal; see [`Origin`].
+    /// Whose limitation this is. [`Origin::Program`] for everything except a
+    /// lockdown refusal under `--eval`; see [`Origin`].
     pub origin: Origin,
     /// Innermost-first runtime frames. Empty for frontend diagnostics.
     pub stack: Vec<Frame>,

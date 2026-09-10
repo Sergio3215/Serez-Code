@@ -1,5 +1,4 @@
-//! Where a program is running, as far as the person reading a diagnostic is
-//! concerned.
+//! What the online playground cannot do, and how it says so.
 //!
 //! # The problem this exists for
 //!
@@ -21,59 +20,89 @@
 //! model yet. What they have is a `fetch` that did not work, and the obvious
 //! conclusion — the reasonable one — is that `fetch` is broken.
 //!
+//! # Which runs get this wording, and why nothing has to be told
+//!
+//! `--eval` **is** the playground's execution mode: source handed in as a
+//! string, no file, no `serez.json`, lockdown on. That is not a coincidence to
+//! be re-declared with a flag — it is the definition of the situation. A run
+//! with no manifest cannot be sent to a manifest, so under [`RunMode::Eval`] a
+//! capability *lockdown closed* is announced as a limitation of the
+//! environment. Both halves are required; see
+//! `Evaluator::eval_limits_capabilities`.
+//!
 //! # What this module changes, and what it deliberately does not
 //!
 //! **It changes wording, and only wording.** Nothing here is consulted by a
-//! gate. [`Environment`] is metadata the *embedder* sets, it reaches the
-//! evaluator alongside the security policy rather than inside it, and the one
-//! question it answers is which of two texts a refusal that has *already
-//! happened* should carry. A capability that is closed stays closed in every
-//! environment, and a capability that is open is never closed by this.
-//!
-//! That separation is the reason `Environment` is not a field of
-//! `permissions::SecurityPolicy`: a value that can only affect a message cannot
-//! be mistaken for one that affects a decision if it does not live where the
-//! decisions are made.
+//! gate: the one question this vocabulary answers is which of two texts a
+//! refusal that has *already happened* should carry. A capability that is
+//! closed stays closed in every mode, and a capability that is open is never
+//! closed by this.
 //!
 //! # The four things a reader can be looking at
 //!
 //! | | Cause | What it says |
 //! | --- | --- | --- |
-//! | A | The online beta switches a capability off | `❌ BETA LIMITATION` — the text below |
+//! | A | `--eval` lockdown switches a capability off | `❌ BETA LIMITATION` — the text below |
 //! | B | A local run lacks a permission | `❌ ERROR [SZ6001]: '…' requires permission '…'` — unchanged |
 //! | C | The program is wrong | the ordinary diagnostic — unchanged |
 //! | D | The embedder refused something | the embedder's own message — unchanged |
 //!
 //! Only A is new. B, C and D are byte-identical to what they were, which is
-//! what makes this safe to land: `sz file.sz` and `sz --eval` from a terminal
-//! are [`Environment::Local`], and [`Environment::Local`] is the default.
+//! what makes this safe to land: `sz file.sz` is [`RunMode::File`], and that is
+//! the default.
 
-/// Which environment a program is running in.
+/// How this run was started — which is also who is going to read its refusals.
 ///
-/// Set by the **embedder** — `run::RunOpts::environment`,
-/// `Evaluator::set_environment`, or the CLI's `--online-beta`. There is
-/// deliberately no way for a running program to change it, for the same reason
-/// it cannot extend the fetch allowlist: it would be describing itself.
+/// # Why the entry point is the right thing to ask
+///
+/// A refused capability has two audiences and one of them cannot act on the
+/// other's advice. `'Socket' requires permission 'Socket' — declare it in
+/// serez.json` is exactly right for someone running their own file: the
+/// manifest is on their disk and they can edit it. Under `--eval` there is no
+/// file, therefore no `serez.json`, therefore nothing to declare it in — and
+/// `use permissions { }`, the other half of that sentence, is refused by the
+/// same lockdown that emptied the permission set to begin with. The advice is
+/// unactionable by construction, and the reader most likely to receive it is
+/// the one meeting the language through the online playground, which is a
+/// hosted `sz --eval`.
+///
+/// So the mode is not a second opinion about the environment that someone has
+/// to remember to pass. It is a fact the entry point already knows, and the
+/// condition it stands for — *there is no manifest to send the reader to* — is
+/// precisely what `--eval` means.
+///
+/// # What it does not do
+///
+/// Nothing here is consulted by a gate. It reaches the evaluator alongside the
+/// security policy rather than inside it, and the one question it answers is
+/// which of two texts a refusal that has *already happened* should carry. That
+/// separation is why it is not a field of `permissions::SecurityPolicy`: a
+/// value that can only affect a message cannot be mistaken for one that affects
+/// a decision if it does not live where the decisions are made.
+///
+/// Nor is it sufficient on its own — see `Evaluator::eval_limits_capabilities`,
+/// which pairs it with lockdown so that only a capability lockdown actually
+/// closed is ever announced as an environment limitation.
+///
+/// It lives here rather than beside `RunOpts` because `evaluator` has to read
+/// it and `run` has to set it: putting it in either would make those two
+/// modules mutually dependent, which `tests/architecture.rs` refuses. This
+/// module is what they already share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Environment {
-    /// A Serez Code installation on someone's machine. The default, and what
-    /// `sz file.sz` and a terminal `sz --eval` are.
+pub enum RunMode {
+    /// `sz file.sz`: source read from a path, with a `serez.json` beside it that
+    /// the reader can edit. The default, and every diagnostic it produces is
+    /// byte-identical to what it has always been.
     #[default]
-    Local,
-    /// The online beta playground at serezcode.org: a hosted `sz --eval` behind
-    /// a web page, where a reader may never have seen the language before.
-    OnlineBeta,
+    File,
+    /// `sz --eval "<code>"`: source handed in as a string. No file, no manifest,
+    /// lockdown on — and the execution mode the online beta playground runs.
+    Eval,
 }
 
-impl Environment {
-    pub fn is_online_beta(self) -> bool {
-        matches!(self, Environment::OnlineBeta)
-    }
-}
-
-/// A capability the online beta does not expose.
+/// A capability the playground does not expose.
 ///
-/// One entry per gate that can refuse in the playground, so the text lives here
+/// One entry per gate that can refuse under `--eval`, so the text lives here
 /// rather than at fourteen call sites. A builtin says *which* capability it is;
 /// it does not say anything about the beta.
 ///
@@ -113,7 +142,7 @@ pub enum Capability {
 }
 
 impl Capability {
-    /// Every capability the online beta withholds.
+    /// Every capability an `--eval` run withholds.
     ///
     /// Exists so a test can assert the shape of all of them at once rather than
     /// of whichever one someone remembered to cover.
@@ -212,7 +241,7 @@ impl Capability {
         })
     }
 
-    /// The message this capability reports when the online beta refuses it.
+    /// The message this capability reports when an `--eval` run refuses it.
     pub fn limitation(self) -> String {
         limitation(self.subject(), self.example())
     }
@@ -224,7 +253,7 @@ impl Capability {
 /// every refusal is a thing that must never be wrong in one of them.
 pub const INSTALL_SOURCE: &str = "serezcode.org";
 
-/// The three paragraphs every online-beta refusal is made of.
+/// The three paragraphs every beta-limitation refusal is made of.
 ///
 /// The order is the order the questions arrive in:
 ///
@@ -240,9 +269,9 @@ pub const INSTALL_SOURCE: &str = "serezcode.org";
 /// the runtime.
 ///
 /// `subject` is normally [`Capability::subject`]. It is a parameter because one
-/// caller — a beta that opened a short list of hosts and was asked for one that
-/// is not on it — has a more specific first line to say, and it must say it
-/// through this function rather than beside it.
+/// caller — an `--eval` run that opened a short list of hosts and was asked for
+/// one that is not on it — has a more specific first line to say, and it must
+/// say it through this function rather than beside it.
 pub fn limitation(subject: &str, example: &str) -> String {
     format!(
         "{subject} is disabled in this online beta environment.\n\
@@ -258,13 +287,6 @@ pub fn limitation(subject: &str, example: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn local_is_the_default_so_nothing_becomes_a_beta_message_by_accident() {
-        assert_eq!(Environment::default(), Environment::Local);
-        assert!(!Environment::default().is_online_beta());
-        assert!(Environment::OnlineBeta.is_online_beta());
-    }
 
     #[test]
     fn every_message_answers_the_three_questions_a_reader_has() {

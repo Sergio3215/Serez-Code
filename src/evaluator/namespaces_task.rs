@@ -201,7 +201,7 @@ impl super::Evaluator {
                 // playground today — `Task.spawn` itself needs a permission
                 // lockdown does not grant — and inherited anyway, because a
                 // capability that depends on being remembered gets forgotten.
-                let worker_environment = self.environment;
+                let worker_mode = self.run_mode;
                 let inherited_permissions: Vec<String> = if worker_lockdown {
                     self.security.granted.iter().cloned().collect()
                 } else {
@@ -256,7 +256,7 @@ impl super::Evaluator {
                         let file_path = std::path::Path::new(&worker_path);
                         evaluator.set_current_file(file_path);
 
-                        evaluator.set_environment(worker_environment);
+                        evaluator.set_run_mode(worker_mode);
                         if worker_lockdown {
                             evaluator.set_permissions(inherited_permissions);
                             evaluator.set_lockdown(true);

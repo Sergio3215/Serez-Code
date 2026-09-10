@@ -7,6 +7,11 @@
 //! options instead, which is what lets `sz --eval` run a snippet straight from a
 //! string rather than inventing a temp file to satisfy the CLI.
 
+/// Re-exported so an embedder configuring [`RunOpts`] finds the mode beside
+/// the options it belongs to. It is defined next to the vocabulary its one
+/// effect belongs to — see [`crate::environment`].
+pub use crate::environment::RunMode;
+
 use crate::evaluator;
 use crate::lexer;
 use crate::parser;
@@ -69,14 +74,14 @@ pub struct RunOpts {
     /// A host setting, like `fetch_allowlist`: a running program has no way to
     /// raise it.
     pub generator_yield_limit: Option<usize>,
-    /// Which environment this run is, for the **wording** of a refusal.
+    /// Which door the source came through, for the **wording** of a refusal.
     ///
     /// Grants nothing and closes nothing: a capability that is off is off in
-    /// every environment, and this only decides whether the refusal is phrased
-    /// for someone debugging a local runtime or for someone meeting the language
-    /// on a web page. `Local` is the default, so `sz file.sz` and a terminal
-    /// `sz --eval` are unchanged. See [`crate::environment`].
-    pub environment: crate::environment::Environment,
+    /// either mode, and this only decides whether the refusal is phrased for
+    /// someone debugging a runtime they installed or for someone meeting the
+    /// language on a web page. [`RunMode::File`] is the default. See
+    /// [`RunMode`] and [`crate::environment`].
+    pub mode: RunMode,
 }
 
 impl Default for RunOpts {
@@ -89,7 +94,7 @@ impl Default for RunOpts {
             check_only: false,
             fetch_allowlist: Vec::new(),
             generator_yield_limit: None,
-            environment: crate::environment::Environment::Local,
+            mode: RunMode::File,
         }
     }
 }
@@ -97,9 +102,15 @@ impl Default for RunOpts {
 impl RunOpts {
     /// Options for running source you did not write: no permissions, no file to
     /// import from, and the self-granting escapes closed. This is what `--eval` uses.
+    ///
+    /// [`RunMode::Eval`] comes with it rather than being a second thing to
+    /// remember, because it describes the same situation from the reader's side:
+    /// there is no `current_file` here, so there is no manifest any refusal
+    /// could send them to.
     pub fn sandboxed() -> Self {
         RunOpts {
             lockdown: true,
+            mode: RunMode::Eval,
             ..Default::default()
         }
     }
@@ -218,7 +229,7 @@ pub fn run_source_detailed(src: String, name: &str, opts: RunOpts) -> DetailedOu
     evaluator.set_permissions(opts.permissions);
     evaluator.set_lockdown(opts.lockdown);
     evaluator.allow_fetch_hosts(&opts.fetch_allowlist);
-    evaluator.set_environment(opts.environment);
+    evaluator.set_run_mode(opts.mode);
     if let Some(limit) = opts.generator_yield_limit {
         evaluator.set_generator_yield_limit(limit);
     }
@@ -339,9 +350,9 @@ pub fn run_file(file_path: &str, is_check: bool) -> i32 {
             // `fetch` is unrestricted here exactly as it always was.
             fetch_allowlist: Vec::new(),
             generator_yield_limit: None,
-            // A file on this machine is a local run by definition; there is no
-            // other environment `sz file.sz` can be.
-            environment: crate::environment::Environment::Local,
+            // A file on this machine has a `serez.json` next to it that the
+            // reader can edit, so its refusals keep saying so.
+            mode: RunMode::File,
         },
     )
     .exit_code
@@ -390,22 +401,17 @@ fn run_szx_file(szx_path: &str, is_check: bool) -> i32 {
 /// closed, and this is the only thing that opens it. Empty is the default and
 /// means no outbound request at all.
 ///
-/// `environment` is the CLI's `--online-beta`. It is the same door either way
-/// — the online playground is a hosted `sz --eval` — so the only thing it changes
-/// is who the refusals are written for. See [`crate::environment`].
-pub fn run_eval(
-    src: String,
-    is_check: bool,
-    fetch_allowlist: Vec<String>,
-    environment: crate::environment::Environment,
-) -> i32 {
+/// This is [`RunMode::Eval`], which [`RunOpts::sandboxed`] already carries: a
+/// capability lockdown closes here is reported as a limitation of the
+/// environment rather than as advice about a `serez.json` that does not exist.
+/// It is the same door the online playground runs behind. See [`RunMode`].
+pub fn run_eval(src: String, is_check: bool, fetch_allowlist: Vec<String>) -> i32 {
     run_source(
         src,
         "<eval>",
         RunOpts {
             check_only: is_check,
             fetch_allowlist,
-            environment,
             ..RunOpts::sandboxed()
         },
     )

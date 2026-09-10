@@ -59,7 +59,6 @@ code. See `errors.md` for the ranges.
 | `sz --eval "<code>"` / `sz -e "<code>"` | Runs a snippet. |
 | `sz --eval -` | Reads the snippet from stdin. |
 | `sz --eval … --allow-fetch <hosts>` | Opens named hosts to `fetch`. Repeatable, comma-separated. See `security.md`. |
-| `sz --eval … --online-beta` | Words the refusals for the online beta playground. Grants nothing. |
 | `sz` | Starts the REPL. |
 | `sz --version` | Prints `Serez-Code vX.Y.Z`. |
 | `sz --help` / `sz -h` / `sz help` | Prints usage on stdout, exit 0. |
@@ -79,13 +78,15 @@ is not a sandbox.
 Running your own file is unaffected: `sz file.sz` still honours an inline
 `use permissions` block.
 
-### `--online-beta` changes the wording, not the rules
+### `--eval` is the online playground's execution mode
 
 The online beta playground is a hosted `sz --eval`: same binary, same lockdown,
 same refusals. What differs is the reader — someone whose first contact with the
 language is a web page, for whom `this code runs as untrusted source` reads as
-*the language is broken*. `--online-beta` says so, and a capability lockdown
-closed is then announced as a limitation of that environment:
+*the language is broken*. `--eval` already says which of the two this is: a
+snippet has no file, therefore no `serez.json`, therefore nothing that *"declare
+it in serez.json"* could refer to. So a capability lockdown closed under `--eval`
+is announced as a limitation of that environment:
 
 ```text
 ❌ BETA LIMITATION [SZ6001]:
@@ -98,15 +99,19 @@ To use `fetch` and the full Serez Code runtime, install Serez Code locally from
 serezcode.org.
 ```
 
-`SEREZ_ONLINE_BETA=1` is the same switch for a deployment that sets a variable
-more easily than an argument vector.
+There is no flag for this and there is nothing to export. A `--online-beta`
+switch and a `SEREZ_ONLINE_BETA` variable existed briefly and were removed: they
+asked a deployment to declare a second time what `--eval` already meant, and a
+playground that forgot to pass them silently served the wrong wording.
 
 **It grants nothing and closes nothing.** The diagnostic code, the kind, and
 whether `try/catch` may consume the refusal are all unchanged; only the headline
-and the message differ. It is off by default, so `sz file.sz` and a terminal
-`sz --eval` keep the diagnostics they have always had — in particular, a local
-run that is missing a permission stays a permission error, because on that
-machine declaring it is something the reader can actually do.
+and the message differ. It requires lockdown to have *already* refused
+something, so an `--eval` run handed a permission set does not report a
+capability it was granted as an environment limit. And `sz file.sz` keeps the
+diagnostics it has always had — in particular, a local run that is missing a
+permission stays a permission error, because on that machine declaring it is
+something the reader can actually do.
 
 ### `.szx` is translated before it runs
 

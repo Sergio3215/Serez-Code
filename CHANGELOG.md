@@ -26,18 +26,18 @@ that carries the evidence. **Four of them are breaking** and are marked as such;
 each was measured against the corpus and all eight official packages before it
 landed, and the count is in the entry.
 
-### The online beta playground says what it is, instead of reading as a broken language
+### `--eval` says what it is, instead of reading as a broken language
 
-- The playground is a hosted `sz --eval`, so a snippet runs under lockdown and
-  every capability lockdown closes comes back refused. The refusals were written
-  for someone at a terminal: `fetch to 'pokeapi.co' is not available here — this
-  code runs as untrusted source, and the network is closed unless the host allows
-  it explicitly`. Every word of it is true, and for a reader whose first contact
-  with Serez Code is a web page it reads as *`fetch` is broken*.
-- A run can now say which environment it is — `sz --eval … --online-beta`,
-  `SEREZ_ONLINE_BETA=1`, `run::RunOpts::environment`, or
-  `Evaluator::set_environment` — and in the online beta a capability lockdown
-  closed is announced as a limitation of that environment:
+- The online playground is a hosted `sz --eval`, so a snippet runs under lockdown
+  and every capability lockdown closes comes back refused. The refusals were
+  written for someone at a terminal: `fetch to 'pokeapi.co' is not available here
+  — this code runs as untrusted source, and the network is closed unless the host
+  allows it explicitly`. Every word of it is true, and for a reader whose first
+  contact with Serez Code is a web page it reads as *`fetch` is broken*.
+- **`--eval` is that environment**, so nothing has to be declared: a snippet has
+  no file, therefore no `serez.json`, therefore nothing that *"declare it in
+  serez.json"* could refer to. A capability lockdown closes under `--eval` is
+  announced as a limitation of the environment:
 
   ```text
   ❌ BETA LIMITATION [SZ6001]:
@@ -50,7 +50,7 @@ landed, and the count is in the entry.
   from serezcode.org.
   ```
 
-- All fourteen capabilities the playground withholds are covered, not just
+- All fourteen capabilities an `--eval` run withholds are covered, not just
   `fetch`: the filesystem, `import` and packages, model weight files,
   `use permissions`, and the nine guarded namespaces (`OS`, `Terminal`, `Env`,
   `System`, `Socket`, `Media`, `Gui`, `Task`, `Time`/`DateTime`). The text lives
@@ -58,17 +58,24 @@ landed, and the count is in the entry.
 - **It grants nothing and closes nothing.** The setting is not consulted by any
   gate and does not live in `SecurityPolicy`; it applies only where a refusal has
   already happened. Code, kind and catchability are identical in both
-  environments — `SZ6001` stays `SZ6001`, a catchable refusal stays catchable,
+  modes — `SZ6001` stays `SZ6001`, a catchable refusal stays catchable,
   and `use permissions` stays a fatal `SZ6004`. Stack frames and their positions
   print underneath as before.
-- **Off by default, so nothing else moved.** `sz file.sz` and a terminal
-  `sz --eval` produce byte-identical diagnostics; in particular a local run that
-  is missing a permission still says so and still names `serez.json`, because
-  there that is advice the reader can act on. An ordinary programming mistake is
-  never reported as a limitation of the environment, in either.
-- `run::run_eval` takes the environment as a fourth argument. Embedders that
-  call it directly need one more parameter; `run_source` and `RunOpts` are
-  additive.
+- **`sz file.sz` did not move.** A run with a file behind it produces
+  byte-identical diagnostics; in particular a local run that is missing a
+  permission still says so and still names `serez.json`, because there that is
+  advice the reader can act on. An ordinary programming mistake is never
+  reported as a limitation of the environment, in either mode.
+- The condition is a conjunction, not a label: eval mode **and** a refusal
+  lockdown actually made (`Evaluator::eval_limits_capabilities`). An `--eval`
+  run handed a permission set does not report a capability it was granted as an
+  environment limit.
+- New API, additive: `run::RunOpts` carries `mode: run::RunMode` (`File` the
+  default, `Eval` what `RunOpts::sandboxed` and `run::run_eval` set), and
+  `Evaluator::set_run_mode` is how an embedder says which it is.
+  `run::run_eval` keeps its three arguments, and there is no CLI flag: an
+  embedder that wants the beta wording runs the snippet through `--eval`,
+  which is what a playground does anyway.
 - `spec/cli.md` also stopped saying `fetch` is not closed under lockdown, which
   had been wrong since `649ba49` below.
 - `tests/beta_limitations.rs` asserts both directions.

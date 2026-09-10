@@ -779,39 +779,45 @@ if ($runAll -or $cli) {
     # ── Lockdown ──────────────────────────────────────────────────────────────
     # The permission set is a manifest, not a sandbox. Everything below reaches
     # the machine without any permission being declared, so lockdown closes it.
+    #
+    # `--eval` is also the online playground's execution mode, so what a refusal
+    # SAYS here is the beta wording: there is no serez.json behind a snippet, so
+    # "declare it in serez.json" would name a file that does not exist. What is
+    # refused is unchanged — see `sz file.sz` at the end of the block, which
+    # still gets the technical diagnostic.
     Run-CLI-Test "eval/lockdown: use permissions denied" @("--eval", "-") `
                  -expectErr "use permissions" `
                  -stdinContent "use permissions { OS };`nout 1;"
     Run-CLI-Test "eval/lockdown: File denied"            @("--eval", "-") `
-                 -expectErr "File is not available" `
+                 -expectErr "Filesystem access is disabled" `
                  -stdinContent "out File.read(`"Cargo.toml`");"
     Run-CLI-Test "eval/lockdown: import denied"          @("--eval", "-") `
-                 -expectErr "import is not available" `
+                 -expectErr "Module and package loading is disabled" `
                  -stdinContent "import `"std/math`";"
     Run-CLI-Test "eval/lockdown: URL import denied"      @("--eval", "-") `
-                 -expectErr "import is not available" `
+                 -expectErr "Module and package loading is disabled" `
                  -stdinContent "import `"https://example.invalid/x.sz`";"
     Run-CLI-Test "eval/lockdown: Autodiff weights denied" @("--eval", "-") `
                  -expectErr "Autodiff.saveWeights" `
                  -stdinContent "Autodiff.saveWeights(`"w.szw`", []);"
     Run-CLI-Test "eval/lockdown: permission set is empty" @("--eval", "-") `
-                 -expectErr "requires permission" `
+                 -expectErr "Process execution is disabled" `
                  -stdinContent "unsafe { OS.exec(`"whoami`"); }"
     # DEC-M7-006. `fetch` used to be exempt from lockdown and this test pinned
     # that; it is now closed by default and opened only by --allow-fetch. None of
     # these three needs the network: the refusal happens before any request, and
     # the allowed case is proved by the *arity* error, which means the builtin ran.
     Run-CLI-Test "eval/lockdown: fetch is gated"        @("--eval", "-") `
-                 -expectErr "is not available here" `
+                 -expectErr "Network access is disabled" `
                  -stdinContent "out fetch(`"http://example.com/`");"
     Run-CLI-Test "eval/lockdown: fetch stays gated for a host not on the list" @("--eval", "-", "--allow-fetch", "allowed.test") `
-                 -expectErr "is not available here" `
+                 -expectErr "Network access to 'evil.test' is disabled" `
                  -stdinContent "out fetch(`"http://evil.test/`");"
     Run-CLI-Test "eval/lockdown: an allowed host reaches the builtin" @("--eval", "-", "--allow-fetch", "allowed.test") `
                  -expectErr "fetch(url," `
                  -stdinContent "out fetch();"
     Run-CLI-Test "eval/lockdown: the fetch refusal is not catchable" @("--eval", "-") `
-                 -expectErr "is not available here" `
+                 -expectErr "Network access is disabled" `
                  -stdinContent "try { out fetch(`"http://example.com/`"); } catch (e) { out `"caught`"; }"
     # Lockdown is only for `--eval`; running your own file keeps declaring inline.
     $permFile = Join-Path $env:TEMP "sz_eval_perm_$(Get-Random).sz"
@@ -819,6 +825,16 @@ if ($runAll -or $cli) {
     Run-CLI-Test "eval/lockdown: sz file.sz still grants inline" @("`"$permFile`"") `
                  -expectOut "true"
     Remove-Item $permFile -ErrorAction SilentlyContinue
+    # And a file that does NOT declare what it needs keeps the diagnostic written
+    # for someone who can edit a manifest. These assert containment only; that
+    # the beta wording is ABSENT there is pinned in tests/beta_limitations.rs.
+    $denyFile = Join-Path $env:TEMP "sz_eval_deny_$(Get-Random).sz"
+    Set-Content $denyFile "out DateTime.now() != null;" -NoNewline
+    Run-CLI-Test "eval/lockdown: sz file.sz keeps the permission diagnostic" @("`"$denyFile`"") `
+                 -expectErr "requires permission 'Time'"
+    Run-CLI-Test "eval/lockdown: sz file.sz points at the manifest" @("`"$denyFile`"") `
+                 -expectErr "serez.json"
+    Remove-Item $denyFile -ErrorAction SilentlyContinue
 }
 
 # ── REPL Tests ────────────────────────────────────────────────────────────────

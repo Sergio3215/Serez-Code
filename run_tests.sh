@@ -523,35 +523,49 @@ if [[ "$RUN_ALL" == "1" || "$ONLY_CLI" == "1" ]]; then
     # ── Lockdown ──────────────────────────────────────────────────────────────
     # The permission set is a manifest, not a sandbox. Everything below reaches
     # the machine without any permission being declared, so lockdown closes it.
+    #
+    # `--eval` is also the online playground's execution mode, so what a refusal
+    # SAYS here is the beta wording: there is no serez.json behind a snippet, so
+    # "declare it in serez.json" would name a file that does not exist. What is
+    # refused is unchanged — see `sz file.sz` at the end of the block, which
+    # still gets the technical diagnostic.
     run_cli_test "eval/lockdown: use permissions denied" "" "use permissions" \
         $'use permissions { OS };\nout 1;' "" --eval -
-    run_cli_test "eval/lockdown: File denied" "" "File is not available" \
+    run_cli_test "eval/lockdown: File denied" "" "Filesystem access is disabled" \
         'out File.read("Cargo.toml");' "" --eval -
-    run_cli_test "eval/lockdown: import denied" "" "import is not available" \
+    run_cli_test "eval/lockdown: import denied" "" "Module and package loading is disabled" \
         'import "std/math";' "" --eval -
-    run_cli_test "eval/lockdown: URL import denied" "" "import is not available" \
+    run_cli_test "eval/lockdown: URL import denied" "" "Module and package loading is disabled" \
         'import "https://example.invalid/x.sz";' "" --eval -
     run_cli_test "eval/lockdown: Autodiff weights denied" "" "Autodiff.saveWeights" \
         'Autodiff.saveWeights("w.szw", []);' "" --eval -
-    run_cli_test "eval/lockdown: permission set is empty" "" "requires permission" \
+    run_cli_test "eval/lockdown: permission set is empty" "" "Process execution is disabled" \
         'unsafe { OS.exec("whoami"); }' "" --eval -
     # DEC-M7-006. `fetch` used to be exempt from lockdown and this test pinned
     # that; it is now closed by default and opened only by --allow-fetch. None of
     # these three needs the network: the refusal happens before any request, and
     # the allowed case is proved by the *arity* error, which means the builtin ran.
-    run_cli_test "eval/lockdown: fetch is gated" "" "is not available here" \
+    run_cli_test "eval/lockdown: fetch is gated" "" "Network access is disabled" \
         'out fetch("http://example.com/");' "" --eval -
-    run_cli_test "eval/lockdown: fetch stays gated for a host not on the list" "" "is not available here" \
+    run_cli_test "eval/lockdown: fetch stays gated for a host not on the list" "" "Network access to 'evil.test' is disabled" \
         'out fetch("http://evil.test/");' "" --eval - --allow-fetch allowed.test
     run_cli_test "eval/lockdown: an allowed host reaches the builtin" "" "fetch(url," \
         'out fetch();' "" --eval - --allow-fetch allowed.test
-    run_cli_test "eval/lockdown: the fetch refusal is not catchable" "" "is not available here" \
+    run_cli_test "eval/lockdown: the fetch refusal is not catchable" "" "Network access is disabled" \
         'try { out fetch("http://example.com/"); } catch (e) { out "caught"; }' "" --eval -
 
     # Lockdown is only for `--eval`; running your own file keeps declaring inline.
     TMP_PERM="$(mktemp -d)"
     printf 'use permissions { Time };\nout DateTime.now() != null;' > "$TMP_PERM/perm.sz"
     run_cli_test "eval/lockdown: sz file.sz still grants inline" "true" "" "" "" "$TMP_PERM/perm.sz"
+    # And a file that does NOT declare what it needs keeps the diagnostic written
+    # for someone who can edit a manifest. These assert containment only; that
+    # the beta wording is ABSENT there is pinned in tests/beta_limitations.rs.
+    printf 'out DateTime.now() != null;' > "$TMP_PERM/deny.sz"
+    run_cli_test "eval/lockdown: sz file.sz keeps the permission diagnostic" "" \
+        "requires permission 'Time'" "" "" "$TMP_PERM/deny.sz"
+    run_cli_test "eval/lockdown: sz file.sz points at the manifest" "" \
+        "serez.json" "" "" "$TMP_PERM/deny.sz"
     rm -rf "$TMP_PERM"
 fi
 

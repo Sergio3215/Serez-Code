@@ -199,11 +199,12 @@ reached from wherever `sz` is running, and there is no memory or CPU ceiling.
 Don't feed `--eval` source you don't trust without real isolation around the
 process.
 
-If you are embedding `--eval` behind a web page, add `--online-beta` (or
-`SEREZ_ONLINE_BETA=1`). It changes nothing about what runs — it words the
-refusals for someone who has never seen the language, so a capability the
-environment does not expose reads as `❌ BETA LIMITATION` and points at
-serezcode.org instead of reading as a broken `fetch`. See `spec/cli.md`.
+`--eval` **is** the execution mode the online playground runs, and its refusals
+are worded for that reader: a capability lockdown closes is announced as
+`❌ BETA LIMITATION` and points at serezcode.org, instead of reading as a broken
+`fetch`. Nothing has to be switched on for this — a snippet has no `serez.json`,
+so *"declare it in serez.json"* names a file that does not exist. `sz file.sz`
+keeps the diagnostic it always had. See `spec/cli.md`.
 
 ### Watch mode (auto-rerun on save)
 
