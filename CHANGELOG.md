@@ -6,6 +6,18 @@ Order: most recent to oldest.
 ---
 
 ## [Unreleased]
+**Target:** v11.3.0 (branch `improve`)
+
+### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+### Security
+
+---
+
+## [v11.2.0] — 2026-09-10
 
 Everything below landed **after** `v10.0.0` (`d8662c2`, 2026-08-31). The
 boundary is the tag, not a memory of it: `CHANGELOG.md` was byte-identical at
@@ -25,6 +37,12 @@ What follows is only what a user can observe, and each entry names the commit
 that carries the evidence. **Four of them are breaking** and are marked as such;
 each was measured against the corpus and all eight official packages before it
 landed, and the count is in the entry.
+
+Only the first entry — `--eval` diagnostics — is new in **v11.2.0**. Everything
+after it was already built into the `v11.0.0` tag (`1dfd7b4`), which was cut on
+this branch without the changelog opening a heading for it; the headings for
+`v11.0.0` and `v11.1.0` live on the `origin/improve` line and arrive here when
+that line is merged.
 
 ### `--eval` says what it is, instead of reading as a broken language
 
