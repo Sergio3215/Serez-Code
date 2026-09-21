@@ -29,7 +29,7 @@ audio = ["dep:rodio"]
 
 [dependencies]
 notify = "8"
-ureq = "2"
+ureq = "3"
 zip = "2"
 crossterm = "0.28"
 winit = "0.30.13"
